@@ -1,14 +1,25 @@
-const OBSERVATION_EVENTS = require('../observation/observation-events');
+const OBSERVATION_EVENTS =
+  require('../observation/observation-events');
 
 class AgentOrchestrator {
   constructor({
     planner,
+    planValidator,
+    replanner,
     decisionEngine,
     recoveryEngine,
     eventPublisher = null
   } = {}) {
     if (!planner) {
       throw new TypeError('planner is required');
+    }
+
+    if (!planValidator) {
+      throw new TypeError('planValidator is required');
+    }
+
+    if (!replanner) {
+      throw new TypeError('replanner is required');
     }
 
     if (!decisionEngine) {
@@ -20,6 +31,8 @@ class AgentOrchestrator {
     }
 
     this.planner = planner;
+    this.planValidator = planValidator;
+    this.replanner = replanner;
     this.decisionEngine = decisionEngine;
     this.recoveryEngine = recoveryEngine;
     this.eventPublisher = eventPublisher;
@@ -44,7 +57,15 @@ class AgentOrchestrator {
   }
 
   async plan(input, context = {}) {
-    const plan = await this.planner.plan(input);
+    const planned = await this.planner.plan(input);
+
+    const validation =
+      this.planValidator.validate(planned);
+
+    const plan = {
+      ...planned,
+      steps: validation.steps
+    };
 
     await this.publishEvent({
       type: OBSERVATION_EVENTS.PLAN_CREATED,
@@ -52,31 +73,54 @@ class AgentOrchestrator {
       goalId: context.goalId || null,
       data: {
         input,
-        plan
+        plan,
+        validation: {
+          valid: validation.valid,
+          steps: validation.steps.length
+        }
       }
     });
 
-    return plan;
+    return {
+      plan,
+      validation
+    };
   }
 
-  async decide(evaluation, context = {}) {
+  decide(evaluation, context = {}) {
     const decision = this.decisionEngine.decide(evaluation);
 
-    await this.publishEvent({
-      type: OBSERVATION_EVENTS.DECISION_CREATED,
-      executionId: context.executionId || null,
-      goalId: context.goalId || null,
-      data: {
+    if (this.eventPublisher) {
+      this.publishEvent({
+        type: OBSERVATION_EVENTS.DECISION_CREATED,
+        executionId: context.executionId || null,
+        goalId: context.goalId || null,
+        data: { evaluation, decision }
+      }).catch(() => {});
+    }
+
+    return decision;
+  }
+
+  decideReplanning({
+    evaluation,
+    replans = 0,
+    hasRemainingSteps = false,
+    context = {}
+  } = {}) {
+    const decision =
+      this.replanner.decide({
         evaluation,
-        decision
-      }
-    });
+        replans,
+        hasRemainingSteps
+      });
 
     return decision;
   }
 
   async recover(error, context = {}) {
-    const recovery = this.recoveryEngine.recover(error);
+    const recovery =
+      this.recoveryEngine.recover(error);
 
     await this.publishEvent({
       type: OBSERVATION_EVENTS.RECOVERY_STARTED,

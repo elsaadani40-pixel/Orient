@@ -65,6 +65,12 @@ const DecisionEngine =
 const RecoveryEngine =
   require('./src/core/agent/recovery/recovery-engine');
 
+const PlanValidator =
+  require('./src/core/planning/validation/plan-validator');
+
+const Replanner =
+  require('./src/core/planning/replanning/replanner');
+
 const createMemoryRoutes =
   require('./src/interfaces/http/routes/memory.routes');
 
@@ -143,9 +149,21 @@ const decisionEngine =
 const recoveryEngine =
   new RecoveryEngine();
 
+const planValidator =
+  new PlanValidator({
+    maxSteps: 5
+  });
+
+const replanner =
+  new Replanner({
+    maxReplans: 3
+  });
+
 const agentOrchestrator =
   new AgentOrchestrator({
     planner,
+    planValidator,
+    replanner,
     decisionEngine,
     recoveryEngine,
     eventPublisher
@@ -159,9 +177,8 @@ const persistence =
 const runtime =
   new OrientRuntime({
     toolRegistry,
-    planner,
+    agentOrchestrator,
     authorizationService,
-    recoveryEngine,
     persistence
   });
 

@@ -9,18 +9,11 @@ const AgentState =
 const AgentLoop =
   require('../execution/agent-loop');
 
-const PlanValidator =
-  require('../planning/validation/plan-validator');
-
-const Replanner =
-  require('../planning/replanning/replanner');
-
 class OrientRuntime {
   constructor({
     toolRegistry,
-    planner,
+    agentOrchestrator,
     authorizationService = null,
-    recoveryEngine = null,
     persistence = null
   }) {
     if (!toolRegistry) {
@@ -29,23 +22,20 @@ class OrientRuntime {
       );
     }
 
-    if (!planner) {
+    if (!agentOrchestrator) {
       throw new TypeError(
-        'planner is required'
+        'agentOrchestrator is required'
       );
     }
 
     this.toolRegistry =
       toolRegistry;
 
-    this.planner =
-      planner;
+    this.agentOrchestrator =
+      agentOrchestrator;
 
     this.authorizationService =
       authorizationService;
-
-    this.recoveryEngine =
-      recoveryEngine;
 
     this.persistence =
       persistence;
@@ -53,22 +43,12 @@ class OrientRuntime {
     this.persistedEventOffsets =
       new WeakMap();
 
-    this.planValidator =
-      new PlanValidator({
-        maxSteps: 5
-      });
-
     this.agentLoop =
       new AgentLoop({
         toolRegistry,
         authorizationService,
         idempotencyRepository:
           persistence?.idempotency || null
-      });
-
-    this.replanner =
-      new Replanner({
-        maxReplans: 3
       });
 
     this.name =
@@ -263,30 +243,32 @@ class OrientRuntime {
         AgentState.LIFECYCLE.PLANNING
       );
 
-      const planned =
-        await this.planner.plan(
-          text
+      const orchestration =
+        await this.agentOrchestrator.plan(
+          text,
+          context
         );
+
+      const plan =
+        orchestration.plan;
+
+      const validation =
+        orchestration.validation;
 
       context.record(
         'plan.generated',
         {
           intent:
-            planned.intent,
+            plan.intent,
 
           confidence:
-            planned.confidence
+            plan.confidence
         }
       );
 
       context.transitionAgentTo(
         AgentState.LIFECYCLE.VALIDATING
       );
-
-      const validation =
-        this.planValidator.validate(
-          planned
-        );
 
       context.record(
         'plan.validation.completed',
@@ -298,12 +280,6 @@ class OrientRuntime {
             validation.steps.length
         }
       );
-
-      const plan = {
-        ...planned,
-        steps:
-          validation.steps
-      };
 
       context.setPlan(
         plan
@@ -344,7 +320,7 @@ class OrientRuntime {
       );
 
       const replanningDecision =
-        this.replanner.decide({
+        this.agentOrchestrator.decideReplanning({
           evaluation:
             loopResult.evaluation,
 
@@ -353,7 +329,9 @@ class OrientRuntime {
 
           hasRemainingSteps:
             loopResult.stepsExecuted <
-            plan.steps.length
+            plan.steps.length,
+
+          context
         });
 
       context.record(
@@ -447,40 +425,18 @@ class OrientRuntime {
     }
   }
 
-  classifyRecovery({
+  async classifyRecovery({
     error,
     context
   }) {
-    if (!this.recoveryEngine) {
-      const fallback = {
-        action: 'abort',
-
-        reason:
-          'Recovery Engine غير متصل',
-
-        target: null,
-
-        metadata: {
-          recoveryAvailable:
-            false
-        }
-      };
-
-      context.record(
-        'recovery.started',
-        fallback
-      );
-
-      return fallback;
-    }
-
     const recovery =
-      this.recoveryEngine.recover(
-        error
+      await this.agentOrchestrator.recover(
+        error,
+        context
       );
 
     const serialized =
-      typeof recovery.toJSON ===
+      typeof recovery?.toJSON ===
       'function'
         ? recovery.toJSON()
         : recovery;
