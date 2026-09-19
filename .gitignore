@@ -1,0 +1,9 @@
+node_modules/
+data/agent/
+*.log
+*.tmp
+.env
+.env.*
+
+memories.json
+orient-one/
