@@ -1,0 +1,125 @@
+const path = require('path');
+
+class WorkspacePolicy {
+  constructor({
+    allowedRoot,
+    allowRead = true,
+    allowWrite = false,
+    allowCommands = false,
+    allowGit = false,
+    deniedCommands = [],
+    allowedCommands = [],
+    maxOutput = 20000,
+    timeoutMs = 30000
+  } = {}) {
+    if (!allowedRoot || typeof allowedRoot !== 'string') {
+      throw new TypeError('allowedRoot is required');
+    }
+
+    this.allowedRoot = path.resolve(allowedRoot);
+    this.allowRead = allowRead === true;
+    this.allowWrite = allowWrite === true;
+    this.allowCommands = allowCommands === true;
+    this.allowGit = allowGit === true;
+    this.deniedCommands = new Set(deniedCommands.map(String));
+    this.allowedCommands = new Set(allowedCommands.map(String));
+    this.maxOutput = Number.isFinite(maxOutput) && maxOutput > 0
+      ? maxOutput
+      : 20000;
+    this.timeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? timeoutMs
+      : 30000;
+  }
+
+  resolve(relativePath = '.') {
+    if (typeof relativePath !== 'string') {
+      throw new TypeError('path must be a string');
+    }
+
+    const resolved =
+      path.resolve(this.allowedRoot, relativePath);
+
+    if (
+      resolved !== this.allowedRoot &&
+      !resolved.startsWith(`${this.allowedRoot}${path.sep}`)
+    ) {
+      throw new Error(
+        'Workspace path escapes allowed root'
+      );
+    }
+
+    return resolved;
+  }
+
+  assertRead(relativePath = '.') {
+    if (!this.allowRead) {
+      throw new Error(
+        'Workspace read access is denied'
+      );
+    }
+
+    return this.resolve(relativePath);
+  }
+
+  assertWrite(relativePath) {
+    if (!this.allowWrite) {
+      throw new Error(
+        'Workspace write access is denied'
+      );
+    }
+
+    return this.resolve(relativePath);
+  }
+
+  assertCommand(command) {
+    if (!this.allowCommands) {
+      throw new Error(
+        'Workspace command execution is denied'
+      );
+    }
+
+    const executable =
+      String(command || '')
+        .trim()
+        .split(/\s+/)[0];
+
+    if (!executable) {
+      throw new Error('Command is required');
+    }
+
+    const executableName =
+      path.basename(executable);
+
+    if (
+      this.allowedCommands.size === 0 ||
+      !(
+        this.allowedCommands.has(executable) ||
+        this.allowedCommands.has(executableName)
+      )
+    ) {
+      throw new Error(
+        `Command "${executable}" is not allowed`
+      );
+    }
+
+    if (this.deniedCommands.has(executable)) {
+      throw new Error(
+        `Command "${executable}" is denied`
+      );
+    }
+
+    if (
+      !this.allowGit &&
+      (executable === 'git' ||
+       executable.endsWith('/git'))
+    ) {
+      throw new Error(
+        'Git command execution is denied'
+      );
+    }
+
+    return executable;
+  }
+}
+
+module.exports = WorkspacePolicy;
