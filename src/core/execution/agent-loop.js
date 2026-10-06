@@ -205,13 +205,15 @@ class AgentLoop {
       }
 
       if (this.authorizationService) {
+        let authorization;
+
         try {
           const approval =
             runtimeContext.approvals?.[stepNumber] ||
             runtimeContext.approval ||
             null;
 
-          const authorization =
+          authorization =
             this.authorizationService
               .assertAuthorized(step.tool, {
                 executionId: context.executionId,
