@@ -2,7 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const OrientRuntime = require('../../../../src/core/runtime/orient-runtime');
-const assert = require('node:assert/strict');
 
 test('runtime rejects oversized input before orchestration', async () => {
   const runtime = new OrientRuntime({
