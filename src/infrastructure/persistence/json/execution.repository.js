@@ -111,7 +111,7 @@ class ExecutionRepository {
 
   findAll({ tenantId = null } = {}) {
     return this.readRaw().map(execution => this.normalize(execution))
-      .filter(execution => !tenantId || execution.metadata?.tenantId === tenantId);
+      .filter(execution => !tenantId || execution.metadata?.tenantId === tenantId || (tenantId === 'local' && !execution.metadata?.tenantId));
   }
 
   findById(executionId, { tenantId = null } = {}) {
