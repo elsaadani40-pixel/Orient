@@ -249,6 +249,36 @@ class AgentLoop {
 
           throw error;
         }
+
+        if (
+          authorization.requiresApproval &&
+          authorization.approval &&
+          this.authorizationService.approvalService
+        ) {
+          const consumed =
+            this.authorizationService.approvalService.consume(
+              authorization.approval.approvalId
+            );
+
+          if (!consumed) {
+            throw new AppError(
+              'Approval could not be consumed safely',
+              409,
+              'APPROVAL_CONSUME_FAILED'
+            );
+          }
+
+          context.record(
+            'approval.consumed',
+            {
+              step: stepNumber,
+              tool: step.tool,
+              approvalId:
+                authorization.approval.approvalId,
+              planRevision
+            }
+          );
+        }
       } else {
         context.record(
           'authorization.completed',
