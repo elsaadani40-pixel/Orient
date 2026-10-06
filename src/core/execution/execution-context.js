@@ -27,6 +27,9 @@ class ExecutionContext {
     executionId = null,
     goalId = null,
     parentExecutionId = null,
+    tenantId = null,
+    userId = null,
+    workspaceId = null,
     metadata = {}
   } = {}) {
     if (!requestId) {
@@ -57,6 +60,14 @@ class ExecutionContext {
 
     this.parentExecutionId =
       parentExecutionId || null;
+
+    this.tenantId = tenantId || metadata.tenantId || null;
+    this.userId = userId || metadata.userId || null;
+    this.workspaceId = workspaceId || metadata.workspaceId || null;
+
+    if (this.tenantId) this.metadataTenantGuard(metadata.tenantId, this.tenantId);
+    if (this.userId) this.metadataTenantGuard(metadata.userId, this.userId);
+    if (this.workspaceId) this.metadataTenantGuard(metadata.workspaceId, this.workspaceId);
 
     this.input =
       String(input);
@@ -98,6 +109,12 @@ class ExecutionContext {
     this.events = [];
   }
 
+  metadataTenantGuard(metadataValue, explicitValue) {
+    if (metadataValue && explicitValue && metadataValue !== explicitValue) {
+      throw new TypeError('Identity metadata mismatch');
+    }
+  }
+
   identity() {
     return {
       executionId:
@@ -112,8 +129,16 @@ class ExecutionContext {
       parentExecutionId:
         this.parentExecutionId,
 
+      tenantId: this.tenantId,
+      userId: this.userId,
+      workspaceId: this.workspaceId,
+
       executionVersion:
-        this.executionVersion
+        this.executionVersion,
+
+      tenantId: this.tenantId,
+      userId: this.userId,
+      workspaceId: this.workspaceId
     };
   }
 
@@ -617,6 +642,9 @@ class ExecutionContext {
       executionId: snapshot.executionId,
       goalId: snapshot.goalId,
       parentExecutionId: snapshot.parentExecutionId || null,
+      tenantId: snapshot.tenantId || snapshot.metadata?.tenantId || null,
+      userId: snapshot.userId || snapshot.metadata?.userId || null,
+      workspaceId: snapshot.workspaceId || snapshot.metadata?.workspaceId || null,
       metadata:
         snapshot.metadata && typeof snapshot.metadata === 'object'
           ? snapshot.metadata
