@@ -363,6 +363,14 @@ class AgentLoop {
         }
       );
 
+      if (idempotency.created && typeof runtimeContext.onCheckpoint === 'function') {
+        await runtimeContext.onCheckpoint({
+          step: stepNumber,
+          planRevision,
+          reason: 'step_started'
+        });
+      }
+
       if (!idempotency.created) {
         const existing =
           idempotency.record;
