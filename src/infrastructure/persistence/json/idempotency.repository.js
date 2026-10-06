@@ -101,7 +101,7 @@ class IdempotencyRepository {
     }
 
     const record = this.read()[key] || null;
-    return record && (!tenantId || record.tenantId === tenantId)
+    return record && (!tenantId || record.tenantId === tenantId || (tenantId === 'local' && !record.tenantId))
       ? record
       : null;
   }
