@@ -233,6 +233,7 @@ class AgentLoop {
                 step: stepNumber,
                 planRevision,
                 approval,
+                tenantId: runtimeContext.tenantId || context.tenantId,
                 scope: { planRevision }
               });
 
@@ -273,7 +274,8 @@ class AgentLoop {
         ) {
           const consumed =
             this.authorizationService.approvalService.consume(
-              authorization.approval.approvalId
+              authorization.approval.approvalId,
+              runtimeContext.tenantId || context.tenantId
             );
 
           if (!consumed) {
