@@ -479,23 +479,96 @@ class AgentLoop {
         }
 
         if (
-          existing.status === 'running'
+          existing.status === 'running' ||
+          existing.status === 'unknown'
         ) {
-          const error = new AppError(
-            `التنفيذ المكرر للأداة "${step.tool}" ممنوع`,
-            409,
-            'IDEMPOTENCY_EXECUTION_IN_PROGRESS'
-          );
+          // A persisted RUNNING operation is not proof that the external side effect
+          // did not happen. After a crash, retrying blindly can duplicate irreversible
+          // work. Reconciliation must therefore be explicit and authoritative.
+          let reconciliation = null;
 
-          context.record(
-            'idempotency.rejected',
-            {
+          if (typeof runtimeContext.reconcileOperation === 'function') {
+            reconciliation = await runtimeContext.reconcileOperation({
+              operationId,
+              executionId: context.executionId,
+              step: stepNumber,
+              planRevision,
+              tool: step.tool,
+              input: resolvedInput,
+              record: existing
+            });
+          }
+
+          if (reconciliation?.status === 'completed') {
+            const reconciledResult = reconciliation.result;
+            this.idempotencyStore.complete(
+              idempotency.key,
+              reconciledResult
+            );
+
+            context.record('idempotency.reconciled', {
               step: stepNumber,
               tool: step.tool,
               key: idempotency.key,
-              status: existing.status
-            }
+              operationId,
+              outcome: 'completed'
+            });
+
+            context.completeStep({
+              step: stepNumber,
+              tool: step.tool,
+              result: reconciledResult,
+              planRevision
+            });
+            context.addObservation({
+              step: stepNumber,
+              tool: step.tool,
+              success: true,
+              result: reconciledResult
+            });
+            completedSteps.add(stepNumber);
+            stepResults.push({
+              step: stepNumber,
+              planRevision,
+              operationId,
+              tool: step.tool,
+              input: resolvedInput,
+              originalInput: step.input,
+              dependsOn: step.dependsOn,
+              result: reconciledResult,
+              success: true,
+              reconciled: true,
+              completedAt: new Date().toISOString()
+            });
+            lastResult = reconciledResult;
+            lastEvaluation = this.evaluate({
+              plan,
+              step,
+              result: reconciledResult,
+              stepNumber
+            });
+            context.record('evaluation.completed', {
+              ...lastEvaluation,
+              step: stepNumber,
+              tool: step.tool,
+              reconciled: true
+            });
+            continue;
+          }
+
+          const error = new AppError(
+            `لا يمكن استئناف العملية "${operationId}" بأمان قبل التحقق من حالتها الخارجية`,
+            409,
+            'IDEMPOTENCY_OPERATION_UNKNOWN'
           );
+
+          context.record('idempotency.reconciliation_required', {
+            step: stepNumber,
+            tool: step.tool,
+            key: idempotency.key,
+            operationId,
+            status: existing.status
+          });
 
           throw error;
         }
