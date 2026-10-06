@@ -523,3 +523,38 @@ test('sqlite approval consumption is single-use and tenant-scoped', () => {
   assert.equal(persistence.approvals.consume(approval.approvalId, new Date(2000).toISOString(), 'tenant-a'), true);
   assert.equal(persistence.approvals.consume(approval.approvalId, new Date(3000).toISOString(), 'tenant-a'), false);
 });
+
+
+test('JSON durable lease writes reject cross-tenant workflow collisions', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const WorkflowLeaseRepository = require('../../../../src/infrastructure/persistence/json/workflow-lease.repository');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-json-lease-collision-'));
+  const repository = new WorkflowLeaseRepository(path.join(dir, 'leases.json'));
+
+  repository.save({
+    workflowId: 'shared-json-lease',
+    leaseId: 'lease-a',
+    workerId: 'worker-a',
+    acquiredAt: 1000,
+    expiresAt: 5000,
+    metadata: { tenantId: 'tenant-a' }
+  }, 'tenant-a');
+
+  assert.throws(
+    () => repository.save({
+      workflowId: 'shared-json-lease',
+      leaseId: 'lease-b',
+      workerId: 'worker-b',
+      acquiredAt: 1000,
+      expiresAt: 5000,
+      metadata: { tenantId: 'tenant-b' }
+    }, 'tenant-b'),
+    /Lease tenant collision/
+  );
+
+  assert.equal(repository.findByWorkflowId('shared-json-lease', 'tenant-a').leaseId, 'lease-a');
+  assert.equal(repository.findByWorkflowId('shared-json-lease', 'tenant-b'), null);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
