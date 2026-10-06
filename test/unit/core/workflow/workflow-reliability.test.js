@@ -15,7 +15,7 @@ test('lease store prevents concurrent ownership and recovers expired leases', ()
     findByWorkflowId(id) { return this.values.get(id) || null; },
     findAll() { return [...this.values.values()]; },
     delete(id) { return this.values.delete(id); },
-    deleteExpired(id) { return this.values.delete(id); }
+    deleteExpired(id, leaseId) {\n      const current = this.values.get(id);\n      if (!current || current.leaseId !== leaseId) return false;\n      return this.values.delete(id);\n    }
   };
   const store = new WorkflowLeaseStore({ repository, clock: () => now, leaseDurationMs: 1000 });
   const first = store.acquire('wf', 'worker-a');
