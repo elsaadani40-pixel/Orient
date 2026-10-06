@@ -174,7 +174,8 @@ class ExecutionRepository {
 
     const current = this.normalize(executions[index]);
 
-    if (tenantId && current.metadata?.tenantId !== tenantId) return null;
+    if (tenantId && current.metadata?.tenantId !== tenantId && !(tenantId === 'local' && !current.metadata?.tenantId)) return null;
+    if (tenantId && patch.metadata?.tenantId && patch.metadata.tenantId !== tenantId) throw new Error('Execution tenant mismatch');
 
     const updated = this.normalize({
       ...current,
