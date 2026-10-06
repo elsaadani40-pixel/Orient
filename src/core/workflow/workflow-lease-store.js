@@ -146,7 +146,7 @@ class WorkflowLeaseStore {
   }
 
   persist(lease) {
-    if (this.repository?.save) this.repository.save(lease);
+    if (this.repository?.save) this.repository.save(lease, this.tenantId);
   }
 }
 
