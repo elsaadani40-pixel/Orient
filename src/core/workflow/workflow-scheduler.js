@@ -12,7 +12,8 @@ class WorkflowScheduler {
     baseBackoffMs = 250,
     maxBackoffMs = 30000,
     workflowRepository = null,
-    tenantId = null
+    tenantId = null,
+    maxQueueDepth = 1000
   } = {}) {
     if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
       throw new AppError(
@@ -20,6 +21,9 @@ class WorkflowScheduler {
         400,
         'SCHEDULER_INVALID_LIMIT'
       );
+    }
+    if (!Number.isInteger(maxQueueDepth) || maxQueueDepth < 1) {
+      throw new AppError('maxQueueDepth must be positive', 400, 'SCHEDULER_INVALID_QUEUE_LIMIT');
     }
     if (!Number.isInteger(maxRetries) || maxRetries < 0) {
       throw new AppError(
@@ -30,6 +34,8 @@ class WorkflowScheduler {
     }
 
     this.maxConcurrent = maxConcurrent;
+    this.maxQueueDepth = maxQueueDepth;
+    this.accepting = true;
     this.clock = clock;
     this.maxRetries = maxRetries;
     this.baseBackoffMs = baseBackoffMs;
@@ -53,19 +59,15 @@ class WorkflowScheduler {
     instance,
     { priority = 0, deadlineAt = null, delayMs = 0 } = {}
   ) {
+    if (!this.accepting) {
+      throw new AppError('Workflow scheduler is shutting down', 503, 'SCHEDULER_SHUTTING_DOWN');
+    }
+
     if (!instance) {
       throw new AppError(
         'Workflow instance required',
         400,
         'SCHEDULER_WORKFLOW_REQUIRED'
-      );
-    }
-
-    if (this.tenantId && instance.tenantId !== this.tenantId) {
-      throw new AppError(
-        'Workflow tenant does not match scheduler tenant',
-        403,
-        'WORKFLOW_TENANT_MISMATCH'
       );
     }
 
@@ -89,6 +91,10 @@ class WorkflowScheduler {
         409,
         'SCHEDULER_INVALID_STATE'
       );
+    }
+
+    if (this.queue.length >= this.maxQueueDepth) {
+      throw new AppError('Workflow queue capacity exceeded', 429, 'SCHEDULER_QUEUE_FULL');
     }
 
     instance.setDeadline(deadlineAt);
@@ -349,6 +355,21 @@ class WorkflowScheduler {
 
   depth() {
     return this.queue.length;
+  }
+
+  shutdown({ cancelQueued = false } = {}) {
+    this.accepting = false;
+    if (cancelQueued) {
+      for (const item of this.queue) {
+        if (item.instance.state !== 'CANCELLED') {
+          item.instance.requestCancel();
+          item.instance.transition('CANCELLED');
+          this.persist(item.instance);
+        }
+      }
+      this.queue = [];
+    }
+    return this.snapshot();
   }
 
   persist(instance) {
