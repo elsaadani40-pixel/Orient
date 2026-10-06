@@ -64,10 +64,14 @@ class OrientRuntime {
     this.persistence =
       persistence;
 
+    this.workflowRepository =
+      persistence?.workflows || null;
+
     this.workflowScheduler =
       workflowScheduler ||
       new WorkflowScheduler({
         maxConcurrent: 1,
+        workflowRepository: this.workflowRepository,
         leaseStore: persistence?.workflowLeases
           ? new (require('../workflow/workflow-lease-store'))({
               repository: persistence.workflowLeases
@@ -75,8 +79,12 @@ class OrientRuntime {
           : null
       });
 
-    this.workflowRepository =
-      persistence?.workflows || null;
+    // Rebuild the in-memory dispatch queue from durable workflow state.
+    // Persisted RUNNING workflows are only recovered when their durable lease
+    // has expired, preventing two workers from owning the same execution.
+    if (!workflowScheduler && this.workflowRepository?.findAll) {
+      this.workflowScheduler.recoverPersisted();
+    }
 
     this.persistedEventOffsets =
       new WeakMap();
