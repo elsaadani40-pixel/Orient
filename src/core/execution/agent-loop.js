@@ -23,7 +23,8 @@ class AgentLoop {
     authorizationService = null,
     idempotencyRepository = null,
     maxToolInputChars = 50000,
-    agentRegistry = null
+    agentRegistry = null,
+    agentInvocationService = null
   }) {
     if (!toolRegistry) {
       throw new TypeError('toolRegistry is required');
@@ -34,6 +35,7 @@ class AgentLoop {
       authorizationService;
     this.maxToolInputChars = maxToolInputChars;
     this.agentRegistry = agentRegistry;
+    this.agentInvocationService = agentInvocationService;
 
     this.name = 'ORIENT_AGENT_LOOP';
     this.version = '0.8.2';
@@ -189,6 +191,46 @@ class AgentLoop {
         runtimeContext,
         context
       });
+
+      let agentInvocation = null;
+
+      if (step.targetAgentId) {
+        if (!this.agentInvocationService) {
+          throw new AppError(
+            'Agent invocation service is required for delegated steps',
+            500,
+            'AGENT_INVOCATION_SERVICE_REQUIRED'
+          );
+        }
+
+        try {
+          agentInvocation =
+            this.agentInvocationService.authorize({
+              sourceAgentId: agentAuthorization.agentId,
+              targetAgentId: step.targetAgentId,
+              capability: step.targetCapability || null,
+              reason: step.invocationReason || null
+            });
+
+          context.record(
+            'agent.invocation.authorized',
+            agentInvocation
+          );
+        } catch (error) {
+          context.record(
+            'agent.invocation.denied',
+            {
+              sourceAgentId: agentAuthorization.agentId,
+              targetAgentId: step.targetAgentId,
+              capability: step.targetCapability || null,
+              code: error.code || 'AGENT_TARGET_FORBIDDEN',
+              reason: error.message
+            }
+          );
+
+          throw error;
+        }
+      }
 
       if (!step.tool) {
         context.record(
