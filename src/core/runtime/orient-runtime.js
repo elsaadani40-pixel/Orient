@@ -9,6 +9,9 @@ const AgentState =
 const AgentLoop =
   require('../execution/agent-loop');
 
+const ApprovalService =
+  require('../agent/approval/approval-service');
+
 class OrientRuntime {
   constructor({
     toolRegistry,
@@ -39,10 +42,15 @@ class OrientRuntime {
       authorizationService;
 
     this.approvalService =
-      approvalService;
+      approvalService ||
+      (persistence?.approvals
+        ? new ApprovalService({
+            repository: persistence.approvals
+          })
+        : null);
 
     if (this.authorizationService && !this.authorizationService.approvalService) {
-      this.authorizationService.approvalService = approvalService;
+      this.authorizationService.approvalService = this.approvalService;
     }
 
     this.persistence =
