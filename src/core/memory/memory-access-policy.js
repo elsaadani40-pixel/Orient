@@ -3,6 +3,7 @@ class MemoryAccessPolicy {
     if (!agentRegistry) {
       throw new TypeError('agentRegistry is required');
     }
+
     this.agentRegistry = agentRegistry;
   }
 
@@ -14,7 +15,7 @@ class MemoryAccessPolicy {
       );
     }
 
-    if (!['read', 'write'].includes(operation)) {
+    if (!['read', 'write', 'delete'].includes(operation)) {
       throw Object.assign(
         new Error('Unsupported memory operation'),
         { code: 'MEMORY_OPERATION_INVALID' }
@@ -31,12 +32,12 @@ class MemoryAccessPolicy {
       );
     }
 
-    return {
+    return Object.freeze({
       allowed: true,
       agentId,
       scope,
       operation
-    };
+    });
   }
 }
 
