@@ -595,14 +595,6 @@ class AgentLoop {
             stepNumber
           });
 
-        if (typeof runtimeContext.onCheckpoint === 'function') {
-          await runtimeContext.onCheckpoint({
-            step: stepNumber,
-            planRevision,
-            reason: evaluation.outcome === 'replan' ? 'replan_requested' : 'step_completed'
-          });
-        }
-
         context.record(
           'evaluation.completed',
           {
@@ -611,6 +603,14 @@ class AgentLoop {
             tool: step.tool
           }
         );
+
+        if (typeof runtimeContext.onCheckpoint === 'function') {
+          await runtimeContext.onCheckpoint({
+            step: stepNumber,
+            planRevision,
+            reason: evaluation.outcome === 'replan' ? 'replan_requested' : 'step_completed'
+          });
+        }
 
         lastResult = result;
         lastEvaluation = evaluation;
