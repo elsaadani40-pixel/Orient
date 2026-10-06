@@ -11,7 +11,7 @@ class PolicyEngine {
   authorize(capability) {
     if (!capability) return PolicyDecision.deny(null, 'Capability مطلوبة');
     if (!this.capabilities.has(capability)) return PolicyDecision.deny(capability, 'Capability غير مصرح بها');
-    return PolicyDecision.allow(capability, this.riskOf(capability));
+    return PolicyDecision.allow(capability);
   }
   riskOf(capability) { return this.riskByCapability.get(capability) || 'low'; }
   requiresApproval(capability) { return (RISK_ORDER[this.riskOf(capability)] ?? 0) >= (RISK_ORDER[this.approvalRequiredAt] ?? 2); }
