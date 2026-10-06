@@ -67,8 +67,16 @@ class OrientRuntime {
     this.workflowScheduler =
       workflowScheduler ||
       new WorkflowScheduler({
-        maxConcurrent: 1
+        maxConcurrent: 1,
+        leaseStore: persistence?.workflowLeases
+          ? new (require('../workflow/workflow-lease-store'))({
+              repository: persistence.workflowLeases
+            })
+          : null
       });
+
+    this.workflowRepository =
+      persistence?.workflows || null;
 
     this.persistedEventOffsets =
       new WeakMap();
@@ -270,20 +278,33 @@ class OrientRuntime {
       input: { text }
     });
 
+    instance.metadata.priority = priority;
+    if (this.workflowRepository?.save) {
+      this.workflowRepository.save(instance);
+    }
+
     this.workflowScheduler.enqueue(instance, {
       priority,
       deadlineAt
     });
 
+    if (this.workflowRepository?.save) {
+      this.workflowRepository.save(instance);
+    }
+
     const worker = new WorkflowWorker({
       scheduler: this.workflowScheduler,
       eventSink: (event) => {
+        if (this.workflowRepository?.save) {
+          this.workflowRepository.save(instance);
+        }
+
         if (this.persistence?.events?.append) {
           this.persistence.events.append({
-            eventId: crypto.randomUUID(),
+            id: event.eventId || crypto.randomUUID(),
             type: event.type,
-            timestamp: new Date().toISOString(),
-            payload: event
+            timestamp: event.timestamp || new Date().toISOString(),
+            data: event.payload || event
           });
         }
       },
@@ -302,8 +323,22 @@ class OrientRuntime {
       );
     }
 
+    if (this.workflowRepository?.save) {
+      this.workflowRepository.save(completed);
+    }
+
     if (completed.state === WorkflowInstance.STATES.COMPLETED) {
       return completed.steps['agent-runtime'].result;
+    }
+
+    if (completed.state === WorkflowInstance.STATES.WAITING) {
+      return {
+        type: 'workflow_waiting',
+        workflowId: completed.workflowId,
+        state: completed.state,
+        retry: completed.retry,
+        execution: completed.toJSON()
+      };
     }
 
     throw Object.assign(
