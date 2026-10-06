@@ -56,7 +56,8 @@ class OrientRuntime {
       approvalService ||
       (persistence?.approvals
         ? new ApprovalService({
-            repository: persistence.approvals
+            repository: persistence.approvals,
+            tenantId: tenantId || 'local'
           })
         : null);
 
