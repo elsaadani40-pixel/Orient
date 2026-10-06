@@ -20,7 +20,8 @@ class WorkflowLeaseRepository {
     fs.renameSync(temp, this.filePath);
   }
 
-  save(lease) {
+  save(lease, tenantId = null) {
+    if (tenantId && lease.metadata?.tenantId !== tenantId) throw new Error('Lease tenant mismatch');
     const items = this.read().filter(item => item.workflowId !== lease.workflowId);
     items.push({ ...lease });
     this.write(items);
