@@ -115,3 +115,18 @@ test('SQLite checkpoint sequencing remains monotonic and schema migration marker
 
   fs.rmSync(directory, { recursive: true, force: true });
 });
+
+
+test('sqlite transactions roll back all statements after an injected failure', () => {
+  const SqliteDatabase = require('../../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+
+  assert.throws(
+    () => db.transaction([
+      "INSERT INTO events(event_id,type,timestamp,payload) VALUES ('rollback-event','test','2026-01-01T00:00:00.000Z','{}');",
+      'THIS IS NOT VALID SQL;'
+    ])
+  );
+
+  assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
+});
