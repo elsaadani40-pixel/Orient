@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 
 class ApprovalService {
-  constructor({ clock = () => Date.now() } = {}) { this.clock = clock; this.approvals = new Map(); }
+  constructor({ clock = () => Date.now(), repository = null } = {}) { this.clock = clock; this.repository = repository; this.approvals = new Map(); }
   issue({ executionId, step, tool, capability, planRevision = 1, scope = {}, ttlMs = 300000, metadata = {} } = {}) {
     if (!executionId || !tool || !capability) throw new TypeError('executionId, tool and capability are required');
     if (!Number.isInteger(step) || step < 1) throw new TypeError('step must be a positive integer');
@@ -9,11 +9,12 @@ class ApprovalService {
     const now = this.clock();
     const value = { approvalId: crypto.randomUUID(), executionId: String(executionId), step, planRevision, tool, capability, scope: { ...scope }, issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString(), used: false, metadata: { ...metadata } };
     this.approvals.set(value.approvalId, value);
+    if (this.repository?.save) this.repository.save(value);
     return { ...value };
   }
   validate({ approval, executionId, step, tool, capability, planRevision = 1, scope = {} } = {}) {
     if (!approval || typeof approval !== 'object') return { allowed: false, reason: 'APPROVAL_REQUIRED' };
-    const stored = this.approvals.get(approval.approvalId);
+    const stored = this.approvals.get(approval.approvalId) || this.repository?.findById?.(approval.approvalId);
     if (!stored) return { allowed: false, reason: 'APPROVAL_NOT_FOUND' };
     if (stored.used) return { allowed: false, reason: 'APPROVAL_ALREADY_USED' };
     if (this.clock() >= Date.parse(stored.expiresAt)) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
@@ -21,7 +22,7 @@ class ApprovalService {
     if (!Object.entries(stored.scope).every(([key, value]) => scope[key] === value)) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     return { allowed: true, approval: { ...stored } };
   }
-  consume(approvalId) { const stored = this.approvals.get(approvalId); if (!stored || stored.used) return false; stored.used = true; stored.usedAt = new Date(this.clock()).toISOString(); return true; }
+  consume(approvalId) { const stored = this.approvals.get(approvalId) || this.repository?.findById?.(approvalId); if (!stored || stored.used) return false; const usedAt = new Date(this.clock()).toISOString(); if (this.repository?.consume && !this.repository.consume(approvalId, usedAt)) return false; stored.used = true; stored.usedAt = usedAt; this.approvals.set(approvalId, stored); return true; }
 }
 
 module.exports = ApprovalService;
