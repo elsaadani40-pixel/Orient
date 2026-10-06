@@ -186,13 +186,17 @@ class OrientRuntime {
     }
 
     const pendingEvents =
-      events.slice(offset);
+      events.slice(offset).map((event) => ({
+        ...event,
+        data: {
+          ...(event.data || {}),
+          tenantId: context.tenantId
+        }
+      }));
 
     const persistedEvents =
       pendingEvents.length
-        ? this.persistence?.events?.appendMany(
-            pendingEvents
-          ) || []
+        ? this.persistence?.events?.appendMany(pendingEvents) || []
         : [];
 
     this.persistedEventOffsets.set(
@@ -329,7 +333,10 @@ class OrientRuntime {
             type: event.type,
             executionId: instance.workflowId,
             timestamp: event.timestamp || new Date().toISOString(),
-            data: event.payload || event
+            data: {
+              ...(event.payload || event),
+              tenantId: this.tenantId
+            }
           });
         }
       },
@@ -397,7 +404,10 @@ class OrientRuntime {
     const context =
       new ExecutionContext({
         requestId,
-        input: text
+        input: text,
+        tenantId: this.tenantId,
+        userId: this.userId,
+        workspaceId: this.workspaceId
       });
 
     context.start();
@@ -728,7 +738,7 @@ class OrientRuntime {
     }
 
     const checkpoint =
-      this.persistence.checkpoints.findLatest(executionId);
+      this.persistence.checkpoints.findLatest(executionId, { tenantId: this.tenantId });
 
     if (!checkpoint) {
       throw Object.assign(
