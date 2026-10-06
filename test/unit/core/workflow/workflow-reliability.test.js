@@ -428,3 +428,52 @@ test('tenant-scoped lease acquisition cannot delete another tenant lease during 
   assert.equal(leases.findByWorkflowId('shared-expired-lease', 'tenant-a').leaseId, 'lease-tenant-a-recovery');
   assert.equal(leases.findByWorkflowId('shared-expired-lease', 'tenant-b'), null);
 });
+
+
+test('JSON durable writes reject cross-tenant workflow and checkpoint collisions', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-tenant-write-'));
+  const WorkflowRepository = require('../../../../src/infrastructure/persistence/json/workflow.repository');
+  const CheckpointRepository = require('../../../../src/infrastructure/persistence/json/checkpoint.repository');
+  const workflows = new WorkflowRepository(path.join(dir, 'workflows.json'));
+  const checkpoints = new CheckpointRepository(path.join(dir, 'checkpoints.json'));
+
+  const a = new WorkflowInstance({ definition: definition(), workflowId: 'json-shared-workflow', tenantId: 'tenant-a' });
+  const b = new WorkflowInstance({ definition: definition(), workflowId: 'json-shared-workflow', tenantId: 'tenant-b' });
+  workflows.save(a);
+  assert.throws(() => workflows.save(b), /Workflow tenant collision/);
+
+  checkpoints.save({ executionId: 'json-shared-execution', tenantId: 'tenant-a' }, { tenantId: 'tenant-a' });
+  assert.throws(
+    () => checkpoints.save({ executionId: 'json-shared-execution', tenantId: 'tenant-b' }, { tenantId: 'tenant-b' }),
+    /Checkpoint tenant collision/
+  );
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('SQLite idempotency rejects cross-tenant key reuse explicitly', () => {
+  const SqlitePersistence = require('../../../../src/infrastructure/persistence/sqlite/sqlite-persistence');
+  const persistence = new SqlitePersistence({ filePath: ':memory:' });
+
+  persistence.idempotency.begin({
+    executionId: 'shared-execution-key',
+    step: 1,
+    tool: 'test',
+    operationId: 'shared-operation',
+    tenantId: 'tenant-a'
+  });
+
+  assert.throws(
+    () => persistence.idempotency.begin({
+      executionId: 'shared-execution-key',
+      step: 1,
+      tool: 'test',
+      operationId: 'shared-operation',
+      tenantId: 'tenant-b'
+    }),
+    /Idempotency tenant mismatch/
+  );
+});
