@@ -261,6 +261,7 @@ class OrientRuntime {
 
     const normalized = {
       intent: plan.intent || null,
+      agentId: plan.agentId || null,
       input: plan.input ?? null,
       steps: Array.isArray(plan.steps)
         ? plan.steps.map((step) => ({
@@ -678,6 +679,7 @@ class OrientRuntime {
         replans += 1;
         planRevision += 1;
         context.metadata.planRevision = planRevision;
+        context.metadata.agentId = plan.agentId || context.metadata.agentId || 'ORIENT_RUNTIME';
         context.metadata.replans = replans;
         previousFingerprint =
           replanValidation.fingerprint;
@@ -890,6 +892,7 @@ class OrientRuntime {
               approval,
               approvals,
               tenantId: this.tenantId,
+              agentId: plan.agentId || context.metadata?.agentId || 'ORIENT_RUNTIME',
               onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'resume_step_completed' } = {}) => {
                 context.metadata.planRevision = checkpointPlanRevision;
                 context.metadata.replans = replans;

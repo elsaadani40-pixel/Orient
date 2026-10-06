@@ -32,6 +32,7 @@ class PlannerService {
             }
           ],
           input: text,
+          agentId: this.resolveAgentId(text),
           requiredCapabilities: ['text-generation'],
           preferredLocality: 'local',
           preferredCostClass: 'free',
@@ -269,13 +270,16 @@ class PlannerService {
     }
 
     const normalized = {
-      ...plan
+      ...plan,
+      agentId: plan.agentId || this.resolveAgentId(plan.intent || '')
     };
 
     if (Array.isArray(plan.steps)) {
       normalized.steps = plan.steps.map(
         (step, index) => ({
           step: index + 1,
+          agentId: step.agentId || normalized.agentId,
+          capability: step.capability || null,
           tool: step.tool || null,
           input:
             this.normalizeStepInput(
@@ -291,6 +295,21 @@ class PlannerService {
     }
 
     return normalized;
+  }
+
+  resolveAgentId(value) {
+    const text = String(value || '').toLowerCase();
+
+    if (
+      text.includes('memory.') ||
+      text.includes('ذاكرة') ||
+      text.includes('محفوظ') ||
+      text.includes('معلوماتي')
+    ) {
+      return 'MEMORY_AGENT';
+    }
+
+    return 'RESEARCH_AGENT';
   }
 
   normalizeStepInput(tool, input) {

@@ -79,6 +79,7 @@ class AgentOrchestrator {
       data: {
         input,
         plan,
+        agentId: plan.agentId || null,
         validation: {
           valid: validation.valid,
           steps: validation.steps.length

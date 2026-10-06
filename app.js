@@ -9,8 +9,8 @@ const MemoryService =
 
 const AgentRegistry =
   require('./src/core/agent/boundary/agent-registry');
-const { AgentDefinition } =
-  require('./src/core/agent/boundary/agent-definition');
+const { registerDefaultAgents } =
+  require('./src/core/agent/catalog/default-agents');
 const MemoryAccessPolicy =
   require('./src/core/memory/memory-access-policy');
 
@@ -67,6 +67,8 @@ const AgentOrchestrator =
   require('./src/core/agent/orchestrator/agent-orchestrator');
 const ModelRouter =
   require('./src/core/model/model-router');
+const ModelRoutingPolicy =
+  require('./src/core/model/model-routing-policy');
 const OllamaProvider =
   require('./src/infrastructure/model/ollama.provider');
 
@@ -97,14 +99,7 @@ const repository =
 const agentRegistry =
   new AgentRegistry();
 
-agentRegistry.register(new AgentDefinition({
-  id: 'ORIENT_RUNTIME',
-  name: 'ORIENT Canonical Runtime',
-  capabilities: ['*'],
-  allowedMemoryScopes: ['*'],
-  allowedAgentTargets: ['*'],
-  risk: 'critical'
-}));
+registerDefaultAgents(agentRegistry);
 
 const memoryAccessPolicy =
   new MemoryAccessPolicy({
@@ -191,8 +186,16 @@ const replanner =
     maxReplans: 3
   });
 
+const modelRoutingPolicy =
+  new ModelRoutingPolicy({
+    agentRegistry,
+    allowRemote: false
+  });
+
 const modelRouter =
-  new ModelRouter();
+  new ModelRouter({
+    policy: modelRoutingPolicy.asFunction()
+  });
 
 if (config.modelProvider === 'ollama') {
   modelRouter.register(new OllamaProvider({
