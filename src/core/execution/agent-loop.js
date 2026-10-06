@@ -1245,6 +1245,21 @@ class AgentLoop {
           capability:
             typeof step.capability === 'string'
               ? step.capability.trim()
+              : null,
+
+          targetAgentId:
+            typeof step.targetAgentId === 'string'
+              ? step.targetAgentId.trim()
+              : null,
+
+          targetCapability:
+            typeof step.targetCapability === 'string'
+              ? step.targetCapability.trim()
+              : null,
+
+          invocationReason:
+            typeof step.invocationReason === 'string'
+              ? step.invocationReason.trim()
               : null
         }));
     }
@@ -1260,7 +1275,10 @@ class AgentLoop {
               : plan.input,
           dependsOn: null,
           agentId: typeof plan.agentId === 'string' ? plan.agentId.trim() : null,
-          capability: typeof plan.capability === 'string' ? plan.capability.trim() : null
+          capability: typeof plan.capability === 'string' ? plan.capability.trim() : null,
+          targetAgentId: typeof plan.targetAgentId === 'string' ? plan.targetAgentId.trim() : null,
+          targetCapability: typeof plan.targetCapability === 'string' ? plan.targetCapability.trim() : null,
+          invocationReason: typeof plan.invocationReason === 'string' ? plan.invocationReason.trim() : null
         }
       ];
     }
