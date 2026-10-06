@@ -11,7 +11,8 @@ class WorkflowScheduler {
     maxRetries = 2,
     baseBackoffMs = 250,
     maxBackoffMs = 30000,
-    workflowRepository = null
+    workflowRepository = null,
+    tenantId = null
   } = {}) {
     if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
       throw new AppError(
@@ -34,6 +35,7 @@ class WorkflowScheduler {
     this.baseBackoffMs = baseBackoffMs;
     this.maxBackoffMs = maxBackoffMs;
     this.workflowRepository = workflowRepository;
+    this.tenantId = tenantId;
     this.queue = [];
     this.active = new Map();
     this.cancelled = new Set();
@@ -42,7 +44,8 @@ class WorkflowScheduler {
       leaseStore ||
       new WorkflowLeaseStore({
         clock,
-        leaseDurationMs
+          leaseDurationMs,
+        tenantId
       });
   }
 
@@ -55,6 +58,14 @@ class WorkflowScheduler {
         'Workflow instance required',
         400,
         'SCHEDULER_WORKFLOW_REQUIRED'
+      );
+    }
+
+    if (this.tenantId && instance.tenantId !== this.tenantId) {
+      throw new AppError(
+        'Workflow tenant does not match scheduler tenant',
+        403,
+        'WORKFLOW_TENANT_MISMATCH'
       );
     }
 
@@ -107,7 +118,7 @@ class WorkflowScheduler {
 
     let recovered = 0;
     const now = this.clock();
-    const persisted = this.workflowRepository.findAll();
+    const persisted = this.workflowRepository.findAll({ tenantId: this.tenantId });
 
     for (const payload of persisted) {
       if (!payload || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state)) {
