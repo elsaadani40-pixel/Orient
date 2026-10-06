@@ -22,7 +22,8 @@ class AgentLoop {
     toolRegistry,
     authorizationService = null,
     idempotencyRepository = null,
-    maxToolInputChars = 50000
+    maxToolInputChars = 50000,
+    agentRegistry = null
   }) {
     if (!toolRegistry) {
       throw new TypeError('toolRegistry is required');
@@ -32,6 +33,7 @@ class AgentLoop {
     this.authorizationService =
       authorizationService;
     this.maxToolInputChars = maxToolInputChars;
+    this.agentRegistry = agentRegistry;
 
     this.name = 'ORIENT_AGENT_LOOP';
     this.version = '0.8.2';
@@ -177,6 +179,14 @@ class AgentLoop {
         step,
         stepNumber,
         completedSteps,
+        context
+      });
+
+      const agentAuthorization = this.authorizeAgentStep({
+        step,
+        stepNumber,
+        plan,
+        runtimeContext,
         context
       });
 
@@ -1103,6 +1113,49 @@ class AgentLoop {
     };
   }
 
+  authorizeAgentStep({ step, stepNumber, plan, runtimeContext, context }) {
+    if (!this.agentRegistry) {
+      return null;
+    }
+
+    const agentId =
+      step.agentId ||
+      plan.agentId ||
+      runtimeContext.agentId ||
+      'ORIENT_RUNTIME';
+
+    const capability =
+      step.capability ||
+      `tool:${step.tool}`;
+
+    const agent = this.agentRegistry.require(agentId);
+
+    if (!agent.canUseCapability(capability)) {
+      context.record('agent.boundary.denied', {
+        step: stepNumber,
+        agentId,
+        capability,
+        tool: step.tool,
+        reason: 'capability_not_declared'
+      });
+
+      throw new AppError(
+        `Agent "${agentId}" is not authorized for capability "${capability}"`,
+        403,
+        'AGENT_CAPABILITY_FORBIDDEN'
+      );
+    }
+
+    context.record('agent.boundary.authorized', {
+      step: stepNumber,
+      agentId,
+      capability,
+      tool: step.tool
+    });
+
+    return { agentId, capability };
+  }
+
   normalizeSteps(plan) {
     if (Array.isArray(plan.steps)) {
       return plan.steps
@@ -1130,7 +1183,17 @@ class AgentLoop {
           dependsOn:
             step.dependsOn === undefined
               ? null
-              : step.dependsOn
+              : step.dependsOn,
+
+          agentId:
+            typeof step.agentId === 'string'
+              ? step.agentId.trim()
+              : null,
+
+          capability:
+            typeof step.capability === 'string'
+              ? step.capability.trim()
+              : null
         }));
     }
 
@@ -1143,7 +1206,9 @@ class AgentLoop {
             plan.input === undefined
               ? null
               : plan.input,
-          dependsOn: null
+          dependsOn: null,
+          agentId: typeof plan.agentId === 'string' ? plan.agentId.trim() : null,
+          capability: typeof plan.capability === 'string' ? plan.capability.trim() : null
         }
       ];
     }

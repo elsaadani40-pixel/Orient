@@ -29,7 +29,7 @@ class AgentDefinition {
   }
 
   canUseCapability(name) {
-    return this.capabilities.includes(name);
+    return this.capabilities.includes('*') || this.capabilities.includes(name);
   }
 
   canReadMemory(scope) {
