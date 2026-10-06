@@ -33,7 +33,7 @@ class WorkflowLeaseStore {
     // This is required for multi-process workers; a read-then-write sequence
     // can otherwise allow two workers to acquire the same workflow.
     if (this.repository?.tryAcquire) {
-      const acquired = this.repository.tryAcquire(lease);
+      const acquired = this.repository.tryAcquire(lease, this.tenantId);
       if (!acquired) {
         throw new AppError('Workflow lease is already held', 409, 'WORKFLOW_LEASE_HELD');
       }
@@ -58,7 +58,8 @@ class WorkflowLeaseStore {
         workflowId,
         leaseId,
         expiresAt,
-        this.now()
+        this.now(),
+        this.tenantId
       );
       if (!renewed) {
         this.memory.delete(workflowId);
@@ -101,7 +102,7 @@ class WorkflowLeaseStore {
       if (lease.expiresAt <= now) {
         this.memory.delete(lease.workflowId);
         if (this.repository?.deleteExpired) {
-          this.repository.deleteExpired(lease.workflowId, lease.leaseId, now);
+          this.repository.deleteExpired(lease.workflowId, lease.leaseId, now, this.tenantId);
         }
         expired.push({ ...lease });
       }
