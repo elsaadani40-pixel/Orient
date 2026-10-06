@@ -76,7 +76,8 @@ class IdempotencyRepository {
     executionId,
     step,
     tool,
-    planRevision = 1
+    planRevision = 1,
+    operationId = null
   } = {}) {
     if (!executionId) {
       throw new TypeError('executionId is required');
@@ -90,7 +91,7 @@ class IdempotencyRepository {
       throw new TypeError('tool is required');
     }
 
-    return `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
+    return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
 
   findByKey(key) {
@@ -107,13 +108,15 @@ class IdempotencyRepository {
     executionId,
     step,
     tool,
-    planRevision = 1
+    planRevision = 1,
+    operationId = null
   } = {}) {
     const key = this.buildKey({
       executionId,
       step,
       tool,
-      planRevision
+      planRevision,
+      operationId
     });
 
     return this.findByKey(key);
@@ -123,13 +126,15 @@ class IdempotencyRepository {
     executionId,
     step,
     tool,
-    planRevision = 1
+    planRevision = 1,
+    operationId = null
   } = {}) {
     const key = this.buildKey({
       executionId,
       step,
       tool,
-      planRevision
+      planRevision,
+      operationId
     });
 
     const records = this.read();
@@ -149,6 +154,7 @@ class IdempotencyRepository {
       step,
       tool,
       planRevision,
+      operationId,
       status: 'running',
       result: null,
       error: null,
