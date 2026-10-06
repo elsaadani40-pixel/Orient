@@ -12,13 +12,21 @@ const AgentLoop =
 const ApprovalService =
   require('../agent/approval/approval-service');
 
+const {
+  WorkflowDefinition,
+  WorkflowInstance,
+  WorkflowScheduler,
+  WorkflowWorker
+} = require('../workflow');
+
 class OrientRuntime {
   constructor({
     toolRegistry,
     agentOrchestrator,
     authorizationService = null,
     approvalService = null,
-    persistence = null
+    persistence = null,
+    workflowScheduler = null
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -55,6 +63,12 @@ class OrientRuntime {
 
     this.persistence =
       persistence;
+
+    this.workflowScheduler =
+      workflowScheduler ||
+      new WorkflowScheduler({
+        maxConcurrent: 1
+      });
 
     this.persistedEventOffsets =
       new WeakMap();
@@ -223,6 +237,86 @@ class OrientRuntime {
       valid: true,
       fingerprint
     };
+  }
+
+  async executeWorkflow(input, { approval = null, approvals = {}, priority = 0, deadlineAt = null } = {}) {
+    const text = String(input || '').trim();
+
+    if (!text) {
+      return {
+        type: 'error',
+        message: 'لم يتم إرسال طلب.'
+      };
+    }
+
+    const definition = new WorkflowDefinition({
+      id: 'orient.request.execution',
+      version: 1,
+      name: 'ORIENT Request Execution',
+      steps: [
+        {
+          id: 'agent-runtime',
+          agent: 'ORIENT_RUNTIME',
+          metadata: {
+            executionMode: 'canonical-agent-runtime'
+          }
+        }
+      ]
+    });
+
+    const instance = new WorkflowInstance({
+      definition,
+      tenantId: 'local',
+      input: { text }
+    });
+
+    this.workflowScheduler.enqueue(instance, {
+      priority,
+      deadlineAt
+    });
+
+    const worker = new WorkflowWorker({
+      scheduler: this.workflowScheduler,
+      eventSink: (event) => {
+        if (this.persistence?.events?.append) {
+          this.persistence.events.append({
+            eventId: crypto.randomUUID(),
+            type: event.type,
+            timestamp: new Date().toISOString(),
+            payload: event
+          });
+        }
+      },
+      executor: async () => this.execute(text, {
+        approval,
+        approvals
+      })
+    });
+
+    const completed = await worker.tick();
+
+    if (!completed) {
+      throw Object.assign(
+        new Error('Workflow could not acquire a worker lease'),
+        { code: 'WORKFLOW_LEASE_UNAVAILABLE' }
+      );
+    }
+
+    if (completed.state === WorkflowInstance.STATES.COMPLETED) {
+      return completed.steps['agent-runtime'].result;
+    }
+
+    throw Object.assign(
+      new Error(
+        completed.steps['agent-runtime']?.error?.message ||
+        'Workflow execution failed'
+      ),
+      {
+        code:
+          completed.steps['agent-runtime']?.error?.code ||
+          'WORKFLOW_EXECUTION_FAILED'
+      }
+    );
   }
 
   async execute(input, { approval = null, approvals = {} } = {}) {
