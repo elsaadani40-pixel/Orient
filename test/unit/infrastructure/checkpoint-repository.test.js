@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const CheckpointRepository =
-  require('../../../../src/infrastructure/persistence/json/checkpoint.repository');
+  require('../../../src/infrastructure/persistence/json/checkpoint.repository');
 
 test('checkpoint repository stores the latest snapshot and verifies integrity', () => {
   const directory = fs.mkdtempSync(
