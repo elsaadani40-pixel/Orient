@@ -223,7 +223,8 @@ class ExecutionContext {
   startStep({
     step,
     tool,
-    planRevision = 1
+    planRevision = 1,
+    operationId = null
   }) {
     if (!this.isActive()) {
       throw new Error(
@@ -258,6 +259,7 @@ class ExecutionContext {
     const stepState = {
       step,
       planRevision,
+      operationId,
       tool,
       status: 'running',
       startedAt:
@@ -276,7 +278,8 @@ class ExecutionContext {
       {
         step,
         tool,
-        planRevision
+        planRevision,
+        operationId
       }
     );
 
