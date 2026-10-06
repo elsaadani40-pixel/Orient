@@ -111,7 +111,7 @@ class OrientRuntime {
     );
   }
 
-  checkpoint(context, mode = 'update') {
+  checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
     if (!context) {
       throw new TypeError('context is required');
     }
@@ -147,10 +147,16 @@ class OrientRuntime {
       events.length
     );
 
+    const durableCheckpoint =
+      this.persistence?.checkpoints?.save
+        ? this.persistence.checkpoints.save(snapshot, { reason })
+        : null;
+
     return {
       snapshot,
       events: persistedEvents,
-      eventCount: persistedEvents.length
+      eventCount: persistedEvents.length,
+      checkpoint: durableCheckpoint
     };
   }
 
@@ -311,7 +317,14 @@ class OrientRuntime {
               plan,
               planRevision,
               approval,
-              approvals
+              approvals,
+              onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'step_completed' } = {}) => {
+                this.checkpoint(
+                  context,
+                  'update',
+                  reason + ':plan-' + checkpointPlanRevision + ':step-' + step
+                );
+              }
             }
           });
 
