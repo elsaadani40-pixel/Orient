@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {WorkflowDefinition,WorkflowInstance,WorkflowScheduler,WorkflowWorker}=require('../../../src/core/workflow');
+const {WorkflowDefinition,WorkflowInstance,WorkflowScheduler,WorkflowWorker}=require('../../../../src/core/workflow');
 
 test('workflow definition rejects cycles and preserves versioned identity',()=>{
   assert.throws(()=>new WorkflowDefinition({id:'cyclic',name:'Cyclic',steps:[{id:'a',dependsOn:['b']},{id:'b',dependsOn:['a']}]}),/cycle/i);
