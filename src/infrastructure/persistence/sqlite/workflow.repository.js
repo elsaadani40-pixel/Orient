@@ -71,6 +71,8 @@ class SqliteWorkflowLeaseRepository {
 
   save(lease, tenantId = null) {
     if (tenantId && lease.metadata?.tenantId !== tenantId) throw new Error('Lease tenant mismatch');
+    const existing = this.findByWorkflowId(lease.workflowId);
+    if (existing && existing.leaseId !== lease.leaseId && existing.metadata?.tenantId !== lease.metadata?.tenantId) throw new Error('Lease tenant collision');
     this.db.run('INSERT INTO workflow_leases(workflow_id,lease_id,worker_id,acquired_at,expires_at,payload) VALUES (' +
       this.db.constructor.literal(lease.workflowId) + ',' + this.db.constructor.literal(lease.leaseId) + ',' +
       this.db.constructor.literal(lease.workerId) + ',' + this.db.constructor.literal(new Date(lease.acquiredAt).toISOString()) + ',' +
