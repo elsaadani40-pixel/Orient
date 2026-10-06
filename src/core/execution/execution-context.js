@@ -222,7 +222,8 @@ class ExecutionContext {
 
   startStep({
     step,
-    tool
+    tool,
+    planRevision = 1
   }) {
     if (!this.isActive()) {
       throw new Error(
@@ -256,6 +257,7 @@ class ExecutionContext {
 
     const stepState = {
       step,
+      planRevision,
       tool,
       status: 'running',
       startedAt:
@@ -273,7 +275,8 @@ class ExecutionContext {
       'execution.step.started',
       {
         step,
-        tool
+        tool,
+        planRevision
       }
     );
 
@@ -306,12 +309,14 @@ class ExecutionContext {
   completeStep({
     step,
     tool,
-    result
+    result,
+    planRevision = 1
   }) {
     const stepState =
       this.steps.find(
         (item) =>
-          item.step === step
+          item.step === step &&
+          Number(item.planRevision || 1) === planRevision
       );
 
     if (!stepState) {
@@ -336,7 +341,8 @@ class ExecutionContext {
       'execution.step.completed',
       {
         step,
-        tool
+        tool,
+        planRevision
       }
     );
 
@@ -346,12 +352,14 @@ class ExecutionContext {
   failStep({
     step,
     tool,
-    error
+    error,
+    planRevision = 1
   }) {
     const stepState =
       this.steps.find(
         (item) =>
-          item.step === step
+          item.step === step &&
+          Number(item.planRevision || 1) === planRevision
       );
 
     if (!stepState) {
@@ -384,6 +392,7 @@ class ExecutionContext {
       {
         step,
         tool,
+        planRevision,
         code:
           normalizedError.code
       }
