@@ -37,7 +37,7 @@ class IdempotencyStore {
     return Boolean(this.get(key));
   }
 
-  get(key) {
+  get(key, tenantId = null) {
     if (this.repository) {
       return this.repository.findByKey(key, { tenantId });
     }
