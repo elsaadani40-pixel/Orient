@@ -1,0 +1,14 @@
+{
+  "name": "orient-one",
+  "version": "0.9.0",
+  "private": true,
+  "description": "ORIENT ONE — autonomous personal AI runtime and durable agent execution platform",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check:syntax": "find src test -type f -name '*.js' -print0 | xargs -0 -n1 node --check"
+  }
+}
