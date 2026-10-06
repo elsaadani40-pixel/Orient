@@ -386,6 +386,20 @@ class OrientRuntime {
         const nextValidation =
           nextOrchestration.validation;
 
+        if (
+          !nextValidation ||
+          nextValidation.valid !== true
+        ) {
+          throw Object.assign(
+            new Error(
+              'الخطة الجديدة لم تجتز التحقق'
+            ),
+            {
+              code: 'INVALID_REPLAN_VALIDATION'
+            }
+          );
+        }
+
         const replanValidation =
           this.validateReplannedPlan(
             nextPlan,
@@ -487,7 +501,7 @@ class OrientRuntime {
       }
 
       const recovery =
-        this.classifyRecovery({
+        await this.classifyRecovery({
           error,
           context
         });
