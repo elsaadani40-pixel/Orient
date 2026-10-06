@@ -99,7 +99,7 @@ class WorkflowLeaseStore {
       if (lease.expiresAt <= now) {
         this.memory.delete(lease.workflowId);
         if (this.repository?.deleteExpired) {
-          this.repository.deleteExpired(lease.workflowId, lease.leaseId);
+          this.repository.deleteExpired(lease.workflowId, lease.leaseId, now);
         }
         expired.push({ ...lease });
       }
@@ -110,7 +110,7 @@ class WorkflowLeaseStore {
   all() {
     const persisted = this.repository?.findAll?.() || [];
     const merged = new Map(persisted.map(item => [item.workflowId, item]));
-    for (const [id, lease] of this.memory) merged.set(id, lease);
+    for (const [id, lease] of this.memory) {\n      if (!merged.has(id)) merged.set(id, lease);\n    }
     return [...merged.values()];
   }
 
