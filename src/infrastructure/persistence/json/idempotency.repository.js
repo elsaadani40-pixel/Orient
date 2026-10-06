@@ -94,14 +94,15 @@ class IdempotencyRepository {
     return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
 
-  findByKey(key) {
+  findByKey(key, { tenantId = null } = {}) {
     if (!key) {
       return null;
     }
 
-    const records = this.read();
-
-    return records[key] || null;
+    const record = this.read()[key] || null;
+    return record && (!tenantId || record.tenantId === tenantId)
+      ? record
+      : null;
   }
 
   find({
