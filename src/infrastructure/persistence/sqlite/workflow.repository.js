@@ -39,7 +39,8 @@ class SqliteWorkflowRepository {
 class SqliteWorkflowLeaseRepository {
   constructor(db) { this.db = db; }
 
-  tryAcquire(lease) {
+  tryAcquire(lease, tenantId = null) {
+    if (tenantId && lease.metadata?.tenantId !== tenantId) return null;
     const workflowId = this.db.constructor.literal(lease.workflowId);
     const expiresAt = this.db.constructor.literal(new Date(lease.expiresAt).toISOString());
     const leaseId = this.db.constructor.literal(lease.leaseId);
@@ -60,11 +61,12 @@ class SqliteWorkflowLeaseRepository {
        );`
     ]);
 
-    const current = this.findByWorkflowId(lease.workflowId);
+    const current = this.findByWorkflowId(lease.workflowId, tenantId);
     return current && current.leaseId === lease.leaseId ? { ...lease } : null;
   }
 
-  save(lease) {
+  save(lease, tenantId = null) {
+    if (tenantId && lease.metadata?.tenantId !== tenantId) throw new Error('Lease tenant mismatch');
     this.db.run('INSERT INTO workflow_leases(workflow_id,lease_id,worker_id,acquired_at,expires_at,payload) VALUES (' +
       this.db.constructor.literal(lease.workflowId) + ',' + this.db.constructor.literal(lease.leaseId) + ',' +
       this.db.constructor.literal(lease.workerId) + ',' + this.db.constructor.literal(new Date(lease.acquiredAt).toISOString()) + ',' +
@@ -73,8 +75,8 @@ class SqliteWorkflowLeaseRepository {
     return { ...lease };
   }
 
-  renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now()) {
-    const current = this.findByWorkflowId(workflowId);
+  renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null) {
+    const current = this.findByWorkflowId(workflowId, tenantId);
     if (!current || current.leaseId !== leaseId) return false;
     const nowIso = new Date(now).toISOString();
 
@@ -108,12 +110,16 @@ class SqliteWorkflowLeaseRepository {
       .filter(payload => !tenantId || payload.metadata?.tenantId === tenantId);
   }
 
-  delete(workflowId, leaseId) {
+  delete(workflowId, leaseId, tenantId = null) {
+    const current = this.findByWorkflowId(workflowId, tenantId);
+    if (!current || current.leaseId !== leaseId) return false;
     const result = this.db.query('DELETE FROM workflow_leases WHERE workflow_id=' + this.db.constructor.literal(workflowId) + ' AND lease_id=' + this.db.constructor.literal(leaseId) + '; SELECT changes() AS changes;');
     return Boolean(result.length && Number(result[result.length - 1].changes) === 1);
   }
 
-  deleteExpired(workflowId, leaseId, now = Date.now()) {
+  deleteExpired(workflowId, leaseId, now = Date.now(), tenantId = null) {
+    const current = this.findByWorkflowId(workflowId, tenantId);
+    if (!current || current.leaseId !== leaseId) return false;
     const result = this.db.query(
       'DELETE FROM workflow_leases WHERE workflow_id=' +
       this.db.constructor.literal(workflowId) +
