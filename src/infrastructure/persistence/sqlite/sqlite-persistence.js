@@ -26,7 +26,7 @@ class SqliteExecutionRepository {
     const rows = this.db.query(`SELECT payload FROM executions WHERE execution_id=${SqliteDatabase.literal(executionId)} LIMIT 1;`);
     if (!rows.length) return null;
     const item = JSON.parse(rows[0].payload);
-    return tenantId && item.metadata?.tenantId !== tenantId ? null : item;
+    return tenantId && item.metadata?.tenantId !== tenantId && !(tenantId === 'local' && !item.metadata?.tenantId) ? null : item;
   }
 
   findAll({ tenantId = null } = {}) {
