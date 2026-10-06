@@ -71,13 +71,21 @@ class SqliteWorkflowLeaseRepository {
   }
 
   renewIfOwned(workflowId, leaseId, expiresAt) {
+    const current = this.findByWorkflowId(workflowId);
+    if (!current || current.leaseId !== leaseId) return false;
+
+    const renewed = {
+      ...current,
+      expiresAt
+    };
+
     const result = this.db.query(
       'UPDATE workflow_leases SET expires_at=' +
       this.db.constructor.literal(new Date(expiresAt).toISOString()) +
-      ', payload=json_set(payload, '$.expiresAt', ' + this.db.constructor.literal(expiresAt) + ')' +
+      ', payload=' + this.db.constructor.json(renewed) +
       ' WHERE workflow_id=' + this.db.constructor.literal(workflowId) +
       ' AND lease_id=' + this.db.constructor.literal(leaseId) +
-      ' AND expires_at > datetime('now')' +
+      ' AND julianday(expires_at) > julianday(\'now\')' +
       '; SELECT changes() AS changes;'
     );
     return Boolean(result.length && Number(result[result.length - 1].changes) === 1);
