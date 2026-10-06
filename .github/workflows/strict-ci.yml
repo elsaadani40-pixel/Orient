@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git grep -nE '(AIzaSy|ghp_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' -- ':!AGENT.md'; then
+          if git grep -nE '(AIzaSy|ghp_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' -- ':!AGENT.md' ':!.github/workflows/strict-ci.yml'; then
             echo "Potential credential material detected"
             exit 1
           fi
