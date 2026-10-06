@@ -8,7 +8,8 @@ class AgentOrchestrator {
     replanner,
     decisionEngine,
     recoveryEngine,
-    eventPublisher = null
+    eventPublisher = null,
+    modelRouter = null
   } = {}) {
     if (!planner) {
       throw new TypeError('planner is required');
@@ -36,6 +37,7 @@ class AgentOrchestrator {
     this.decisionEngine = decisionEngine;
     this.recoveryEngine = recoveryEngine;
     this.eventPublisher = eventPublisher;
+    this.modelRouter = modelRouter;
   }
 
   async publishEvent({
@@ -57,7 +59,10 @@ class AgentOrchestrator {
   }
 
   async plan(input, context = {}) {
-    const planned = await this.planner.plan(input);
+    const planned = await this.planner.plan(input, {
+      modelRouter: this.modelRouter,
+      context
+    });
 
     const validation =
       this.planValidator.validate(planned);
@@ -77,7 +82,8 @@ class AgentOrchestrator {
         validation: {
           valid: validation.valid,
           steps: validation.steps.length
-        }
+        },
+        routing: planned.routing || null
       }
     });
 
@@ -85,6 +91,28 @@ class AgentOrchestrator {
       plan,
       validation
     };
+  }
+
+  async completeModel(request = {}, context = {}) {
+    if (!this.modelRouter) {
+      throw Object.assign(
+        new Error('Model router is not configured'),
+        { code: 'MODEL_ROUTER_REQUIRED' }
+      );
+    }
+
+    const result = await this.modelRouter.complete(request);
+
+    await this.publishEvent({
+      type: 'model.routing.completed',
+      executionId: context.executionId || null,
+      goalId: context.goalId || null,
+      data: {
+        routing: result.routing || null
+      }
+    });
+
+    return result;
   }
 
   async replan({
