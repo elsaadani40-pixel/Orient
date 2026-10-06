@@ -771,6 +771,10 @@ class ExecutionContext {
       parentExecutionId:
         this.parentExecutionId,
 
+      tenantId: this.tenantId,
+      userId: this.userId,
+      workspaceId: this.workspaceId,
+
       executionVersion:
         this.executionVersion,
 
