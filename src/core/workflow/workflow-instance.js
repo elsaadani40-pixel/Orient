@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const AppError = require('../errors/app-error');
+const AppError = require('../errors/AppError');
 const WorkflowDefinition = require('./workflow-definition');
 
 const STATES=Object.freeze({ CREATED:'CREATED', QUEUED:'QUEUED', RUNNING:'RUNNING', WAITING:'WAITING', COMPLETED:'COMPLETED', FAILED:'FAILED', CANCELLED:'CANCELLED', RECOVERING:'RECOVERING' });
