@@ -258,10 +258,15 @@ ${empty}
 }
 
 function createMemoryRoutes(memoryService, config) {
+  const memoryContext = {
+    agentId: 'ORIENT_RUNTIME',
+    tenantId: config.defaultTenantId || 'local'
+  };
+
   return {
     home(req, res, url) {
       const query = (url.searchParams.get('q') || '').trim();
-      const memories = memoryService.list(query);
+      const memories = memoryService.list(query, memoryContext);
 
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
@@ -274,7 +279,7 @@ function createMemoryRoutes(memoryService, config) {
     add(req, res, body) {
       const text = new URLSearchParams(body).get('text') || '';
 
-      memoryService.add(text);
+      memoryService.add(text, {}, memoryContext);
 
       res.writeHead(303, {
         Location: '/'
@@ -286,7 +291,7 @@ function createMemoryRoutes(memoryService, config) {
     delete(req, res, body) {
       const id = new URLSearchParams(body).get('id') || '';
 
-      memoryService.delete(id);
+      memoryService.delete(id, memoryContext);
 
       res.writeHead(303, {
         Location: '/'
