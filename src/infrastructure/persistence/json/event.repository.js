@@ -127,38 +127,23 @@ class EventRepository {
     return unique;
   }
 
-  findAll() {
-    return this.read();
+  findAll({ tenantId = null } = {}) {
+    return this.read().filter(event => !tenantId || event.data?.tenantId === tenantId);
   }
 
-  findByExecutionId(executionId) {
-    if (!executionId) {
-      return [];
-    }
-
-    return this.read().filter(
-      event => event.executionId === executionId
-    );
+  findByExecutionId(executionId, { tenantId = null } = {}) {
+    if (!executionId) return [];
+    return this.findAll({ tenantId }).filter(event => event.executionId === executionId);
   }
 
-  findByGoalId(goalId) {
-    if (!goalId) {
-      return [];
-    }
-
-    return this.read().filter(
-      event => event.goalId === goalId
-    );
+  findByGoalId(goalId, { tenantId = null } = {}) {
+    if (!goalId) return [];
+    return this.findAll({ tenantId }).filter(event => event.goalId === goalId);
   }
 
-  findByType(type) {
-    if (!type) {
-      return [];
-    }
-
-    return this.read().filter(
-      event => event.type === type
-    );
+  findByType(type, { tenantId = null } = {}) {
+    if (!type) return [];
+    return this.findAll({ tenantId }).filter(event => event.type === type);
   }
 
   count() {
