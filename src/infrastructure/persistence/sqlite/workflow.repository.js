@@ -12,19 +12,22 @@ class SqliteWorkflowRepository {
     return item;
   }
 
-  findById(workflowId) {
-    const rows = this.db.query('SELECT payload FROM workflows WHERE workflow_id=' + this.db.constructor.literal(workflowId) + ' LIMIT 1;');
+  findById(workflowId, tenantId = null) {
+    const tenantClause = tenantId ? ' AND tenant_id=' + this.db.constructor.literal(tenantId) : '';
+    const rows = this.db.query('SELECT payload FROM workflows WHERE workflow_id=' + this.db.constructor.literal(workflowId) + tenantClause + ' LIMIT 1;');
     return rows.length ? JSON.parse(rows[0].payload) : null;
   }
 
-  findAll() {
-    return this.db.query('SELECT payload FROM workflows ORDER BY updated_at DESC;').map(row => JSON.parse(row.payload));
+  findAll({ tenantId = null } = {}) {
+    const tenantClause = tenantId ? ' WHERE tenant_id=' + this.db.constructor.literal(tenantId) : '';
+    return this.db.query('SELECT payload FROM workflows' + tenantClause + ' ORDER BY updated_at DESC;').map(row => JSON.parse(row.payload));
   }
 
-  delete(workflowId) {
-    const found = this.findById(workflowId);
+  delete(workflowId, tenantId = null) {
+    const found = this.findById(workflowId, tenantId);
     if (!found) return false;
-    this.db.run('DELETE FROM workflows WHERE workflow_id=' + this.db.constructor.literal(workflowId) + ';');
+    const tenantClause = tenantId ? ' AND tenant_id=' + this.db.constructor.literal(tenantId) : '';
+    this.db.run('DELETE FROM workflows WHERE workflow_id=' + this.db.constructor.literal(workflowId) + tenantClause + ';');
     return true;
   }
 
@@ -92,13 +95,17 @@ class SqliteWorkflowLeaseRepository {
     return Boolean(result.length && Number(result[result.length - 1].changes) === 1);
   }
 
-  findByWorkflowId(workflowId) {
+  findByWorkflowId(workflowId, tenantId = null) {
     const rows = this.db.query('SELECT payload FROM workflow_leases WHERE workflow_id=' + this.db.constructor.literal(workflowId) + ' LIMIT 1;');
-    return rows.length ? JSON.parse(rows[0].payload) : null;
+    if (!rows.length) return null;
+    const payload = JSON.parse(rows[0].payload);
+    return tenantId && payload.metadata?.tenantId !== tenantId ? null : payload;
   }
 
-  findAll() {
-    return this.db.query('SELECT payload FROM workflow_leases ORDER BY acquired_at ASC;').map(row => JSON.parse(row.payload));
+  findAll({ tenantId = null } = {}) {
+    return this.db.query('SELECT payload FROM workflow_leases ORDER BY acquired_at ASC;')
+      .map(row => JSON.parse(row.payload))
+      .filter(payload => !tenantId || payload.metadata?.tenantId === tenantId);
   }
 
   delete(workflowId, leaseId) {
