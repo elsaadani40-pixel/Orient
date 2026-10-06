@@ -3,8 +3,12 @@ const crypto = require('crypto');
 class SqliteWorkflowRepository {
   constructor(db) { this.db = db; }
 
-  save(instance) {
+  save(instance, tenantId = null) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenantId = item.tenantId || 'local';
+    if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
+    const existing = this.findById(item.workflowId);
+    if (existing && (existing.tenantId || 'local') !== effectiveTenantId) throw new Error('Workflow tenant collision');
     this.db.run('INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES (' +
       this.db.constructor.literal(item.workflowId) + ',' + this.db.constructor.literal(item.tenantId || 'local') + ',' +
       this.db.constructor.literal(item.state) + ',' + this.db.constructor.literal(item.updatedAt || new Date().toISOString()) + ',' +
