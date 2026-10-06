@@ -1,0 +1,8 @@
+const WorkflowInstance = require('./workflow-instance');
+const WorkflowDefinition = require('./workflow-definition');
+
+class WorkflowWorker {
+  constructor({ scheduler, executor, eventSink=()=>{} }) { this.scheduler=scheduler; this.executor=executor; this.eventSink=eventSink; }
+  async tick(){ const lease=this.scheduler.lease(); if(!lease)return null; const instance=lease.instance; this.eventSink({type:'workflow.lease.acquired',workflowId:instance.workflowId,leaseId:lease.leaseId}); try { while(true){ if(lease.cancelled){instance.transition('CANCELLED');break;} const ready=instance.readySteps(); if(!ready.length){ if(instance.definition.steps.every(s=>instance.steps[s.id].state===WorkflowDefinition.STEP_STATES.COMPLETED)) instance.transition('COMPLETED'); else instance.transition('FAILED'); break; } const step=ready[0]; instance.markStepRunning(step.id); this.eventSink({type:'workflow.step.started',workflowId:instance.workflowId,stepId:step.id}); try { const result=await this.executor({instance,step,lease}); instance.markStepCompleted(step.id,result); this.eventSink({type:'workflow.step.completed',workflowId:instance.workflowId,stepId:step.id}); } catch(error){ instance.markStepFailed(step.id,error); instance.transition('FAILED'); this.eventSink({type:'workflow.step.failed',workflowId:instance.workflowId,stepId:step.id,error:{message:error?.message,code:error?.code}}); break; } } return instance; } finally { this.scheduler.release(instance.workflowId); this.eventSink({type:'workflow.lease.released',workflowId:instance.workflowId,leaseId:lease.leaseId}); } }
+}
+module.exports=WorkflowWorker;
