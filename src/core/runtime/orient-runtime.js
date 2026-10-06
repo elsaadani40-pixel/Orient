@@ -57,6 +57,10 @@ class OrientRuntime {
     this.authorizationService =
       authorizationService;
 
+    if (this.authorizationService && typeof this.toolRegistry.requireAuthorization === 'function') {
+      this.toolRegistry.requireAuthorization();
+    }
+
     this.approvalService =
       approvalService ||
       (persistence?.approvals
