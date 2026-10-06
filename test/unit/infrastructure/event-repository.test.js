@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const EventRepository =
-  require('../../../../src/infrastructure/persistence/json/event.repository');
+  require('../../../src/infrastructure/persistence/json/event.repository');
 
 test('event persistence is replay-safe by event id', () => {
   const directory = fs.mkdtempSync(
