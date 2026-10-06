@@ -1183,7 +1183,17 @@ class AgentLoop {
           dependsOn:
             step.dependsOn === undefined
               ? null
-              : step.dependsOn
+              : step.dependsOn,
+
+          agentId:
+            typeof step.agentId === 'string'
+              ? step.agentId.trim()
+              : null,
+
+          capability:
+            typeof step.capability === 'string'
+              ? step.capability.trim()
+              : null
         }));
     }
 
