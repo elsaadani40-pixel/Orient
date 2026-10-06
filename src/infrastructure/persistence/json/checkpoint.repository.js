@@ -72,10 +72,11 @@ class CheckpointRepository {
     return JSON.parse(JSON.stringify(checkpoint));
   }
 
-  findLatest(executionId, { verify = true } = {}) {
+  findLatest(executionId, { verify = true, tenantId = null } = {}) {
     if (!executionId) return null;
     const checkpoint = this.read()[executionId] || null;
     if (!checkpoint) return null;
+    if (tenantId && checkpoint.snapshot?.metadata?.tenantId !== tenantId) return null;
 
     if (verify && checkpoint.snapshotSha256 !== this.digest(checkpoint.snapshot)) {
       const error = new Error(`Checkpoint integrity verification failed: ${executionId}`);
