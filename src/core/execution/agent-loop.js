@@ -115,7 +115,8 @@ class AgentLoop {
       steps,
       context,
       completedSteps,
-      stepResults
+      stepResults,
+      planRevision
     });
 
     if (stepResults.length > 0) {
@@ -291,7 +292,8 @@ class AgentLoop {
 
       context.startStep({
         step: stepNumber,
-        tool: step.tool
+        tool: step.tool,
+        planRevision
       });
 
       const idempotency =
@@ -333,7 +335,8 @@ class AgentLoop {
           context.completeStep({
             step: stepNumber,
             tool: step.tool,
-            result: existing.result
+            result: existing.result,
+            planRevision
           });
 
           context.addObservation({
@@ -484,7 +487,8 @@ class AgentLoop {
         context.completeStep({
           step: stepNumber,
           tool: step.tool,
-          result
+          result,
+          planRevision
         });
 
         context.addObservation({
@@ -575,7 +579,8 @@ class AgentLoop {
         context.failStep({
           step: stepNumber,
           tool: step.tool,
-          error
+          error,
+          planRevision
         });
 
         context.addObservation({
@@ -650,7 +655,8 @@ class AgentLoop {
     steps,
     context,
     completedSteps,
-    stepResults
+    stepResults,
+    planRevision = 1
   }) {
     if (!context || !Array.isArray(context.steps)) {
       return;
@@ -661,7 +667,8 @@ class AgentLoop {
         .filter(
           (item) =>
             item &&
-            item.status === 'completed'
+            item.status === 'completed' &&
+            Number(item.planRevision || 1) === planRevision
         )
         .sort(
           (a, b) =>
@@ -703,6 +710,7 @@ class AgentLoop {
 
       stepResults.push({
         step: stepNumber,
+        planRevision,
         tool:
           persistedStep.tool ||
           currentStep.tool,
