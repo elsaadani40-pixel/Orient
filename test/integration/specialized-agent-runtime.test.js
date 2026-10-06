@@ -92,7 +92,7 @@ test('specialized agent completes a real end-to-end model-planned task through c
 
   const result = await runtime.execute('ابحث عن القاهرة');
 
-  assert.equal(result.type, 'success');
+  assert.equal(result.type, 'memory_result');
   assert.equal(result.result.query, 'القاهرة');
   assert.equal(executionContext.agentId, 'MEMORY_AGENT');
   assert.equal(executionContext.capability, 'tool:memory.search');
