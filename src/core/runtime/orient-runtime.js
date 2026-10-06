@@ -311,6 +311,7 @@ class OrientRuntime {
           this.persistence.events.append({
             id: event.eventId || crypto.randomUUID(),
             type: event.type,
+            executionId: instance.workflowId,
             timestamp: event.timestamp || new Date().toISOString(),
             data: event.payload || event
           });
