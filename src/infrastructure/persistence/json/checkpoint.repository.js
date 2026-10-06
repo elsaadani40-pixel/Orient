@@ -44,12 +44,15 @@ class CheckpointRepository {
       .digest('hex');
   }
 
-  save(snapshot, { reason = 'step_completed' } = {}) {
+  save(snapshot, { reason = 'step_completed', tenantId = null } = {}) {
     if (!snapshot || typeof snapshot !== 'object') {
       throw new TypeError('snapshot must be an object');
     }
     if (!snapshot.executionId) {
       throw new TypeError('snapshot.executionId is required');
+    }
+    if (tenantId && snapshot.tenantId !== tenantId && snapshot.metadata?.tenantId !== tenantId) {
+      throw Object.assign(new Error('Checkpoint tenant mismatch'), { code: 'TENANT_CONTEXT_MISMATCH' });
     }
 
     const records = this.read();
@@ -87,9 +90,10 @@ class CheckpointRepository {
     return JSON.parse(JSON.stringify(checkpoint));
   }
 
-  delete(executionId) {
+  delete(executionId, { tenantId = null } = {}) {
     const records = this.read();
     if (!records[executionId]) return false;
+    if (tenantId && records[executionId].snapshot?.tenantId !== tenantId && records[executionId].snapshot?.metadata?.tenantId !== tenantId) return false;
     delete records[executionId];
     this.write(records);
     return true;
