@@ -7,6 +7,13 @@ const JsonMemoryRepository =
 const MemoryService =
   require('./src/application/memory/memory.service');
 
+const AgentRegistry =
+  require('./src/core/agent/boundary/agent-registry');
+const { AgentDefinition } =
+  require('./src/core/agent/boundary/agent-definition');
+const MemoryAccessPolicy =
+  require('./src/core/memory/memory-access-policy');
+
 const ToolRegistry =
   require('./src/core/tools/tool.registry');
 
@@ -58,6 +65,8 @@ const JsonPersistence =
 
 const AgentOrchestrator =
   require('./src/core/agent/orchestrator/agent-orchestrator');
+const ModelRouter =
+  require('./src/core/model/model-router');
 
 const DecisionEngine =
   require('./src/core/agent/decision/decision-engine');
@@ -83,8 +92,28 @@ const createServer =
 const repository =
   new JsonMemoryRepository(config.dataFile);
 
+const agentRegistry =
+  new AgentRegistry();
+
+agentRegistry.register(new AgentDefinition({
+  id: 'ORIENT_RUNTIME',
+  name: 'ORIENT Canonical Runtime',
+  capabilities: ['*'],
+  allowedMemoryScopes: ['*'],
+  allowedAgentTargets: ['*'],
+  risk: 'critical'
+}));
+
+const memoryAccessPolicy =
+  new MemoryAccessPolicy({
+    agentRegistry
+  });
+
 const memoryService =
-  new MemoryService(repository);
+  new MemoryService(repository, {
+    memoryAccessPolicy,
+    defaultScope: 'personal'
+  });
 
 const toolRegistry =
   new ToolRegistry();
@@ -159,6 +188,9 @@ const replanner =
     maxReplans: 3
   });
 
+const modelRouter =
+  new ModelRouter();
+
 const agentOrchestrator =
   new AgentOrchestrator({
     planner,
@@ -166,7 +198,8 @@ const agentOrchestrator =
     replanner,
     decisionEngine,
     recoveryEngine,
-    eventPublisher
+    eventPublisher,
+    modelRouter
   });
 
 const persistence =
@@ -185,7 +218,8 @@ const runtime =
     maxRetries: config.maxWorkflowRetries,
     leaseDurationMs: config.workflowLeaseMs,
     maxInputChars: config.maxInputChars,
-    maxToolInputChars: config.maxToolInputChars
+    maxToolInputChars: config.maxToolInputChars,
+    agentRegistry
   });
 
 const agentService =

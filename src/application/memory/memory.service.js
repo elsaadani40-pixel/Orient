@@ -5,13 +5,36 @@ const {
 } = require('../../domain/memory/memory.entity');
 
 class MemoryService {
-  constructor(repository) {
+  constructor(repository, {
+    memoryAccessPolicy = null,
+    defaultScope = 'personal'
+  } = {}) {
     this.repository = repository;
+    this.memoryAccessPolicy = memoryAccessPolicy;
+    this.defaultScope = defaultScope;
   }
 
-  list(query = '') {
+  authorize(context = {}, operation = 'read', scope = this.defaultScope) {
+    if (!this.memoryAccessPolicy) {
+      return null;
+    }
+
+    return this.memoryAccessPolicy.authorize({
+      agentId: context.agentId || 'ORIENT_RUNTIME',
+      scope: context.memoryScope || scope,
+      operation
+    });
+  }
+
+  tenantId(context = {}) {
+    return context.tenantId || 'local';
+  }
+
+  list(query = '', context = {}) {
+    this.authorize(context, 'read');
+
     const memories = this.repository
-      .findAll()
+      .findAll(this.tenantId(context))
       .map(normalizeMemory);
 
     const cleanQuery = String(query || '')
@@ -27,7 +50,9 @@ class MemoryService {
     );
   }
 
-  add(text, options = {}) {
+  add(text, options = {}, context = {}) {
+    this.authorize(context, 'write');
+
     const clean = String(text || '').trim();
 
     if (!clean) {
@@ -45,7 +70,7 @@ class MemoryService {
         importance: options.importance
       });
 
-      return this.repository.insert(memory);
+      return this.repository.insert(memory, this.tenantId(context));
     } catch (error) {
       throw new AppError(
         error.message,
@@ -55,8 +80,13 @@ class MemoryService {
     }
   }
 
-  get(id) {
-    const memory = this.repository.findById(id);
+  get(id, context = {}) {
+    this.authorize(context, 'read');
+
+    const memory = this.repository.findById(
+      id,
+      this.tenantId(context)
+    );
 
     if (!memory) {
       throw new AppError(
@@ -69,7 +99,9 @@ class MemoryService {
     return normalizeMemory(memory);
   }
 
-  delete(id) {
+  delete(id, context = {}) {
+    this.authorize(context, 'write');
+
     const cleanId = String(id || '').trim();
 
     if (!cleanId) {
@@ -80,7 +112,10 @@ class MemoryService {
       );
     }
 
-    const deleted = this.repository.deleteById(cleanId);
+    const deleted = this.repository.deleteById(
+      cleanId,
+      this.tenantId(context)
+    );
 
     if (!deleted) {
       throw new AppError(
@@ -93,8 +128,9 @@ class MemoryService {
     return true;
   }
 
-  count() {
-    return this.repository.findAll().length;
+  count(context = {}) {
+    this.authorize(context, 'read');
+    return this.repository.findAll(this.tenantId(context)).length;
   }
 }
 
