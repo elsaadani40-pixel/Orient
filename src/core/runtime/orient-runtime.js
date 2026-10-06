@@ -116,10 +116,11 @@ class OrientRuntime {
       throw new TypeError('context is required');
     }
 
-    const snapshot = this.persistExecution(
-      context,
-      mode
-    );
+    const snapshot =
+      this.persistExecution(
+        context,
+        mode
+      ) || context.snapshot();
 
     const events = Array.isArray(context.events)
       ? context.events
