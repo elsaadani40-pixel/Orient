@@ -184,7 +184,8 @@ const runtime =
     maxQueueDepth: config.maxQueueDepth,
     maxRetries: config.maxWorkflowRetries,
     leaseDurationMs: config.workflowLeaseMs,
-    maxInputChars: config.maxInputChars
+    maxInputChars: config.maxInputChars,
+    maxToolInputChars: config.maxToolInputChars
   });
 
 const agentService =
