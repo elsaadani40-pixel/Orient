@@ -130,7 +130,8 @@ class IdempotencyRepository {
     step,
     tool,
     planRevision = 1,
-    operationId = null
+    operationId = null,
+    tenantId = null
   } = {}) {
     const key = this.buildKey({
       executionId,
