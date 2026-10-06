@@ -218,6 +218,7 @@ class AgentLoop {
               .assertAuthorized(step.tool, {
                 executionId: context.executionId,
                 step: stepNumber,
+                planRevision,
                 approval,
                 scope: { planRevision }
               });
