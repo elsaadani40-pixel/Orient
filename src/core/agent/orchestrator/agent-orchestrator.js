@@ -87,6 +87,53 @@ class AgentOrchestrator {
     };
   }
 
+  async replan({
+    input,
+    evaluation = null,
+    previousPlan = null,
+    context = {}
+  } = {}) {
+    const planned =
+      await this.planner.replan({
+        input,
+        evaluation,
+        previousPlan,
+        context
+      });
+
+    if (!planned) {
+      return null;
+    }
+
+    const validation =
+      this.planValidator.validate(planned);
+
+    const plan = {
+      ...planned,
+      steps: validation.steps
+    };
+
+    await this.publishEvent({
+      type: OBSERVATION_EVENTS.PLAN_CREATED,
+      executionId: context.executionId || null,
+      goalId: context.goalId || null,
+      data: {
+        input,
+        replan: true,
+        plan,
+        validation: {
+          valid: validation.valid,
+          steps: validation.steps.length
+        }
+      }
+    });
+
+    return {
+      plan,
+      validation
+    };
+  }
+
   decide(evaluation, context = {}) {
     const decision = this.decisionEngine.decide(evaluation);
 
