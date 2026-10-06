@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const OllamaProvider = require('../../../../src/infrastructure/model/ollama.provider');
+const OllamaProvider = require('../../../src/infrastructure/model/ollama.provider');
 
 test('OllamaProvider sends a local chat request and returns normalized text', async () => {
   let request = null;
