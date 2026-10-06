@@ -477,3 +477,49 @@ test('SQLite idempotency rejects cross-tenant key reuse explicitly', () => {
     /Idempotency tenant mismatch/
   );
 });
+
+
+test('capability risk policy requires approval for high-risk capabilities', () => {
+  const Capability = require('../../../../src/core/agent/capability/capability');
+  const CapabilityRegistry = require('../../../../src/core/agent/capability/capability-registry');
+  const CapabilityPolicy = require('../../../../src/core/agent/policy/capability-policy');
+
+  const registry = new CapabilityRegistry();
+  registry.register(new Capability({ name: 'read.safe', risk: 'low' }));
+  registry.register(new Capability({ name: 'external.write', risk: 'high' }));
+
+  const policy = new CapabilityPolicy({ capabilityRegistry: registry });
+
+  assert.equal(policy.riskOf('read.safe'), 'low');
+  assert.equal(policy.requiresApproval('read.safe'), false);
+  assert.equal(policy.riskOf('external.write'), 'high');
+  assert.equal(policy.requiresApproval('external.write'), true);
+  assert.equal(policy.authorize('external.write').allowed, true);
+  assert.equal(policy.authorize('missing').allowed, false);
+});
+
+test('sqlite approval consumption is single-use and tenant-scoped', () => {
+  const SqlitePersistence = require('../../../../src/infrastructure/persistence/sqlite/sqlite-persistence');
+  const persistence = new SqlitePersistence({ filePath: ':memory:' });
+  const approval = {
+    approvalId: 'approval-tenant-a',
+    executionId: 'execution-tenant-a',
+    step: 1,
+    planRevision: 1,
+    tool: 'external.write',
+    capability: 'external.write',
+    scope: { planRevision: 1 },
+    issuedAt: new Date(1000).toISOString(),
+    expiresAt: new Date(100000).toISOString(),
+    used: false,
+    metadata: { tenantId: 'tenant-a' },
+    tenantId: 'tenant-a'
+  };
+
+  persistence.approvals.save(approval, { tenantId: 'tenant-a' });
+
+  assert.equal(persistence.approvals.findById(approval.approvalId, { tenantId: 'tenant-b' }), null);
+  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(2000).toISOString(), 'tenant-b'), false);
+  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(2000).toISOString(), 'tenant-a'), true);
+  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(3000).toISOString(), 'tenant-a'), false);
+});
