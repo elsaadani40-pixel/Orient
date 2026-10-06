@@ -27,7 +27,7 @@ class IdempotencyStore {
       );
     }
 
-    return `${executionId}:${step}:${tool}`;
+    return `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
 
   has(key) {
@@ -45,20 +45,23 @@ class IdempotencyStore {
   begin({
     executionId,
     step,
-    tool
+    tool,
+    planRevision = 1
   } = {}) {
     const key =
       this.buildKey({
         executionId,
         step,
-        tool
+        tool,
+        planRevision
       });
 
     if (this.repository) {
       return this.repository.begin({
         executionId,
         step,
-        tool
+        tool,
+        planRevision
       });
     }
 
@@ -78,6 +81,7 @@ class IdempotencyStore {
       executionId,
       step,
       tool,
+      planRevision,
       status: 'running',
       result: null,
       error: null,
