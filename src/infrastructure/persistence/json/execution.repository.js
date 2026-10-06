@@ -125,8 +125,12 @@ class ExecutionRepository {
     return this.findAll({ tenantId }).filter(execution => execution.goalId === goalId);
   }
 
-  insert(execution) {
+  insert(execution, { tenantId = null } = {}) {
     const normalized = this.normalize(execution);
+    if (tenantId && normalized.metadata?.tenantId !== tenantId) {
+      throw new Error('Execution tenant mismatch');
+    }
+
     const executions = this.readRaw();
 
     if (
@@ -147,7 +151,7 @@ class ExecutionRepository {
     return normalized;
   }
 
-  update(executionId, patch) {
+  update(executionId, patch, { tenantId = null } = {}) {
     if (!executionId) {
       throw new TypeError('executionId is required');
     }
@@ -170,6 +174,8 @@ class ExecutionRepository {
 
     const current = this.normalize(executions[index]);
 
+    if (tenantId && current.metadata?.tenantId !== tenantId) return null;
+
     const updated = this.normalize({
       ...current,
       ...patch,
@@ -184,7 +190,7 @@ class ExecutionRepository {
     return updated;
   }
 
-  deleteById(executionId) {
+  deleteById(executionId, { tenantId = null } = {}) {
     const executions = this.readRaw();
 
     const index = executions.findIndex(
@@ -196,6 +202,8 @@ class ExecutionRepository {
     if (index === -1) {
       return false;
     }
+
+    if (tenantId && executions[index]?.metadata?.tenantId !== tenantId) return false;
 
     executions.splice(index, 1);
     this.write(executions);
