@@ -54,6 +54,11 @@ class SqliteDatabase {
       PRAGMA journal_mode=WAL;
       PRAGMA foreign_keys=ON;
 
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS executions (
         execution_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL,
@@ -109,6 +114,9 @@ class SqliteDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_approvals_expiry
         ON approvals(expires_at);
+
+      INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+        VALUES (1, datetime('now'));
     `);
   }
 
