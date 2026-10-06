@@ -289,3 +289,41 @@ test('tenant-scoped durable workflow queries cannot read another tenant', () => 
   assert.equal(jsonLeases.findByWorkflowId('json-lease-a', 'tenant-b'), null);
   assert.equal(jsonLeases.findAll({ tenantId: 'tenant-b' }).length, 0);
 });
+
+
+test('JSON execution, event, idempotency and checkpoint reads enforce tenant scope', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-persistence-'));
+  const ExecutionRepository = require('../../../../src/infrastructure/persistence/json/execution.repository');
+  const EventRepository = require('../../../../src/infrastructure/persistence/json/event.repository');
+  const IdempotencyRepository = require('../../../../src/infrastructure/persistence/json/idempotency.repository');
+  const CheckpointRepository = require('../../../../src/infrastructure/persistence/json/checkpoint.repository');
+
+  const execution = {
+    executionId: 'exec-tenant-a',
+    goalId: 'goal-a',
+    metadata: { tenantId: 'tenant-a' },
+    status: 'running'
+  };
+  const executions = new ExecutionRepository(path.join(dir, 'executions.json'));
+  executions.insert(execution);
+  assert.ok(executions.findById('exec-tenant-a', { tenantId: 'tenant-a' }));
+  assert.equal(executions.findById('exec-tenant-a', { tenantId: 'tenant-b' }), null);
+
+  const events = new EventRepository(path.join(dir, 'events.json'));
+  events.append({ id: 'event-a', type: 'test', executionId: 'exec-tenant-a', data: { tenantId: 'tenant-a' } });
+  assert.equal(events.findByExecutionId('exec-tenant-a', { tenantId: 'tenant-b' }).length, 0);
+
+  const idempotency = new IdempotencyRepository(path.join(dir, 'idempotency.json'));
+  idempotency.begin({ executionId: 'exec-tenant-a', step: 0, tool: 'test', tenantId: 'tenant-a' });
+  assert.equal(idempotency.findByKey('exec-tenant-a:plan-1:step-0:test', { tenantId: 'tenant-b' }), null);
+
+  const checkpoints = new CheckpointRepository(path.join(dir, 'checkpoints.json'));
+  checkpoints.save({
+    executionId: 'exec-tenant-a',
+    metadata: { tenantId: 'tenant-a' }
+  });
+  assert.equal(checkpoints.findLatest('exec-tenant-a', { tenantId: 'tenant-b' }), null);
+});
