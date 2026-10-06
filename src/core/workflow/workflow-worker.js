@@ -7,7 +7,16 @@ class WorkflowWorker {
   }
 
   isDeadlineExceeded(lease) {
-    return Boolean(lease.deadlineAt && new Date(lease.deadlineAt).getTime() <= this.now());
+    const deadlineAt = lease.deadlineAt || lease.instance?.deadlineAt || null;
+    return Boolean(deadlineAt && new Date(deadlineAt).getTime() <= this.now());
+  }
+
+  failDeadline(instance) {
+    instance.metadata.deadlineExceeded = true;
+    instance.metadata.failureCode = 'WORKFLOW_DEADLINE_EXCEEDED';
+    if (instance.state !== 'FAILED' && instance.state !== 'CANCELLED') {
+      instance.transition('FAILED');
+    }
   }
 
   async tick() {
@@ -22,8 +31,7 @@ class WorkflowWorker {
           this.emit('workflow.cancelled', { workflowId: instance.workflowId, leaseId: lease.leaseId }); break;
         }
         if (this.isDeadlineExceeded(lease)) {
-          if (instance.state !== 'FAILED' && instance.state !== 'CANCELLED') instance.transition('FAILED');
-          instance.metadata.deadlineExceeded = true; instance.metadata.failureCode = 'WORKFLOW_DEADLINE_EXCEEDED';
+          this.failDeadline(instance);
           this.emit('workflow.deadline.exceeded', { workflowId: instance.workflowId, leaseId: lease.leaseId }); break;
         }
 
@@ -49,7 +57,7 @@ class WorkflowWorker {
           }
           if (this.isDeadlineExceeded(lease)) {
             instance.markStepFailed(step.id, Object.assign(new Error('Workflow deadline exceeded'), { code: 'WORKFLOW_DEADLINE_EXCEEDED' }));
-            instance.transition('FAILED');
+            this.failDeadline(instance);
             this.emit('workflow.deadline.exceeded', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id }); break;
           }
           instance.markStepCompleted(step.id, result);
