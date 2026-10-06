@@ -35,14 +35,15 @@ class JsonMemoryRepository {
     }
   }
 
-  normalize(memory) {
+  normalize(memory, tenantId = null) {
     const now = new Date().toISOString();
 
     return {
       id: memory.id || crypto.randomUUID(),
       text: String(memory.text || '').trim(),
       createdAt: memory.createdAt || now,
-      updatedAt: memory.updatedAt || memory.createdAt || now
+      updatedAt: memory.updatedAt || memory.createdAt || now,
+      tenantId: memory.tenantId || tenantId || 'local'
     };
   }
 
@@ -53,7 +54,7 @@ class JsonMemoryRepository {
       return;
     }
 
-    const migrated = current.map(memory => this.normalize(memory));
+    const migrated = current.map(memory => this.normalize(memory, 'local'));
 
     const changed = migrated.some((memory, index) => {
       const original = current[index];
@@ -70,8 +71,10 @@ class JsonMemoryRepository {
     }
   }
 
-  read() {
-    return this.readRaw().map(memory => this.normalize(memory));
+  read(tenantId = 'local') {
+    return this.readRaw()
+      .map(memory => this.normalize(memory, 'local'))
+      .filter(memory => memory.tenantId === tenantId);
   }
 
   write(memories) {
@@ -96,27 +99,28 @@ class JsonMemoryRepository {
     }
   }
 
-  findAll() {
-    return this.read();
+  findAll(tenantId = 'local') {
+    return this.read(tenantId);
   }
 
-  findById(id) {
-    return this.read().find(memory => memory.id === id) || null;
+  findById(id, tenantId = 'local') {
+    return this.read(tenantId).find(memory => memory.id === id) || null;
   }
 
-  insert(memory) {
-    const memories = this.read();
+  insert(memory, tenantId = 'local') {
+    const memories = this.readRaw().map(item => this.normalize(item, 'local'));
+    const stored = this.normalize({ ...memory, tenantId }, tenantId);
 
-    memories.unshift(memory);
+    memories.unshift(stored);
 
     this.write(memories);
 
-    return memory;
+    return stored;
   }
 
-  deleteById(id) {
-    const memories = this.read();
-    const index = memories.findIndex(memory => memory.id === id);
+  deleteById(id, tenantId = 'local') {
+    const memories = this.readRaw().map(item => this.normalize(item, 'local'));
+    const index = memories.findIndex(memory => memory.id === id && memory.tenantId === tenantId);
 
     if (index === -1) {
       return false;
