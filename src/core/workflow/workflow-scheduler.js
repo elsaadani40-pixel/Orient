@@ -1,5 +1,6 @@
 const AppError = require('../errors/AppError');
 const WorkflowLeaseStore = require('./workflow-lease-store');
+const WorkflowInstance = require('./workflow-instance');
 
 class WorkflowScheduler {
   constructor({
@@ -9,7 +10,8 @@ class WorkflowScheduler {
     leaseDurationMs = 30000,
     maxRetries = 2,
     baseBackoffMs = 250,
-    maxBackoffMs = 30000
+    maxBackoffMs = 30000,
+    workflowRepository = null
   } = {}) {
     if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
       throw new AppError(
@@ -31,6 +33,7 @@ class WorkflowScheduler {
     this.maxRetries = maxRetries;
     this.baseBackoffMs = baseBackoffMs;
     this.maxBackoffMs = maxBackoffMs;
+    this.workflowRepository = workflowRepository;
     this.queue = [];
     this.active = new Map();
     this.cancelled = new Set();
@@ -96,6 +99,52 @@ class WorkflowScheduler {
       if (a.priority !== b.priority) return b.priority - a.priority;
       return a.sequence - b.sequence;
     });
+  }
+
+  recoverPersisted() {
+    if (!this.workflowRepository?.findAll) return 0;
+
+    let recovered = 0;
+    const now = this.clock();
+    const persisted = this.workflowRepository.findAll();
+
+    for (const payload of persisted) {
+      if (!payload || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state)) {
+        continue;
+      }
+
+      const existing = this.queue.some(
+        (item) => item.instance.workflowId === payload.workflowId
+      ) || this.active.has(payload.workflowId);
+
+      if (existing) continue;
+
+      const durableLease = this.leaseStore.get(payload.workflowId);
+      if (durableLease && durableLease.expiresAt > now) {
+        continue;
+      }
+
+      const instance = WorkflowInstance.fromJSON(payload);
+
+      if (instance.state === 'RUNNING' || instance.state === 'RECOVERING') {
+        instance.state = 'RECOVERING';
+      }
+
+      if (
+        instance.state === 'QUEUED' ||
+        instance.state === 'WAITING' ||
+        instance.state === 'RECOVERING'
+      ) {
+        this.enqueue(instance, {
+          priority: Number(instance.metadata?.priority || 0),
+          deadlineAt: instance.deadlineAt,
+          delayMs: 0
+        });
+        recovered += 1;
+      }
+    }
+
+    return recovered;
   }
 
   cancel(workflowId) {
