@@ -73,3 +73,39 @@ test('cancellation prevents queued execution', async () => {
   assert.equal(await worker.tick(), null);
   assert.equal(instance.state, 'CANCELLED');
 });
+
+test('workflow instances retain a recoverable definition and scheduler rebuilds durable queue', () => {
+  let now = 1000;
+  const repository = {
+    values: [{
+      workflowId: 'recover-wf',
+      tenantId: 'local',
+      userId: 'local',
+      workspaceId: 'local',
+      definitionId: 'reliability',
+      definitionVersion: 1,
+      definition: definition().toJSON(),
+      input: { value: 1 },
+      state: 'RUNNING',
+      createdAt: new Date(900).toISOString(),
+      updatedAt: new Date(950).toISOString(),
+      deadlineAt: null,
+      cancelRequested: false,
+      retry: { attempt: 0, nextAttemptAt: null, lastError: null },
+      steps: { a: { state: 'PENDING', attempts: 0, result: null, error: null, startedAt: null, completedAt: null } },
+      metadata: { priority: 5 }
+    }],
+    findAll() { return this.values; },
+    save(value) { this.values = this.values.filter(item => item.workflowId !== value.workflowId); this.values.push(value.toJSON()); }
+  };
+  const scheduler = new WorkflowScheduler({
+    maxConcurrent: 1,
+    clock: () => now,
+    workflowRepository: repository
+  });
+  assert.equal(scheduler.recoverPersisted(), 1);
+  const lease = scheduler.lease('recovered-worker');
+  assert.equal(lease.workflowId, 'recover-wf');
+  assert.equal(lease.instance.definition.id, 'reliability');
+  scheduler.release(lease.workflowId, lease.leaseId);
+});
