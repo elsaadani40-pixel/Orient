@@ -128,7 +128,7 @@ class EventRepository {
   }
 
   findAll({ tenantId = null } = {}) {
-    return this.read().filter(event => !tenantId || event.data?.tenantId === tenantId);
+    return this.read().filter(event => !tenantId || event.data?.tenantId === tenantId || (tenantId === 'local' && !event.data?.tenantId));
   }
 
   findByExecutionId(executionId, { tenantId = null } = {}) {
