@@ -21,7 +21,8 @@ class AgentLoop {
   constructor({
     toolRegistry,
     authorizationService = null,
-    idempotencyRepository = null
+    idempotencyRepository = null,
+    maxToolInputChars = 50000
   }) {
     if (!toolRegistry) {
       throw new TypeError('toolRegistry is required');
@@ -30,6 +31,7 @@ class AgentLoop {
     this.toolRegistry = toolRegistry;
     this.authorizationService =
       authorizationService;
+    this.maxToolInputChars = maxToolInputChars;
 
     this.name = 'ORIENT_AGENT_LOOP';
     this.version = '0.8.2';
@@ -333,6 +335,19 @@ class AgentLoop {
           stepResults,
           lastResult
         });
+
+      const resolvedInputSize =
+        typeof resolvedInput === 'string'
+          ? resolvedInput.length
+          : JSON.stringify(resolvedInput ?? null).length;
+
+      if (resolvedInputSize > this.maxToolInputChars) {
+        throw new AppError(
+          'حجم مدخلات الأداة يتجاوز الحد المسموح',
+          413,
+          'TOOL_INPUT_TOO_LARGE'
+        );
+      }
 
       const injectedContext =
         this.buildStepContext({
