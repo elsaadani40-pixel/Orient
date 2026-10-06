@@ -30,7 +30,7 @@ class SqliteExecutionRepository {
   }
 
   findAll({ tenantId = null } = {}) {
-    return this.db.query('SELECT payload FROM executions ORDER BY updated_at DESC;').map(row => JSON.parse(row.payload)).filter(item => !tenantId || item.metadata?.tenantId === tenantId);
+    return this.db.query('SELECT payload FROM executions ORDER BY updated_at DESC;').map(row => JSON.parse(row.payload)).filter(item => !tenantId || item.metadata?.tenantId === tenantId || (tenantId === 'local' && !item.metadata?.tenantId));
   }
 
   findByGoalId(goalId, { tenantId = null } = {}) {
@@ -99,7 +99,7 @@ class SqliteEventRepository {
     if (statements.length) this.db.transaction(statements);
     return unique;
   }
-  findAll({ tenantId = null } = {}) { return this.db.query('SELECT payload FROM events ORDER BY timestamp ASC;').map(row => JSON.parse(row.payload)).filter(item => !tenantId || item.data?.tenantId === tenantId); }
+  findAll({ tenantId = null } = {}) { return this.db.query('SELECT payload FROM events ORDER BY timestamp ASC;').map(row => JSON.parse(row.payload)).filter(item => !tenantId || item.data?.tenantId === tenantId || (tenantId === 'local' && !item.data?.tenantId)); }
   findByExecutionId(id, { tenantId = null } = {}) { return this.findAll({ tenantId }).filter(item => item.executionId === id); }
   findByGoalId(id, { tenantId = null } = {}) { return this.findAll({ tenantId }).filter(item => item.goalId === id); }
   findByType(type, { tenantId = null } = {}) { return this.findAll({ tenantId }).filter(item => item.type === type); }
@@ -119,7 +119,7 @@ class SqliteIdempotencyRepository {
     const rows = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)} LIMIT 1;`);
     if (!rows.length) return null;
     const item = JSON.parse(rows[0].payload);
-    return tenantId && item.tenantId !== tenantId ? null : item;
+    return tenantId && item.tenantId !== tenantId && !(tenantId === 'local' && !item.tenantId) ? null : item;
   }
   find(args) { return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || null }); }
   begin(args) {
