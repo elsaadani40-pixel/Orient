@@ -443,7 +443,7 @@ class AgentLoop {
       if (agentAuthorization) {
         injectedContext.agentId = agentAuthorization.agentId;
         injectedContext.capability = agentAuthorization.capability;
-        injectedContext.memoryScope = runtimeContext.memoryScope || 'personal';
+        injectedContext.memoryScope = step.memoryScope || runtimeContext.memoryScope || 'personal';
       }
 
       if (agentInvocation) {
@@ -1311,7 +1311,8 @@ class AgentLoop {
           capability: typeof plan.capability === 'string' ? plan.capability.trim() : null,
           targetAgentId: typeof plan.targetAgentId === 'string' ? plan.targetAgentId.trim() : null,
           targetCapability: typeof plan.targetCapability === 'string' ? plan.targetCapability.trim() : null,
-          invocationReason: typeof plan.invocationReason === 'string' ? plan.invocationReason.trim() : null
+          invocationReason: typeof plan.invocationReason === 'string' ? plan.invocationReason.trim() : null,
+          memoryScope: typeof plan.memoryScope === 'string' ? plan.memoryScope.trim() : null
         }
       ];
     }
