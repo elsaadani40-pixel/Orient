@@ -67,6 +67,8 @@ const AgentOrchestrator =
   require('./src/core/agent/orchestrator/agent-orchestrator');
 const ModelRouter =
   require('./src/core/model/model-router');
+const OllamaProvider =
+  require('./src/infrastructure/model/ollama.provider');
 
 const DecisionEngine =
   require('./src/core/agent/decision/decision-engine');
@@ -190,6 +192,14 @@ const replanner =
 
 const modelRouter =
   new ModelRouter();
+
+if (config.modelProvider === 'ollama') {
+  modelRouter.register(new OllamaProvider({
+    baseUrl: config.ollamaBaseUrl,
+    model: config.ollamaModel,
+    timeoutMs: config.ollamaTimeoutMs
+  }));
+}
 
 const agentOrchestrator =
   new AgentOrchestrator({
