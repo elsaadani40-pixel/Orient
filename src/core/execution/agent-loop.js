@@ -387,7 +387,8 @@ class AgentLoop {
           step: stepNumber,
           tool: step.tool,
           planRevision,
-          operationId
+          operationId,
+          tenantId: runtimeContext.tenantId || context.tenantId
         });
 
       context.record(
@@ -526,7 +527,8 @@ class AgentLoop {
             const reconciledResult = reconciliation.result;
             this.idempotencyStore.complete(
               idempotency.key,
-              reconciledResult
+              reconciledResult,
+              runtimeContext.tenantId || context.tenantId
             );
 
             context.record('idempotency.reconciled', {
@@ -738,7 +740,8 @@ class AgentLoop {
       } catch (error) {
         this.idempotencyStore.fail(
           idempotency.key,
-          error
+          error,
+          runtimeContext.tenantId || context.tenantId
         );
 
         context.record(
