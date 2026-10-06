@@ -232,7 +232,8 @@ class SqliteApprovalRepository {
     return { approvalId:r.approval_id,executionId:r.execution_id,step:Number(r.step),planRevision:Number(r.plan_revision),tool:r.tool,capability:r.capability,scope:JSON.parse(r.scope),issuedAt:r.issued_at,expiresAt:r.expires_at,used:Boolean(r.used),usedAt:r.used_at||undefined,metadata,tenantId:metadata?.tenantId || null };
   }
   consume(approvalId, usedAt, tenantId = null) {
-    const scope = tenantId ? ` AND metadata LIKE ${SqliteDatabase.literal('%"tenantId":"'+tenantId.replace(/[%_]/g, '')+'"%')}` : '';
+    const current = this.findById(approvalId, { tenantId });
+    if (!current) return false;
     const result=this.db.query(`UPDATE approvals SET used=1,used_at=${SqliteDatabase.literal(usedAt)} WHERE approval_id=${SqliteDatabase.literal(approvalId)} AND used=0; SELECT changes() AS changes;`);
     return Boolean(result.length && Number(result[result.length - 1].changes) === 1);
   }
