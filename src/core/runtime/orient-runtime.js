@@ -243,101 +243,186 @@ class OrientRuntime {
         AgentState.LIFECYCLE.PLANNING
       );
 
-      const orchestration =
+      let orchestration =
         await this.agentOrchestrator.plan(
           text,
           context
         );
 
-      const plan =
+      let plan =
         orchestration.plan;
 
-      const validation =
+      let validation =
         orchestration.validation;
 
-      context.record(
-        'plan.generated',
-        {
-          intent:
-            plan.intent,
+      let planRevision = 1;
+      let replans = 0;
+      let previousFingerprint =
+        this.planFingerprint(plan);
 
-          confidence:
-            plan.confidence
-        }
-      );
+      let loopResult = null;
+      let replanningDecision = null;
 
-      context.transitionAgentTo(
-        AgentState.LIFECYCLE.VALIDATING
-      );
-
-      context.record(
-        'plan.validation.completed',
-        {
-          valid:
-            validation.valid,
-
-          steps:
-            validation.steps.length
-        }
-      );
-
-      context.setPlan(
-        plan
-      );
-
-      context.transitionAgentTo(
-        AgentState.LIFECYCLE.EXECUTING
-      );
-
-      const loopResult =
-        await this.agentLoop.run({
-          plan,
-          context,
-          runtimeContext: {
-            requestId,
-            input: text,
-            plan
+      while (true) {
+        context.record(
+          'plan.generated',
+          {
+            intent: plan.intent,
+            confidence: plan.confidence,
+            planRevision,
+            replan: planRevision > 1
           }
-        });
+        );
 
-      context.transitionAgentTo(
-        AgentState.LIFECYCLE.OBSERVING
-      );
+        context.record(
+          'plan.validation.completed',
+          {
+            valid: validation.valid,
+            steps: validation.steps.length,
+            planRevision
+          }
+        );
 
-      context.record(
-        'observation.phase.completed',
-        {
-          stepsExecuted:
-            loopResult.stepsExecuted,
+        context.setPlan(plan);
 
-          observations:
-            context.observations.length
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.EXECUTING
+        );
+
+        loopResult =
+          await this.agentLoop.run({
+            plan,
+            context,
+            runtimeContext: {
+              requestId,
+              input: text,
+              plan,
+              planRevision
+            }
+          });
+
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.OBSERVING
+        );
+
+        context.record(
+          'observation.phase.completed',
+          {
+            stepsExecuted:
+              loopResult.stepsExecuted,
+            observations:
+              context.observations.length,
+            planRevision
+          }
+        );
+
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.EVALUATING
+        );
+
+        replanningDecision =
+          this.agentOrchestrator.decideReplanning({
+            evaluation:
+              loopResult.evaluation,
+            replans,
+            hasRemainingSteps:
+              loopResult.stepsExecuted <
+              plan.steps.length,
+            context
+          });
+
+        context.record(
+          'replanning.decision',
+          {
+            ...replanningDecision.toJSON(),
+            planRevision,
+            replans
+          }
+        );
+
+        if (
+          replanningDecision.nextAction !== 'replan'
+        ) {
+          break;
         }
-      );
 
-      context.transitionAgentTo(
-        AgentState.LIFECYCLE.EVALUATING
-      );
+        if (replans >= 3) {
+          throw Object.assign(
+            new Error(
+              'تم الوصول إلى الحد الأقصى لإعادة التخطيط'
+            ),
+            {
+              code: 'MAX_REPLANS_EXCEEDED'
+            }
+          );
+        }
 
-      const replanningDecision =
-        this.agentOrchestrator.decideReplanning({
-          evaluation:
-            loopResult.evaluation,
+        const nextOrchestration =
+          await this.agentOrchestrator.replan({
+            input: text,
+            evaluation: loopResult.evaluation,
+            previousPlan: plan,
+            context
+          });
 
-          replans:
-            0,
+        if (!nextOrchestration) {
+          throw Object.assign(
+            new Error(
+              'لم يتم إنشاء خطة بديلة صالحة'
+            ),
+            {
+              code: 'REPLAN_NOT_AVAILABLE'
+            }
+          );
+        }
 
-          hasRemainingSteps:
-            loopResult.stepsExecuted <
-            plan.steps.length,
+        const nextPlan =
+          nextOrchestration.plan;
 
-          context
-        });
+        const nextValidation =
+          nextOrchestration.validation;
 
-      context.record(
-        'replanning.decision',
-        replanningDecision.toJSON()
-      );
+        const replanValidation =
+          this.validateReplannedPlan(
+            nextPlan,
+            previousFingerprint
+          );
+
+        if (!replanValidation.valid) {
+          throw Object.assign(
+            new Error(
+              replanValidation.reason
+            ),
+            {
+              code: 'INVALID_REPLAN'
+            }
+          );
+        }
+
+        replans += 1;
+        planRevision += 1;
+        previousFingerprint =
+          replanValidation.fingerprint;
+
+        context.record(
+          'replanning.executed',
+          {
+            replans,
+            planRevision,
+            previousPlanIntent:
+              plan.intent,
+            nextPlanIntent:
+              nextPlan.intent
+          }
+        );
+
+        plan = nextPlan;
+        validation = nextValidation;
+
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.PLANNING
+        );
+      }
 
       context.complete();
 
