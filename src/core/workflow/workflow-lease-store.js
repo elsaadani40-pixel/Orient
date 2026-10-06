@@ -110,7 +110,9 @@ class WorkflowLeaseStore {
   all() {
     const persisted = this.repository?.findAll?.() || [];
     const merged = new Map(persisted.map(item => [item.workflowId, item]));
-    for (const [id, lease] of this.memory) {\n      if (!merged.has(id)) merged.set(id, lease);\n    }
+    for (const [id, lease] of this.memory) {
+      if (!merged.has(id)) merged.set(id, lease);
+    }
     return [...merged.values()];
   }
 
