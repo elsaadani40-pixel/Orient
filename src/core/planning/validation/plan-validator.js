@@ -52,7 +52,7 @@ class PlanValidator {
       );
     }
 
-    const seenTools = new Set();
+    const seenStepIds = new Set();
 
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index];
@@ -65,15 +65,20 @@ class PlanValidator {
         );
       }
 
-      if (seenTools.has(step.tool)) {
+      const stepId =
+        step.step === undefined || step.step === null
+          ? index + 1
+          : step.step;
+
+      if (seenStepIds.has(stepId)) {
         throw new AppError(
-          `الأداة "${step.tool}" مكررة داخل الخطة`,
+          `هوية الخطوة "${stepId}" مكررة داخل الخطة`,
           500,
-          'PLAN_DUPLICATE_TOOL'
+          'PLAN_DUPLICATE_STEP_ID'
         );
       }
 
-      seenTools.add(step.tool);
+      seenStepIds.add(stepId);
     }
 
     return {
