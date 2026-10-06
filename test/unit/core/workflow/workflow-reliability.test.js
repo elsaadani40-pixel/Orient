@@ -32,6 +32,7 @@ test('scheduler retries with exponential backoff and preserves attempt state', (
   const instance = new WorkflowInstance({ definition: definition(), workflowId: 'retry-wf' });
   scheduler.enqueue(instance);
   const lease = scheduler.lease('worker');
+  scheduler.release(lease.workflowId, lease.leaseId);
   instance.metadata.failedStepId = 'a';
   instance.markStepFailed('a', Object.assign(new Error('temporary'), { code: 'TEMPORARY' }));
   assert.equal(scheduler.retry(instance, { error: new Error('temporary') }), true);
@@ -42,7 +43,6 @@ test('scheduler retries with exponential backoff and preserves attempt state', (
   const next = scheduler.lease('worker-2');
   assert.equal(next.workflowId, 'retry-wf');
   scheduler.release(next.workflowId, next.leaseId);
-  scheduler.release(lease.workflowId, lease.leaseId);
 });
 
 test('worker enforces deadline and emits durable operational events', async () => {
