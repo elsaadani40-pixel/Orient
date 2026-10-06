@@ -367,7 +367,7 @@ test('tenant-scoped durable writes reject cross-tenant workflow and lease collis
   assert.throws(
     () => leases.save({
       workflowId: 'shared-lease-id',
-      leaseId: 'lease-b',
+      leaseId: 'lease-b-cross-tenant',
       workerId: 'worker-b',
       acquiredAt: 1000,
       expiresAt: 5000,
