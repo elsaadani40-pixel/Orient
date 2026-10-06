@@ -85,8 +85,10 @@ class EventRepository {
     const normalized = this.normalize(event);
     const events = this.read();
 
-    events.push(normalized);
-    this.write(events);
+    if (!events.some(event => event.id === normalized.id)) {
+      events.push(normalized);
+      this.write(events);
+    }
 
     return normalized;
   }
@@ -105,10 +107,24 @@ class EventRepository {
     );
 
     const current = this.read();
-    current.push(...normalized);
-    this.write(current);
+    const existingIds = new Set(
+      current.map(event => event.id)
+    );
 
-    return normalized;
+    const unique = normalized.filter(
+      event => {
+        if (existingIds.has(event.id)) return false;
+        existingIds.add(event.id);
+        return true;
+      }
+    );
+
+    if (unique.length) {
+      current.push(...unique);
+      this.write(current);
+    }
+
+    return unique;
   }
 
   findAll() {
