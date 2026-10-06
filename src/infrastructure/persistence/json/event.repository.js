@@ -81,8 +81,10 @@ class EventRepository {
     };
   }
 
-  append(event) {
+  append(event, { tenantId = null } = {}) {
     const normalized = this.normalize(event);
+    if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
+    if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
     const events = this.read();
 
     if (!events.some(event => event.id === normalized.id)) {
@@ -93,7 +95,7 @@ class EventRepository {
     return normalized;
   }
 
-  appendMany(events) {
+  appendMany(events, { tenantId = null } = {}) {
     if (!Array.isArray(events)) {
       throw new TypeError('events must be an array');
     }
@@ -102,9 +104,12 @@ class EventRepository {
       return [];
     }
 
-    const normalized = events.map(event =>
-      this.normalize(event)
-    );
+    const normalized = events.map(event => {
+      const item = this.normalize(event);
+      if (tenantId && item.data?.tenantId && item.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
+      if (tenantId && !item.data?.tenantId) item.data.tenantId = tenantId;
+      return item;
+    });
 
     const current = this.read();
     const existingIds = new Set(
