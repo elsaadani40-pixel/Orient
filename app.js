@@ -264,7 +264,22 @@ function shutdown(signal) {
 
   eventStoreSubscriber.stop();
 
+  try {
+    runtime.shutdown({ cancelQueued: false });
+  } catch (error) {
+    logger.error('Runtime shutdown failed', {
+      code: error?.code || 'RUNTIME_SHUTDOWN_FAILED',
+      message: error?.message || String(error)
+    });
+  }
+
+  const forceExit = setTimeout(() => {
+    process.exit(1);
+  }, 10000);
+  forceExit.unref();
+
   server.close(() => {
+    clearTimeout(forceExit);
     process.exit(0);
   });
 }
