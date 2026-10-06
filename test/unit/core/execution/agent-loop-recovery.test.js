@@ -169,7 +169,7 @@ test('reconciliation completes a persisted operation without replaying the exter
     },
     assertAuthorized() {
       return {
-        authorized: true,
+        allowed: true,
         capability: 'external.side_effect',
         risk: 'high',
         requiresApproval: true,
