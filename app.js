@@ -60,6 +60,8 @@ const CapabilityPolicy =
 
 const AuthorizationService =
   require('./src/core/agent/authorization/authorization-service');
+const CapabilityGovernance =
+  require('./src/core/agent/capability/capability-governance');
 
 const JsonPersistence =
   require('./src/infrastructure/persistence/json-persistence');
@@ -176,6 +178,13 @@ const authorizationService =
     capabilityPolicy
   });
 
+const capabilityGovernance =
+  new CapabilityGovernance({
+    capabilityMapper,
+    capabilityRegistry,
+    agentRegistry
+  });
+
 const decisionEngine =
   new DecisionEngine();
 
@@ -241,7 +250,8 @@ const runtime =
     maxInputChars: config.maxInputChars,
     maxToolInputChars: config.maxToolInputChars,
     agentRegistry,
-    agentInvocationService
+    agentInvocationService,
+    capabilityGovernance
   });
 
 const agentService =
