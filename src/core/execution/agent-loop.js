@@ -69,6 +69,17 @@ class AgentLoop {
       );
     }
 
+    const planRevision =
+      Number(runtimeContext.planRevision || 1);
+
+    if (!Number.isInteger(planRevision) || planRevision < 1) {
+      throw new AppError(
+        'إصدار الخطة غير صالح',
+        500,
+        'INVALID_PLAN_REVISION'
+      );
+    }
+
     const steps = this.normalizeSteps(plan);
 
     if (steps.length === 0) {
@@ -288,7 +299,8 @@ class AgentLoop {
           executionId:
             context.executionId,
           step: stepNumber,
-          tool: step.tool
+          tool: step.tool,
+          planRevision
         });
 
       context.record(
@@ -297,6 +309,7 @@ class AgentLoop {
           step: stepNumber,
           tool: step.tool,
           key: idempotency.key,
+          planRevision,
           created: idempotency.created
         }
       );
