@@ -105,8 +105,19 @@ class SqliteWorkflowLeaseRepository {
     return Boolean(result.length && Number(result[result.length - 1].changes) === 1);
   }
 
-  deleteExpired(workflowId, leaseId) {
-    return this.delete(workflowId, leaseId);
+  deleteExpired(workflowId, leaseId, now = Date.now()) {
+    const result = this.db.query(
+      'DELETE FROM workflow_leases WHERE workflow_id=' +
+      this.db.constructor.literal(workflowId) +
+      ' AND lease_id=' + this.db.constructor.literal(leaseId) +
+      ' AND expires_at <= ' +
+      this.db.constructor.literal(new Date(now).toISOString()) +
+      '; SELECT changes() AS changes;'
+    );
+    return Boolean(
+      result.length &&
+      Number(result[result.length - 1].changes) === 1
+    );
   }
 
   count() {
