@@ -159,7 +159,7 @@ test('scheduler persists cancellation and deadline terminal transitions', () => 
     deadlineAt: new Date(900).toISOString()
   });
   assert.equal(scheduler.lease('deadline-worker'), null);
-  const persisted = saved.find(item => item.workflowId === deadlineInstance.workflowId);
+  const persisted = saved.filter(item => item.workflowId === deadlineInstance.workflowId).at(-1);
   assert.equal(persisted.state, 'FAILED');
   assert.equal(persisted.metadata.failureCode, 'WORKFLOW_DEADLINE_EXCEEDED');
 });
