@@ -1,5 +1,7 @@
 name: ORIENT ONE — Strict CI
 
+# Strict gate: every branch change must pass the full compatibility matrix.
+
 on:
   push:
     branches: ["**"]
