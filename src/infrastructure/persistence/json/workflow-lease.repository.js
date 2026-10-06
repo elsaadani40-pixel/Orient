@@ -22,9 +22,14 @@ class WorkflowLeaseRepository {
 
   save(lease, tenantId = null) {
     if (tenantId && lease.metadata?.tenantId !== tenantId) throw new Error('Lease tenant mismatch');
-    const items = this.read().filter(item => !(item.workflowId === lease.workflowId && (!tenantId || item.metadata?.tenantId === tenantId)));
-    items.push({ ...lease });
-    this.write(items);
+    const items = this.read();
+    const existing = items.find(item => item.workflowId === lease.workflowId);
+    if (existing && tenantId && existing.metadata?.tenantId !== tenantId) {
+      throw new Error('Lease tenant collision');
+    }
+    const next = items.filter(item => item.workflowId !== lease.workflowId);
+    next.push({ ...lease });
+    this.write(next);
     return { ...lease };
   }
 
