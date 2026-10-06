@@ -43,6 +43,8 @@ class FileWorkspace {
     const target =
       this.policy.assertWrite(relativePath);
 
+    await fs.mkdir(path.dirname(target), { recursive: true });
+
     await fs.writeFile(
       target,
       content,
