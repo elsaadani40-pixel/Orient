@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const AppError = require('../errors/app-error');
+const AppError = require('../errors/AppError');
 
 const STEP_STATES = Object.freeze({ PENDING:'PENDING', READY:'READY', RUNNING:'RUNNING', COMPLETED:'COMPLETED', FAILED:'FAILED', BLOCKED:'BLOCKED', CANCELLED:'CANCELLED' });
 
