@@ -615,7 +615,7 @@ class AgentLoop {
         },
 
       stepsExecuted:
-        context.steps.length,
+        stepResults.length,
 
       stepResults
     };
