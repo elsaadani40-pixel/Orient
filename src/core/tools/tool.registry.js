@@ -1,8 +1,15 @@
 const AppError = require('../errors/AppError');
+const { isAuthorized } = require('./tool-execution-authorization');
 
 class ToolRegistry {
   constructor() {
     this.tools = new Map();
+    this.authorizationRequired = false;
+  }
+
+  requireAuthorization() {
+    this.authorizationRequired = true;
+    return this;
   }
 
   register(tool) {
@@ -45,6 +52,14 @@ class ToolRegistry {
         `الأداة "${name}" غير موجودة`,
         404,
         'TOOL_NOT_FOUND'
+      );
+    }
+
+    if (this.authorizationRequired && !isAuthorized(context)) {
+      throw new AppError(
+        `الأداة "${name}" تتطلب تفويضًا من مسار التنفيذ المصرح به`,
+        403,
+        'TOOL_EXECUTION_AUTHORIZATION_REQUIRED'
       );
     }
 
