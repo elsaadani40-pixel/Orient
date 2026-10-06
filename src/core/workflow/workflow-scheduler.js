@@ -73,6 +73,7 @@ class WorkflowScheduler {
     }
 
     instance.setDeadline(deadlineAt);
+    this.persist(instance);
     const now = this.clock();
 
     this.queue.push({
@@ -158,6 +159,7 @@ class WorkflowScheduler {
     if (queued) {
       queued.instance.requestCancel();
       queued.instance.transition('CANCELLED');
+      this.persist(queued.instance);
       this.queue = this.queue.filter(
         (item) => item.instance.workflowId !== workflowId
       );
@@ -191,6 +193,7 @@ class WorkflowScheduler {
         if (instance.state !== 'CANCELLED') {
           instance.transition('CANCELLED');
         }
+        this.persist(instance);
         continue;
       }
 
@@ -208,6 +211,7 @@ class WorkflowScheduler {
         }
         instance.metadata.deadlineExceeded = true;
         instance.metadata.failureCode = 'WORKFLOW_DEADLINE_EXCEEDED';
+        this.persist(instance);
         continue;
       }
 
@@ -326,6 +330,12 @@ class WorkflowScheduler {
 
   depth() {
     return this.queue.length;
+  }
+
+  persist(instance) {
+    if (this.workflowRepository?.save) {
+      this.workflowRepository.save(instance);
+    }
   }
 
   activeCount() {
