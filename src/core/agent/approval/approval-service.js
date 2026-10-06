@@ -2,16 +2,16 @@ const crypto = require('crypto');
 
 class ApprovalService {
   constructor({ clock = () => Date.now() } = {}) { this.clock = clock; this.approvals = new Map(); }
-  issue({ executionId, step, tool, capability, scope = {}, ttlMs = 300000, metadata = {} } = {}) {
+  issue({ executionId, step, tool, capability, planRevision = 1, scope = {}, ttlMs = 300000, metadata = {} } = {}) {
     if (!executionId || !tool || !capability) throw new TypeError('executionId, tool and capability are required');
     if (!Number.isInteger(step) || step < 1) throw new TypeError('step must be a positive integer');
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new TypeError('ttlMs must be positive');
     const now = this.clock();
-    const value = { approvalId: crypto.randomUUID(), executionId: String(executionId), step, tool, capability, scope: { ...scope }, issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString(), used: false, metadata: { ...metadata } };
+    const value = { approvalId: crypto.randomUUID(), executionId: String(executionId), step, planRevision, tool, capability, scope: { ...scope }, issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString(), used: false, metadata: { ...metadata } };
     this.approvals.set(value.approvalId, value);
     return { ...value };
   }
-  validate({ approval, executionId, step, tool, capability, scope = {} } = {}) {
+  validate({ approval, executionId, step, tool, capability, planRevision = 1, scope = {} } = {}) {
     if (!approval || typeof approval !== 'object') return { allowed: false, reason: 'APPROVAL_REQUIRED' };
     const stored = this.approvals.get(approval.approvalId);
     if (!stored) return { allowed: false, reason: 'APPROVAL_NOT_FOUND' };
