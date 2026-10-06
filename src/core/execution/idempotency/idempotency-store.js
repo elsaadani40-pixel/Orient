@@ -9,7 +9,8 @@ class IdempotencyStore {
     step,
     tool,
     planRevision = 1,
-    operationId = null
+    operationId = null,
+    tenantId = null
   } = {}) {
     if (!executionId) {
       throw new TypeError(
@@ -38,7 +39,7 @@ class IdempotencyStore {
 
   get(key) {
     if (this.repository) {
-      return this.repository.findByKey(key);
+      return this.repository.findByKey(key, { tenantId });
     }
 
     return this.records.get(key) || null;
@@ -49,7 +50,8 @@ class IdempotencyStore {
     step,
     tool,
     planRevision = 1,
-    operationId = null
+    operationId = null,
+    tenantId = null
   } = {}) {
     const key =
       this.buildKey({
@@ -57,7 +59,8 @@ class IdempotencyStore {
         step,
         tool,
         planRevision,
-        operationId
+        operationId,
+        tenantId
       });
 
     if (this.repository) {
@@ -66,7 +69,8 @@ class IdempotencyStore {
         step,
         tool,
         planRevision,
-        operationId
+        operationId,
+        tenantId
       });
     }
 
@@ -110,13 +114,15 @@ class IdempotencyStore {
 
   complete(
     key,
-    result
+    result,
+    tenantId = null
   ) {
     if (this.repository) {
       const record =
         this.repository.complete(
           key,
-          result
+          result,
+          { tenantId }
         );
 
       if (!record) {
@@ -147,13 +153,15 @@ class IdempotencyStore {
 
   fail(
     key,
-    error
+    error,
+    tenantId = null
   ) {
     if (this.repository) {
       const record =
         this.repository.fail(
           key,
-          error
+          error,
+          { tenantId }
         );
 
       if (!record) {
@@ -191,9 +199,9 @@ class IdempotencyStore {
     return record;
   }
 
-  delete(key) {
+  delete(key, tenantId = null) {
     if (this.repository) {
-      return this.repository.delete(key);
+      return this.repository.delete(key, { tenantId });
     }
 
     return this.records.delete(key);
