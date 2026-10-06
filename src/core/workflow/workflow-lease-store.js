@@ -2,13 +2,14 @@ const crypto = require('crypto');
 const AppError = require('../errors/AppError');
 
 class WorkflowLeaseStore {
-  constructor({ repository = null, clock = () => Date.now(), leaseDurationMs = 30000 } = {}) {
+  constructor({ repository = null, clock = () => Date.now(), leaseDurationMs = 30000, tenantId = null } = {}) {
     if (!Number.isInteger(leaseDurationMs) || leaseDurationMs < 1000) {
       throw new AppError('leaseDurationMs must be at least 1000ms', 400, 'LEASE_INVALID_DURATION');
     }
     this.repository = repository;
     this.clock = clock;
     this.leaseDurationMs = leaseDurationMs;
+    this.tenantId = tenantId;
     this.memory = new Map();
   }
 
@@ -25,7 +26,7 @@ class WorkflowLeaseStore {
       workerId,
       acquiredAt: now,
       expiresAt: now + this.leaseDurationMs,
-      metadata: { ...metadata }
+      metadata: { ...metadata, ...(this.tenantId ? { tenantId: this.tenantId } : {}) }
     };
 
     // Durable repositories may provide an atomic acquisition primitive.
@@ -87,10 +88,10 @@ class WorkflowLeaseStore {
 
   get(workflowId) {
     const local = this.memory.get(workflowId);
-    if (local) return local;
-    const persisted = this.repository?.findByWorkflowId?.(workflowId) || null;
-    if (persisted) this.memory.set(workflowId, persisted);
-    return persisted;
+    if (local && this.tenantMatches(local)) return local;
+    const persisted = this.repository?.findByWorkflowId?.(workflowId, this.tenantId) || null;
+    if (persisted && this.tenantMatches(persisted)) this.memory.set(workflowId, persisted);
+    return persisted && this.tenantMatches(persisted) ? persisted : null;
   }
 
   recoverExpired() {
@@ -110,7 +111,7 @@ class WorkflowLeaseStore {
 
   // Merge durable ownership without allowing stale local leases to override it.
   all() {
-    const persisted = this.repository?.findAll?.() || [];
+    const persisted = this.repository?.findAll?.({ tenantId: this.tenantId }) || [];
     const merged = new Map(persisted.map(item => [item.workflowId, item]));
     for (const [id, lease] of this.memory) {
       if (!merged.has(id)) merged.set(id, lease);
@@ -118,9 +119,14 @@ class WorkflowLeaseStore {
     return [...merged.values()];
   }
 
+  tenantMatches(lease) {
+    if (!this.tenantId) return true;
+    return lease?.metadata?.tenantId === this.tenantId;
+  }
+
   require(workflowId, leaseId) {
     const lease = this.get(workflowId);
-    if (!lease || lease.leaseId !== leaseId) {
+    if (!lease || lease.leaseId !== leaseId || !this.tenantMatches(lease)) {
       throw new AppError(
         'Workflow lease is not owned by this worker',
         409,
