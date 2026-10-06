@@ -417,7 +417,7 @@ test('tenant-scoped lease acquisition cannot delete another tenant lease during 
 
   const acquired = leases.tryAcquire({
     workflowId: 'shared-expired-lease',
-    leaseId: 'lease-b',
+    leaseId: 'lease-b-cross-tenant',
     workerId: 'worker-b',
     acquiredAt: 3000,
     expiresAt: 4000,
