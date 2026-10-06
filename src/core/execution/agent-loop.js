@@ -418,6 +418,10 @@ class AgentLoop {
         injectedContext.memoryScope = runtimeContext.memoryScope || 'personal';
       }
 
+      if (agentInvocation) {
+        injectedContext.agentInvocation = agentInvocation;
+      }
+
       injectedContext.resolvedInput =
         resolvedInput;
 
