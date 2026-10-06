@@ -7,7 +7,7 @@ class PlannerService {
     this.maxSteps = 5;
   }
 
-  plan(input) {
+  async plan(input, { modelRouter = null, context = {} } = {}) {
     const text = String(input || '').trim();
 
     if (!text) {
@@ -21,6 +21,16 @@ class PlannerService {
     if (modelRouter && modelRouter.list().length) {
       try {
         const modelResult = await modelRouter.complete({
+          messages: [
+            {
+              role: 'system',
+              content: 'You are ORIENT ONE planner. Return ONLY valid JSON with intent, confidence, reason, and steps. Each step must contain tool, input, and dependsOn. Never invent tools. Prefer memory.search, memory.list, memory.add, memory.delete when applicable.'
+            },
+            {
+              role: 'user',
+              content: text
+            }
+          ],
           input: text,
           requiredCapabilities: ['text-generation'],
           preferredLocality: 'local',
@@ -122,7 +132,7 @@ class PlannerService {
     let payload;
 
     try {
-      const fenced = text.match(/\`\`\`(?:json)?\\s*([\\s\\S]*?)\\s*\`\`\`/i);
+      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
       payload = JSON.parse(
         fenced ? fenced[1] : text
       );
@@ -197,7 +207,10 @@ class PlannerService {
     }
 
     const planned =
-      this.plan(candidateInput);
+      this.plan(candidateInput, {
+        modelRouter: context?.modelRouter || null,
+        context
+      });
 
     return {
       ...planned,
