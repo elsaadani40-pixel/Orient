@@ -108,30 +108,21 @@ class ExecutionRepository {
     }
   }
 
-  findAll() {
-    return this.readRaw().map(execution =>
-      this.normalize(execution)
-    );
+
+  findAll({ tenantId = null } = {}) {
+    return this.readRaw().map(execution => this.normalize(execution))
+      .filter(execution => !tenantId || execution.metadata?.tenantId === tenantId);
   }
 
-  findById(executionId) {
-    return (
-      this.findAll().find(
-        execution =>
-          execution.executionId === executionId ||
-          execution.id === executionId
-      ) || null
-    );
+  findById(executionId, { tenantId = null } = {}) {
+    return this.findAll({ tenantId }).find(
+      execution => execution.executionId === executionId || execution.id === executionId
+    ) || null;
   }
 
-  findByGoalId(goalId) {
-    if (!goalId) {
-      return [];
-    }
-
-    return this.findAll().filter(
-      execution => execution.goalId === goalId
-    );
+  findByGoalId(goalId, { tenantId = null } = {}) {
+    if (!goalId) return [];
+    return this.findAll({ tenantId }).filter(execution => execution.goalId === goalId);
   }
 
   insert(execution) {
