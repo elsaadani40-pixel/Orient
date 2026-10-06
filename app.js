@@ -7,6 +7,13 @@ const JsonMemoryRepository =
 const MemoryService =
   require('./src/application/memory/memory.service');
 
+const AgentRegistry =
+  require('./src/core/agent/boundary/agent-registry');
+const { AgentDefinition } =
+  require('./src/core/agent/boundary/agent-definition');
+const MemoryAccessPolicy =
+  require('./src/core/memory/memory-access-policy');
+
 const ToolRegistry =
   require('./src/core/tools/tool.registry');
 
@@ -83,8 +90,28 @@ const createServer =
 const repository =
   new JsonMemoryRepository(config.dataFile);
 
+const agentRegistry =
+  new AgentRegistry();
+
+agentRegistry.register(new AgentDefinition({
+  id: 'ORIENT_RUNTIME',
+  name: 'ORIENT Canonical Runtime',
+  capabilities: ['*'],
+  allowedMemoryScopes: ['*'],
+  allowedAgentTargets: ['*'],
+  risk: 'critical'
+}));
+
+const memoryAccessPolicy =
+  new MemoryAccessPolicy({
+    agentRegistry
+  });
+
 const memoryService =
-  new MemoryService(repository);
+  new MemoryService(repository, {
+    memoryAccessPolicy,
+    defaultScope: 'personal'
+  });
 
 const toolRegistry =
   new ToolRegistry();
@@ -185,7 +212,8 @@ const runtime =
     maxRetries: config.maxWorkflowRetries,
     leaseDurationMs: config.workflowLeaseMs,
     maxInputChars: config.maxInputChars,
-    maxToolInputChars: config.maxToolInputChars
+    maxToolInputChars: config.maxToolInputChars,
+    agentRegistry
   });
 
 const agentService =
