@@ -65,6 +65,8 @@ const JsonPersistence =
 
 const AgentOrchestrator =
   require('./src/core/agent/orchestrator/agent-orchestrator');
+const ModelRouter =
+  require('./src/core/model/model-router');
 
 const DecisionEngine =
   require('./src/core/agent/decision/decision-engine');
@@ -186,6 +188,9 @@ const replanner =
     maxReplans: 3
   });
 
+const modelRouter =
+  new ModelRouter();
+
 const agentOrchestrator =
   new AgentOrchestrator({
     planner,
@@ -193,7 +198,8 @@ const agentOrchestrator =
     replanner,
     decisionEngine,
     recoveryEngine,
-    eventPublisher
+    eventPublisher,
+    modelRouter
   });
 
 const persistence =
