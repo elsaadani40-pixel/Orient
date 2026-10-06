@@ -20,8 +20,12 @@ class WorkflowRepository {
     fs.renameSync(temp, this.filePath);
   }
 
-  save(instance) {
+  save(instance, tenantId = null) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenantId = item.tenantId || 'local';
+    if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
+    const existing = this.findById(item.workflowId);
+    if (existing && (existing.tenantId || 'local') !== effectiveTenantId) throw new Error('Workflow tenant collision');
     const items = this.read().filter(existing => existing.workflowId !== item.workflowId);
     items.push(item);
     this.write(items);
