@@ -28,6 +28,12 @@ jobs:
           node-version: ${{ matrix.node }}
           check-latest: true
 
+      - name: Verify SQLite runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sqlite3 --version
+
       - name: Verify repository hygiene
         shell: bash
         run: |
