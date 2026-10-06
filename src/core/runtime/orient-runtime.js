@@ -26,7 +26,10 @@ class OrientRuntime {
     authorizationService = null,
     approvalService = null,
     persistence = null,
-    workflowScheduler = null
+    workflowScheduler = null,
+    tenantId = 'local',
+    userId = 'local',
+    workspaceId = 'local'
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -64,6 +67,10 @@ class OrientRuntime {
     this.persistence =
       persistence;
 
+    this.tenantId = tenantId || 'local';
+    this.userId = userId || 'local';
+    this.workspaceId = workspaceId || 'local';
+
     this.workflowRepository =
       persistence?.workflows || null;
 
@@ -71,10 +78,12 @@ class OrientRuntime {
       workflowScheduler ||
       new WorkflowScheduler({
         maxConcurrent: 1,
+        tenantId: this.tenantId,
         workflowRepository: this.workflowRepository,
         leaseStore: persistence?.workflowLeases
           ? new (require('../workflow/workflow-lease-store'))({
-              repository: persistence.workflowLeases
+              repository: persistence.workflowLeases,
+              tenantId: this.tenantId
             })
           : null
       });
@@ -121,9 +130,15 @@ class OrientRuntime {
       return [];
     }
 
-    return this.persistence.events.appendMany(
-      events
-    );
+    const scopedEvents = events.map((event) => ({
+      ...event,
+      data: {
+        ...(event.data || {}),
+        tenantId: context.tenantId
+      }
+    }));
+
+    return this.persistence.events.appendMany(scopedEvents);
   }
 
   persistExecution(context, mode = 'update') {
@@ -137,16 +152,15 @@ class OrientRuntime {
     const snapshot =
       context.snapshot();
 
-    if (mode === 'insert') {
-      return this.persistence.executions.insert(
-        snapshot
-      );
+    if (snapshot.tenantId && snapshot.tenantId !== this.tenantId) {
+      throw Object.assign(new Error('Execution tenant does not match runtime tenant'), { code: 'TENANT_CONTEXT_MISMATCH' });
     }
 
-    return this.persistence.executions.update(
-      snapshot.executionId,
-      snapshot
-    );
+    if (mode === 'insert') {
+      return this.persistence.executions.insert(snapshot, { tenantId: this.tenantId });
+    }
+
+    return this.persistence.executions.update(snapshot.executionId, snapshot, { tenantId: this.tenantId });
   }
 
   checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
@@ -188,7 +202,7 @@ class OrientRuntime {
 
     const durableCheckpoint =
       this.persistence?.checkpoints?.save
-        ? this.persistence.checkpoints.save(snapshot, { reason })
+        ? this.persistence.checkpoints.save(snapshot, { reason, tenantId: this.tenantId })
         : null;
 
     return {
@@ -282,7 +296,9 @@ class OrientRuntime {
 
     const instance = new WorkflowInstance({
       definition,
-      tenantId: 'local',
+      tenantId: this.tenantId,
+      userId: this.userId,
+      workspaceId: this.workspaceId,
       input: { text }
     });
 
@@ -467,6 +483,7 @@ class OrientRuntime {
               planRevision,
               approval,
               approvals,
+              tenantId: this.tenantId,
               onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'step_completed' } = {}) => {
                 this.checkpoint(
                   context,
@@ -789,6 +806,7 @@ class OrientRuntime {
               planRevision,
               approval,
               approvals,
+              tenantId: this.tenantId,
               onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'resume_step_completed' } = {}) => {
                 context.metadata.planRevision = checkpointPlanRevision;
                 context.metadata.replans = replans;
