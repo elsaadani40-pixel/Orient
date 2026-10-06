@@ -168,6 +168,29 @@ test('runtime executes a validated replan instead of only recording the decision
     'completed'
   );
 
+  assert.deepEqual(
+    result.execution.steps.map(step => ({
+      step: step.step,
+      planRevision: step.planRevision,
+      tool: step.tool,
+      status: step.status
+    })),
+    [
+      {
+        step: 1,
+        planRevision: 1,
+        tool: 'test.request-replan',
+        status: 'completed'
+      },
+      {
+        step: 1,
+        planRevision: 2,
+        tool: 'test.finalize',
+        status: 'completed'
+      }
+    ]
+  );
+
   assert.equal(
     result.execution.events.some(
       event => event.type === 'replanning.executed'
