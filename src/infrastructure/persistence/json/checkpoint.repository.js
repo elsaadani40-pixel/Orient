@@ -79,7 +79,9 @@ class CheckpointRepository {
     if (!executionId) return null;
     const checkpoint = this.read()[executionId] || null;
     if (!checkpoint) return null;
-    if (tenantId && checkpoint.snapshot?.metadata?.tenantId !== tenantId) return null;
+    if (tenantId && checkpoint.snapshot?.tenantId && checkpoint.snapshot.tenantId !== tenantId) return null;
+    if (tenantId && !checkpoint.snapshot?.tenantId && checkpoint.snapshot?.metadata?.tenantId && checkpoint.snapshot.metadata.tenantId !== tenantId) return null;
+    if (tenantId && !checkpoint.snapshot?.tenantId && !checkpoint.snapshot?.metadata?.tenantId && tenantId !== 'local') return null;
 
     if (verify && checkpoint.snapshotSha256 !== this.digest(checkpoint.snapshot)) {
       const error = new Error(`Checkpoint integrity verification failed: ${executionId}`);
