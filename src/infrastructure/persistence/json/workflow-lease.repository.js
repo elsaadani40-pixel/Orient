@@ -40,19 +40,21 @@ class WorkflowLeaseRepository {
     );
   }
 
-  delete(workflowId, leaseId) {
+  delete(workflowId, leaseId, tenantId = null) {
     const items = this.read();
+    const current = items.find(item => item.workflowId === workflowId && item.leaseId === leaseId);
+    if (tenantId && current?.metadata?.tenantId !== tenantId) return false;
     const next = items.filter(item => !(item.workflowId === workflowId && item.leaseId === leaseId));
     if (next.length !== items.length) this.write(next);
     return next.length !== items.length;
   }
 
-  deleteExpired(workflowId, leaseId, now = Date.now()) {
+  deleteExpired(workflowId, leaseId, now = Date.now(), tenantId = null) {
     const items = this.read();
     const current = items.find(
       item => item.workflowId === workflowId && item.leaseId === leaseId
     );
-    if (!current || new Date(current.expiresAt).getTime() > now) {
+    if (!current || (tenantId && current.metadata?.tenantId !== tenantId) || new Date(current.expiresAt).getTime() > now) {
       return false;
     }
     const next = items.filter(
