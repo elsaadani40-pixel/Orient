@@ -7,7 +7,8 @@ class IdempotencyStore {
   buildKey({
     executionId,
     step,
-    tool
+    tool,
+    planRevision = 1
   } = {}) {
     if (!executionId) {
       throw new TypeError(
