@@ -53,11 +53,15 @@ class SqliteWorkflowLeaseRepository {
     const payload = this.db.constructor.json(lease);
 
     // BEGIN IMMEDIATE serializes competing writers. Expired ownership is
-    // removed and the new lease is inserted in the same transaction.
+    // removed only when it belongs to the same tenant, then the new lease is
+    // inserted in the same transaction.
+    const tenantClause = tenantId
+      ? ` AND json_extract(payload, '$.metadata.tenantId') = ${this.db.constructor.literal(tenantId)}`
+      : '';
     this.db.transaction([
       `DELETE FROM workflow_leases
        WHERE workflow_id=${workflowId}
-         AND expires_at <= ${acquiredAt};`,
+         AND expires_at <= ${acquiredAt}${tenantClause};`,
       `INSERT OR IGNORE INTO workflow_leases(
          workflow_id, lease_id, worker_id, acquired_at, expires_at, payload
        ) VALUES (
