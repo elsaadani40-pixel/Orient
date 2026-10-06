@@ -8,7 +8,8 @@ class IdempotencyStore {
     executionId,
     step,
     tool,
-    planRevision = 1
+    planRevision = 1,
+    operationId = null
   } = {}) {
     if (!executionId) {
       throw new TypeError(
@@ -28,7 +29,7 @@ class IdempotencyStore {
       );
     }
 
-    return `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
+    return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
 
   has(key) {
@@ -47,14 +48,16 @@ class IdempotencyStore {
     executionId,
     step,
     tool,
-    planRevision = 1
+    planRevision = 1,
+    operationId = null
   } = {}) {
     const key =
       this.buildKey({
         executionId,
         step,
         tool,
-        planRevision
+        planRevision,
+        operationId
       });
 
     if (this.repository) {
@@ -83,6 +86,7 @@ class IdempotencyStore {
       step,
       tool,
       planRevision,
+      operationId,
       status: 'running',
       result: null,
       error: null,
