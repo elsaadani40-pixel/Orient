@@ -271,6 +271,8 @@ class OrientRuntime {
 
       let planRevision = 1;
       let replans = 0;
+      context.metadata.planRevision = planRevision;
+      context.metadata.replans = replans;
       let previousFingerprint =
         this.planFingerprint(plan);
 
@@ -442,6 +444,8 @@ class OrientRuntime {
 
         replans += 1;
         planRevision += 1;
+        context.metadata.planRevision = planRevision;
+        context.metadata.replans = replans;
         previousFingerprint =
           replanValidation.fingerprint;
 
@@ -546,6 +550,252 @@ class OrientRuntime {
       this.persistEvents(
         context
       );
+
+      throw error;
+    }
+  }
+
+  async resume(executionId, { approval = null, approvals = {} } = {}) {
+    if (!this.persistence?.checkpoints?.findLatest) {
+      throw Object.assign(
+        new Error('Durable checkpoint storage is required for resume'),
+        { code: 'CHECKPOINT_STORAGE_REQUIRED' }
+      );
+    }
+
+    const checkpoint =
+      this.persistence.checkpoints.findLatest(executionId);
+
+    if (!checkpoint) {
+      throw Object.assign(
+        new Error(`No checkpoint found for execution: ${executionId}`),
+        { code: 'CHECKPOINT_NOT_FOUND' }
+      );
+    }
+
+    const context =
+      ExecutionContext.restore(checkpoint.snapshot);
+
+    if (!context.isActive()) {
+      return {
+        resumed: false,
+        reason: 'execution_not_resumable',
+        execution: context.snapshot()
+      };
+    }
+
+    let plan =
+      context.plan;
+
+    if (!plan || !Array.isArray(plan.steps)) {
+      throw Object.assign(
+        new Error('Checkpoint does not contain a resumable plan'),
+        { code: 'CHECKPOINT_PLAN_REQUIRED' }
+      );
+    }
+
+    let planRevision =
+      Number(context.metadata?.planRevision || 1);
+
+    if (!Number.isInteger(planRevision) || planRevision < 1) {
+      throw Object.assign(
+        new Error('Checkpoint plan revision is invalid'),
+        { code: 'CHECKPOINT_PLAN_REVISION_INVALID' }
+      );
+    }
+
+    let replans =
+      Number(context.metadata?.replans || Math.max(0, planRevision - 1));
+
+    let validation = {
+      valid: true,
+      steps: plan.steps
+    };
+
+    let previousFingerprint =
+      this.planFingerprint(plan);
+
+    let loopResult = null;
+    let replanningDecision = null;
+
+    try {
+      context.record(
+        'execution.resume.started',
+        {
+          checkpointId: checkpoint.checkpointId,
+          sequence: checkpoint.sequence,
+          planRevision
+        }
+      );
+
+      while (true) {
+        context.setPlan(plan);
+
+        loopResult =
+          await this.agentLoop.run({
+            plan,
+            context,
+            runtimeContext: {
+              requestId: context.requestId,
+              input: context.input,
+              plan,
+              planRevision,
+              approval,
+              approvals,
+              onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'resume_step_completed' } = {}) => {
+                context.metadata.planRevision = checkpointPlanRevision;
+                context.metadata.replans = replans;
+                this.checkpoint(
+                  context,
+                  'update',
+                  reason + ':plan-' + checkpointPlanRevision + ':step-' + step
+                );
+              }
+            }
+          });
+
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.OBSERVING
+        );
+
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.EVALUATING
+        );
+
+        replanningDecision =
+          this.agentOrchestrator.decideReplanning({
+            evaluation: loopResult.evaluation,
+            replans,
+            hasRemainingSteps:
+              loopResult.stepsExecuted < plan.steps.length,
+            context
+          });
+
+        context.record(
+          'replanning.decision',
+          {
+            ...replanningDecision.toJSON(),
+            planRevision,
+            replans,
+            resumed: true
+          }
+        );
+
+        if (replanningDecision.nextAction !== 'replan') {
+          break;
+        }
+
+        if (replans >= 3) {
+          throw Object.assign(
+            new Error('تم الوصول إلى الحد الأقصى لإعادة التخطيط'),
+            { code: 'MAX_REPLANS_EXCEEDED' }
+          );
+        }
+
+        const nextOrchestration =
+          await this.agentOrchestrator.replan({
+            input: context.input,
+            evaluation: loopResult.evaluation,
+            previousPlan: plan,
+            context
+          });
+
+        if (!nextOrchestration?.plan || nextOrchestration.validation?.valid !== true) {
+          throw Object.assign(
+            new Error('الخطة المستعادة لم تجتز إعادة التخطيط'),
+            { code: 'INVALID_RESUME_REPLAN' }
+          );
+        }
+
+        const nextPlan =
+          nextOrchestration.plan;
+
+        const replanValidation =
+          this.validateReplannedPlan(
+            nextPlan,
+            previousFingerprint
+          );
+
+        if (!replanValidation.valid) {
+          throw Object.assign(
+            new Error(replanValidation.reason),
+            { code: 'INVALID_REPLAN' }
+          );
+        }
+
+        replans += 1;
+        planRevision += 1;
+        context.metadata.planRevision = planRevision;
+        context.metadata.replans = replans;
+        previousFingerprint =
+          replanValidation.fingerprint;
+
+        plan =
+          nextPlan;
+
+        validation =
+          nextOrchestration.validation;
+
+        context.record(
+          'replanning.executed',
+          {
+            replans,
+            planRevision,
+            previousPlanIntent:
+              context.plan?.intent || null,
+            nextPlanIntent:
+              nextPlan.intent,
+            resumed: true
+          }
+        );
+
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.PLANNING
+        );
+      }
+
+      context.complete();
+
+      this.persistExecution(context, 'update');
+      this.persistEvents(context);
+      this.checkpoint(context, 'update', 'execution_completed');
+
+      return {
+        resumed: true,
+        requestId: context.requestId,
+        result: loopResult.result,
+        evaluation: loopResult.evaluation,
+        replanning: replanningDecision.toJSON(),
+        execution: context.snapshot()
+      };
+    } catch (error) {
+      if (
+        context.isActive() &&
+        context.canTransitionAgentTo(
+          AgentState.LIFECYCLE.RECOVERING
+        )
+      ) {
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.RECOVERING
+        );
+      }
+
+      const recovery =
+        await this.classifyRecovery({
+          error,
+          context
+        });
+
+      context.record(
+        'recovery.completed',
+        recovery
+      );
+
+      context.fail(error);
+
+      this.persistExecution(context, 'update');
+      this.persistEvents(context);
+      this.checkpoint(context, 'update', 'resume_failed');
 
       throw error;
     }
