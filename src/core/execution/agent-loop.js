@@ -370,6 +370,12 @@ class AgentLoop {
           stepResults
         });
 
+      if (agentAuthorization) {
+        injectedContext.agentId = agentAuthorization.agentId;
+        injectedContext.capability = agentAuthorization.capability;
+        injectedContext.memoryScope = runtimeContext.memoryScope || 'personal';
+      }
+
       injectedContext.resolvedInput =
         resolvedInput;
 
