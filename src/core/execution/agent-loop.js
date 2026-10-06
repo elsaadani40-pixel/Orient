@@ -206,9 +206,19 @@ class AgentLoop {
 
       if (this.authorizationService) {
         try {
+          const approval =
+            runtimeContext.approvals?.[stepNumber] ||
+            runtimeContext.approval ||
+            null;
+
           const authorization =
             this.authorizationService
-              .assertAuthorized(step.tool);
+              .assertAuthorized(step.tool, {
+                executionId: context.executionId,
+                step: stepNumber,
+                approval,
+                scope: { planRevision }
+              });
 
           context.record(
             'authorization.completed',
@@ -217,7 +227,11 @@ class AgentLoop {
               tool: step.tool,
               authorized: true,
               capability:
-                authorization.capability
+                authorization.capability,
+              risk:
+                authorization.risk,
+              requiresApproval:
+                authorization.requiresApproval
             }
           );
         } catch (error) {
