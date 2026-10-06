@@ -132,8 +132,12 @@ class SqliteIdempotencyRepository {
       startedAt: new Date().toISOString(),
       completedAt: null
     };
-    this.db.run(`INSERT INTO idempotency(key,payload,status,updated_at) VALUES (${SqliteDatabase.literal(key)},${SqliteDatabase.json(record)},'running',${SqliteDatabase.literal(record.startedAt)});`);
-    return { created: true, key, record };
+    const inserted = this.db.query(`INSERT OR IGNORE INTO idempotency(key,payload,status,updated_at) VALUES (${SqliteDatabase.literal(key)},${SqliteDatabase.json(record)},'running',${SqliteDatabase.literal(record.startedAt)}); SELECT changes() AS changes;`);
+    const actual = this.findByKey(key);
+    if (!inserted.length || Number(inserted[inserted.length - 1].changes) !== 1) {
+      return { created: false, key, record: actual };
+    }
+    return { created: true, key, record: actual };
   }
   complete(key, result) {
     const record = this.findByKey(key); if (!record) return null;
@@ -198,10 +202,8 @@ class SqliteApprovalRepository {
     return { approvalId:r.approval_id,executionId:r.execution_id,step:Number(r.step),planRevision:Number(r.plan_revision),tool:r.tool,capability:r.capability,scope:JSON.parse(r.scope),issuedAt:r.issued_at,expiresAt:r.expires_at,used:Boolean(r.used),usedAt:r.used_at||undefined,metadata:JSON.parse(r.metadata) };
   }
   consume(approvalId, usedAt) {
-    const changed=this.db.query(`SELECT approval_id FROM approvals WHERE approval_id=${SqliteDatabase.literal(approvalId)} AND used=0 LIMIT 1;`).length;
-    if(!changed)return false;
-    this.db.run(`UPDATE approvals SET used=1,used_at=${SqliteDatabase.literal(usedAt)} WHERE approval_id=${SqliteDatabase.literal(approvalId)} AND used=0;`);
-    return true;
+    const result=this.db.query(`UPDATE approvals SET used=1,used_at=${SqliteDatabase.literal(usedAt)} WHERE approval_id=${SqliteDatabase.literal(approvalId)} AND used=0; SELECT changes() AS changes;`);
+    return Boolean(result.length && Number(result[result.length - 1].changes) === 1);
   }
   count() { return this.db.query('SELECT COUNT(*) AS count FROM approvals;')[0].count; }
 }
