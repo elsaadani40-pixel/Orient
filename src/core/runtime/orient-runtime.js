@@ -274,6 +274,10 @@ class OrientRuntime {
           }
         );
 
+        context.transitionAgentTo(
+          AgentState.LIFECYCLE.VALIDATING
+        );
+
         context.record(
           'plan.validation.completed',
           {
