@@ -182,7 +182,8 @@ const recoveryEngine =
 
 const planValidator =
   new PlanValidator({
-    maxSteps: 5
+    maxSteps: 5,
+    toolRegistry
   });
 
 const replanner =
