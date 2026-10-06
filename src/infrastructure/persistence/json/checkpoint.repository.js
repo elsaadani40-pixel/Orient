@@ -57,6 +57,10 @@ class CheckpointRepository {
 
     const records = this.read();
     const previous = records[snapshot.executionId];
+    if (previous && tenantId) {
+      const previousTenantId = previous.snapshot?.tenantId || previous.snapshot?.metadata?.tenantId || (tenantId === 'local' ? 'local' : null);
+      if (previousTenantId !== tenantId) throw Object.assign(new Error('Checkpoint tenant collision'), { code: 'TENANT_CONTEXT_MISMATCH' });
+    }
     const sequence = Number(previous?.sequence || 0) + 1;
     const storedSnapshot = JSON.parse(JSON.stringify(snapshot));
 
