@@ -751,6 +751,20 @@ class OrientRuntime {
     const context =
       ExecutionContext.restore(checkpoint.snapshot);
 
+    if (!context.tenantId) context.tenantId = this.tenantId;
+    if (!context.userId) context.userId = this.userId;
+    if (!context.workspaceId) context.workspaceId = this.workspaceId;
+    context.metadata = {
+      ...context.metadata,
+      tenantId: context.tenantId,
+      userId: context.userId,
+      workspaceId: context.workspaceId
+    };
+
+    if (context.tenantId !== this.tenantId) {
+      throw Object.assign(new Error('Checkpoint tenant does not match runtime tenant'), { code: 'TENANT_CONTEXT_MISMATCH' });
+    }
+
     if (!context.isActive()) {
       return {
         resumed: false,
