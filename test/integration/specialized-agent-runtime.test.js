@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const AgentRegistry = require('../../../src/core/agent/boundary/agent-registry');
+const AgentRegistry = require('../../src/core/agent/boundary/agent-registry');
 const { registerDefaultAgents } = require('../../../src/core/agent/catalog/default-agents');
 const ModelRouter = require('../../../src/core/model/model-router');
 const ModelRoutingPolicy = require('../../../src/core/model/model-routing-policy');
