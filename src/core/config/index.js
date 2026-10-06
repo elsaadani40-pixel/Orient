@@ -26,7 +26,7 @@ const config = Object.freeze({
   ollamaModel: process.env.ORIENT_OLLAMA_MODEL || 'llama3.2:3b',
   ollamaTimeoutMs: positiveInteger(process.env.ORIENT_OLLAMA_TIMEOUT_MS, 60000),
   appName: 'ORIENT ONE',
-  version: '0.9.0'
+  version: '0.10.0'
 });
 
 module.exports = config;
