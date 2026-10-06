@@ -14,6 +14,7 @@ class OrientRuntime {
     toolRegistry,
     agentOrchestrator,
     authorizationService = null,
+    approvalService = null,
     persistence = null
   }) {
     if (!toolRegistry) {
@@ -36,6 +37,13 @@ class OrientRuntime {
 
     this.authorizationService =
       authorizationService;
+
+    this.approvalService =
+      approvalService;
+
+    if (this.authorizationService && !this.authorizationService.approvalService) {
+      this.authorizationService.approvalService = approvalService;
+    }
 
     this.persistence =
       persistence;
@@ -202,7 +210,7 @@ class OrientRuntime {
     };
   }
 
-  async execute(input) {
+  async execute(input, { approval = null, approvals = {} } = {}) {
     const requestId =
       crypto.randomUUID();
 
@@ -301,7 +309,9 @@ class OrientRuntime {
               requestId,
               input: text,
               plan,
-              planRevision
+              planRevision,
+              approval,
+              approvals
             }
           });
 
