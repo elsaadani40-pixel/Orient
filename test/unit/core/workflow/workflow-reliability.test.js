@@ -130,3 +130,36 @@ test('durable sqlite lease acquisition is single-owner under serialized writers'
   assert.throws(() => store.acquire('wf-atomic', 'worker-b'), /already held/);
   assert.equal(repository.findByWorkflowId('wf-atomic').leaseId, first.leaseId);
 });
+
+test('scheduler persists cancellation and deadline terminal transitions', () => {
+  const saved = [];
+  const repository = {
+    save(value) { saved.push(value.toJSON()); }
+  };
+  let now = 1000;
+  const scheduler = new WorkflowScheduler({
+    maxConcurrent: 1,
+    clock: () => now,
+    workflowRepository: repository
+  });
+
+  const cancelInstance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'persist-cancel-wf'
+  });
+  scheduler.enqueue(cancelInstance);
+  assert.equal(scheduler.cancel(cancelInstance.workflowId), true);
+  assert.equal(saved.at(-1).state, 'CANCELLED');
+
+  const deadlineInstance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'persist-deadline-wf'
+  });
+  scheduler.enqueue(deadlineInstance, {
+    deadlineAt: new Date(900).toISOString()
+  });
+  assert.equal(scheduler.lease('deadline-worker'), null);
+  const persisted = saved.find(item => item.workflowId === deadlineInstance.workflowId);
+  assert.equal(persisted.state, 'FAILED');
+  assert.equal(persisted.metadata.failureCode, 'WORKFLOW_DEADLINE_EXCEEDED');
+});
