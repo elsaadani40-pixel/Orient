@@ -29,7 +29,12 @@ class OrientRuntime {
     workflowScheduler = null,
     tenantId = 'local',
     userId = 'local',
-    workspaceId = 'local'
+    workspaceId = 'local',
+    maxConcurrent = 1,
+    maxQueueDepth = 1000,
+    maxRetries = 2,
+    leaseDurationMs = 30000,
+    maxInputChars = 100000
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -71,6 +76,7 @@ class OrientRuntime {
     this.tenantId = tenantId || 'local';
     this.userId = userId || 'local';
     this.workspaceId = workspaceId || 'local';
+    this.maxInputChars = maxInputChars;
 
     this.workflowRepository =
       persistence?.workflows || null;
@@ -78,7 +84,10 @@ class OrientRuntime {
     this.workflowScheduler =
       workflowScheduler ||
       new WorkflowScheduler({
-        maxConcurrent: 1,
+        maxConcurrent,
+        maxQueueDepth,
+        maxRetries,
+        leaseDurationMs,
         tenantId: this.tenantId,
         workflowRepository: this.workflowRepository,
         leaseStore: persistence?.workflowLeases
@@ -289,6 +298,13 @@ class OrientRuntime {
         message: 'لم يتم إرسال طلب.'
       };
     }
+    if (text.length > this.maxInputChars) {
+      return {
+        type: 'error',
+        code: 'INPUT_TOO_LARGE',
+        message: 'حجم الطلب يتجاوز الحد المسموح.'
+      };
+    }
 
     const definition = new WorkflowDefinition({
       id: 'orient.request.execution',
@@ -405,6 +421,14 @@ class OrientRuntime {
         requestId,
         type: 'error',
         message: 'لم يتم إرسال طلب.'
+      };
+    }
+    if (text.length > this.maxInputChars) {
+      return {
+        requestId,
+        type: 'error',
+        code: 'INPUT_TOO_LARGE',
+        message: 'حجم الطلب يتجاوز الحد المسموح.'
       };
     }
 
