@@ -85,7 +85,7 @@ class IdempotencyRepository {
       throw new TypeError('tool is required');
     }
 
-    return `${executionId}:${step}:${tool}`;
+    return `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
 
   findByKey(key) {
@@ -131,6 +131,7 @@ class IdempotencyRepository {
       executionId,
       step,
       tool,
+      planRevision,
       status: 'running',
       result: null,
       error: null,
