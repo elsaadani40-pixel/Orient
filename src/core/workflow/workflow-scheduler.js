@@ -1,4 +1,4 @@
-const AppError = require('../errors/app-error');
+const AppError = require('../errors/AppError');
 
 class WorkflowScheduler {
   constructor({ maxConcurrent=1, clock=()=>Date.now() }={}) { if(maxConcurrent<1) throw new AppError('maxConcurrent must be positive',400,'SCHEDULER_INVALID_LIMIT'); this.maxConcurrent=maxConcurrent; this.clock=clock; this.queue=[]; this.active=new Map(); this.cancelled=new Set(); }
