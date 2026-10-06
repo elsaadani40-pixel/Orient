@@ -85,11 +85,13 @@ class SqliteEventRepository {
     this.db.run(`INSERT OR IGNORE INTO events(event_id,execution_id,goal_id,type,timestamp,payload) VALUES (${SqliteDatabase.literal(normalized.id)},${SqliteDatabase.literal(normalized.executionId)},${SqliteDatabase.literal(normalized.goalId)},${SqliteDatabase.literal(normalized.type)},${SqliteDatabase.literal(normalized.timestamp)},${SqliteDatabase.json(normalized)});`);
     return normalized;
   }
-  appendMany(events) {
+  appendMany(events, { tenantId = null } = {}) {
     const unique = [];
     const statements = [];
     for (const event of events || []) {
       const normalized = this.normalize(event);
+      if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
+      if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
       const exists = this.db.query(`SELECT 1 FROM events WHERE event_id=${SqliteDatabase.literal(normalized.id)} LIMIT 1;`).length;
       if (!exists) {
         unique.push(normalized);
