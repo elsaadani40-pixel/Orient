@@ -274,6 +274,12 @@ class OrientRuntime {
     };
   }
 
+  shutdown(options = {}) {
+    return this.workflowScheduler?.shutdown
+      ? this.workflowScheduler.shutdown(options)
+      : null;
+  }
+
   async executeWorkflow(input, { approval = null, approvals = {}, priority = 0, deadlineAt = null } = {}) {
     const text = String(input || '').trim();
 
