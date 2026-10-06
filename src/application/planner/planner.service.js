@@ -7,7 +7,7 @@ class PlannerService {
     this.maxSteps = 5;
   }
 
-  plan(input) {
+  async plan(input, { modelRouter = null, context = {} } = {}) {
     const text = String(input || '').trim();
 
     if (!text) {
@@ -16,6 +16,48 @@ class PlannerService {
         400,
         'PLAN_INPUT_REQUIRED'
       );
+    }
+
+    if (modelRouter && modelRouter.list().length) {
+      try {
+        const modelResult = await modelRouter.complete({
+          messages: [
+            {
+              role: 'system',
+              content: 'You are ORIENT ONE planner. Return ONLY valid JSON with intent, confidence, reason, and steps. Each step must contain tool, input, and dependsOn. Never invent tools. Prefer memory.search, memory.list, memory.add, memory.delete when applicable.'
+            },
+            {
+              role: 'user',
+              content: text
+            }
+          ],
+          input: text,
+          requiredCapabilities: ['text-generation'],
+          preferredLocality: 'local',
+          preferredCostClass: 'free',
+          context
+        });
+
+        const modelPlan = this.parseModelPlan(
+          modelResult.text
+        );
+
+        if (modelPlan) {
+          return this.normalizePlan({
+            ...modelPlan,
+            routing: modelResult.routing
+          });
+        }
+      } catch (error) {
+        // Model inference is an optional enhancement. The deterministic
+        // planner remains the safe fallback when the local provider is
+        // unavailable or returns an invalid plan.
+        if (context && typeof context.record === 'function') {
+          context.record('model.planning.fallback', {
+            code: error?.code || 'MODEL_PLANNING_FAILED'
+          });
+        }
+      }
     }
 
     const multiStepPlan =
@@ -80,6 +122,53 @@ class PlannerService {
         reason: 'لم يتم العثور على Tool مناسبة'
       })
     );
+  }
+
+  parseModelPlan(text) {
+    if (typeof text !== 'string' || !text.trim()) {
+      return null;
+    }
+
+    let payload;
+
+    try {
+      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      payload = JSON.parse(
+        fenced ? fenced[1] : text
+      );
+    } catch {
+      return null;
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    if (
+      typeof payload.intent !== 'string' ||
+      !Array.isArray(payload.steps)
+    ) {
+      return null;
+    }
+
+    if (payload.steps.length > this.maxSteps) {
+      return null;
+    }
+
+    return {
+      intent: payload.intent,
+      tool: payload.steps[0]?.tool || null,
+      input: payload.steps[0]?.input ?? null,
+      confidence:
+        typeof payload.confidence === 'number'
+          ? payload.confidence
+          : 0.5,
+      reason:
+        typeof payload.reason === 'string'
+          ? payload.reason
+          : 'Local model planning',
+      steps: payload.steps
+    };
   }
 
   replan({

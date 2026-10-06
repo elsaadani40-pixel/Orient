@@ -1,10 +1,11 @@
 const AppError = require('../../errors/AppError');
 
 class PlanValidator {
-  constructor({ maxSteps = 5 } = {}) {
+  constructor({ maxSteps = 5, toolRegistry = null } = {}) {
     this.name = 'ORIENT_PLAN_VALIDATOR';
     this.version = '0.7.0';
     this.maxSteps = maxSteps;
+    this.toolRegistry = toolRegistry;
   }
 
   validate(plan) {
@@ -62,6 +63,17 @@ class PlanValidator {
           `الخطوة ${index + 1} لا تحتوي على أداة`,
           500,
           'PLAN_STEP_TOOL_REQUIRED'
+        );
+      }
+
+      if (
+        this.toolRegistry &&
+        !this.toolRegistry.has(step.tool)
+      ) {
+        throw new AppError(
+          `الأداة "${step.tool}" غير مسجلة`,
+          500,
+          'PLAN_TOOL_NOT_REGISTERED'
         );
       }
 

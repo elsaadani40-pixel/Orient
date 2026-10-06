@@ -21,8 +21,12 @@ const config = Object.freeze({
     : 2,
   workflowLeaseMs: positiveInteger(process.env.ORIENT_WORKFLOW_LEASE_MS, 30000),
   shutdownGraceMs: positiveInteger(process.env.ORIENT_SHUTDOWN_GRACE_MS, 10000),
+  modelProvider: process.env.ORIENT_MODEL_PROVIDER || 'none',
+  ollamaBaseUrl: process.env.ORIENT_OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+  ollamaModel: process.env.ORIENT_OLLAMA_MODEL || 'llama3.2:3b',
+  ollamaTimeoutMs: positiveInteger(process.env.ORIENT_OLLAMA_TIMEOUT_MS, 60000),
   appName: 'ORIENT ONE',
-  version: '0.9.0'
+  version: '0.10.0'
 });
 
 module.exports = config;
