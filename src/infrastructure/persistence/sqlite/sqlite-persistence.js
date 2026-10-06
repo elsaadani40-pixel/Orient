@@ -161,19 +161,33 @@ class SqliteCheckpointRepository {
   digest(snapshot) { return crypto.createHash('sha256').update(JSON.stringify(snapshot)).digest('hex'); }
   save(snapshot, { reason = 'step_completed' } = {}) {
     if (!snapshot?.executionId) throw new TypeError('snapshot.executionId is required');
-    const previous = this.findLatest(snapshot.executionId, { verify: false });
-    const sequence = Number(previous?.sequence || 0) + 1;
-    const checkpoint = {
-      checkpointId: crypto.randomUUID(),
-      executionId: snapshot.executionId,
-      sequence,
-      reason,
-      createdAt: new Date().toISOString(),
-      snapshot: JSON.parse(JSON.stringify(snapshot)),
-      snapshotSha256: this.digest(snapshot)
-    };
-    this.db.run(`INSERT INTO checkpoints(execution_id,sequence,checkpoint_id,reason,created_at,snapshot,snapshot_sha256) VALUES (${SqliteDatabase.literal(checkpoint.executionId)},${sequence},${SqliteDatabase.literal(checkpoint.checkpointId)},${SqliteDatabase.literal(reason)},${SqliteDatabase.literal(checkpoint.createdAt)},${SqliteDatabase.json(checkpoint.snapshot)},${SqliteDatabase.literal(checkpoint.snapshotSha256)}) ON CONFLICT(execution_id) DO UPDATE SET sequence=excluded.sequence,checkpoint_id=excluded.checkpoint_id,reason=excluded.reason,created_at=excluded.created_at,snapshot=excluded.snapshot,snapshot_sha256=excluded.snapshot_sha256;`);
-    return checkpoint;
+    const checkpointId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const normalizedSnapshot = JSON.parse(JSON.stringify(snapshot));
+    const snapshotSha256 = this.digest(normalizedSnapshot);
+
+    // Sequence allocation and replacement happen under one SQLite write transaction.
+    // This prevents concurrent writers from allocating the same checkpoint sequence.
+    this.db.transaction([
+      `INSERT INTO checkpoints(execution_id,sequence,checkpoint_id,reason,created_at,snapshot,snapshot_sha256)
+       SELECT ${SqliteDatabase.literal(snapshot.executionId)},
+              COALESCE((SELECT MAX(sequence) FROM checkpoints WHERE execution_id=${SqliteDatabase.literal(snapshot.executionId)}),0)+1,
+              ${SqliteDatabase.literal(checkpointId)},
+              ${SqliteDatabase.literal(reason)},
+              ${SqliteDatabase.literal(createdAt)},
+              ${SqliteDatabase.json(normalizedSnapshot)},
+              ${SqliteDatabase.literal(snapshotSha256)}
+       ON CONFLICT(execution_id) DO UPDATE SET
+         sequence=excluded.sequence,
+         checkpoint_id=excluded.checkpoint_id,
+         reason=excluded.reason,
+         created_at=excluded.created_at,
+         snapshot=excluded.snapshot,
+         snapshot_sha256=excluded.snapshot_sha256;`
+    ]);
+
+    const persisted = this.findLatest(snapshot.executionId, { verify: false });
+    return persisted;
   }
   findLatest(executionId, { verify = true } = {}) {
     const rows = this.db.query(`SELECT * FROM checkpoints WHERE execution_id=${SqliteDatabase.literal(executionId)} LIMIT 1;`);
