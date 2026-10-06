@@ -42,8 +42,19 @@ class WorkflowLeaseRepository {
     return next.length !== items.length;
   }
 
-  deleteExpired(workflowId, leaseId) {
-    return this.delete(workflowId, leaseId);
+  deleteExpired(workflowId, leaseId, now = Date.now()) {
+    const items = this.read();
+    const current = items.find(
+      item => item.workflowId === workflowId && item.leaseId === leaseId
+    );
+    if (!current || new Date(current.expiresAt).getTime() > now) {
+      return false;
+    }
+    const next = items.filter(
+      item => !(item.workflowId === workflowId && item.leaseId === leaseId)
+    );
+    this.write(next);
+    return true;
   }
 }
 
