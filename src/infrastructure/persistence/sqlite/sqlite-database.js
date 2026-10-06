@@ -42,11 +42,18 @@ class SqliteDatabase {
 
   transaction(statements) {
     if (!Array.isArray(statements) || !statements.length) return;
-    this.run([
-      'BEGIN IMMEDIATE;',
-      ...statements,
-      'COMMIT;'
-    ].join('\n'));
+    try {
+      this.run([
+        'BEGIN IMMEDIATE;',
+        ...statements,
+        'COMMIT;'
+      ].join('\n'));
+    } catch (error) {
+      try {
+        this.run('ROLLBACK;');
+      } catch {}
+      throw error;
+    }
   }
 
   initialize() {
