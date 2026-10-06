@@ -92,6 +92,7 @@ class IdempotencyStore {
       tool,
       planRevision,
       operationId,
+      tenantId,
       status: 'running',
       result: null,
       error: null,
