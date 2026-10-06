@@ -234,6 +234,12 @@ test('tenant-scoped durable workflow queries cannot read another tenant', () => 
   const db = new SqliteDatabase(':memory:');
   const workflows = new SqliteWorkflowRepository(db);
   const leases = new SqliteWorkflowLeaseRepository(db);
+  const WorkflowRepository = require('../../../../src/infrastructure/persistence/json/workflow.repository');
+  const WorkflowLeaseRepository = require('../../../../src/infrastructure/persistence/json/workflow-lease.repository');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-tenant-'));
 
   const a = new WorkflowInstance({
     definition: definition(),
@@ -268,4 +274,18 @@ test('tenant-scoped durable workflow queries cannot read another tenant', () => 
   assert.ok(leases.findByWorkflowId('lease-a', 'tenant-a'));
   assert.equal(leases.findByWorkflowId('lease-a', 'tenant-b'), null);
   assert.equal(leases.findAll({ tenantId: 'tenant-b' }).length, 0);
+
+  const jsonWorkflows = new WorkflowRepository(path.join(dir, 'workflows.json'));
+  jsonWorkflows.save(a);
+  jsonWorkflows.save(b);
+  assert.equal(jsonWorkflows.findById(a.workflowId, 'tenant-b'), null);
+  assert.deepEqual(jsonWorkflows.findAll({ tenantId: 'tenant-a' }).map(item => item.tenantId), ['tenant-a']);
+
+  const jsonLeases = new WorkflowLeaseRepository(path.join(dir, 'leases.json'));
+  jsonLeases.save({
+    workflowId: 'json-lease-a', leaseId: 'json-lease-a-id', workerId: 'worker-a',
+    acquiredAt: 1000, expiresAt: 5000, metadata: { tenantId: 'tenant-a' }
+  });
+  assert.equal(jsonLeases.findByWorkflowId('json-lease-a', 'tenant-b'), null);
+  assert.equal(jsonLeases.findAll({ tenantId: 'tenant-b' }).length, 0);
 });
