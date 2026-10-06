@@ -75,7 +75,10 @@ class ExecutionContext {
     this.executionVersion = 1;
 
     this.metadata = {
-      ...metadata
+      ...metadata,
+      ...(this.tenantId ? { tenantId: this.tenantId } : {}),
+      ...(this.userId ? { userId: this.userId } : {}),
+      ...(this.workspaceId ? { workspaceId: this.workspaceId } : {})
     };
 
     this.status =
