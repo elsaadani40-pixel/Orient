@@ -1,3 +1,48 @@
+test('durable lease renewal uses the scheduler clock and refuses expired ownership', async () => {
+  const SqliteDatabase = require('../../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const { SqliteWorkflowLeaseRepository } = require('../../../../src/infrastructure/persistence/sqlite/workflow.repository');
+  const db = new SqliteDatabase(':memory:');
+  const repository = new SqliteWorkflowLeaseRepository(db);
+  const lease = {
+    workflowId: 'clock-test',
+    leaseId: 'lease-1',
+    workerId: 'worker-1',
+    acquiredAt: 1000,
+    expiresAt: 2000,
+    metadata: {}
+  };
+  repository.save(lease);
+
+  assert.equal(repository.renewIfOwned('clock-test', 'lease-1', 4000, 2000), false);
+  assert.equal(repository.renewIfOwned('clock-test', 'lease-1', 5000, 1500), true);
+});
+
+test('JSON durable lease cleanup only removes an actually expired lease', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const WorkflowLeaseRepository = require('../../../../src/infrastructure/persistence/json/workflow-lease.repository');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-lease-'));
+  const repository = new WorkflowLeaseRepository(path.join(dir, 'leases.json'));
+  repository.save({
+    workflowId: 'json-clock-test',
+    leaseId: 'lease-1',
+    workerId: 'worker-1',
+    acquiredAt: 1000,
+    expiresAt: 5000,
+    metadata: {}
+  });
+
+  assert.equal(repository.deleteExpired('json-clock-test', 'lease-1', 4000), false);
+  assert.ok(repository.findByWorkflowId('json-clock-test'));
+
+  assert.equal(repository.deleteExpired('json-clock-test', 'lease-1', 5000), true);
+  assert.equal(repository.findByWorkflowId('json-clock-test'), null);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { WorkflowDefinition, WorkflowInstance, WorkflowScheduler, WorkflowWorker } = require('../../../../src/core/workflow');
