@@ -207,6 +207,11 @@ test('reconciliation completes a persisted operation without replaying the exter
   assert.equal(counter.count, 1);
   assert.equal(authorization.approvalService.consumed, 1);
 
+  // Model the durable checkpoint captured at step start immediately
+  // before the process disappeared. The in-memory crash handler is not
+  // part of the persisted state after a real process termination.
+  firstContext.steps[0].status = 'running';
+
   const restored = ExecutionContext.restore(
     firstContext.snapshot()
   );
