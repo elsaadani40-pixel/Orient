@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const AppError = require('../errors/AppError');
 
 const ResultReferenceResolver =
@@ -327,6 +329,17 @@ class AgentLoop {
         }
       );
 
+      const operationId = crypto
+        .createHash('sha256')
+        .update(JSON.stringify({
+          executionId: context.executionId,
+          planRevision,
+          step: stepNumber,
+          tool: step.tool,
+          input: resolvedInput
+        }))
+        .digest('hex');
+
       context.record(
         'result.references.resolved',
         {
@@ -340,7 +353,8 @@ class AgentLoop {
       context.startStep({
         step: stepNumber,
         tool: step.tool,
-        planRevision
+        planRevision,
+        operationId
       });
 
       const idempotency =
@@ -349,7 +363,8 @@ class AgentLoop {
             context.executionId,
           step: stepNumber,
           tool: step.tool,
-          planRevision
+          planRevision,
+          operationId
         });
 
       context.record(
@@ -358,6 +373,7 @@ class AgentLoop {
           step: stepNumber,
           tool: step.tool,
           key: idempotency.key,
+          operationId,
           planRevision,
           created: idempotency.created
         }
@@ -557,6 +573,8 @@ class AgentLoop {
 
         const stepRecord = {
           step: stepNumber,
+          planRevision,
+          operationId,
           tool: step.tool,
           input: resolvedInput,
           originalInput: step.input,
