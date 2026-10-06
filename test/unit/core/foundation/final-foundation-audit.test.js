@@ -16,7 +16,8 @@ test('canonical runtime enables the tool execution authorization gate', () => {
 
   new OrientRuntime({
     toolRegistry,
-    agentOrchestrator: {}
+    agentOrchestrator: {},
+    authorizationService: {}
   });
 
   assert.equal(required, true);
