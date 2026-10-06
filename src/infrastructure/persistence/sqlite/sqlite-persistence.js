@@ -126,6 +126,12 @@ class SqliteIdempotencyRepository {
   find(args) { return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || null }); }
   begin(args) {
     const key = this.buildKey(args);
+    const raw = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)} LIMIT 1;`);
+    if (raw.length) {
+      const existingRecord = JSON.parse(raw[0].payload);
+      if (args?.tenantId && existingRecord.tenantId !== args.tenantId && !(args.tenantId === 'local' && !existingRecord.tenantId)) throw new Error('Idempotency tenant mismatch');
+      return { created: false, key, record: existingRecord };
+    }
     const existing = this.findByKey(key, { tenantId: args?.tenantId || null });
     if (existing) return { created: false, key, record: existing };
     const record = {
@@ -173,6 +179,12 @@ class SqliteCheckpointRepository {
   save(snapshot, { reason = 'step_completed', tenantId = null } = {}) {
     if (!snapshot?.executionId) throw new TypeError('snapshot.executionId is required');
     if (tenantId && snapshot.tenantId !== tenantId && snapshot.metadata?.tenantId !== tenantId) throw new Error('Checkpoint tenant mismatch');
+    const existingRows = this.db.query(`SELECT snapshot FROM checkpoints WHERE execution_id=${SqliteDatabase.literal(snapshot.executionId)} LIMIT 1;`);
+    if (existingRows.length && tenantId) {
+      const existingSnapshot = JSON.parse(existingRows[0].snapshot);
+      const existingTenantId = existingSnapshot.tenantId || existingSnapshot.metadata?.tenantId || (tenantId === 'local' ? 'local' : null);
+      if (existingTenantId !== tenantId) throw new Error('Checkpoint tenant collision');
+    }
     const checkpointId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const normalizedSnapshot = JSON.parse(JSON.stringify(snapshot));
