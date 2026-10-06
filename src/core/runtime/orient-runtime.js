@@ -9,6 +9,11 @@ const AgentState =
 const AgentLoop =
   require('../execution/agent-loop');
 
+const AgentRegistry =
+  require('../agent/boundary/agent-registry');
+const { AgentDefinition } =
+  require('../agent/boundary/agent-definition');
+
 const ApprovalService =
   require('../agent/approval/approval-service');
 
@@ -35,7 +40,8 @@ class OrientRuntime {
     maxRetries = 2,
     leaseDurationMs = 30000,
     maxInputChars = 100000,
-    maxToolInputChars = 50000
+    maxToolInputChars = 50000,
+    agentRegistry = null
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -83,6 +89,20 @@ class OrientRuntime {
     this.workspaceId = workspaceId || 'local';
     this.maxInputChars = maxInputChars;
 
+    this.agentRegistry =
+      agentRegistry || new AgentRegistry();
+
+    if (!this.agentRegistry.get('ORIENT_RUNTIME')) {
+      this.agentRegistry.register(new AgentDefinition({
+        id: 'ORIENT_RUNTIME',
+        name: 'ORIENT Canonical Runtime',
+        capabilities: ['*'],
+        allowedMemoryScopes: ['*'],
+        allowedAgentTargets: ['*'],
+        risk: 'critical'
+      }));
+    }
+
     this.workflowRepository =
       persistence?.workflows || null;
 
@@ -119,7 +139,8 @@ class OrientRuntime {
         authorizationService,
         idempotencyRepository:
           persistence?.idempotency || null,
-        maxToolInputChars
+        maxToolInputChars,
+        agentRegistry: this.agentRegistry
       });
 
     this.name =
@@ -531,6 +552,7 @@ class OrientRuntime {
               approval,
               approvals,
               tenantId: this.tenantId,
+              agentId: plan.agentId || 'ORIENT_RUNTIME',
               onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'step_completed' } = {}) => {
                 this.checkpoint(
                   context,
