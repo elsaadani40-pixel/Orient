@@ -408,7 +408,7 @@ test('tenant-scoped lease acquisition cannot delete another tenant lease during 
 
   leases.save({
     workflowId: 'shared-expired-lease',
-    leaseId: 'lease-a',
+    leaseId: 'lease-tenant-a-recovery',
     workerId: 'worker-a',
     acquiredAt: 1000,
     expiresAt: 2000,
@@ -425,6 +425,6 @@ test('tenant-scoped lease acquisition cannot delete another tenant lease during 
   }, 'tenant-b');
 
   assert.equal(acquired, null);
-  assert.equal(leases.findByWorkflowId('shared-expired-lease', 'tenant-a').leaseId, 'lease-a');
+  assert.equal(leases.findByWorkflowId('shared-expired-lease', 'tenant-a').leaseId, 'lease-tenant-a-recovery');
   assert.equal(leases.findByWorkflowId('shared-expired-lease', 'tenant-b'), null);
 });
