@@ -17,7 +17,7 @@ class ApprovalService {
     if (!stored) return { allowed: false, reason: 'APPROVAL_NOT_FOUND' };
     if (stored.used) return { allowed: false, reason: 'APPROVAL_ALREADY_USED' };
     if (this.clock() >= Date.parse(stored.expiresAt)) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
-    if (stored.executionId !== String(executionId) || stored.step !== step || stored.tool !== tool || stored.capability !== capability) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
+    if (stored.executionId !== String(executionId) || stored.step !== step || stored.planRevision !== planRevision || stored.tool !== tool || stored.capability !== capability) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     if (!Object.entries(stored.scope).every(([key, value]) => scope[key] === value)) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     return { allowed: true, approval: { ...stored } };
   }
