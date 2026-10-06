@@ -1288,6 +1288,11 @@ class AgentLoop {
           invocationReason:
             typeof step.invocationReason === 'string'
               ? step.invocationReason.trim()
+              : null,
+
+          memoryScope:
+            typeof step.memoryScope === 'string'
+              ? step.memoryScope.trim()
               : null
         }));
     }
