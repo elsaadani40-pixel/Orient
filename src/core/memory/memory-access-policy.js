@@ -22,7 +22,9 @@ class MemoryAccessPolicy {
     }
 
     const agent = this.agentRegistry.require(agentId);
-    const allowed = agent.canReadMemory(scope);
+    const allowed = operation === 'write'
+      ? agent.canReadMemory(scope)
+      : agent.canReadMemory(scope);
 
     if (!allowed) {
       throw Object.assign(
