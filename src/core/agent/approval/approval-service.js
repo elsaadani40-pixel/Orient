@@ -23,7 +23,7 @@ class ApprovalService {
     if (!Object.entries(stored.scope).every(([key, value]) => scope[key] === value)) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     return { allowed: true, approval: { ...stored } };
   }
-  consume(approvalId, tenantId = this.tenantId) { const stored = this.approvals.get(approvalId) || this.repository?.findById?.(approvalId, { tenantId }); if (!stored || stored.used) return false; const usedAt = new Date(this.clock()).toISOString(); if (this.repository?.consume && !this.repository.consume(approvalId, usedAt, tenantId)) return false; stored.used = true; stored.usedAt = usedAt; this.approvals.set(approvalId, stored); return true; }
+  consume(approvalId, tenantId = this.tenantId) { const stored = this.approvals.get(approvalId) || this.repository?.findById?.(approvalId, { tenantId }); if (!stored || stored.used) return false; if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return false; const usedAt = new Date(this.clock()).toISOString(); if (this.repository?.consume && !this.repository.consume(approvalId, usedAt, tenantId)) return false; stored.used = true; stored.usedAt = usedAt; this.approvals.set(approvalId, stored); return true; }
 }
 
 module.exports = ApprovalService;
