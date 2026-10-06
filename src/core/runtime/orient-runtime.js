@@ -148,7 +148,7 @@ class OrientRuntime {
       }
     }));
 
-    return this.persistence.events.appendMany(scopedEvents);
+    return this.persistence.events.appendMany(scopedEvents, { tenantId: this.tenantId });
   }
 
   persistExecution(context, mode = 'update') {
@@ -206,7 +206,7 @@ class OrientRuntime {
 
     const persistedEvents =
       pendingEvents.length
-        ? this.persistence?.events?.appendMany(pendingEvents) || []
+        ? this.persistence?.events?.appendMany(pendingEvents, { tenantId: this.tenantId }) || []
         : [];
 
     this.persistedEventOffsets.set(
