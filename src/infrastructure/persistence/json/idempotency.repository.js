@@ -77,7 +77,8 @@ class IdempotencyRepository {
     step,
     tool,
     planRevision = 1,
-    operationId = null
+    operationId = null,
+    tenantId = null
   } = {}) {
     if (!executionId) {
       throw new TypeError('executionId is required');
@@ -110,7 +111,8 @@ class IdempotencyRepository {
     step,
     tool,
     planRevision = 1,
-    operationId = null
+    operationId = null,
+    tenantId = null
   } = {}) {
     const key = this.buildKey({
       executionId,
@@ -120,7 +122,7 @@ class IdempotencyRepository {
       operationId
     });
 
-    return this.findByKey(key);
+    return this.findByKey(key, { tenantId });
   }
 
   begin({
@@ -141,6 +143,9 @@ class IdempotencyRepository {
     const records = this.read();
 
     if (records[key]) {
+      if (tenantId && records[key].tenantId !== tenantId) {
+        throw new Error('Idempotency tenant mismatch');
+      }
       return {
         created: false,
         key,
@@ -156,6 +161,7 @@ class IdempotencyRepository {
       tool,
       planRevision,
       operationId,
+      tenantId,
       status: 'running',
       result: null,
       error: null,
@@ -173,7 +179,7 @@ class IdempotencyRepository {
     };
   }
 
-  complete(key, result) {
+  complete(key, result, { tenantId = null } = {}) {
     if (!key) {
       throw new TypeError('key is required');
     }
@@ -184,6 +190,7 @@ class IdempotencyRepository {
     if (!record) {
       return null;
     }
+    if (tenantId && record.tenantId !== tenantId) return null;
 
     record.status = 'completed';
     record.result = result ?? null;
@@ -194,7 +201,7 @@ class IdempotencyRepository {
     return record;
   }
 
-  fail(key, error) {
+  fail(key, error, { tenantId = null } = {}) {
     if (!key) {
       throw new TypeError('key is required');
     }
@@ -205,6 +212,7 @@ class IdempotencyRepository {
     if (!record) {
       return null;
     }
+    if (tenantId && record.tenantId !== tenantId) return null;
 
     record.status = 'failed';
     record.error = {
@@ -218,7 +226,7 @@ class IdempotencyRepository {
     return record;
   }
 
-  delete(key) {
+  delete(key, { tenantId = null } = {}) {
     if (!key) {
       return false;
     }
@@ -228,6 +236,7 @@ class IdempotencyRepository {
     if (!records[key]) {
       return false;
     }
+    if (tenantId && records[key].tenantId !== tenantId) return false;
 
     delete records[key];
     this.write(records);
