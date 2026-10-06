@@ -9,6 +9,8 @@ const MemoryService =
 
 const AgentRegistry =
   require('./src/core/agent/boundary/agent-registry');
+const AgentInvocationService =
+  require('./src/core/agent/invocation/agent-invocation-service');
 const { registerDefaultAgents } =
   require('./src/core/agent/catalog/default-agents');
 const MemoryAccessPolicy =
@@ -103,6 +105,11 @@ registerDefaultAgents(agentRegistry);
 
 const memoryAccessPolicy =
   new MemoryAccessPolicy({
+    agentRegistry
+  });
+
+const agentInvocationService =
+  new AgentInvocationService({
     agentRegistry
   });
 
@@ -233,7 +240,8 @@ const runtime =
     leaseDurationMs: config.workflowLeaseMs,
     maxInputChars: config.maxInputChars,
     maxToolInputChars: config.maxToolInputChars,
-    agentRegistry
+    agentRegistry,
+    agentInvocationService
   });
 
 const agentService =

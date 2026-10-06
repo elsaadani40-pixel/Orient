@@ -41,7 +41,8 @@ class OrientRuntime {
     leaseDurationMs = 30000,
     maxInputChars = 100000,
     maxToolInputChars = 50000,
-    agentRegistry = null
+    agentRegistry = null,
+    agentInvocationService = null
   }) {
     if (!toolRegistry) {
       throw new TypeError(

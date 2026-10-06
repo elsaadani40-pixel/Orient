@@ -23,7 +23,8 @@ class AgentLoop {
     authorizationService = null,
     idempotencyRepository = null,
     maxToolInputChars = 50000,
-    agentRegistry = null
+    agentRegistry = null,
+    agentInvocationService = null
   }) {
     if (!toolRegistry) {
       throw new TypeError('toolRegistry is required');
@@ -34,6 +35,7 @@ class AgentLoop {
       authorizationService;
     this.maxToolInputChars = maxToolInputChars;
     this.agentRegistry = agentRegistry;
+    this.agentInvocationService = agentInvocationService;
 
     this.name = 'ORIENT_AGENT_LOOP';
     this.version = '0.8.2';
@@ -189,6 +191,46 @@ class AgentLoop {
         runtimeContext,
         context
       });
+
+      let agentInvocation = null;
+
+      if (step.targetAgentId) {
+        if (!this.agentInvocationService) {
+          throw new AppError(
+            'Agent invocation service is required for delegated steps',
+            500,
+            'AGENT_INVOCATION_SERVICE_REQUIRED'
+          );
+        }
+
+        try {
+          agentInvocation =
+            this.agentInvocationService.authorize({
+              sourceAgentId: agentAuthorization.agentId,
+              targetAgentId: step.targetAgentId,
+              capability: step.targetCapability || null,
+              reason: step.invocationReason || null
+            });
+
+          context.record(
+            'agent.invocation.authorized',
+            agentInvocation
+          );
+        } catch (error) {
+          context.record(
+            'agent.invocation.denied',
+            {
+              sourceAgentId: agentAuthorization.agentId,
+              targetAgentId: step.targetAgentId,
+              capability: step.targetCapability || null,
+              code: error.code || 'AGENT_TARGET_FORBIDDEN',
+              reason: error.message
+            }
+          );
+
+          throw error;
+        }
+      }
 
       if (!step.tool) {
         context.record(
@@ -374,6 +416,10 @@ class AgentLoop {
         injectedContext.agentId = agentAuthorization.agentId;
         injectedContext.capability = agentAuthorization.capability;
         injectedContext.memoryScope = runtimeContext.memoryScope || 'personal';
+      }
+
+      if (agentInvocation) {
+        injectedContext.agentInvocation = agentInvocation;
       }
 
       injectedContext.resolvedInput =
@@ -1199,6 +1245,21 @@ class AgentLoop {
           capability:
             typeof step.capability === 'string'
               ? step.capability.trim()
+              : null,
+
+          targetAgentId:
+            typeof step.targetAgentId === 'string'
+              ? step.targetAgentId.trim()
+              : null,
+
+          targetCapability:
+            typeof step.targetCapability === 'string'
+              ? step.targetCapability.trim()
+              : null,
+
+          invocationReason:
+            typeof step.invocationReason === 'string'
+              ? step.invocationReason.trim()
               : null
         }));
     }
@@ -1214,7 +1275,10 @@ class AgentLoop {
               : plan.input,
           dependsOn: null,
           agentId: typeof plan.agentId === 'string' ? plan.agentId.trim() : null,
-          capability: typeof plan.capability === 'string' ? plan.capability.trim() : null
+          capability: typeof plan.capability === 'string' ? plan.capability.trim() : null,
+          targetAgentId: typeof plan.targetAgentId === 'string' ? plan.targetAgentId.trim() : null,
+          targetCapability: typeof plan.targetCapability === 'string' ? plan.targetCapability.trim() : null,
+          invocationReason: typeof plan.invocationReason === 'string' ? plan.invocationReason.trim() : null
         }
       ];
     }
