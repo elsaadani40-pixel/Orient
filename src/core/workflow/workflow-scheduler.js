@@ -276,11 +276,12 @@ class WorkflowScheduler {
     return active;
   }
 
-  release(workflowId, leaseId) {
+  release(workflowId, leaseId = null) {
     const active = this.active.get(workflowId);
     if (!active) return false;
 
-    this.leaseStore.release(workflowId, leaseId);
+    const ownedLeaseId = leaseId || active.leaseId;
+    this.leaseStore.release(workflowId, ownedLeaseId);
     this.active.delete(workflowId);
     return true;
   }
