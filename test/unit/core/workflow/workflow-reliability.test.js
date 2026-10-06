@@ -327,3 +327,74 @@ test('JSON execution, event, idempotency and checkpoint reads enforce tenant sco
   });
   assert.equal(checkpoints.findLatest('exec-tenant-a', { tenantId: 'tenant-b' }), null);
 });
+
+
+test('tenant-scoped durable writes reject cross-tenant workflow and lease collisions', () => {
+  const SqliteDatabase = require('../../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const { SqliteWorkflowRepository, SqliteWorkflowLeaseRepository } = require('../../../../src/infrastructure/persistence/sqlite/workflow.repository');
+  const db = new SqliteDatabase(':memory:');
+  const workflows = new SqliteWorkflowRepository(db);
+  const leases = new SqliteWorkflowLeaseRepository(db);
+
+  const tenantA = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'shared-workflow-id',
+    tenantId: 'tenant-a'
+  });
+  workflows.save(tenantA);
+
+  const tenantB = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'shared-workflow-id',
+    tenantId: 'tenant-b'
+  });
+
+  assert.throws(
+    () => workflows.save(tenantB),
+    /Workflow tenant collision/
+  );
+  assert.equal(workflows.findById('shared-workflow-id', 'tenant-a').tenantId, 'tenant-a');
+
+  leases.save({
+    workflowId: 'shared-lease-id',
+    leaseId: 'lease-a',
+    workerId: 'worker-a',
+    acquiredAt: 1000,
+    expiresAt: 5000,
+    metadata: { tenantId: 'tenant-a' }
+  });
+
+  assert.throws(
+    () => leases.save({
+      workflowId: 'shared-lease-id',
+      leaseId: 'lease-b',
+      workerId: 'worker-b',
+      acquiredAt: 1000,
+      expiresAt: 5000,
+      metadata: { tenantId: 'tenant-b' }
+    }),
+    /Lease tenant collision/
+  );
+  assert.equal(leases.findByWorkflowId('shared-lease-id', 'tenant-a').leaseId, 'lease-a');
+});
+
+test('bulk event persistence enforces tenant scope', () => {
+  const SqlitePersistence = require('../../../../src/infrastructure/persistence/sqlite/sqlite-persistence');
+  const persistence = new SqlitePersistence({ filePath: ':memory:' });
+
+  assert.throws(
+    () => persistence.events.appendMany([
+      { id: 'event-tenant-a', type: 'test', executionId: 'exec-a', data: { tenantId: 'tenant-a' } },
+      { id: 'event-tenant-b', type: 'test', executionId: 'exec-b', data: { tenantId: 'tenant-b' } }
+    ], { tenantId: 'tenant-a' }),
+    /Event tenant mismatch/
+  );
+
+  const inserted = persistence.events.appendMany([
+    { id: 'event-local', type: 'test', executionId: 'exec-a', data: {} }
+  ], { tenantId: 'tenant-a' });
+
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].data.tenantId, 'tenant-a');
+  assert.equal(persistence.events.findAll({ tenantId: 'tenant-b' }).length, 0);
+});
