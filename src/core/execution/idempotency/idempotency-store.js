@@ -65,7 +65,8 @@ class IdempotencyStore {
         executionId,
         step,
         tool,
-        planRevision
+        planRevision,
+        operationId
       });
     }
 
