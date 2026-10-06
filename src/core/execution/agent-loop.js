@@ -14,6 +14,9 @@ const RetryExecutor =
 const IdempotencyStore =
   require('./idempotency/idempotency-store');
 
+const { authorizeContext } =
+  require('../tools/tool-execution-authorization');
+
 class AgentLoop {
   constructor({
     toolRegistry,
@@ -217,6 +220,8 @@ class AgentLoop {
             persistedStep.tool === step.tool
         );
 
+      let executionAuthorization = null;
+
       if (this.authorizationService && !recoveringPersistedOperation) {
         let authorization;
 
@@ -250,7 +255,8 @@ class AgentLoop {
               requiresApproval:
                 authorization.requiresApproval
             }
-          );
+          )
+          executionAuthorization = authorization;;
         } catch (error) {
           context.record(
             'authorization.failed',
@@ -341,6 +347,10 @@ class AgentLoop {
 
       injectedContext.resolvedInput =
         resolvedInput;
+
+      if (executionAuthorization) {
+        authorizeContext(injectedContext, executionAuthorization);
+      }
 
       context.record(
         'context.injected',
