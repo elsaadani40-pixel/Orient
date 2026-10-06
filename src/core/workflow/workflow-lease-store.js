@@ -107,7 +107,7 @@ class WorkflowLeaseStore {
     return expired;
   }
 
-  all() {
+  // Merge durable ownership without allowing stale local leases to override it.\n  all() {
     const persisted = this.repository?.findAll?.() || [];
     const merged = new Map(persisted.map(item => [item.workflowId, item]));
     for (const [id, lease] of this.memory) {
