@@ -27,12 +27,17 @@ class WorkflowLeaseRepository {
     return { ...lease };
   }
 
-  findByWorkflowId(workflowId) {
-    return this.read().find(item => item.workflowId === workflowId) || null;
+  findByWorkflowId(workflowId, tenantId = null) {
+    return this.read().find(
+      item => item.workflowId === workflowId &&
+        (!tenantId || item.metadata?.tenantId === tenantId)
+    ) || null;
   }
 
-  findAll() {
-    return this.read();
+  findAll({ tenantId = null } = {}) {
+    return this.read().filter(
+      item => !tenantId || item.metadata?.tenantId === tenantId
+    );
   }
 
   delete(workflowId, leaseId) {
