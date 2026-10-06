@@ -56,7 +56,8 @@ class WorkflowLeaseStore {
       const renewed = this.repository.renewIfOwned(
         workflowId,
         leaseId,
-        expiresAt
+        expiresAt,
+        this.now()
       );
       if (!renewed) {
         this.memory.delete(workflowId);
