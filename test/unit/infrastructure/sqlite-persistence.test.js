@@ -118,7 +118,7 @@ test('SQLite checkpoint sequencing remains monotonic and schema migration marker
 
 
 test('sqlite transactions roll back all statements after an injected failure', () => {
-  const SqliteDatabase = require('../../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
   const db = new SqliteDatabase(':memory:');
 
   assert.throws(
