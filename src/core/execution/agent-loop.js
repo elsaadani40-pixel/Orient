@@ -206,7 +206,18 @@ class AgentLoop {
         throw error;
       }
 
-      if (this.authorizationService) {
+      const recoveringPersistedOperation =
+        Array.isArray(context.steps) &&
+        context.steps.some(
+          (persistedStep) =>
+            persistedStep &&
+            persistedStep.status === 'running' &&
+            Number(persistedStep.planRevision || 1) === planRevision &&
+            persistedStep.step === stepNumber &&
+            persistedStep.tool === step.tool
+        );
+
+      if (this.authorizationService && !recoveringPersistedOperation) {
         let authorization;
 
         try {
@@ -284,7 +295,7 @@ class AgentLoop {
             }
           );
         }
-      } else {
+      } else if (!this.authorizationService) {
         context.record(
           'authorization.completed',
           {
@@ -292,6 +303,16 @@ class AgentLoop {
             tool: step.tool,
             authorized: true,
             mode: 'legacy'
+          }
+        );
+      } else {
+        context.record(
+          'authorization.reused',
+          {
+            step: stepNumber,
+            tool: step.tool,
+            planRevision,
+            reason: 'persisted_operation_recovery'
           }
         );
       }
