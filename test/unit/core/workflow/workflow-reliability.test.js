@@ -109,3 +109,24 @@ test('workflow instances retain a recoverable definition and scheduler rebuilds 
   assert.equal(lease.instance.definition.id, 'reliability');
   scheduler.release(lease.workflowId, lease.leaseId);
 });
+
+test('durable sqlite lease acquisition is single-owner under serialized writers', () => {
+  // Contract-level regression: a repository with an atomic tryAcquire primitive
+  // must reject the second owner without relying on a read-then-write race.
+  const values = new Map();
+  const repository = {
+    tryAcquire(lease) {
+      if (values.has(lease.workflowId)) return null;
+      values.set(lease.workflowId, { ...lease });
+      return { ...lease };
+    },
+    findByWorkflowId(id) { return values.get(id) || null; },
+    findAll() { return [...values.values()]; },
+    delete(id) { return values.delete(id); },
+    deleteExpired(id) { return values.delete(id); }
+  };
+  const store = new WorkflowLeaseStore({ repository, clock: () => 1000, leaseDurationMs: 1000 });
+  const first = store.acquire('wf-atomic', 'worker-a');
+  assert.throws(() => store.acquire('wf-atomic', 'worker-b'), /already held/);
+  assert.equal(repository.findByWorkflowId('wf-atomic').leaseId, first.leaseId);
+});
