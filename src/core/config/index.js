@@ -13,6 +13,7 @@ const config = Object.freeze({
   dataFile: path.join(__dirname, '../../../data/memories.json'),
   agentDataDirectory: path.join(__dirname, '../../../data/agent'),
   maxInputChars: positiveInteger(process.env.ORIENT_MAX_INPUT_CHARS, 100000),
+  maxToolInputChars: positiveInteger(process.env.ORIENT_MAX_TOOL_INPUT_CHARS, 50000),
   maxQueueDepth: positiveInteger(process.env.ORIENT_MAX_QUEUE_DEPTH, 1000),
   maxWorkflowRetries: Number.isInteger(Number(process.env.ORIENT_MAX_WORKFLOW_RETRIES))
     && Number(process.env.ORIENT_MAX_WORKFLOW_RETRIES) >= 0
