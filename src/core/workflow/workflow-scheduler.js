@@ -69,6 +69,14 @@ class WorkflowScheduler {
       );
     }
 
+    if (this.tenantId && instance.tenantId !== this.tenantId) {
+      throw new AppError(
+        'Workflow tenant does not match scheduler tenant',
+        403,
+        'WORKFLOW_TENANT_MISMATCH'
+      );
+    }
+
     if (
       instance.state === 'CREATED' ||
       instance.state === 'WAITING' ||
