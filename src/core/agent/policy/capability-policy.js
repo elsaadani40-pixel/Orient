@@ -12,6 +12,15 @@ class CapabilityPolicy {
       capabilityRegistry;
   }
 
+  riskOf(capability) {
+    const entry = this.capabilityRegistry.get(capability);
+    return entry?.risk || 'low';
+  }
+
+  requiresApproval(capability) {
+    return ['high', 'critical'].includes(this.riskOf(capability));
+  }
+
   authorize(capability) {
     if (!capability) {
       return PolicyDecision.deny(
