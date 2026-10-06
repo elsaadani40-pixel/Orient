@@ -212,3 +212,60 @@ test('scheduler persists cancellation and deadline terminal transitions', () => 
   assert.equal(persisted.state, 'FAILED');
   assert.equal(persisted.metadata.failureCode, 'WORKFLOW_DEADLINE_EXCEEDED');
 });
+
+
+test('tenant-scoped scheduler rejects cross-tenant workflow enqueue and recovery', () => {
+  const scheduler = new WorkflowScheduler({ tenantId: 'tenant-a' });
+  const foreign = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'tenant-b-wf',
+    tenantId: 'tenant-b'
+  });
+
+  assert.throws(
+    () => scheduler.enqueue(foreign),
+    error => error.code === 'WORKFLOW_TENANT_MISMATCH'
+  );
+});
+
+test('tenant-scoped durable workflow queries cannot read another tenant', () => {
+  const SqliteDatabase = require('../../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const { SqliteWorkflowRepository, SqliteWorkflowLeaseRepository } = require('../../../../src/infrastructure/persistence/sqlite/workflow.repository');
+  const db = new SqliteDatabase(':memory:');
+  const workflows = new SqliteWorkflowRepository(db);
+  const leases = new SqliteWorkflowLeaseRepository(db);
+
+  const a = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'shared-id-a',
+    tenantId: 'tenant-a'
+  });
+  const b = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'shared-id-b',
+    tenantId: 'tenant-b'
+  });
+
+  workflows.save(a);
+  workflows.save(b);
+
+  assert.ok(workflows.findById(a.workflowId, 'tenant-a'));
+  assert.equal(workflows.findById(a.workflowId, 'tenant-b'), null);
+  assert.deepEqual(
+    workflows.findAll({ tenantId: 'tenant-a' }).map(item => item.tenantId),
+    ['tenant-a']
+  );
+
+  leases.save({
+    workflowId: 'lease-a',
+    leaseId: 'lease-a-id',
+    workerId: 'worker-a',
+    acquiredAt: 1000,
+    expiresAt: 5000,
+    metadata: { tenantId: 'tenant-a' }
+  });
+
+  assert.ok(leases.findByWorkflowId('lease-a', 'tenant-a'));
+  assert.equal(leases.findByWorkflowId('lease-a', 'tenant-b'), null);
+  assert.equal(leases.findAll({ tenantId: 'tenant-b' }).length, 0);
+});
