@@ -11,6 +11,9 @@ const DEFAULT_AGENTS = Object.freeze([
       'tool:memory.list',
       'tool:memory.add',
       'tool:memory.delete',
+      'memory.read',
+      'memory.write',
+      'memory.delete',
       'model:text-generation'
     ],
     allowedMemoryScopes: ['personal', 'shared.memory'],
@@ -25,6 +28,7 @@ const DEFAULT_AGENTS = Object.freeze([
     capabilities: [
       'tool:memory.search',
       'tool:memory.list',
+      'memory.read',
       'model:text-generation'
     ],
     allowedMemoryScopes: ['personal', 'shared.research'],
