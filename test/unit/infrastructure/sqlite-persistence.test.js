@@ -95,3 +95,23 @@ test('SQLite approval storage survives restart and remains single-use', () => {
 
   fs.rmSync(directory, { recursive: true, force: true });
 });
+
+
+test('SQLite checkpoint sequencing remains monotonic and schema migration marker is durable', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-migration-'));
+  const filePath = path.join(directory, 'orient.db');
+
+  const first = new SqlitePersistence({ filePath });
+  first.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 1 });
+  first.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 2 });
+
+  const migrationRows = first.db.query('SELECT version FROM schema_migrations ORDER BY version ASC;');
+  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1]);
+  assert.equal(first.checkpoints.findLatest('exec-seq-1').sequence, 2);
+
+  const second = new SqlitePersistence({ filePath });
+  second.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 3 });
+  assert.equal(second.checkpoints.findLatest('exec-seq-1').sequence, 3);
+
+  fs.rmSync(directory, { recursive: true, force: true });
+});
