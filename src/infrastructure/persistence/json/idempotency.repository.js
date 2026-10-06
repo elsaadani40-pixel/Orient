@@ -72,7 +72,12 @@ class IdempotencyRepository {
     }
   }
 
-  buildKey({ executionId, step, tool } = {}) {
+  buildKey({
+    executionId,
+    step,
+    tool,
+    planRevision = 1
+  } = {}) {
     if (!executionId) {
       throw new TypeError('executionId is required');
     }
@@ -98,21 +103,33 @@ class IdempotencyRepository {
     return records[key] || null;
   }
 
-  find({ executionId, step, tool } = {}) {
+  find({
+    executionId,
+    step,
+    tool,
+    planRevision = 1
+  } = {}) {
     const key = this.buildKey({
       executionId,
       step,
-      tool
+      tool,
+      planRevision
     });
 
     return this.findByKey(key);
   }
 
-  begin({ executionId, step, tool } = {}) {
+  begin({
+    executionId,
+    step,
+    tool,
+    planRevision = 1
+  } = {}) {
     const key = this.buildKey({
       executionId,
       step,
-      tool
+      tool,
+      planRevision
     });
 
     const records = this.read();
