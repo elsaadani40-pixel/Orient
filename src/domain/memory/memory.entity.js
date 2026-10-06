@@ -8,7 +8,18 @@ const MEMORY_TYPES = Object.freeze([
   'note'
 ]);
 
-function createMemory({ text, type = 'note', importance = 0.5 } = {}) {
+const MEMORY_SCOPES = Object.freeze([
+  'personal',
+  'shared.memory',
+  'shared.research'
+]);
+
+function createMemory({
+  text,
+  type = 'note',
+  importance = 0.5,
+  scope = 'personal'
+} = {}) {
   const cleanText = String(text || '').trim();
 
   if (!cleanText) {
@@ -28,6 +39,10 @@ function createMemory({ text, type = 'note', importance = 0.5 } = {}) {
     Math.max(0, Number(importance) || 0.5)
   );
 
+  const normalizedScope = MEMORY_SCOPES.includes(scope)
+    ? scope
+    : 'personal';
+
   const now = new Date().toISOString();
 
   return Object.freeze({
@@ -35,6 +50,7 @@ function createMemory({ text, type = 'note', importance = 0.5 } = {}) {
     text: cleanText,
     type: normalizedType,
     importance: normalizedImportance,
+    scope: normalizedScope,
     createdAt: now,
     updatedAt: now
   });
@@ -53,6 +69,9 @@ function normalizeMemory(memory) {
       typeof memory.importance === 'number'
         ? Math.min(1, Math.max(0, memory.importance))
         : 0.5,
+    scope: MEMORY_SCOPES.includes(memory.scope)
+      ? memory.scope
+      : 'personal',
     createdAt: memory.createdAt || now,
     updatedAt: memory.updatedAt || memory.createdAt || now
   };
@@ -60,6 +79,7 @@ function normalizeMemory(memory) {
 
 module.exports = {
   MEMORY_TYPES,
+  MEMORY_SCOPES,
   createMemory,
   normalizeMemory
 };
