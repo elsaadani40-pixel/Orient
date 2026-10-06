@@ -203,7 +203,9 @@ class SqliteCheckpointRepository {
     const rows = this.db.query(`SELECT * FROM checkpoints WHERE execution_id=${SqliteDatabase.literal(executionId)} LIMIT 1;`);
     if (!rows.length) return null;
     const row=rows[0], snapshot=JSON.parse(row.snapshot);
-    if (tenantId && snapshot.tenantId !== tenantId && snapshot.metadata?.tenantId !== tenantId) return null;
+    if (tenantId && snapshot.tenantId && snapshot.tenantId !== tenantId) return null;
+    if (tenantId && !snapshot.tenantId && snapshot.metadata?.tenantId && snapshot.metadata.tenantId !== tenantId) return null;
+    if (tenantId && !snapshot.tenantId && !snapshot.metadata?.tenantId && tenantId !== 'local') return null;
     if (verify && row.snapshot_sha256 !== this.digest(snapshot)) {
       const error=new Error(`Checkpoint integrity verification failed: ${executionId}`); error.code='CHECKPOINT_INTEGRITY_FAILED'; throw error;
     }
