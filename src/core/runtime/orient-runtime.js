@@ -34,7 +34,8 @@ class OrientRuntime {
     maxQueueDepth = 1000,
     maxRetries = 2,
     leaseDurationMs = 30000,
-    maxInputChars = 100000
+    maxInputChars = 100000,
+    maxToolInputChars = 50000
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -117,7 +118,8 @@ class OrientRuntime {
         toolRegistry,
         authorizationService,
         idempotencyRepository:
-          persistence?.idempotency || null
+          persistence?.idempotency || null,
+        maxToolInputChars
       });
 
     this.name =
