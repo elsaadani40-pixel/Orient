@@ -179,7 +179,12 @@ const runtime =
     toolRegistry,
     agentOrchestrator,
     authorizationService,
-    persistence
+    persistence,
+    tenantId: config.defaultTenantId,
+    maxQueueDepth: config.maxQueueDepth,
+    maxRetries: config.maxWorkflowRetries,
+    leaseDurationMs: config.workflowLeaseMs,
+    maxInputChars: config.maxInputChars
   });
 
 const agentService =
@@ -275,7 +280,7 @@ function shutdown(signal) {
 
   const forceExit = setTimeout(() => {
     process.exit(1);
-  }, 10000);
+  }, config.shutdownGraceMs);
   forceExit.unref();
 
   server.close(() => {
