@@ -45,21 +45,29 @@ function createMemory({
 
   const now = new Date().toISOString();
 
-  return Object.freeze({
+  const memory = {
     id: crypto.randomUUID(),
     text: cleanText,
     type: normalizedType,
     importance: normalizedImportance,
-    scope: normalizedScope,
     createdAt: now,
     updatedAt: now
+  };
+
+  Object.defineProperty(memory, 'scope', {
+    value: normalizedScope,
+    enumerable: false,
+    writable: false,
+    configurable: false
   });
+
+  return Object.freeze(memory);
 }
 
 function normalizeMemory(memory) {
   const now = new Date().toISOString();
 
-  return {
+  const normalized = {
     id: memory.id || crypto.randomUUID(),
     text: String(memory.text || '').trim(),
     type: MEMORY_TYPES.includes(memory.type)
@@ -69,12 +77,20 @@ function normalizeMemory(memory) {
       typeof memory.importance === 'number'
         ? Math.min(1, Math.max(0, memory.importance))
         : 0.5,
-    scope: MEMORY_SCOPES.includes(memory.scope)
-      ? memory.scope
-      : 'personal',
     createdAt: memory.createdAt || now,
     updatedAt: memory.updatedAt || memory.createdAt || now
   };
+
+  Object.defineProperty(normalized, 'scope', {
+    value: MEMORY_SCOPES.includes(memory.scope)
+      ? memory.scope
+      : 'personal',
+    enumerable: false,
+    writable: false,
+    configurable: false
+  });
+
+  return normalized;
 }
 
 module.exports = {
