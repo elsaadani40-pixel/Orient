@@ -57,6 +57,17 @@ class ModelRouter {
     };
   }
 
+  providerFor(providerId) {
+    const provider = this.providers.get(providerId);
+    if (!provider) {
+      throw Object.assign(
+        new Error(`Unknown model provider "${providerId}"`),
+        { code: 'MODEL_PROVIDER_NOT_FOUND' }
+      );
+    }
+    return provider;
+  }
+
   async complete(request = {}) {
     const route = this.route(request);
     const provider = this.providers.get(route.providerId);
