@@ -1,4 +1,4 @@
-test('durable lease renewal uses the scheduler clock and refuses expired ownership', async () => {
+require('node:test').test('durable lease renewal uses the scheduler clock and refuses expired ownership', async () => {
   const SqliteDatabase = require('../../../../src/infrastructure/persistence/sqlite/sqlite-database');
   const { SqliteWorkflowLeaseRepository } = require('../../../../src/infrastructure/persistence/sqlite/workflow.repository');
   const db = new SqliteDatabase(':memory:');
@@ -13,11 +13,11 @@ test('durable lease renewal uses the scheduler clock and refuses expired ownersh
   };
   repository.save(lease);
 
-  assert.equal(repository.renewIfOwned('clock-test', 'lease-1', 4000, 2000), false);
-  assert.equal(repository.renewIfOwned('clock-test', 'lease-1', 5000, 1500), true);
+  require('node:assert/strict').equal(repository.renewIfOwned('clock-test', 'lease-1', 4000, 2000), false);
+  require('node:assert/strict').equal(repository.renewIfOwned('clock-test', 'lease-1', 5000, 1500), true);
 });
 
-test('JSON durable lease cleanup only removes an actually expired lease', async () => {
+require('node:test').test('JSON durable lease cleanup only removes an actually expired lease', async () => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
@@ -34,11 +34,11 @@ test('JSON durable lease cleanup only removes an actually expired lease', async 
     metadata: {}
   });
 
-  assert.equal(repository.deleteExpired('json-clock-test', 'lease-1', 4000), false);
-  assert.ok(repository.findByWorkflowId('json-clock-test'));
+  require('node:assert/strict').equal(repository.deleteExpired('json-clock-test', 'lease-1', 4000), false);
+  require('node:assert/strict').ok(repository.findByWorkflowId('json-clock-test'));
 
-  assert.equal(repository.deleteExpired('json-clock-test', 'lease-1', 5000), true);
-  assert.equal(repository.findByWorkflowId('json-clock-test'), null);
+  require('node:assert/strict').equal(repository.deleteExpired('json-clock-test', 'lease-1', 5000), true);
+  require('node:assert/strict').equal(repository.findByWorkflowId('json-clock-test'), null);
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
