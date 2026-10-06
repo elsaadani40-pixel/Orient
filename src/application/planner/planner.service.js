@@ -207,10 +207,7 @@ class PlannerService {
     }
 
     const planned =
-      this.plan(candidateInput, {
-        modelRouter: context?.modelRouter || null,
-        context
-      });
+      this.plan(candidateInput);
 
     return {
       ...planned,
