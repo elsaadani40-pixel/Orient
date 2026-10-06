@@ -641,7 +641,8 @@ class AgentLoop {
 
         this.idempotencyStore.complete(
           idempotency.key,
-          result
+          result,
+          runtimeContext.tenantId || context.tenantId
         );
 
         context.record(
