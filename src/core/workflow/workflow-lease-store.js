@@ -1,0 +1,100 @@
+const crypto = require('crypto');
+const AppError = require('../errors/AppError');
+
+class WorkflowLeaseStore {
+  constructor({ repository = null, clock = () => Date.now(), leaseDurationMs = 30000 } = {}) {
+    if (!Number.isInteger(leaseDurationMs) || leaseDurationMs < 1000) {
+      throw new AppError('leaseDurationMs must be at least 1000ms', 400, 'LEASE_INVALID_DURATION');
+    }
+    this.repository = repository;
+    this.clock = clock;
+    this.leaseDurationMs = leaseDurationMs;
+    this.memory = new Map();
+  }
+
+  now() {
+    return this.clock();
+  }
+
+  acquire(workflowId, workerId = crypto.randomUUID(), metadata = {}) {
+    if (!workflowId) throw new AppError('workflowId is required', 400, 'LEASE_WORKFLOW_REQUIRED');
+    const current = this.get(workflowId);
+    const now = this.now();
+    if (current && current.expiresAt > now) {
+      throw new AppError('Workflow lease is already held', 409, 'WORKFLOW_LEASE_HELD');
+    }
+
+    const lease = {
+      workflowId,
+      leaseId: crypto.randomUUID(),
+      workerId,
+      acquiredAt: now,
+      expiresAt: now + this.leaseDurationMs,
+      metadata: { ...metadata }
+    };
+    this.memory.set(workflowId, lease);
+    this.persist(lease);
+    return { ...lease };
+  }
+
+  renew(workflowId, leaseId) {
+    const lease = this.require(workflowId, leaseId);
+    lease.expiresAt = this.now() + this.leaseDurationMs;
+    this.memory.set(workflowId, lease);
+    this.persist(lease);
+    return { ...lease };
+  }
+
+  release(workflowId, leaseId) {
+    const lease = this.require(workflowId, leaseId);
+    this.memory.delete(workflowId);
+    if (this.repository?.delete) this.repository.delete(workflowId, leaseId);
+    return { ...lease };
+  }
+
+  get(workflowId) {
+    const local = this.memory.get(workflowId);
+    if (local) return local;
+    const persisted = this.repository?.findByWorkflowId?.(workflowId) || null;
+    if (persisted) this.memory.set(workflowId, persisted);
+    return persisted;
+  }
+
+  recoverExpired() {
+    const now = this.now();
+    const expired = [];
+    for (const lease of this.all()) {
+      if (lease.expiresAt <= now) {
+        this.memory.delete(lease.workflowId);
+        if (this.repository?.deleteExpired) this.repository.deleteExpired(lease.workflowId, lease.leaseId);
+        expired.push({ ...lease });
+      }
+    }
+    return expired;
+  }
+
+  all() {
+    const persisted = this.repository?.findAll?.() || [];
+    const merged = new Map(persisted.map(item => [item.workflowId, item]));
+    for (const [id, lease] of this.memory) merged.set(id, lease);
+    return [...merged.values()];
+  }
+
+  require(workflowId, leaseId) {
+    const lease = this.get(workflowId);
+    if (!lease || lease.leaseId !== leaseId) {
+      throw new AppError('Workflow lease is not owned by this worker', 409, 'WORKFLOW_LEASE_NOT_OWNER');
+    }
+    if (lease.expiresAt <= this.now()) {
+      this.memory.delete(workflowId);
+      throw new AppError('Workflow lease has expired', 409, 'WORKFLOW_LEASE_EXPIRED');
+    }
+    return lease;
+  }
+
+  persist(lease) {
+    if (this.repository?.save) this.repository.save(lease);
+  }
+}
+
+module.exports = WorkflowLeaseStore;
