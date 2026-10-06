@@ -944,6 +944,27 @@ class AgentLoop {
       };
     }
 
+    if (
+      result &&
+      typeof result === 'object' &&
+      (
+        result.nextAction === 'replan' ||
+        result.outcome === 'replan'
+      )
+    ) {
+      return {
+        outcome: 'replan',
+        nextAction: 'replan',
+        nextInput:
+          typeof result.nextInput === 'string'
+            ? result.nextInput.trim()
+            : null,
+        reason:
+          result.reason ||
+          `الخطوة ${stepNumber} طلبت إعادة التخطيط`
+      };
+    }
+
     const hasNextStep =
       Array.isArray(plan.steps) &&
       stepNumber < plan.steps.length;
