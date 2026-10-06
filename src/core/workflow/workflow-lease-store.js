@@ -83,7 +83,7 @@ class WorkflowLeaseStore {
   release(workflowId, leaseId) {
     const lease = this.require(workflowId, leaseId);
     this.memory.delete(workflowId);
-    if (this.repository?.delete) this.repository.delete(workflowId, leaseId);
+    if (this.repository?.delete) this.repository.delete(workflowId, leaseId, this.tenantId);
     return { ...lease };
   }
 
