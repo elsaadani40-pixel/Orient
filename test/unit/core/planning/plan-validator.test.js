@@ -28,20 +28,22 @@ test('valid plan is accepted and normalized', () => {
   assert.equal(result.steps[0].step, 1);
 });
 
-test('duplicate tools are rejected', () => {
+test('the same tool may appear in distinct plan steps', () => {
   const validator = createValidator();
 
-  assert.throws(
-    () => validator.validate({
-      intent: 'test',
-      confidence: 0.9,
-      steps: [
-        { tool: 'memory.search' },
-        { tool: 'memory.search' }
-      ]
-    }),
-    error => error.code === 'PLAN_DUPLICATE_TOOL'
-  );
+  const result = validator.validate({
+    intent: 'test',
+    confidence: 0.9,
+    steps: [
+      { tool: 'memory.search', input: 'first' },
+      { tool: 'memory.search', input: 'second' }
+    ]
+  });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.steps.length, 2);
+  assert.equal(result.steps[0].tool, 'memory.search');
+  assert.equal(result.steps[1].tool, 'memory.search');
 });
 
 test('maximum step limit is enforced', () => {
