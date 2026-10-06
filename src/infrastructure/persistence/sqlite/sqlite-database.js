@@ -94,6 +94,29 @@ class SqliteDatabase {
         snapshot_sha256 TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS workflows (
+        workflow_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workflows_tenant_state
+        ON workflows(tenant_id, state);
+
+      CREATE TABLE IF NOT EXISTS workflow_leases (
+        workflow_id TEXT PRIMARY KEY,
+        lease_id TEXT NOT NULL UNIQUE,
+        worker_id TEXT NOT NULL,
+        acquired_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workflow_leases_expiry
+        ON workflow_leases(expires_at);
+
       CREATE TABLE IF NOT EXISTS approvals (
         approval_id TEXT PRIMARY KEY,
         execution_id TEXT NOT NULL,
