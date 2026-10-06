@@ -398,3 +398,33 @@ test('bulk event persistence enforces tenant scope', () => {
   assert.equal(inserted[0].data.tenantId, 'tenant-a');
   assert.equal(persistence.events.findAll({ tenantId: 'tenant-b' }).length, 0);
 });
+
+
+test('tenant-scoped lease acquisition cannot delete another tenant lease during expiry recovery', () => {
+  const SqliteDatabase = require('../../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const { SqliteWorkflowLeaseRepository } = require('../../../../src/infrastructure/persistence/sqlite/workflow.repository');
+  const db = new SqliteDatabase(':memory:');
+  const leases = new SqliteWorkflowLeaseRepository(db);
+
+  leases.save({
+    workflowId: 'shared-expired-lease',
+    leaseId: 'lease-a',
+    workerId: 'worker-a',
+    acquiredAt: 1000,
+    expiresAt: 2000,
+    metadata: { tenantId: 'tenant-a' }
+  });
+
+  const acquired = leases.tryAcquire({
+    workflowId: 'shared-expired-lease',
+    leaseId: 'lease-b',
+    workerId: 'worker-b',
+    acquiredAt: 3000,
+    expiresAt: 4000,
+    metadata: { tenantId: 'tenant-b' }
+  }, 'tenant-b');
+
+  assert.equal(acquired, null);
+  assert.equal(leases.findByWorkflowId('shared-expired-lease', 'tenant-a').leaseId, 'lease-a');
+  assert.equal(leases.findByWorkflowId('shared-expired-lease', 'tenant-b'), null);
+});
