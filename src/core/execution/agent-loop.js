@@ -24,7 +24,8 @@ class AgentLoop {
     idempotencyRepository = null,
     maxToolInputChars = 50000,
     agentRegistry = null,
-    agentInvocationService = null
+    agentInvocationService = null,
+    capabilityGovernance = null
   }) {
     if (!toolRegistry) {
       throw new TypeError('toolRegistry is required');
@@ -36,6 +37,7 @@ class AgentLoop {
     this.maxToolInputChars = maxToolInputChars;
     this.agentRegistry = agentRegistry;
     this.agentInvocationService = agentInvocationService;
+    this.capabilityGovernance = capabilityGovernance;
 
     this.name = 'ORIENT_AGENT_LOOP';
     this.version = '0.8.2';
@@ -228,6 +230,32 @@ class AgentLoop {
             }
           );
 
+          throw error;
+        }
+      }
+
+      if (this.capabilityGovernance) {
+        try {
+          const governance = this.capabilityGovernance.authorizeTool({
+            agentId: agentAuthorization?.agentId || 'ORIENT_RUNTIME',
+            tool: step.tool
+          });
+
+          context.record('capability.governance.authorized', {
+            step: stepNumber,
+            agentId: governance.agentId,
+            tool: governance.tool,
+            capability: governance.capability,
+            risk: governance.risk
+          });
+        } catch (error) {
+          context.record('capability.governance.denied', {
+            step: stepNumber,
+            agentId: agentAuthorization?.agentId || 'ORIENT_RUNTIME',
+            tool: step.tool,
+            code: error.code || 'CAPABILITY_GOVERNANCE_DENIED',
+            reason: error.message
+          });
           throw error;
         }
       }
