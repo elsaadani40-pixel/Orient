@@ -134,11 +134,7 @@ class ExecutionContext {
       workspaceId: this.workspaceId,
 
       executionVersion:
-        this.executionVersion,
-
-      tenantId: this.tenantId,
-      userId: this.userId,
-      workspaceId: this.workspaceId
+        this.executionVersion
     };
   }
 
