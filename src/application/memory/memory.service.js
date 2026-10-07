@@ -209,6 +209,11 @@ class MemoryService {
     }
 
     const normalized = normalizeMemory(memory);
+
+    if (normalized.state !== 'active') {
+      throw new AppError('الذاكرة غير موجودة', 404, 'MEMORY_NOT_FOUND');
+    }
+
     this.repository.update(id, {
       lastAccessedAt: new Date().toISOString(),
       accessCount: normalized.accessCount + 1
