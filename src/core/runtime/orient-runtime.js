@@ -1,11 +1,3 @@
-const crypto = require('crypto');
-
-const ExecutionContext =
-  require('../execution/execution-context');
-
-const AgentState =
-  require('../agent/state/agent-state');
-
 const AgentLoop =
   require('../execution/agent-loop');
 
@@ -17,20 +9,12 @@ const { AgentDefinition } =
 const ApprovalService =
   require('../agent/approval/approval-service');
 
-const TenantQuotaPolicy =
-  require('../security/tenant-quota-policy');
-const TenantQuotaService =
-  require('../security/tenant-quota-service');
-
-const { WorkflowDefinition, WorkflowInstance, WorkflowScheduler, WorkflowWorker } = require('../workflow');
-const AsyncWorkflowScheduler = require('../workflow/async-workflow-scheduler');
-const AsyncWorkflowWorker = require('../workflow/async-workflow-worker');
-const PostgresTenantQuotaRepository = require('../../infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 const ExecutionPersistenceCoordinator = require('./execution-persistence-coordinator');
 const WorkflowExecutionCoordinator = require('./workflow-execution-coordinator');
 const AgentExecutionCoordinator = require('./agent-execution-coordinator');
 const ExecutionRecoveryCoordinator = require('./execution-recovery-coordinator');
 const RequestExecutionCoordinator = require('./request-execution-coordinator');
+const RuntimeInfrastructureCoordinator = require('./runtime-infrastructure-coordinator');
 
 class OrientRuntime {
   constructor({
@@ -121,81 +105,27 @@ class OrientRuntime {
       }));
     }
 
-    this.workflowRepository =
-      persistence?.workflows || null;
+    this.infrastructureCoordinator = new RuntimeInfrastructureCoordinator({
+      persistence,
+      workflowScheduler,
+      tenantId: this.tenantId,
+      maxConcurrent,
+      maxQueueDepth,
+      maxRetries,
+      leaseDurationMs,
+      maxInputChars,
+      maxToolInputChars,
+      quotaPolicy,
+      quotaService
+    });
 
-    this.tenantQuotaRepository =
-      persistence?.tenantQuotas || (persistence?.isAsync && persistence?.db ? new PostgresTenantQuotaRepository(persistence.db) : null);
-
-    this.workflowScheduler =
-      workflowScheduler ||
-      (persistence?.isAsync
-        ? new AsyncWorkflowScheduler({
-            maxConcurrent,
-            maxQueueDepth,
-            maxRetries,
-            leaseDurationMs,
-            tenantId: this.tenantId,
-            workflowRepository: this.workflowRepository,
-            leaseRepository: persistence.workflowLeases,
-            quotaRepository: this.tenantQuotaRepository,
-            quotaPolicy: this.tenantQuotaPolicy
-          })
-        : new WorkflowScheduler({
-        maxConcurrent,
-        maxQueueDepth,
-        maxRetries,
-        leaseDurationMs,
-        tenantId: this.tenantId,
-        workflowRepository: this.workflowRepository,
-        leaseStore: persistence?.workflowLeases
-          ? new (require('../workflow/workflow-lease-store'))({ repository: persistence.workflowLeases, tenantId: this.tenantId })
-          : null
-      }));
-
-    this.tenantQuotaPolicy =
-      quotaPolicy instanceof TenantQuotaPolicy
-        ? quotaPolicy
-        : new TenantQuotaPolicy({
-            maxConcurrent,
-            maxQueued: maxQueueDepth,
-            maxInputChars,
-            maxToolInputChars,
-            maxRetries
-          });
-
-    if (this.tenantQuotaRepository?.ensureTenant) {
-      this.quotaReady = this.tenantQuotaRepository.ensureTenant(this.tenantId, this.tenantQuotaPolicy);
-    } else {
-      this.quotaReady = Promise.resolve();
-    }
-
-    if (this.workflowScheduler?.async) {
-      this.workflowScheduler.quotaPolicy = this.tenantQuotaPolicy;
-    }
-
-    this.tenantQuotaService =
-      quotaService ||
-      new TenantQuotaService({
-        tenantId: this.tenantId,
-        policy: this.tenantQuotaPolicy,
-        scheduler: this.workflowScheduler
-      });
-
-    if (this.workflowScheduler?.async) {
-      this.workflowScheduler.quotaRepository = this.tenantQuotaRepository;
-    }
-
-    if (this.tenantQuotaService.scheduler !== this.workflowScheduler) {
-      this.tenantQuotaService.scheduler = this.workflowScheduler;
-    }
-
-    // Rebuild the in-memory dispatch queue from durable workflow state.
-    // Persisted RUNNING workflows are only recovered when their durable lease
-    // has expired, preventing two workers from owning the same execution.
-    this.recoveryReady = !workflowScheduler && this.workflowRepository?.findAll
-      ? Promise.resolve(this.workflowScheduler.recoverPersisted())
-      : Promise.resolve(0);
+    this.workflowRepository = this.infrastructureCoordinator.workflowRepository;
+    this.tenantQuotaRepository = this.infrastructureCoordinator.tenantQuotaRepository;
+    this.workflowScheduler = this.infrastructureCoordinator.workflowScheduler;
+    this.tenantQuotaPolicy = this.infrastructureCoordinator.tenantQuotaPolicy;
+    this.quotaReady = this.infrastructureCoordinator.quotaReady;
+    this.tenantQuotaService = this.infrastructureCoordinator.tenantQuotaService;
+    this.recoveryReady = this.infrastructureCoordinator.recoveryReady;
 
     this.workflowExecutionCoordinator = new WorkflowExecutionCoordinator({
       scheduler: this.workflowScheduler,
@@ -273,9 +203,7 @@ class OrientRuntime {
   }
 
   shutdown(options = {}) {
-    return this.workflowScheduler?.shutdown
-      ? this.workflowScheduler.shutdown(options)
-      : null;
+    return this.infrastructureCoordinator.shutdown(options);
   }
 
   async executeWorkflow(input, options = {}) {
