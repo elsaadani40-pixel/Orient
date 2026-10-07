@@ -81,7 +81,7 @@ test('PostgreSQL approval consumption is single-use under concurrency', async ()
     planRevision: 1,
     tool: 'external.write',
     capability: 'external.write',
-    scope: 'tenant-approval',
+    scope: { tenant: 'tenant-approval' },
     issuedAt: new Date(Date.now() - 1000).toISOString(),
     expiresAt: new Date(Date.now() + 60000).toISOString(),
     used: false,
