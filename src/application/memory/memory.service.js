@@ -18,17 +18,16 @@ function tokenize(value) {
 function lexicalScore(query, text) {
   const queryTokens = tokenize(query);
   if (!queryTokens.length) return 0;
-
   const textTokens = new Set(tokenize(text));
   const matches = queryTokens.filter(token => textTokens.has(token)).length;
-
   return matches / queryTokens.length;
 }
 
 function recencyScore(memory, now = Date.now()) {
-  const timestamp = Date.parse(memory.lastAccessedAt || memory.updatedAt || memory.createdAt);
+  const timestamp = Date.parse(
+    memory.lastAccessedAt || memory.updatedAt || memory.createdAt
+  );
   if (!Number.isFinite(timestamp)) return 0;
-
   const ageDays = Math.max(0, (now - timestamp) / 86400000);
   return Math.exp(-ageDays / 30);
 }
@@ -37,7 +36,6 @@ function temporalScore(memory, now = new Date()) {
   const from = memory.validFrom ? Date.parse(memory.validFrom) : null;
   const until = memory.validUntil ? Date.parse(memory.validUntil) : null;
   const time = now.getTime();
-
   if (Number.isFinite(from) && time < from) return 0;
   if (Number.isFinite(until) && time > until) return 0;
   return 1;
@@ -67,11 +65,12 @@ function relevanceScore(memory, query, options = {}) {
 }
 
 class MemoryService {
-  constructor(repository, { memoryAccessPolicy = null, defaultScope = 'personal', auditRepository = null } = {}) {
-    if (!repository) {
-      throw new TypeError('repository is required');
-    }
-
+  constructor(repository, {
+    memoryAccessPolicy = null,
+    defaultScope = 'personal',
+    auditRepository = null
+  } = {}) {
+    if (!repository) throw new TypeError('repository is required');
     this.repository = repository;
     this.memoryAccessPolicy = memoryAccessPolicy;
     this.defaultScope = defaultScope;
@@ -81,10 +80,18 @@ class MemoryService {
   resolveTenant(context = {}) {
     const tenantId = context.tenantId;
     if (!tenantId || typeof tenantId !== 'string') {
-      throw new AppError('Tenant identity is required for memory access', 403, 'MEMORY_TENANT_REQUIRED');
+      throw new AppError(
+        'Tenant identity is required for memory access',
+        403,
+        'MEMORY_TENANT_REQUIRED'
+      );
     }
     if (context.runtimeTenantId && context.runtimeTenantId !== tenantId) {
-      throw new AppError('Memory tenant does not match canonical runtime tenant', 403, 'MEMORY_TENANT_CONTEXT_MISMATCH');
+      throw new AppError(
+        'Memory tenant does not match canonical runtime tenant',
+        403,
+        'MEMORY_TENANT_CONTEXT_MISMATCH'
+      );
     }
     return tenantId;
   }
@@ -101,7 +108,13 @@ class MemoryService {
     const tenantId = this.resolveTenant(context);
     const resolvedScope = this.resolveScope(context, scope);
     if (!this.memoryAccessPolicy) {
-      return { allowed: true, agentId: context.agentId || 'ORIENT_RUNTIME', scope: resolvedScope, operation, tenantId };
+      return {
+        allowed: true,
+        agentId: context.agentId || 'ORIENT_RUNTIME',
+        scope: resolvedScope,
+        operation,
+        tenantId
+      };
     }
     const decision = this.memoryAccessPolicy.authorize({
       agentId: context.agentId || 'ORIENT_RUNTIME',
@@ -118,24 +131,20 @@ class MemoryService {
 
   list(query = '', context = {}, options = {}) {
     const authorization = this.authorize(context, 'read', options.scope);
-    const tenantId = authorization.tenantId;
-    const scope = authorization.scope;
     const memories = this.repository
-      .findAll(tenantId, scope)
+      .findAll(authorization.tenantId, authorization.scope)
       .map(normalizeMemory)
       .filter(memory =>
         memory.state === 'active' &&
-        (options.includeExpired || isTemporallyValid(memory, options.nowDate || new Date()))
+        (options.includeExpired ||
+          isTemporallyValid(memory, options.nowDate || new Date()))
       );
 
     const cleanQuery = String(query || '').trim();
-
     if (!cleanQuery) {
-      return memories.sort((a, b) => {
-        const scoreA = relevanceScore(a, '', options);
-        const scoreB = relevanceScore(b, '', options);
-        return scoreB - scoreA;
-      });
+      return memories.sort(
+        (a, b) => relevanceScore(b, '', options) - relevanceScore(a, '', options)
+      );
     }
 
     return memories
@@ -157,6 +166,7 @@ class MemoryService {
       const authorization = this.authorize(context, 'write', options.scope);
       const tenantId = authorization.tenantId;
       const scope = authorization.scope;
+
       const candidate = createMemory({
         text: clean,
         type: options.type,
@@ -173,16 +183,26 @@ class MemoryService {
         scope
       });
 
-      const exact = this.repository.findByFingerprint({ tenantId, scope, type: candidate.type, text: candidate.text });
+      const exact = this.repository.findByFingerprint({
+        tenantId,
+        scope,
+        type: candidate.type,
+        text: candidate.text
+      });
 
       if (exact) {
-        const updated = this.repository.update(exact.id, {
-          confidence: Math.max(exact.confidence, candidate.confidence),
-          importance: Math.max(exact.importance, candidate.importance),
-          updatedAt: new Date().toISOString(),
-          evidence: [...exact.evidence, ...candidate.evidence].slice(-50),
-          lastAccessedAt: exact.lastAccessedAt || null
-        });
+        const updated = this.repository.update(
+          exact.id,
+          {
+            confidence: Math.max(exact.confidence, candidate.confidence),
+            importance: Math.max(exact.importance, candidate.importance),
+            updatedAt: new Date().toISOString(),
+            evidence: [...exact.evidence, ...candidate.evidence].slice(-50),
+            lastAccessedAt: exact.lastAccessedAt || null
+          },
+          tenantId,
+          scope
+        );
 
         this.audit({
           action: 'memory.reinforced',
@@ -195,17 +215,26 @@ class MemoryService {
       }
 
       const conflict = candidate.semanticKey
-        ? this.repository.findActiveBySemanticKey(candidate.semanticKey, tenantId, scope)
+        ? this.repository.findActiveBySemanticKey(
+            candidate.semanticKey,
+            tenantId,
+            scope
+          )
         : null;
 
       let memory = candidate;
 
       if (conflict && conflict.text !== candidate.text) {
-        this.repository.update(conflict.id, {
-          state: 'superseded',
-          supersededById: candidate.id,
-          updatedAt: new Date().toISOString()
-        });
+        this.repository.update(
+          conflict.id,
+          {
+            state: 'superseded',
+            supersededById: candidate.id,
+            updatedAt: new Date().toISOString()
+          },
+          tenantId,
+          scope
+        );
 
         memory = {
           ...candidate,
@@ -221,7 +250,7 @@ class MemoryService {
         });
       }
 
-      const inserted = this.repository.insert(memory);
+      const inserted = this.repository.insert(memory, tenantId, scope);
 
       this.audit({
         action: 'memory.created',
@@ -234,39 +263,36 @@ class MemoryService {
       return inserted;
     } catch (error) {
       if (error instanceof AppError) throw error;
-
-      throw new AppError(
-        error.message,
-        400,
-        'INVALID_MEMORY'
-      );
+      throw new AppError(error.message, 400, 'INVALID_MEMORY');
     }
   }
 
   get(id, context = {}) {
     const authorization = this.authorize(context, 'read');
-    const tenantId = authorization.tenantId;
-    const scope = authorization.scope;
-    const memory = this.repository.findById(id, tenantId, scope);
+    const memory = this.repository.findById(
+      id,
+      authorization.tenantId,
+      authorization.scope
+    );
 
-    if (!memory) {
+    if (!memory || memory.state !== 'active') {
       throw new AppError('الذاكرة غير موجودة', 404, 'MEMORY_NOT_FOUND');
     }
 
     const normalized = normalizeMemory(memory);
-
-    if (normalized.state !== 'active') {
-      throw new AppError('الذاكرة غير موجودة', 404, 'MEMORY_NOT_FOUND');
-    }
-
-    this.repository.update(id, {
-      lastAccessedAt: new Date().toISOString(),
-      accessCount: normalized.accessCount + 1
-    });
+    this.repository.update(
+      id,
+      {
+        lastAccessedAt: new Date().toISOString(),
+        accessCount: normalized.accessCount + 1
+      },
+      authorization.tenantId,
+      authorization.scope
+    );
 
     this.audit({
       action: 'memory.accessed',
-      tenantId,
+      tenantId: authorization.tenantId,
       memoryId: id
     });
 
@@ -281,13 +307,15 @@ class MemoryService {
     const authorization = this.authorize(context, 'write');
     const tenantId = authorization.tenantId;
     const scope = authorization.scope;
-    const memories = this.repository.findAll(tenantId, scope).map(normalizeMemory);
+    const memories = this.repository
+      .findAll(tenantId, scope)
+      .map(normalizeMemory);
+
     const seen = new Map();
     const changes = [];
 
     for (const memory of memories) {
       if (memory.state !== 'active') continue;
-
       const key = `${memory.type}::${memory.text.toLowerCase().trim()}`;
       const previous = seen.get(key);
 
@@ -296,58 +324,67 @@ class MemoryService {
         continue;
       }
 
-      const winner = previous.confidence >= memory.confidence ? previous : memory;
+      const winner =
+        previous.confidence >= memory.confidence ? previous : memory;
       const loser = winner.id === previous.id ? memory : previous;
 
-      this.repository.update(winner.id, {
-        confidence: Math.max(winner.confidence, loser.confidence),
-        importance: Math.max(winner.importance, loser.importance),
-        evidence: [...winner.evidence, ...loser.evidence].slice(-50),
-        updatedAt: new Date().toISOString()
-      });
+      this.repository.update(
+        winner.id,
+        {
+          confidence: Math.max(winner.confidence, loser.confidence),
+          importance: Math.max(winner.importance, loser.importance),
+          evidence: [...winner.evidence, ...loser.evidence].slice(-50),
+          updatedAt: new Date().toISOString()
+        },
+        tenantId,
+        scope
+      );
 
-      this.repository.update(loser.id, {
-        state: 'superseded',
-        supersededById: winner.id,
-        updatedAt: new Date().toISOString()
-      });
+      this.repository.update(
+        loser.id,
+        {
+          state: 'superseded',
+          supersededById: winner.id,
+          updatedAt: new Date().toISOString()
+        },
+        tenantId,
+        scope
+      );
 
       seen.set(key, winner);
-      changes.push({
-        winnerId: winner.id,
-        supersededId: loser.id
-      });
+      changes.push({ winnerId: winner.id, supersededId: loser.id });
     }
 
-    this.audit({
-      action: 'memory.consolidated',
-      tenantId,
-      changes
-    });
+    this.audit({ action: 'memory.consolidated', tenantId, changes });
 
-    return {
-      tenantId,
-      consolidated: changes.length,
-      changes
-    };
+    return { tenantId, scope, consolidated: changes.length, changes };
   }
 
-  forget(id, options = {}) {
-    const tenantId = String(options.tenantId || 'default');
-    const memory = this.repository.findById(id, tenantId);
+  delete(id, context = {}) {
+    const authorization = this.authorize(context, 'delete');
+    const memory = this.repository.findById(
+      id,
+      authorization.tenantId,
+      authorization.scope
+    );
 
     if (!memory) {
       throw new AppError('الذاكرة غير موجودة', 404, 'MEMORY_NOT_FOUND');
     }
 
-    this.repository.update(id, {
-      state: 'archived',
-      updatedAt: new Date().toISOString()
-    });
+    this.repository.update(
+      id,
+      {
+        state: 'archived',
+        updatedAt: new Date().toISOString()
+      },
+      authorization.tenantId,
+      authorization.scope
+    );
 
     this.audit({
       action: 'memory.archived',
-      tenantId,
+      tenantId: authorization.tenantId,
       memoryId: id,
       reason: context.reason || 'manual'
     });
@@ -361,7 +398,10 @@ class MemoryService {
 
   count(context = {}) {
     const authorization = this.authorize(context, 'read');
-    return this.repository.findAll(authorization.tenantId, authorization.scope).length;
+    return this.repository.findAll(
+      authorization.tenantId,
+      authorization.scope
+    ).length;
   }
 }
 
