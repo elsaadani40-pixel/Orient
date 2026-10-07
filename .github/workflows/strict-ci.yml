@@ -13,7 +13,7 @@ permissions:
 jobs:
   unit:
     name: Unit + Architecture Tests (Node ${{ matrix.node }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -55,7 +55,7 @@ jobs:
 
   static:
     name: Static Safety Checks
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
