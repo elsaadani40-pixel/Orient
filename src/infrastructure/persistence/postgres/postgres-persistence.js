@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { PostgresDatabase } = require('./postgres-database');
 const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repository');
+const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-repository');
 
 function tenantOrLocal(value) {
   return value || 'local';
@@ -563,6 +564,7 @@ class PostgresPersistence {
     this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
     this.approvals = new PostgresApprovalRepository(this.db);
     this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
   }
 
   initialize() {
@@ -581,7 +583,8 @@ class PostgresPersistence {
         workflows: true,
         workflowLeases: true,
         approvals: true,
-        tenantQuotas: true
+        tenantQuotas: true,
+        workers: true
       }
     };
   }
@@ -595,5 +598,6 @@ module.exports = {
   PostgresCheckpointRepository,
   PostgresWorkflowRepository,
   PostgresWorkflowLeaseRepository,
-  PostgresApprovalRepository
+  PostgresApprovalRepository,
+  PostgresWorkerRegistryRepository
 };
