@@ -32,7 +32,7 @@ class RuntimeInfrastructureCoordinator {
         : null);
 
     this.tenantQuotaPolicy =
-      quotaPolicy instanceof TenantQuotaPolicy
+      quotaPolicy instanceof TenantQuotaPolicy || (quotaPolicy && typeof quotaPolicy.toJSON === 'function')
         ? quotaPolicy
         : new TenantQuotaPolicy({
             maxConcurrent,
