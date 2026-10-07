@@ -65,8 +65,8 @@ const AuthorizationService =
 const CapabilityGovernance =
   require('./src/core/agent/capability/capability-governance');
 
-const JsonPersistence =
-  require('./src/infrastructure/persistence/json-persistence');
+const createPersistence =
+  require('./src/infrastructure/persistence/persistence-factory');
 
 
 const AgentOrchestrator =
@@ -244,10 +244,8 @@ const agentOrchestrator =
     modelRouter
   });
 
-const persistence =
-  new JsonPersistence({
-    dataDirectory: config.agentDataDirectory
-  });
+const persistenceRuntime = createPersistence(config);
+const persistence = persistenceRuntime.adapter;
 
 const runtime =
   new OrientRuntime({
@@ -286,10 +284,15 @@ const server =
     agentRoutes
   });
 
-server.listen(
-  config.port,
-  config.host,
-  () => {
+async function start() {
+  if (typeof persistenceRuntime.initialize === 'function') {
+    await persistenceRuntime.initialize();
+  }
+
+  server.listen(
+    config.port,
+    config.host,
+    () => {
     logger.info(
       `${config.appName} started`,
       {
@@ -337,8 +340,20 @@ server.listen(
         .join(', ')
     );
     console.log('');
+    }
+  );
+}
+
+start().catch((error) => {
+  logger.error('ORIENT ONE startup failed', {
+    code: error?.code || 'STARTUP_FAILED',
+    message: error?.message || String(error)
+  });
+  if (typeof persistenceRuntime.close === 'function') {
+    persistenceRuntime.close().catch(() => {});
   }
-);
+  process.exitCode = 1;
+});
 
 function shutdown(signal) {
   logger.info(
@@ -364,7 +379,15 @@ function shutdown(signal) {
 
   server.close(() => {
     clearTimeout(forceExit);
-    process.exit(0);
+    Promise.resolve()
+      .then(() => persistenceRuntime.close())
+      .catch((error) => {
+        logger.error('Persistence shutdown failed', {
+          code: error?.code || 'PERSISTENCE_SHUTDOWN_FAILED',
+          message: error?.message || String(error)
+        });
+      })
+      .finally(() => process.exit(0));
   });
 }
 
