@@ -12,6 +12,7 @@ class RequestExecutionCoordinator {
     persistence,
     quotaService,
     quotaPolicy,
+    persistenceCoordinator,
     tenantId,
     userId,
     workspaceId,
@@ -27,6 +28,7 @@ class RequestExecutionCoordinator {
     this.recoveryCoordinator = recoveryCoordinator;
     this.persistence = persistence;
     this.quotaService = quotaService;
+    this.persistenceCoordinator = persistenceCoordinator;
     this.quotaPolicy = quotaPolicy;
     this.tenantId = tenantId || 'local';
     this.userId = userId || 'local';
