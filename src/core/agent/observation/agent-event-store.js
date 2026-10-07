@@ -13,13 +13,21 @@ class AgentEventStore {
     return event;
   }
 
-  list({ executionId = null, goalId = null } = {}) {
+  list({ executionId = null, goalId = null, tenantId = null, type = null } = {}) {
     return this.events.filter((event) => {
       if (executionId && event.executionId !== executionId) {
         return false;
       }
 
       if (goalId && event.goalId !== goalId) {
+        return false;
+      }
+
+      if (tenantId && event.data?.tenantId !== tenantId) {
+        return false;
+      }
+
+      if (type && event.type !== type) {
         return false;
       }
 
