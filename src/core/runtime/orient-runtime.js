@@ -214,7 +214,7 @@ class OrientRuntime {
     return this.persistence.events.appendMany(scopedEvents, { tenantId: this.tenantId });
   }
 
-  persistExecution(context, mode = 'update') {
+  async persistExecution(context, mode = 'update') {
     if (
       !this.persistence ||
       !this.persistence.executions
@@ -236,16 +236,16 @@ class OrientRuntime {
     return this.persistence.executions.update(snapshot.executionId, snapshot, { tenantId: this.tenantId });
   }
 
-  checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
+  async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
     if (!context) {
       throw new TypeError('context is required');
     }
 
     const snapshot =
-      this.persistExecution(
+      (await this.persistExecution(
         context,
         mode
-      ) || context.snapshot();
+      )) || context.snapshot();
 
     const events = Array.isArray(context.events)
       ? context.events
@@ -523,7 +523,7 @@ class OrientRuntime {
       }
     );
 
-    this.persistExecution(
+    await this.persistExecution(
       context,
       'insert'
     );
@@ -599,7 +599,7 @@ class OrientRuntime {
               tenantId: this.tenantId,
               agentId: plan.agentId || 'ORIENT_RUNTIME',
               onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'step_completed' } = {}) => {
-                this.checkpoint(
+                return this.checkpoint(
                   context,
                   'update',
                   reason + ':plan-' + checkpointPlanRevision + ':step-' + step
@@ -750,7 +750,7 @@ class OrientRuntime {
 
       context.complete();
 
-      this.persistExecution(
+      await this.persistExecution(
         context,
         'update'
       );
@@ -1056,9 +1056,9 @@ class OrientRuntime {
 
       context.complete();
 
-      this.persistExecution(context, 'update');
+      await this.persistExecution(context, 'update');
       this.persistEvents(context);
-      this.checkpoint(context, 'update', 'execution_completed');
+      await this.checkpoint(context, 'update', 'execution_completed');
 
       return {
         resumed: true,
@@ -1095,7 +1095,7 @@ class OrientRuntime {
 
       this.persistExecution(context, 'update');
       this.persistEvents(context);
-      this.checkpoint(context, 'update', 'resume_failed');
+      await this.checkpoint(context, 'update', 'resume_failed');
 
       throw error;
     }
