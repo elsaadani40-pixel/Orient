@@ -5,7 +5,7 @@ const LIFECYCLE_TRANSITIONS = Object.freeze({
   validating: Object.freeze(['executing', 'recovering', 'cancelled', 'failed']),
   executing: Object.freeze(['observing', 'recovering', 'waiting', 'completed', 'cancelled', 'failed']),
   observing: Object.freeze(['evaluating', 'recovering', 'waiting', 'cancelled', 'failed']),
-  evaluating: Object.freeze(['executing', 'waiting', 'completed', 'recovering', 'cancelled', 'failed']),
+  evaluating: Object.freeze(['planning', 'executing', 'waiting', 'completed', 'recovering', 'cancelled', 'failed']),
   recovering: Object.freeze(['understanding', 'planning', 'validating', 'executing', 'waiting', 'failed', 'cancelled']),
   waiting: Object.freeze(['executing', 'completed', 'cancelled', 'failed']),
   completed: Object.freeze([]),
