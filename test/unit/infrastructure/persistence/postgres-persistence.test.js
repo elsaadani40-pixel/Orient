@@ -149,6 +149,7 @@ test('Postgres tenant quota queues work when the running quota is full', async (
     { rows: [{ max_concurrent: 1, max_queued: 2 }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
     { rows: [{ active: 1, queued: 0 }], rowCount: 1 },
     { rows: [{ tenant_id: 'tenant-a', workflow_id: 'wf-queued', state: 'QUEUED', reserved_at: new Date().toISOString(), expires_at: null }], rowCount: 1 }
   ]);
