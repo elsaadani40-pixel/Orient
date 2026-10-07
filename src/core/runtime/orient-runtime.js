@@ -25,6 +25,7 @@ const TenantQuotaService =
 const { WorkflowDefinition, WorkflowInstance, WorkflowScheduler, WorkflowWorker } = require('../workflow');
 const AsyncWorkflowScheduler = require('../workflow/async-workflow-scheduler');
 const AsyncWorkflowWorker = require('../workflow/async-workflow-worker');
+const PostgresTenantQuotaRepository = require('../../infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 
 class OrientRuntime {
   constructor({
@@ -112,6 +113,9 @@ class OrientRuntime {
     this.workflowRepository =
       persistence?.workflows || null;
 
+    this.tenantQuotaRepository =
+      persistence?.tenantQuotas || (persistence?.isAsync && persistence?.db ? new PostgresTenantQuotaRepository(persistence.db) : null);
+
     this.workflowScheduler =
       workflowScheduler ||
       (persistence?.isAsync
@@ -122,7 +126,9 @@ class OrientRuntime {
             leaseDurationMs,
             tenantId: this.tenantId,
             workflowRepository: this.workflowRepository,
-            leaseRepository: persistence.workflowLeases
+            leaseRepository: persistence.workflowLeases,
+            quotaRepository: this.tenantQuotaRepository,
+            quotaPolicy: this.tenantQuotaPolicy
           })
         : new WorkflowScheduler({
         maxConcurrent,
@@ -147,6 +153,16 @@ class OrientRuntime {
             maxRetries
           });
 
+    if (this.tenantQuotaRepository?.ensureTenant) {
+      this.quotaReady = this.tenantQuotaRepository.ensureTenant(this.tenantId, this.tenantQuotaPolicy);
+    } else {
+      this.quotaReady = Promise.resolve();
+    }
+
+    if (this.workflowScheduler?.async) {
+      this.workflowScheduler.quotaPolicy = this.tenantQuotaPolicy;
+    }
+
     this.tenantQuotaService =
       quotaService ||
       new TenantQuotaService({
@@ -154,6 +170,10 @@ class OrientRuntime {
         policy: this.tenantQuotaPolicy,
         scheduler: this.workflowScheduler
       });
+
+    if (this.workflowScheduler?.async) {
+      this.workflowScheduler.quotaRepository = this.tenantQuotaRepository;
+    }
 
     if (this.tenantQuotaService.scheduler !== this.workflowScheduler) {
       this.tenantQuotaService.scheduler = this.workflowScheduler;
@@ -355,6 +375,7 @@ class OrientRuntime {
 
   async executeWorkflow(input, { approval = null, approvals = {}, priority = 0, deadlineAt = null } = {}) {
     await this.recoveryReady;
+    await this.quotaReady;
     const text = String(input || '').trim();
 
     if (!text) {
@@ -373,7 +394,7 @@ class OrientRuntime {
 
     this.tenantQuotaService.assertTenant(this.tenantId);
     this.tenantQuotaService.assertInputSize(text);
-    this.tenantQuotaService.assertWorkflowAdmission();
+    if (!this.tenantQuotaRepository) this.tenantQuotaService.assertWorkflowAdmission();
 
     const definition = new WorkflowDefinition({
       id: 'orient.request.execution',

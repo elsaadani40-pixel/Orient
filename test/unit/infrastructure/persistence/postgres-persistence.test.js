@@ -5,8 +5,10 @@ const {
   PostgresEventRepository,
   PostgresIdempotencyRepository,
   PostgresWorkflowLeaseRepository,
-  PostgresWorkflowRepository
+  PostgresWorkflowRepository,
+  PostgresCheckpointRepository
 } = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
+const PostgresTenantQuotaRepository = require('../../../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 
 function fakeDb(responses = []) {
   const calls = [];
@@ -70,7 +72,7 @@ test('Postgres idempotency begin is tenant-scoped and conflict-safe', async () =
   assert.equal(result.created, true);
   assert.equal(result.record.tenantId, 'tenant-a');
   assert.equal(db.calls[0].values[1], 'tenant-a');
-  assert.match(db.calls[0].text, /ON CONFLICT\(key\) DO NOTHING/);
+  assert.match(db.calls[0].text, /ON CONFLICT\(tenant_id,key\) DO NOTHING/);
 });
 
 test('Postgres persistence rejects cross-tenant writes before SQL execution', async () => {
@@ -114,3 +116,49 @@ test('Postgres workflow writes reject stale fencing tokens', async () => {
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
 });
+
+
+test('PostgresPersistence exposes durable tenant quota repository', () => {
+  const persistence = new PostgresPersistence({ pool: fakeDb() });
+  assert.ok(persistence.tenantQuotas);
+});
+
+test('Postgres checkpoint repository appends history and returns the latest checkpoint', async () => {
+  const crypto = require('crypto');
+  const snap1 = { executionId: 'exec-1', tenantId: 'tenant-a' };
+  const snap2 = { executionId: 'exec-1', tenantId: 'tenant-a', step: 2 };
+  const digest1 = crypto.createHash('sha256').update(JSON.stringify(snap1)).digest('hex');
+  const digest2 = crypto.createHash('sha256').update(JSON.stringify(snap2)).digest('hex');
+  const row1 = { execution_id:'exec-1',tenant_id:'tenant-a',sequence:'1',checkpoint_id:'cp-1',reason:'step',created_at:new Date().toISOString(),snapshot:snap1,snapshot_sha256:digest1 };
+  const row2 = { execution_id:'exec-1',tenant_id:'tenant-a',sequence:'2',checkpoint_id:'cp-2',reason:'step2',created_at:new Date().toISOString(),snapshot:snap2,snapshot_sha256:digest2 };
+  const db = fakeDb([
+    { rows: [], rowCount: 0 }, { rows: [], rowCount: 0 }, { rows: [{ next_sequence: '1' }], rowCount: 1 }, { rows: [row1], rowCount: 1 },
+    { rows: [], rowCount: 0 }, { rows: [], rowCount: 0 }, { rows: [{ next_sequence: '2' }], rowCount: 1 }, { rows: [row2], rowCount: 1 }
+  ]);
+  const repo = new PostgresCheckpointRepository(db);
+  await repo.save(snap1, { tenantId: 'tenant-a' });
+  const second = await repo.save(snap2, { tenantId: 'tenant-a' });
+  assert.equal(second.sequence, 2);
+  assert.match(db.calls[1].text, /pg_advisory_xact_lock/);
+  assert.match(db.calls[5].text, /pg_advisory_xact_lock/);
+});
+
+test('Postgres tenant quota reservation is atomically admission-controlled', async () => {
+  const db = fakeDb([
+    { rows: [], rowCount: 1 },
+    { rows: [{ max_concurrent: 1, max_queued: 2 }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ active: 0, queued: 1 }], rowCount: 1 },
+    { rows: [{ tenant_id: 'tenant-a', workflow_id: 'wf-2', state: 'QUEUED', reserved_at: new Date().toISOString(), expires_at: null }], rowCount: 1 }
+  ]);
+  const repo = new PostgresTenantQuotaRepository(db);
+  const reservation = await repo.reserveWorkflow({
+    tenantId: 'tenant-a',
+    workflowId: 'wf-2',
+    policy: { maxConcurrent: 1, maxQueued: 2, maxInputChars: 100, maxToolInputChars: 100, maxRetries: 2 }
+  });
+  assert.equal(reservation.workflowId, 'wf-2');
+  assert.match(db.calls[6].text, /ON CONFLICT\(workflow_id\) DO NOTHING/);
+})

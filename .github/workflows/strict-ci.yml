@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t tests < <(find test -type f -name '*.test.js' -print | sort)
+          mapfile -t tests < <(find test/unit -type f -name '*.test.js' -print | sort)
           test "${#tests[@]}" -gt 0
           node --test --test-reporter=spec "${tests[@]}"
 
@@ -77,3 +77,38 @@ jobs:
             echo "Potential credential material detected"
             exit 1
           fi
+
+
+  postgres-integration:
+    name: PostgreSQL Integration (Node 20)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: orient_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d orient_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          check-latest: true
+
+      - name: Install PostgreSQL client dependency
+        run: npm install --no-save pg@^8.23.1
+
+      - name: Run PostgreSQL integration suite
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
+        run: node --test test/integration/postgres-persistence.integration.test.js
