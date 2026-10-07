@@ -15,6 +15,7 @@ jobs:
   unit:
     name: Unit + Architecture Tests (Node ${{ matrix.node }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -58,7 +59,7 @@ jobs:
           set -euo pipefail
           mapfile -t tests < <(find test/unit -type f -name '*.test.js' -print | sort)
           test "${#tests[@]}" -gt 0
-          node --test --test-reporter=spec "${tests[@]}"
+          node --test --test-timeout=120000 --test-reporter=spec "${tests[@]}"
 
   static:
     name: Static Safety Checks
@@ -83,7 +84,6 @@ jobs:
             echo "Potential credential material detected"
             exit 1
           fi
-
 
   postgres-integration:
     name: PostgreSQL Integration (Node 20)
