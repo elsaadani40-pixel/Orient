@@ -129,16 +129,18 @@ test('Postgres checkpoint repository appends history and returns the latest chec
   const snap2 = { executionId: 'exec-1', tenantId: 'tenant-a', step: 2 };
   const digest1 = crypto.createHash('sha256').update(JSON.stringify(snap1)).digest('hex');
   const digest2 = crypto.createHash('sha256').update(JSON.stringify(snap2)).digest('hex');
+  const row1 = { execution_id:'exec-1',tenant_id:'tenant-a',sequence:'1',checkpoint_id:'cp-1',reason:'step',created_at:new Date().toISOString(),snapshot:snap1,snapshot_sha256:digest1 };
+  const row2 = { execution_id:'exec-1',tenant_id:'tenant-a',sequence:'2',checkpoint_id:'cp-2',reason:'step2',created_at:new Date().toISOString(),snapshot:snap2,snapshot_sha256:digest2 };
   const db = fakeDb([
-    { rows: [], rowCount: 0 }, { rows: [{ next_sequence: '1' }], rowCount: 1 }, { rows: [{ execution_id:'exec-1',tenant_id:'tenant-a',sequence:'1',checkpoint_id:'cp-1',reason:'step',created_at:new Date().toISOString(),snapshot:snap1,snapshot_sha256:digest1 }], rowCount:1 },
-    { rows: [], rowCount: 0 }, { rows: [{ next_sequence: '2' }], rowCount: 1 }, { rows: [{ execution_id:'exec-1',tenant_id:'tenant-a',sequence:'2',checkpoint_id:'cp-2',reason:'step2',created_at:new Date().toISOString(),snapshot:snap2,snapshot_sha256:digest2 }], rowCount:1 }
+    { rows: [], rowCount: 0 }, { rows: [], rowCount: 0 }, { rows: [{ next_sequence: '1' }], rowCount: 1 }, { rows: [row1], rowCount: 1 },
+    { rows: [], rowCount: 0 }, { rows: [], rowCount: 0 }, { rows: [{ next_sequence: '2' }], rowCount: 1 }, { rows: [row2], rowCount: 1 }
   ]);
   const repo = new PostgresCheckpointRepository(db);
   await repo.save(snap1, { tenantId: 'tenant-a' });
   const second = await repo.save(snap2, { tenantId: 'tenant-a' });
   assert.equal(second.sequence, 2);
   assert.match(db.calls[1].text, /pg_advisory_xact_lock/);
-  assert.match(db.calls[4].text, /pg_advisory_xact_lock/);
+  assert.match(db.calls[5].text, /pg_advisory_xact_lock/);
 });
 
 test('Postgres tenant quota reservation is atomically admission-controlled', async () => {
