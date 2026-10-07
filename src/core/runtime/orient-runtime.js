@@ -159,6 +159,10 @@ class OrientRuntime {
       this.quotaReady = Promise.resolve();
     }
 
+    if (this.workflowScheduler?.async) {
+      this.workflowScheduler.quotaPolicy = this.tenantQuotaPolicy;
+    }
+
     this.tenantQuotaService =
       quotaService ||
       new TenantQuotaService({
