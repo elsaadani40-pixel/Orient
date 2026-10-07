@@ -94,7 +94,8 @@ test('PostgreSQL approval consumption is single-use under concurrency', async ()
   assert.deepEqual(results.sort(), [false, true]);
   await pool.query('DELETE FROM approvals WHERE approval_id=$1 AND tenant_id=$2', [approvalId, 'tenant-approval']);
 });
-\ntest('PostgreSQL quota admission is atomic across concurrent reservations', async () => {
+
+test('PostgreSQL quota admission is atomic across concurrent reservations', async () => {
   await pool.query("INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ('quota-wf-a','tenant-quota','QUEUED',NOW(),'{}'), ('quota-wf-b','tenant-quota','QUEUED',NOW(),'{}')");
   const policy = { maxConcurrent: 1, maxQueued: 1, maxInputChars: 1000, maxToolInputChars: 1000, maxRetries: 2 };
   await persistence.tenantQuotas.ensureTenant('tenant-quota', policy);
