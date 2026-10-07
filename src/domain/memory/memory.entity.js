@@ -18,12 +18,6 @@ const SOURCE_TYPES = Object.freeze([
   'unknown'
 ]);
 
-const MEMORY_SCOPES = Object.freeze([
-  'personal',
-  'shared.memory',
-  'shared.research'
-]);
-
 const MEMORY_STATES = Object.freeze([
   'active',
   'superseded',
@@ -98,7 +92,7 @@ function createMemory({
   const record = {
     id: crypto.randomUUID(),
     tenantId: String(tenantId || 'default'),
-    scope: MEMORY_SCOPES.includes(scope) ? scope : 'personal',
+    scope: String(scope || 'personal'),
     text: cleanText,
     type: normalizedType,
     semanticKey: semanticKey ? String(semanticKey).trim() : null,
@@ -132,7 +126,7 @@ function normalizeMemory(memory = {}) {
   return {
     id: memory.id || crypto.randomUUID(),
     tenantId: String(memory.tenantId || 'default'),
-    scope: MEMORY_SCOPES.includes(memory.scope) ? memory.scope : 'personal',
+    scope: String(memory.scope || 'personal'),
     text: String(memory.text || '').trim(),
     type: MEMORY_TYPES.includes(memory.type) ? memory.type : 'note',
     semanticKey: memory.semanticKey ? String(memory.semanticKey).trim() : null,
@@ -162,7 +156,6 @@ module.exports = {
   MEMORY_TYPES,
   SOURCE_TYPES,
   MEMORY_STATES,
-  MEMORY_SCOPES,
   clamp,
   normalizeSource,
   normalizeEvidence,
