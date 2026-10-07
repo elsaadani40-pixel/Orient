@@ -155,6 +155,68 @@ test('PostgreSQL rejects stale lease renewal after takeover', async () => {
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
+
+test('PostgreSQL crash recovery requeues an orphaned running workflow after lease expiry', async () => {
+  const WorkflowDefinition = require('../../src/core/workflow/workflow-definition');
+  const WorkflowInstance = require('../../src/core/workflow/workflow-instance');
+  const AsyncWorkflowScheduler = require('../../src/core/workflow/async-workflow-scheduler');
+
+  const workflowId = 'crash-recovery-wf-' + Date.now();
+  const definition = new WorkflowDefinition({
+    id: 'crash-recovery-definition',
+    version: 1,
+    name: 'Crash Recovery',
+    steps: [{ id: 'resume-step', tool: 'noop', input: {} }]
+  });
+  const instance = new WorkflowInstance({
+    definition,
+    workflowId,
+    tenantId: 'tenant-recovery'
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  await persistence.workflows.save(instance, 'tenant-recovery');
+
+  const firstLease = await persistence.workflowLeases.tryAcquire({
+    workflowId,
+    leaseId: 'crash-lease-a-' + Date.now(),
+    workerId: 'crashed-worker',
+    acquiredAt: Date.now(),
+    expiresAt: Date.now() + 30000,
+    metadata: { tenantId: 'tenant-recovery' }
+  }, 'tenant-recovery');
+
+  await pool.query(
+    "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
+    [workflowId]
+  );
+
+  const scheduler = new AsyncWorkflowScheduler({
+    workflowRepository: persistence.workflows,
+    leaseRepository: persistence.workflowLeases,
+    tenantId: 'tenant-recovery',
+    leaseDurationMs: 30000
+  });
+
+  const persistedLease = await persistence.workflowLeases.findByWorkflowId(workflowId, 'tenant-recovery');
+  assert.ok(persistedLease.expiresAt <= Date.now());
+
+  const recovered = await scheduler.recoverPersisted();
+  assert.equal(recovered, 1);
+  assert.equal(scheduler.queue.length, 1);
+  assert.equal(scheduler.queue[0].instance.state, 'QUEUED');
+
+  const takeover = await scheduler.leaseAsync('recovery-worker');
+  assert.ok(takeover);
+  assert.equal(takeover.workflowId, workflowId);
+  assert.ok(takeover.fencingToken > firstLease.fencingToken);
+  assert.equal(takeover.instance.state, 'RUNNING');
+
+  await scheduler.releaseAsync(workflowId, takeover.leaseId);
+  await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+});
+
 test('PostgreSQL approval consumption is single-use under concurrency', async () => {
   const approvalId = 'approval-' + Date.now();
   await persistence.approvals.save({
