@@ -28,6 +28,7 @@ const AsyncWorkflowWorker = require('../workflow/async-workflow-worker');
 const PostgresTenantQuotaRepository = require('../../infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 const ExecutionPersistenceCoordinator = require('./execution-persistence-coordinator');
 const WorkflowExecutionCoordinator = require('./workflow-execution-coordinator');
+const AgentExecutionCoordinator = require('./agent-execution-coordinator');
 
 class OrientRuntime {
   constructor({
@@ -214,6 +215,13 @@ class OrientRuntime {
         agentRegistry: this.agentRegistry
       });
 
+    this.agentExecutionCoordinator = new AgentExecutionCoordinator({
+      agentOrchestrator: this.agentOrchestrator,
+      agentLoop: this.agentLoop,
+      checkpoint: (context, mode, reason) => this.checkpoint(context, mode, reason),
+      validateReplannedPlan: (nextPlan, previousFingerprint) => this.validateReplannedPlan(nextPlan, previousFingerprint)
+    });
+
     this.name =
       'ORIENT_RUNTIME';
 
@@ -301,627 +309,123 @@ class OrientRuntime {
   }
 
   async execute(input, { approval = null, approvals = {} } = {}) {
-    const requestId =
-      crypto.randomUUID();
-
-    const text =
-      String(input || '').trim();
-
-    if (!text) {
-      return {
-        requestId,
-        type: 'error',
-        message: 'لم يتم إرسال طلب.'
-      };
-    }
-    if (text.length > this.maxInputChars) {
-      return {
-        requestId,
-        type: 'error',
-        code: 'INPUT_TOO_LARGE',
-        message: 'حجم الطلب يتجاوز الحد المسموح.'
-      };
-    }
+    const requestId = crypto.randomUUID();
+    const text = String(input || '').trim();
+    if (!text) return { requestId, type: 'error', message: 'لم يتم إرسال طلب.' };
+    if (text.length > this.maxInputChars) return { requestId, type: 'error', code: 'INPUT_TOO_LARGE', message: 'حجم الطلب يتجاوز الحد المسموح.' };
 
     this.tenantQuotaService.assertTenant(this.tenantId);
     this.tenantQuotaService.assertInputSize(text);
 
-    const context =
-      new ExecutionContext({
-        requestId,
-        input: text,
-        tenantId: this.tenantId,
-        userId: this.userId,
-        workspaceId: this.workspaceId
+    const context = new ExecutionContext({
+      requestId, input: text, tenantId: this.tenantId, userId: this.userId, workspaceId: this.workspaceId
+    });
+    context.start();
+    context.metadata.tenantQuota = this.tenantQuotaPolicy.toJSON();
+    context.record('request.understood', { inputLength: text.length });
+    await this.persistExecution(context, 'insert');
+
+    try {
+      context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
+      const orchestration = await this.agentOrchestrator.plan(text, context);
+      const executionResult = await this.agentExecutionCoordinator.run({
+        context,
+        plan: orchestration.plan,
+        validation: orchestration.validation,
+        planRevision: 1,
+        replans: 0,
+        previousFingerprint: this.planFingerprint(orchestration.plan),
+        approval, approvals, requestId, input: text, tenantId: this.tenantId
       });
 
-    context.start();
-
-    context.metadata.tenantQuota =
-      this.tenantQuotaPolicy.toJSON();
-
-    context.record(
-      'request.understood',
-      {
-        inputLength:
-          text.length
-      }
-    );
-
-    await this.persistExecution(
-      context,
-      'insert'
-    );
-
-    try {
-      context.transitionAgentTo(
-        AgentState.LIFECYCLE.PLANNING
-      );
-
-      let orchestration =
-        await this.agentOrchestrator.plan(
-          text,
-          context
-        );
-
-      let plan =
-        orchestration.plan;
-
-      let validation =
-        orchestration.validation;
-
-      let planRevision = 1;
-      let replans = 0;
-      context.metadata.planRevision = planRevision;
-      context.metadata.replans = replans;
-      let previousFingerprint =
-        this.planFingerprint(plan);
-
-      let loopResult = null;
-      let replanningDecision = null;
-
-      while (true) {
-        context.record(
-          'plan.generated',
-          {
-            intent: plan.intent,
-            confidence: plan.confidence,
-            planRevision,
-            replan: planRevision > 1
-          }
-        );
-
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.VALIDATING
-        );
-
-        context.record(
-          'plan.validation.completed',
-          {
-            valid: validation.valid,
-            steps: validation.steps.length,
-            planRevision
-          }
-        );
-
-        context.setPlan(plan);
-
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.EXECUTING
-        );
-
-        loopResult =
-          await this.agentLoop.run({
-            plan,
-            context,
-            runtimeContext: {
-              requestId,
-              input: text,
-              plan,
-              planRevision,
-              approval,
-              approvals,
-              tenantId: this.tenantId,
-              agentId: plan.agentId || 'ORIENT_RUNTIME',
-              onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'step_completed' } = {}) => {
-                return this.checkpoint(
-                  context,
-                  'update',
-                  reason + ':plan-' + checkpointPlanRevision + ':step-' + step
-                );
-              }
-            }
-          });
-
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.OBSERVING
-        );
-
-        context.record(
-          'observation.phase.completed',
-          {
-            stepsExecuted:
-              loopResult.stepsExecuted,
-            observations:
-              context.observations.length,
-            planRevision
-          }
-        );
-
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.EVALUATING
-        );
-
-        replanningDecision =
-          this.agentOrchestrator.decideReplanning({
-            evaluation:
-              loopResult.evaluation,
-            replans,
-            hasRemainingSteps:
-              loopResult.stepsExecuted <
-              plan.steps.length,
-            context
-          });
-
-        context.record(
-          'replanning.decision',
-          {
-            ...replanningDecision.toJSON(),
-            planRevision,
-            replans
-          }
-        );
-
-        if (
-          replanningDecision.nextAction !== 'replan'
-        ) {
-          break;
-        }
-
-        if (replans >= 3) {
-          throw Object.assign(
-            new Error(
-              'تم الوصول إلى الحد الأقصى لإعادة التخطيط'
-            ),
-            {
-              code: 'MAX_REPLANS_EXCEEDED'
-            }
-          );
-        }
-
-        const nextOrchestration =
-          await this.agentOrchestrator.replan({
-            input: text,
-            evaluation: loopResult.evaluation,
-            previousPlan: plan,
-            context
-          });
-
-        if (!nextOrchestration) {
-          throw Object.assign(
-            new Error(
-              'لم يتم إنشاء خطة بديلة صالحة'
-            ),
-            {
-              code: 'REPLAN_NOT_AVAILABLE'
-            }
-          );
-        }
-
-        const nextPlan =
-          nextOrchestration.plan;
-
-        const nextValidation =
-          nextOrchestration.validation;
-
-        if (
-          !nextValidation ||
-          nextValidation.valid !== true
-        ) {
-          throw Object.assign(
-            new Error(
-              'الخطة الجديدة لم تجتز التحقق'
-            ),
-            {
-              code: 'INVALID_REPLAN_VALIDATION'
-            }
-          );
-        }
-
-        const replanValidation =
-          this.validateReplannedPlan(
-            nextPlan,
-            previousFingerprint
-          );
-
-        if (!replanValidation.valid) {
-          throw Object.assign(
-            new Error(
-              replanValidation.reason
-            ),
-            {
-              code: 'INVALID_REPLAN'
-            }
-          );
-        }
-
-        replans += 1;
-        planRevision += 1;
-        context.metadata.planRevision = planRevision;
-        context.metadata.agentId = plan.agentId || context.metadata.agentId || 'ORIENT_RUNTIME';
-        context.metadata.replans = replans;
-        previousFingerprint =
-          replanValidation.fingerprint;
-
-        context.record(
-          'replanning.executed',
-          {
-            replans,
-            planRevision,
-            previousPlanIntent:
-              plan.intent,
-            nextPlanIntent:
-              nextPlan.intent
-          }
-        );
-
-        plan = nextPlan;
-        validation = nextValidation;
-
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.PLANNING
-        );
-      }
+      const plan = executionResult.plan;
+      const loopResult = executionResult.loopResult;
+      const replanningDecision = executionResult.replanningDecision;
 
       context.complete();
-
-      await this.persistExecution(
-        context,
-        'update'
-      );
-
-      await this.persistEvents(
-        context
-      );
-
-      const result =
-        loopResult.result;
-
-      return {
-        requestId,
-
-        type:
-          this.resolveResponseType(
-            plan.intent
-          ),
-
-        query:
-          plan.intent === 'memory.search'
-            ? plan.input
-            : '',
-
-        count:
-          result &&
-          Array.isArray(
-            result.memories
-          )
-            ? result.memories.length
-            : undefined,
-
-        result,
-
-        evaluation:
-          loopResult.evaluation,
-
-        replanning:
-          replanningDecision.toJSON(),
-
-        execution:
-          context.snapshot()
-      };
-    } catch (error) {
-      if (
-        context.isActive() &&
-        context.canTransitionAgentTo(
-          AgentState.LIFECYCLE.RECOVERING
-        )
-      ) {
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.RECOVERING
-        );
-      }
-
-      const recovery =
-        await this.classifyRecovery({
-          error,
-          context
-        });
-
-      context.record(
-        'recovery.completed',
-        recovery
-      );
-
-      context.fail(
-        error
-      );
-
-      this.persistExecution(
-        context,
-        'update'
-      );
-
-      this.persistEvents(
-        context
-      );
-
-      throw error;
-    }
-  }
-
-  async resume(executionId, { approval = null, approvals = {} } = {}) {
-    if (!this.persistence?.checkpoints?.findLatest) {
-      throw Object.assign(
-        new Error('Durable checkpoint storage is required for resume'),
-        { code: 'CHECKPOINT_STORAGE_REQUIRED' }
-      );
-    }
-
-    const checkpoint =
-      this.persistence.checkpoints.findLatest(executionId, { tenantId: this.tenantId });
-
-    if (!checkpoint) {
-      throw Object.assign(
-        new Error(`No checkpoint found for execution: ${executionId}`),
-        { code: 'CHECKPOINT_NOT_FOUND' }
-      );
-    }
-
-    const context =
-      ExecutionContext.restore(checkpoint.snapshot);
-
-    this.tenantQuotaService.assertTenant(
-      context.tenantId || this.tenantId
-    );
-    this.tenantQuotaService.assertInputSize(context.input);
-
-    if (!context.tenantId) context.tenantId = this.tenantId;
-    if (!context.userId) context.userId = this.userId;
-    if (!context.workspaceId) context.workspaceId = this.workspaceId;
-    context.metadata = {
-      ...context.metadata,
-      tenantId: context.tenantId,
-      userId: context.userId,
-      workspaceId: context.workspaceId
-    };
-
-    if (context.tenantId !== this.tenantId) {
-      throw Object.assign(new Error('Checkpoint tenant does not match runtime tenant'), { code: 'TENANT_CONTEXT_MISMATCH' });
-    }
-
-    if (!context.isActive()) {
-      return {
-        resumed: false,
-        reason: 'execution_not_resumable',
-        execution: context.snapshot()
-      };
-    }
-
-    let plan =
-      context.plan;
-
-    if (!plan || !Array.isArray(plan.steps)) {
-      throw Object.assign(
-        new Error('Checkpoint does not contain a resumable plan'),
-        { code: 'CHECKPOINT_PLAN_REQUIRED' }
-      );
-    }
-
-    let planRevision =
-      Number(context.metadata?.planRevision || 1);
-
-    if (!Number.isInteger(planRevision) || planRevision < 1) {
-      throw Object.assign(
-        new Error('Checkpoint plan revision is invalid'),
-        { code: 'CHECKPOINT_PLAN_REVISION_INVALID' }
-      );
-    }
-
-    let replans =
-      Number(context.metadata?.replans || Math.max(0, planRevision - 1));
-
-    let validation = {
-      valid: true,
-      steps: plan.steps
-    };
-
-    let previousFingerprint =
-      this.planFingerprint(plan);
-
-    let loopResult = null;
-    let replanningDecision = null;
-
-    try {
-      context.record(
-        'execution.resume.started',
-        {
-          checkpointId: checkpoint.checkpointId,
-          sequence: checkpoint.sequence,
-          planRevision
-        }
-      );
-
-      while (true) {
-        context.setPlan(plan);
-
-        loopResult =
-          await this.agentLoop.run({
-            plan,
-            context,
-            runtimeContext: {
-              requestId: context.requestId,
-              input: context.input,
-              plan,
-              planRevision,
-              approval,
-              approvals,
-              tenantId: this.tenantId,
-              agentId: plan.agentId || context.metadata?.agentId || 'ORIENT_RUNTIME',
-              onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'resume_step_completed' } = {}) => {
-                context.metadata.planRevision = checkpointPlanRevision;
-                context.metadata.replans = replans;
-                this.checkpoint(
-                  context,
-                  'update',
-                  reason + ':plan-' + checkpointPlanRevision + ':step-' + step
-                );
-              }
-            }
-          });
-
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.OBSERVING
-        );
-
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.EVALUATING
-        );
-
-        replanningDecision =
-          this.agentOrchestrator.decideReplanning({
-            evaluation: loopResult.evaluation,
-            replans,
-            hasRemainingSteps:
-              loopResult.stepsExecuted < plan.steps.length,
-            context
-          });
-
-        context.record(
-          'replanning.decision',
-          {
-            ...replanningDecision.toJSON(),
-            planRevision,
-            replans,
-            resumed: true
-          }
-        );
-
-        if (replanningDecision.nextAction !== 'replan') {
-          break;
-        }
-
-        if (replans >= 3) {
-          throw Object.assign(
-            new Error('تم الوصول إلى الحد الأقصى لإعادة التخطيط'),
-            { code: 'MAX_REPLANS_EXCEEDED' }
-          );
-        }
-
-        const nextOrchestration =
-          await this.agentOrchestrator.replan({
-            input: context.input,
-            evaluation: loopResult.evaluation,
-            previousPlan: plan,
-            context
-          });
-
-        if (!nextOrchestration?.plan || nextOrchestration.validation?.valid !== true) {
-          throw Object.assign(
-            new Error('الخطة المستعادة لم تجتز إعادة التخطيط'),
-            { code: 'INVALID_RESUME_REPLAN' }
-          );
-        }
-
-        const nextPlan =
-          nextOrchestration.plan;
-
-        const replanValidation =
-          this.validateReplannedPlan(
-            nextPlan,
-            previousFingerprint
-          );
-
-        if (!replanValidation.valid) {
-          throw Object.assign(
-            new Error(replanValidation.reason),
-            { code: 'INVALID_REPLAN' }
-          );
-        }
-
-        replans += 1;
-        planRevision += 1;
-        context.metadata.planRevision = planRevision;
-        context.metadata.replans = replans;
-        previousFingerprint =
-          replanValidation.fingerprint;
-
-        plan =
-          nextPlan;
-
-        validation =
-          nextOrchestration.validation;
-
-        context.record(
-          'replanning.executed',
-          {
-            replans,
-            planRevision,
-            previousPlanIntent:
-              context.plan?.intent || null,
-            nextPlanIntent:
-              nextPlan.intent,
-            resumed: true
-          }
-        );
-
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.PLANNING
-        );
-      }
-
-      context.complete();
-
       await this.persistExecution(context, 'update');
       await this.persistEvents(context);
-      await this.checkpoint(context, 'update', 'execution_completed');
 
+      const result = loopResult.result;
       return {
-        resumed: true,
-        requestId: context.requestId,
-        result: loopResult.result,
+        requestId,
+        type: this.resolveResponseType(plan.intent),
+        query: plan.intent === 'memory.search' ? plan.input : '',
+        count: result && Array.isArray(result.memories) ? result.memories.length : undefined,
+        result,
         evaluation: loopResult.evaluation,
         replanning: replanningDecision.toJSON(),
         execution: context.snapshot()
       };
     } catch (error) {
-      if (
-        context.isActive() &&
-        context.canTransitionAgentTo(
-          AgentState.LIFECYCLE.RECOVERING
-        )
-      ) {
-        context.transitionAgentTo(
-          AgentState.LIFECYCLE.RECOVERING
-        );
-      }
-
-      const recovery =
-        await this.classifyRecovery({
-          error,
-          context
-        });
-
-      context.record(
-        'recovery.completed',
-        recovery
-      );
-
+      if (context.isActive() && context.canTransitionAgentTo(AgentState.LIFECYCLE.RECOVERING)) context.transitionAgentTo(AgentState.LIFECYCLE.RECOVERING);
+      const recovery = await this.classifyRecovery({ error, context });
+      context.record('recovery.completed', recovery);
       context.fail(error);
+      this.persistExecution(context, 'update');
+      this.persistEvents(context);
+      throw error;
+    }
+  }
 
+  async resume(executionId, { approval = null, approvals = {} } = {}) {
+    if (!this.persistence?.checkpoints?.findLatest) throw Object.assign(new Error('Durable checkpoint storage is required for resume'), { code: 'CHECKPOINT_STORAGE_REQUIRED' });
+
+    const checkpoint = this.persistence.checkpoints.findLatest(executionId, { tenantId: this.tenantId });
+    if (!checkpoint) throw Object.assign(new Error(`No checkpoint found for execution: ${executionId}`), { code: 'CHECKPOINT_NOT_FOUND' });
+
+    const context = ExecutionContext.restore(checkpoint.snapshot);
+    this.tenantQuotaService.assertTenant(context.tenantId || this.tenantId);
+    this.tenantQuotaService.assertInputSize(context.input);
+
+    if (!context.tenantId) context.tenantId = this.tenantId;
+    if (!context.userId) context.userId = this.userId;
+    if (!context.workspaceId) context.workspaceId = this.workspaceId;
+    context.metadata = { ...context.metadata, tenantId: context.tenantId, userId: context.userId, workspaceId: context.workspaceId };
+
+    if (context.tenantId !== this.tenantId) throw Object.assign(new Error('Checkpoint tenant does not match runtime tenant'), { code: 'TENANT_CONTEXT_MISMATCH' });
+    if (!context.isActive()) return { resumed: false, reason: 'execution_not_resumable', execution: context.snapshot() };
+
+    const plan = context.plan;
+    if (!plan || !Array.isArray(plan.steps)) throw Object.assign(new Error('Checkpoint does not contain a resumable plan'), { code: 'CHECKPOINT_PLAN_REQUIRED' });
+
+    const planRevision = Number(context.metadata?.planRevision || 1);
+    if (!Number.isInteger(planRevision) || planRevision < 1) throw Object.assign(new Error('Checkpoint plan revision is invalid'), { code: 'CHECKPOINT_PLAN_REVISION_INVALID' });
+    const replans = Number(context.metadata?.replans || Math.max(0, planRevision - 1));
+
+    try {
+      context.record('execution.resume.started', { checkpointId: checkpoint.checkpointId, sequence: checkpoint.sequence, planRevision });
+      const executionResult = await this.agentExecutionCoordinator.run({
+        context,
+        plan,
+        validation: { valid: true, steps: plan.steps },
+        planRevision,
+        replans,
+        previousFingerprint: this.planFingerprint(plan),
+        approval, approvals,
+        requestId: context.requestId,
+        input: context.input,
+        tenantId: this.tenantId,
+        agentId: context.metadata?.agentId || 'ORIENT_RUNTIME',
+        resumed: true
+      });
+
+      const loopResult = executionResult.loopResult;
+      const replanningDecision = executionResult.replanningDecision;
+      context.complete();
+      await this.persistExecution(context, 'update');
+      await this.persistEvents(context);
+      await this.checkpoint(context, 'update', 'execution_completed');
+
+      return { resumed: true, requestId: context.requestId, result: loopResult.result, evaluation: loopResult.evaluation, replanning: replanningDecision.toJSON(), execution: context.snapshot() };
+    } catch (error) {
+      if (context.isActive() && context.canTransitionAgentTo(AgentState.LIFECYCLE.RECOVERING)) context.transitionAgentTo(AgentState.LIFECYCLE.RECOVERING);
+      const recovery = await this.classifyRecovery({ error, context });
+      context.record('recovery.completed', recovery);
+      context.fail(error);
       await this.persistExecution(context, 'update');
       await this.persistEvents(context);
       await this.checkpoint(context, 'update', 'resume_failed');
-
       throw error;
     }
   }
