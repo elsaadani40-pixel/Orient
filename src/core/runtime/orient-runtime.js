@@ -186,7 +186,7 @@ class OrientRuntime {
       '0.9.0';
   }
 
-  persistEvents(context) {
+  async persistEvents(context) {
     if (
       !this.persistence ||
       !this.persistence.events
@@ -269,7 +269,7 @@ class OrientRuntime {
 
     const persistedEvents =
       pendingEvents.length
-        ? this.persistence?.events?.appendMany(pendingEvents, { tenantId: this.tenantId }) || []
+        ? await this.persistence?.events?.appendMany(pendingEvents, { tenantId: this.tenantId }) || []
         : [];
 
     this.persistedEventOffsets.set(
@@ -1057,7 +1057,7 @@ class OrientRuntime {
       context.complete();
 
       await this.persistExecution(context, 'update');
-      this.persistEvents(context);
+      await this.persistEvents(context);
       await this.checkpoint(context, 'update', 'execution_completed');
 
       return {
@@ -1094,7 +1094,7 @@ class OrientRuntime {
       context.fail(error);
 
       this.persistExecution(context, 'update');
-      this.persistEvents(context);
+      await this.persistEvents(context);
       await this.checkpoint(context, 'update', 'resume_failed');
 
       throw error;
