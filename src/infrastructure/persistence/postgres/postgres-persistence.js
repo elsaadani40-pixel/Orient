@@ -34,7 +34,7 @@ class PostgresExecutionRepository {
   }
 
   async findByGoalId(goalId, { tenantId = null } = {}) {
-    return (await this.findAll({ tenantId })).filter(item => item.goalId === goalId);
+    const result = await this.db.query(tenantId ? 'SELECT payload FROM executions WHERE tenant_id=$1 AND payload->>\'goalId\'=$2 ORDER BY updated_at DESC' : 'SELECT payload FROM executions WHERE payload->>\'goalId\'=$1 ORDER BY updated_at DESC', tenantId ? [tenantId,goalId] : [goalId]); return result.rows.map(row => row.payload);
   }
 
   async insert(execution, { tenantId = null } = {}) {
@@ -151,15 +151,15 @@ class PostgresEventRepository {
   }
 
   async findByExecutionId(id, { tenantId = null } = {}) {
-    return (await this.findAll({ tenantId })).filter(item => item.executionId === id);
+    const result = await this.db.query(tenantId ? 'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp ASC' : 'SELECT payload FROM events WHERE execution_id=$1 ORDER BY timestamp ASC', tenantId ? [tenantId,id] : [id]); return result.rows.map(row => row.payload);
   }
 
   async findByGoalId(id, { tenantId = null } = {}) {
-    return (await this.findAll({ tenantId })).filter(item => item.goalId === id);
+    const result = await this.db.query(tenantId ? 'SELECT payload FROM events WHERE tenant_id=$1 AND goal_id=$2 ORDER BY timestamp ASC' : 'SELECT payload FROM events WHERE goal_id=$1 ORDER BY timestamp ASC', tenantId ? [tenantId,id] : [id]); return result.rows.map(row => row.payload);
   }
 
   async findByType(type, { tenantId = null } = {}) {
-    return (await this.findAll({ tenantId })).filter(item => item.type === type);
+    const result = await this.db.query(tenantId ? 'SELECT payload FROM events WHERE tenant_id=$1 AND type=$2 ORDER BY timestamp ASC' : 'SELECT payload FROM events WHERE type=$1 ORDER BY timestamp ASC', tenantId ? [tenantId,type] : [type]); return result.rows.map(row => row.payload);
   }
 
   async count({ tenantId = null } = {}) {
@@ -210,7 +210,7 @@ class PostgresIdempotencyRepository {
     const result = await this.db.query(
       `INSERT INTO idempotency(key,tenant_id,payload,status,updated_at)
        VALUES($1,$2,$3,'running',$4)
-       ON CONFLICT(key) DO NOTHING`,
+       ON CONFLICT(tenant_id,key) DO NOTHING`,
       [key, tenantId, record, record.startedAt]
     );
     if (result.rowCount === 1) return { created: true, key, record };
@@ -270,23 +270,24 @@ class PostgresCheckpointRepository {
 
     const persisted = await this.db.transaction(async client => {
       const collision = await client.query(
-        'SELECT tenant_id FROM checkpoints WHERE execution_id=$1 FOR UPDATE',
-        [snapshot.executionId]
+        'SELECT tenant_id FROM checkpoints WHERE execution_id=$1 AND tenant_id<>$2 LIMIT 1 FOR UPDATE',
+        [snapshot.executionId,effectiveTenant]
       );
       if (collision.rows.length && collision.rows[0].tenant_id !== effectiveTenant) {
         const error = new Error('Checkpoint tenant collision');
         error.code = 'CHECKPOINT_TENANT_COLLISION';
         throw error;
       }
+      const sequenceResult = await client.query(
+        'SELECT COALESCE(MAX(sequence),0)+1 AS next_sequence FROM checkpoints WHERE execution_id=$1 FOR UPDATE',
+        [snapshot.executionId]
+      );
+      const sequence = Number(sequenceResult.rows[0].next_sequence);
       const result = await client.query(
         `INSERT INTO checkpoints(execution_id,tenant_id,sequence,checkpoint_id,reason,created_at,snapshot,snapshot_sha256)
-         VALUES($1,$2,COALESCE((SELECT MAX(sequence)+1 FROM checkpoints WHERE execution_id=$1),1),$3,$4,$5,$6,$7)
-         ON CONFLICT(execution_id) DO UPDATE SET
-           sequence=checkpoints.sequence+1,checkpoint_id=EXCLUDED.checkpoint_id,
-           reason=EXCLUDED.reason,created_at=EXCLUDED.created_at,
-           snapshot=EXCLUDED.snapshot,snapshot_sha256=EXCLUDED.snapshot_sha256
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
          RETURNING execution_id,tenant_id,sequence,checkpoint_id,reason,created_at,snapshot,snapshot_sha256`,
-        [snapshot.executionId, effectiveTenant, checkpointId, reason, createdAt, snapshotCopy, digest]
+        [snapshot.executionId,effectiveTenant,sequence,checkpointId,reason,createdAt,snapshotCopy,digest]
       );
       return result.rows[0];
     });
@@ -305,8 +306,8 @@ class PostgresCheckpointRepository {
   async findLatest(executionId, { verify = true, tenantId = null } = {}) {
     const result = await this.db.query(
       tenantId
-        ? 'SELECT * FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2 LIMIT 1'
-        : 'SELECT * FROM checkpoints WHERE execution_id=$1 LIMIT 1',
+        ? 'SELECT * FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2 ORDER BY sequence DESC LIMIT 1'
+        : 'SELECT * FROM checkpoints WHERE execution_id=$1 ORDER BY sequence DESC LIMIT 1',
       tenantId ? [executionId, tenantId] : [executionId]
     );
     if (!result.rows.length) return null;
@@ -534,8 +535,8 @@ class PostgresApprovalRepository {
   async consume(approvalId, usedAt, tenantId = null) {
     const result = await this.db.query(
       tenantId
-        ? 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND tenant_id=$3 AND used=FALSE'
-        : 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND used=FALSE',
+        ? 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND tenant_id=$3 AND used=FALSE AND expires_at>$1'
+        : 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND used=FALSE AND expires_at>$1',
       tenantId ? [usedAt, approvalId, tenantId] : [usedAt, approvalId]
     );
     return result.rowCount === 1;
