@@ -3,6 +3,9 @@ const crypto = require('crypto');
 const AgentState =
   require('../agent/state/agent-state');
 
+const Goal =
+  require('../goal/goal.entity');
+
 const AgentStateMachine =
   require('../agent/state/agent-state-machine');
 
@@ -57,6 +60,15 @@ class ExecutionContext {
     this.goalId =
       goalId ||
       crypto.randomUUID();
+
+    this.goal = new Goal({
+      id: this.goalId,
+      input,
+      executionId: this.executionId,
+      tenantId: tenantId || metadata.tenantId || null,
+      userId: userId || metadata.userId || null,
+      workspaceId: workspaceId || metadata.workspaceId || null
+    });
 
     this.parentExecutionId =
       parentExecutionId || null;
@@ -200,6 +212,13 @@ class ExecutionContext {
 
     this.status =
       EXECUTION_STATUS.RUNNING;
+
+    this.goal.transitionTo(Goal.STATUS.RUNNING);
+
+    this.record(
+      'goal.started',
+      this.goal.snapshot()
+    );
 
     this.startedAt =
       new Date().toISOString();
@@ -493,6 +512,13 @@ class ExecutionContext {
     this.status =
       EXECUTION_STATUS.COMPLETED;
 
+    this.goal.transitionTo(Goal.STATUS.COMPLETED);
+
+    this.record(
+      'goal.completed',
+      this.goal.snapshot()
+    );
+
     this.completedAt =
       new Date().toISOString();
 
@@ -520,6 +546,14 @@ class ExecutionContext {
 
     this.status =
       EXECUTION_STATUS.FAILED;
+
+    if (this.goal.status === Goal.STATUS.RUNNING) {
+      this.goal.transitionTo(Goal.STATUS.FAILED);
+      this.record(
+        'goal.failed',
+        this.goal.snapshot()
+      );
+    }
 
     this.completedAt =
       new Date().toISOString();
@@ -652,6 +686,22 @@ class ExecutionContext {
 
     context.executionVersion =
       Number(snapshot.executionVersion || 1);
+
+    if (snapshot.goal && typeof snapshot.goal === 'object') {
+      context.goal = new Goal({
+        id: snapshot.goal.id,
+        input: snapshot.goal.input,
+        executionId: snapshot.goal.executionId || context.executionId,
+        tenantId: snapshot.goal.tenantId || context.tenantId,
+        userId: snapshot.goal.userId || context.userId,
+        workspaceId: snapshot.goal.workspaceId || context.workspaceId,
+        metadata: snapshot.goal.metadata || {}
+      });
+      context.goal.status = snapshot.goal.status || Goal.STATUS.CREATED;
+      context.goal.createdAt = snapshot.goal.createdAt || context.goal.createdAt;
+      context.goal.startedAt = snapshot.goal.startedAt || null;
+      context.goal.completedAt = snapshot.goal.completedAt || null;
+    }
 
     context.status =
       snapshot.status || EXECUTION_STATUS.CREATED;
@@ -814,6 +864,9 @@ class ExecutionContext {
 
       observations:
         this.observations,
+
+      goal:
+        this.goal.snapshot(),
 
       agentState:
         this.agentState.toJSON(),
