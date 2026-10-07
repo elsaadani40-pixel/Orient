@@ -291,7 +291,7 @@ class MemoryService {
         };
 
         this.audit({
-          action: 'memory.conflict_resolved',
+          action: 'memory.conflict.resolved',
           tenantId,
           memoryId: candidate.id,
           relatedMemoryId: conflict.id,
