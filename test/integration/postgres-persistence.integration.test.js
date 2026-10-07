@@ -198,6 +198,9 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
     leaseDurationMs: 30000
   });
 
+  const persistedLease = await persistence.workflowLeases.findByWorkflowId(workflowId, 'tenant-recovery');
+  assert.ok(persistedLease.expiresAt <= Date.now());
+
   const recovered = await scheduler.recoverPersisted();
   assert.equal(recovered, 1);
   assert.equal(scheduler.queue.length, 1);
