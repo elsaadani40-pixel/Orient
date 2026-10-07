@@ -8,7 +8,8 @@ function instance() {
     definition: new WorkflowDefinition({
       id: 'definition-1',
       version: 1,
-      steps: []
+      name: 'Lifecycle Test',
+      steps: [{ id: 'step-1' }]
     })
   });
 }
@@ -42,8 +43,11 @@ test('workflow lifecycle remains distinct from agent lifecycle values', () => {
     Object.values(WorkflowInstance.STATES).includes('executing'),
     false
   );
+  const AgentState = require('../../../../src/core/agent/state/agent-state');
+  const workflowStates = new Set(Object.values(WorkflowInstance.STATES));
+  const agentStates = new Set(Object.values(AgentState.LIFECYCLE));
   assert.equal(
-    Object.values(WorkflowInstance.STATES).includes('EXECUTING'),
-    true
+    [...workflowStates].some((state) => agentStates.has(state)),
+    false
   );
 });
