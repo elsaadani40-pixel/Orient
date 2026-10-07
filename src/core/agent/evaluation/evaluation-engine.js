@@ -2,43 +2,80 @@ const Evaluation = require('./evaluation');
 
 class EvaluationEngine {
   evaluate({
+    plan = null,
+    step = null,
+    result,
+    stepNumber = 1,
     observations = [],
-    goalProgress = 0
+    goalProgress = null
   } = {}) {
     if (!Array.isArray(observations)) {
       throw new TypeError('Observations must be an array');
     }
 
-    const failed =
-      observations.some(
-        (observation) =>
-          observation &&
-          observation.outcome === 'failed'
-      );
-
-    if (failed) {
+    if (result === undefined) {
       return new Evaluation({
         outcome: 'failed',
-        goalProgress,
+        goalProgress: 0,
         confidence: 1,
-        reason: 'حدث فشل أثناء التنفيذ'
+        reason: `الخطوة ${stepNumber} لم تُرجع نتيجة`,
+        blockers: ['missing_result']
       });
     }
 
-    if (goalProgress >= 1) {
+    const failedObservation = observations.find(
+      (observation) =>
+        observation &&
+        (observation.outcome === 'failed' ||
+          observation.success === false)
+    );
+
+    if (failedObservation) {
       return new Evaluation({
-        outcome: 'done',
-        goalProgress: 1,
+        outcome: 'failed',
+        goalProgress: Number.isFinite(goalProgress) ? goalProgress : 0,
         confidence: 1,
-        reason: 'تم تحقيق الهدف'
+        reason: 'حدث فشل أثناء التنفيذ',
+        blockers: ['execution_failure']
       });
     }
+
+    if (
+      result &&
+      typeof result === 'object' &&
+      (result.nextAction === 'replan' || result.outcome === 'replan')
+    ) {
+      return new Evaluation({
+        outcome: 'replan',
+        goalProgress: Number.isFinite(goalProgress) ? goalProgress : 0,
+        confidence: 1,
+        reason:
+          result.reason ||
+          `الخطوة ${stepNumber} طلبت إعادة التخطيط`,
+        recommendations: [
+          result.nextInput ? 'replan_with_next_input' : 'replan'
+        ]
+      });
+    }
+
+    const hasNextStep =
+      Array.isArray(plan?.steps) &&
+      stepNumber < plan.steps.length;
+
+    const resolvedProgress = Number.isFinite(goalProgress)
+      ? goalProgress
+      : hasNextStep
+        ? Math.max(0, Math.min(1, (stepNumber - 1) / plan.steps.length))
+        : 1;
 
     return new Evaluation({
-      outcome: 'continue',
-      goalProgress,
+      outcome: hasNextStep ? 'continue' : 'done',
+      goalProgress: resolvedProgress,
       confidence: 1,
-      reason: 'الهدف لم يكتمل بعد'
+      reason: hasNextStep
+        ? `تم تنفيذ ${step?.tool || 'الخطوة'} بنجاح، الانتقال للخطوة التالية`
+        : `تم تنفيذ ${step?.tool || 'الخطوة'} بنجاح`,
+      recommendations: hasNextStep ? ['next_step'] : []
     });
   }
 }
