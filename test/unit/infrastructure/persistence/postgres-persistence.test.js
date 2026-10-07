@@ -136,7 +136,7 @@ test('Postgres checkpoint repository appends history and returns the latest chec
   await repo.save({ executionId: 'exec-1', tenantId: 'tenant-a' }, { tenantId: 'tenant-a' });
   const second = await repo.save({ executionId: 'exec-1', tenantId: 'tenant-a', step: 2 }, { tenantId: 'tenant-a' });
   assert.equal(second.sequence, 2);
-  assert.match(db.calls[3].text, /pg_advisory_xact_lock/);
+  assert.match(db.calls[4].text, /pg_advisory_xact_lock/);
 });
 
 test('Postgres tenant quota reservation is atomically admission-controlled', async () => {
