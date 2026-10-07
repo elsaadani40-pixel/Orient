@@ -52,7 +52,7 @@ const MIGRATIONS = [
     ALTER TABLE checkpoints ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (execution_id,sequence);
     CREATE INDEX IF NOT EXISTS idx_checkpoints_latest ON checkpoints(execution_id,sequence DESC);
     CREATE INDEX IF NOT EXISTS idx_events_tenant_execution_timestamp ON events(tenant_id,execution_id,timestamp);
-  `}
+  `},
   {version:3,sql:`
     CREATE TABLE IF NOT EXISTS worker_nodes (
       tenant_id TEXT NOT NULL,
