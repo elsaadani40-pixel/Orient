@@ -4,7 +4,7 @@ const {
   PostgresPersistence,
   PostgresEventRepository,
   PostgresIdempotencyRepository
-} = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
+} = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
 
 function fakeDb(responses = []) {
   const calls = [];
