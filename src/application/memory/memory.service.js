@@ -550,3 +550,5 @@ module.exports.relevanceScore = relevanceScore;
 module.exports.lexicalScore = lexicalScore;
 module.exports.temporalScore = temporalScore;
 module.exports.isTemporallyValid = isTemporallyValid;
+module.exports.conflictResolutionScore = conflictResolutionScore;
+module.exports.compareConflictCandidates = compareConflictCandidates;
