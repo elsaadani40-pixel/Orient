@@ -17,6 +17,11 @@ const { AgentDefinition } =
 const ApprovalService =
   require('../agent/approval/approval-service');
 
+const TenantQuotaPolicy =
+  require('../security/tenant-quota-policy');
+const TenantQuotaService =
+  require('../security/tenant-quota-service');
+
 const {
   WorkflowDefinition,
   WorkflowInstance,
@@ -41,6 +46,8 @@ class OrientRuntime {
     leaseDurationMs = 30000,
     maxInputChars = 100000,
     maxToolInputChars = 50000,
+    quotaPolicy = null,
+    quotaService = null,
     agentRegistry = null,
     agentInvocationService = null,
     capabilityGovernance = null
@@ -124,6 +131,29 @@ class OrientRuntime {
             })
           : null
       });
+
+    this.tenantQuotaPolicy =
+      quotaPolicy instanceof TenantQuotaPolicy
+        ? quotaPolicy
+        : new TenantQuotaPolicy({
+            maxConcurrent,
+            maxQueued: maxQueueDepth,
+            maxInputChars,
+            maxToolInputChars,
+            maxRetries
+          });
+
+    this.tenantQuotaService =
+      quotaService ||
+      new TenantQuotaService({
+        tenantId: this.tenantId,
+        policy: this.tenantQuotaPolicy,
+        scheduler: this.workflowScheduler
+      });
+
+    if (this.tenantQuotaService.scheduler !== this.workflowScheduler) {
+      this.tenantQuotaService.scheduler = this.workflowScheduler;
+    }
 
     // Rebuild the in-memory dispatch queue from durable workflow state.
     // Persisted RUNNING workflows are only recovered when their durable lease
@@ -328,13 +358,9 @@ class OrientRuntime {
         message: 'لم يتم إرسال طلب.'
       };
     }
-    if (text.length > this.maxInputChars) {
-      return {
-        type: 'error',
-        code: 'INPUT_TOO_LARGE',
-        message: 'حجم الطلب يتجاوز الحد المسموح.'
-      };
-    }
+    this.tenantQuotaService.assertTenant(this.tenantId);
+    this.tenantQuotaService.assertInputSize(text);
+    this.tenantQuotaService.assertWorkflowAdmission();
 
     const definition = new WorkflowDefinition({
       id: 'orient.request.execution',
@@ -453,14 +479,8 @@ class OrientRuntime {
         message: 'لم يتم إرسال طلب.'
       };
     }
-    if (text.length > this.maxInputChars) {
-      return {
-        requestId,
-        type: 'error',
-        code: 'INPUT_TOO_LARGE',
-        message: 'حجم الطلب يتجاوز الحد المسموح.'
-      };
-    }
+    this.tenantQuotaService.assertTenant(this.tenantId);
+    this.tenantQuotaService.assertInputSize(text);
 
     const context =
       new ExecutionContext({
@@ -472,6 +492,9 @@ class OrientRuntime {
       });
 
     context.start();
+
+    context.metadata.tenantQuota =
+      this.tenantQuotaPolicy.toJSON();
 
     context.record(
       'request.understood',
@@ -812,6 +835,11 @@ class OrientRuntime {
 
     const context =
       ExecutionContext.restore(checkpoint.snapshot);
+
+    this.tenantQuotaService.assertTenant(
+      context.tenantId || this.tenantId
+    );
+    this.tenantQuotaService.assertInputSize(context.input);
 
     if (!context.tenantId) context.tenantId = this.tenantId;
     if (!context.userId) context.userId = this.userId;
