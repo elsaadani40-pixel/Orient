@@ -29,6 +29,12 @@ jobs:
           node-version: ${{ matrix.node }}
           check-latest: true
 
+      - name: Install Node dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+
       - name: Verify SQLite runtime
         shell: bash
         run: |
