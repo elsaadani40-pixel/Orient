@@ -152,6 +152,25 @@ test('consolidation is loss-minimizing and auditable', () => {
   assert.ok(audit.read().some(event => event.action === 'memory.consolidated'));
 });
 
+
+test('temporal validity excludes expired memories from active recall', () => {
+  const { service } = createService();
+
+  const expired = service.add('Old project deadline', {
+    type: 'task',
+    validUntil: '2020-01-01T00:00:00.000Z'
+  });
+
+  service.add('Current project deadline', {
+    type: 'task'
+  });
+
+  const results = service.search('project deadline');
+  assert.equal(results.some(memory => memory.id === expired.id), false);
+  assert.equal(results.length, 1);
+});
+
+
 test('archiving a memory preserves the record and writes an audit event', () => {
   const { service, audit } = createService();
 
