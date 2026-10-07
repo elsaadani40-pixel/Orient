@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const AgentState = require('../../../../src/core/agent/state/agent-state');
+const AgentState = require('../../../../../src/core/agent/state/agent-state');
 
 test('AgentState enforces the agent lifecycle transition contract', () => {
   const state = new AgentState({ goalId: 'goal-1' });
