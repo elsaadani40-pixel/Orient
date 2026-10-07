@@ -82,15 +82,36 @@ class PostgresTenantQuotaRepository {
     return this.toModel(result);
   }
 
-  async promoteWorkflow({tenantId,workflowId}) {
+  async promoteWorkflow({tenantId,workflowId,expiresAt=null}) {
     const result = await this.db.query(
       `UPDATE tenant_quota_reservations
-       SET state='RUNNING',expires_at=NULL
+       SET state='RUNNING',expires_at=$3
        WHERE tenant_id=$1 AND workflow_id=$2 AND state='QUEUED'
        RETURNING tenant_id,workflow_id,state,reserved_at,expires_at`,
-      [tenantId,workflowId]
+      [tenantId,workflowId,expiresAt]
     );
     return result.rowCount === 1 ? this.toModel(result.rows[0]) : null;
+  }
+
+  async queueWorkflow({tenantId,workflowId,expiresAt=null}) {
+    const result = await this.db.query(
+      `UPDATE tenant_quota_reservations
+       SET state='QUEUED',expires_at=$3
+       WHERE tenant_id=$1 AND workflow_id=$2
+       RETURNING tenant_id,workflow_id,state,reserved_at,expires_at`,
+      [tenantId,workflowId,expiresAt]
+    );
+    return result.rowCount === 1 ? this.toModel(result.rows[0]) : null;
+  }
+
+  async refreshWorkflow({tenantId,workflowId,expiresAt}) {
+    const result = await this.db.query(
+      `UPDATE tenant_quota_reservations
+       SET expires_at=$3
+       WHERE tenant_id=$1 AND workflow_id=$2 AND state='RUNNING'`,
+      [tenantId,workflowId,expiresAt]
+    );
+    return result.rowCount === 1;
   }
 
   async releaseWorkflow({tenantId,workflowId}) {
