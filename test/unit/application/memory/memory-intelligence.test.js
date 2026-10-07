@@ -152,6 +152,51 @@ test('consolidation is loss-minimizing and auditable', () => {
   assert.ok(audit.read().some(event => event.action === 'memory.consolidated'));
 });
 
+
+test('memory audit carries execution and decision trace context', () => {
+  const { service, context } = createService();
+  const traceContext = {
+    ...context,
+    executionId: 'exec-42',
+    goalId: 'goal-7',
+    decisionId: 'decision-9',
+    correlationId: 'corr-1',
+    traceId: 'trace-1'
+  };
+
+  const memory = service.add('Traceable memory', {
+    type: 'note',
+    source: { type: 'agent', ref: 'decision:decision-9' }
+  }, traceContext);
+
+  const history = service.history(memory.id, traceContext);
+  const created = history.find(event => event.action === 'memory.created');
+
+  assert.ok(created);
+  assert.equal(created.executionId, 'exec-42');
+  assert.equal(created.goalId, 'goal-7');
+  assert.equal(created.decisionId, 'decision-9');
+  assert.equal(created.correlationId, 'corr-1');
+  assert.equal(created.traceId, 'trace-1');
+  assert.equal(created.agentId, 'ORIENT_RUNTIME');
+  assert.equal(created.scope, 'personal');
+});
+
+test('memory history cannot cross tenant or scope boundaries', () => {
+  const { service, context } = createService();
+  const memory = service.add('Private trace', { type: 'note' }, context);
+
+  assert.equal(service.history(memory.id, {
+    ...context,
+    tenantId: 'other-tenant'
+  }).length, 0);
+
+  assert.equal(service.history(memory.id, {
+    ...context,
+    memoryScope: 'private'
+  }).length, 0);
+});
+
 test('delete is retention-safe: archive plus audit, not physical removal', () => {
   const { service, repository, audit, context } = createService();
   const memory = service.add('Temporary note', { type: 'note' }, context);
