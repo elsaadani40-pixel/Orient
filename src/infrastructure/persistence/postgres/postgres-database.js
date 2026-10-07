@@ -54,7 +54,14 @@ class PostgresDatabase {
       await client.query(BASE_SCHEMA);
       const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
       const version=Number(current.rows[0].version);
-      for(const migration of MIGRATIONS.filter(m=>m.version>version)){await client.query(migration.sql);await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);}
+      if(version===0){
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2)',[1,2]);
+      } else {
+        for(const migration of MIGRATIONS.filter(m=>m.version>version)){
+          await client.query(migration.sql);
+          await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
+        }
+      }
       await client.query('COMMIT');
     } catch(error){try{await client.query('ROLLBACK');}catch{}throw error;} finally{client.release();}
   }
