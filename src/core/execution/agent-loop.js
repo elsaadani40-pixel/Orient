@@ -102,11 +102,12 @@ class AgentLoop {
     const steps = this.normalizeSteps(plan);
 
     if (steps.length === 0) {
-      const evaluation = {
-        outcome: 'no_action',
-        nextAction: null,
-        reason: 'لا توجد خطوات قابلة للتنفيذ'
-      };
+      const evaluation = this.evaluate({
+        plan,
+        step: null,
+        result: null,
+        stepNumber: 0
+      });
 
       context.record(
         'evaluation.completed',
@@ -114,7 +115,7 @@ class AgentLoop {
       );
 
       return {
-        status: 'no_action',
+        status: evaluation.outcome,
         result: null,
         evaluation,
         stepsExecuted: 0,
