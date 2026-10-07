@@ -41,6 +41,7 @@ test('classifies recovery, persists failure, and checkpoints resumed failures', 
     'persistEvents',
     'checkpoint'
   ]);
-  assert.equal(calls.at(-1)[1], 'update');
+  assert.equal(calls.at(-1)[1], context);
+  assert.equal(calls.at(-1)[2], 'update');
   assert.equal(calls.at(-1)[3], 'resume_failed');
 });
