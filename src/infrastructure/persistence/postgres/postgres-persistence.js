@@ -460,17 +460,17 @@ class PostgresWorkflowLeaseRepository {
 
   async findByWorkflowId(workflowId, tenantId = null) {
     const result = await this.db.query(
-      tenantId ? 'SELECT payload FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload FROM workflow_leases WHERE workflow_id=$1 LIMIT 1',
+      tenantId ? 'SELECT payload,expires_at,acquired_at FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload,expires_at,acquired_at FROM workflow_leases WHERE workflow_id=$1 LIMIT 1',
       tenantId ? [workflowId, tenantId] : [workflowId]
     );
-    return result.rows.length ? result.rows[0].payload : null;
+    return result.rows.length ? { ...result.rows[0].payload, expiresAt: new Date(result.rows[0].expires_at).getTime(), acquiredAt: new Date(result.rows[0].acquired_at).getTime() } : null;
   }
 
   async findAll({ tenantId = null } = {}) {
     const result = tenantId
-      ? await this.db.query('SELECT payload FROM workflow_leases WHERE tenant_id=$1 ORDER BY acquired_at ASC', [tenantId])
-      : await this.db.query('SELECT payload FROM workflow_leases ORDER BY acquired_at ASC');
-    return result.rows.map(row => row.payload);
+      ? await this.db.query('SELECT payload,expires_at,acquired_at FROM workflow_leases WHERE tenant_id=$1 ORDER BY acquired_at ASC', [tenantId])
+      : await this.db.query('SELECT payload,expires_at,acquired_at FROM workflow_leases ORDER BY acquired_at ASC');
+    return result.rows.map(row => ({ ...row.payload, expiresAt: new Date(row.expires_at).getTime(), acquiredAt: new Date(row.acquired_at).getTime() }));
   }
 
   async delete(workflowId, leaseId, tenantId = null) {
