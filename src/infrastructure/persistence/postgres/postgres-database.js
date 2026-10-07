@@ -97,6 +97,9 @@ class PostgresDatabase {
       const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
       const version=Number(current.rows[0].version);
       if(version===0){
+        for(const migration of MIGRATIONS.filter(m=>m.version>1)){
+          await client.query(migration.sql);
+        }
         await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4)',[1,2,3,4]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
