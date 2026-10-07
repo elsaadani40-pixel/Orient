@@ -250,6 +250,7 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
   });
 
   let takeover = null;
+  let allowInitialRenew = true;
   const workerA = new AsyncWorkflowWorker({
     scheduler: schedulerA,
     workerId: 'stale-worker-a',
@@ -278,6 +279,10 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
 
   const originalRenewA = schedulerA.renewAsync.bind(schedulerA);
   schedulerA.renewAsync = async (...args) => {
+    if (args[0] === workflowId && allowInitialRenew) {
+      allowInitialRenew = false;
+      return originalRenewA(...args);
+    }
     if (args[0] === workflowId) {
       const error = new Error('simulated lost lease');
       error.code = 'WORKFLOW_LEASE_NOT_OWNER';
