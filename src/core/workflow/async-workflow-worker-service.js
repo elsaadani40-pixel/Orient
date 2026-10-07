@@ -26,7 +26,7 @@ class AsyncWorkflowWorkerService {
     this.onError = onError;
     this.running = false;
     this.timer = null;
-    this.lastRecoveryAt = 0;
+    this.lastRecoveryAt = null;
     this.inFlight = null;
   }
 
@@ -42,7 +42,7 @@ class AsyncWorkflowWorkerService {
         const now = this.clock();
         if (
           typeof this.scheduler.recoverPersisted === 'function' &&
-          now - this.lastRecoveryAt >= this.recoveryIntervalMs
+          this.lastRecoveryAt === null || now - this.lastRecoveryAt >= this.recoveryIntervalMs
         ) {
           await this.scheduler.recoverPersisted();
           this.lastRecoveryAt = now;
