@@ -29,6 +29,7 @@ const PostgresTenantQuotaRepository = require('../../infrastructure/persistence/
 const ExecutionPersistenceCoordinator = require('./execution-persistence-coordinator');
 const WorkflowExecutionCoordinator = require('./workflow-execution-coordinator');
 const AgentExecutionCoordinator = require('./agent-execution-coordinator');
+const ExecutionRecoveryCoordinator = require('./execution-recovery-coordinator');
 
 class OrientRuntime {
   constructor({
@@ -222,6 +223,13 @@ class OrientRuntime {
       validateReplannedPlan: (nextPlan, previousFingerprint) => this.validateReplannedPlan(nextPlan, previousFingerprint)
     });
 
+    this.executionRecoveryCoordinator = new ExecutionRecoveryCoordinator({
+      agentOrchestrator: this.agentOrchestrator,
+      persistExecution: (context, mode) => this.persistExecution(context, mode),
+      persistEvents: (context) => this.persistEvents(context),
+      checkpoint: (context, mode, reason) => this.checkpoint(context, mode, reason)
+    });
+
     this.name =
       'ORIENT_RUNTIME';
 
@@ -358,12 +366,7 @@ class OrientRuntime {
         execution: context.snapshot()
       };
     } catch (error) {
-      if (context.isActive() && context.canTransitionAgentTo(AgentState.LIFECYCLE.RECOVERING)) context.transitionAgentTo(AgentState.LIFECYCLE.RECOVERING);
-      const recovery = await this.classifyRecovery({ error, context });
-      context.record('recovery.completed', recovery);
-      context.fail(error);
-      this.persistExecution(context, 'update');
-      this.persistEvents(context);
+      await this.executionRecoveryCoordinator.fail({ context, error });
       throw error;
     }
   }
@@ -419,51 +422,13 @@ class OrientRuntime {
 
       return { resumed: true, requestId: context.requestId, result: loopResult.result, evaluation: loopResult.evaluation, replanning: replanningDecision.toJSON(), execution: context.snapshot() };
     } catch (error) {
-      if (context.isActive() && context.canTransitionAgentTo(AgentState.LIFECYCLE.RECOVERING)) context.transitionAgentTo(AgentState.LIFECYCLE.RECOVERING);
-      const recovery = await this.classifyRecovery({ error, context });
-      context.record('recovery.completed', recovery);
-      context.fail(error);
-      await this.persistExecution(context, 'update');
-      await this.persistEvents(context);
-      await this.checkpoint(context, 'update', 'resume_failed');
+      await this.executionRecoveryCoordinator.fail({
+        context,
+        error,
+        checkpointReason: 'resume_failed'
+      });
       throw error;
     }
-  }
-
-  async classifyRecovery({
-    error,
-    context
-  }) {
-    const recovery =
-      await this.agentOrchestrator.recover(
-        error,
-        context
-      );
-
-    const serialized =
-      typeof recovery?.toJSON ===
-      'function'
-        ? recovery.toJSON()
-        : recovery;
-
-    context.record(
-      'recovery.started',
-      {
-        action:
-          serialized.action,
-
-        reason:
-          serialized.reason,
-
-        target:
-          serialized.target,
-
-        metadata:
-          serialized.metadata
-      }
-    );
-
-    return serialized;
   }
 
   resolveResponseType(intent) {
