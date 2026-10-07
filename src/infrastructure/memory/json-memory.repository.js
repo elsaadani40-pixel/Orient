@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { normalizeMemory } = require('../../domain/memory/memory.entity');
 
 class JsonMemoryRepository {
   constructor(filePath) {
@@ -11,7 +12,6 @@ class JsonMemoryRepository {
 
   ensureStorage() {
     const directory = path.dirname(this.filePath);
-
     fs.mkdirSync(directory, { recursive: true });
 
     if (!fs.existsSync(this.filePath)) {
@@ -22,13 +22,9 @@ class JsonMemoryRepository {
   readRaw() {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8');
-
-      if (!raw.trim()) {
-        return [];
-      }
+      if (!raw.trim()) return [];
 
       const parsed = JSON.parse(raw);
-
       return Array.isArray(parsed) ? parsed : [];
     } catch (error) {
       throw new Error(`Memory storage read failed: ${error.message}`);
@@ -36,38 +32,24 @@ class JsonMemoryRepository {
   }
 
   normalize(memory) {
-    const now = new Date().toISOString();
+    const normalized = normalizeMemory(memory);
 
-    return {
-      id: memory.id || crypto.randomUUID(),
-      text: String(memory.text || '').trim(),
-      createdAt: memory.createdAt || now,
-      updatedAt: memory.updatedAt || memory.createdAt || now
-    };
+    // Preserve legacy records while ensuring every record has an explicit identity.
+    if (!normalized.id) normalized.id = crypto.randomUUID();
+
+    return normalized;
   }
 
   migrateLegacyData() {
     const current = this.readRaw();
-
-    if (!current.length) {
-      return;
-    }
+    if (!current.length) return;
 
     const migrated = current.map(memory => this.normalize(memory));
+    const changed = migrated.some((memory, index) =>
+      JSON.stringify(memory) !== JSON.stringify(current[index])
+    );
 
-    const changed = migrated.some((memory, index) => {
-      const original = current[index];
-
-      return (
-        !original.id ||
-        !original.createdAt ||
-        !original.updatedAt
-      );
-    });
-
-    if (changed) {
-      this.write(migrated);
-    }
+    if (changed) this.write(migrated);
   }
 
   read() {
@@ -83,48 +65,89 @@ class JsonMemoryRepository {
         JSON.stringify(memories, null, 2) + '\n',
         'utf8'
       );
-
       fs.renameSync(temporaryFile, this.filePath);
     } catch (error) {
       try {
-        if (fs.existsSync(temporaryFile)) {
-          fs.unlinkSync(temporaryFile);
-        }
+        if (fs.existsSync(temporaryFile)) fs.unlinkSync(temporaryFile);
       } catch {}
 
       throw new Error(`Memory storage write failed: ${error.message}`);
     }
   }
 
-  findAll() {
-    return this.read();
+  findAll({ tenantId = null, includeInactive = true } = {}) {
+    return this.read().filter(memory =>
+      (!tenantId || memory.tenantId === tenantId) &&
+      (includeInactive || memory.state === 'active')
+    );
   }
 
-  findById(id) {
-    return this.read().find(memory => memory.id === id) || null;
+  findById(id, tenantId = null) {
+    return this.read().find(memory =>
+      memory.id === id &&
+      (!tenantId || memory.tenantId === tenantId)
+    ) || null;
+  }
+
+  findByFingerprint({ tenantId = 'default', type, text }) {
+    const normalizedText = String(text || '').trim().toLowerCase();
+    return this.findAll({ tenantId }).find(memory =>
+      memory.state === 'active' &&
+      memory.type === type &&
+      memory.text.trim().toLowerCase() === normalizedText
+    ) || null;
+  }
+
+  findActiveBySemanticKey(semanticKey, tenantId = 'default') {
+    const key = String(semanticKey || '').trim();
+    if (!key) return null;
+
+    return this.findAll({ tenantId }).find(memory =>
+      memory.state === 'active' &&
+      memory.semanticKey === key
+    ) || null;
   }
 
   insert(memory) {
     const memories = this.read();
-
-    memories.unshift(memory);
-
+    const normalized = this.normalize(memory);
+    memories.unshift(normalized);
     this.write(memories);
-
-    return memory;
+    return normalized;
   }
 
-  deleteById(id) {
+  update(id, patch, tenantId = null) {
     const memories = this.read();
-    const index = memories.findIndex(memory => memory.id === id);
+    const index = memories.findIndex(memory =>
+      memory.id === id &&
+      (!tenantId || memory.tenantId === tenantId)
+    );
 
-    if (index === -1) {
-      return false;
-    }
+    if (index === -1) return null;
+
+    const updated = this.normalize({
+      ...memories[index],
+      ...patch,
+      id: memories[index].id,
+      updatedAt: patch.updatedAt || new Date().toISOString()
+    });
+
+    memories[index] = updated;
+    this.write(memories);
+    return updated;
+  }
+
+  deleteById(id, tenantId = null) {
+    const memories = this.read();
+    const index = memories.findIndex(memory =>
+      memory.id === id &&
+      (!tenantId || memory.tenantId === tenantId)
+    );
+
+    if (index === -1) return false;
 
     memories.splice(index, 1);
     this.write(memories);
-
     return true;
   }
 }
