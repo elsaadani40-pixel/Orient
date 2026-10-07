@@ -23,6 +23,19 @@ CREATE INDEX IF NOT EXISTS idx_workflow_leases_expiry ON workflow_leases(tenant_
 CREATE TABLE IF NOT EXISTS approvals (approval_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, execution_id TEXT NOT NULL, step INTEGER NOT NULL, plan_revision INTEGER NOT NULL, tool TEXT NOT NULL, capability TEXT NOT NULL, scope JSONB NOT NULL, issued_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, used BOOLEAN NOT NULL DEFAULT FALSE, used_at TIMESTAMPTZ, metadata JSONB NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_approvals_tenant_execution ON approvals(tenant_id, execution_id);
 CREATE INDEX IF NOT EXISTS idx_approvals_tenant_expiry ON approvals(tenant_id, expires_at);
+CREATE TABLE IF NOT EXISTS worker_nodes (
+  tenant_id TEXT NOT NULL,
+  worker_id TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL,
+  heartbeat_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  PRIMARY KEY (tenant_id, worker_id)
+);
+CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_heartbeat ON worker_nodes(tenant_id, heartbeat_at);
+CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_expiry ON worker_nodes(tenant_id, expires_at);
 CREATE TABLE IF NOT EXISTS tenant_quota_limits (tenant_id TEXT PRIMARY KEY, max_concurrent INTEGER NOT NULL, max_queued INTEGER NOT NULL, max_input_chars INTEGER NOT NULL, max_tool_input_chars INTEGER NOT NULL, max_retries INTEGER NOT NULL, updated_at TIMESTAMPTZ NOT NULL);
 CREATE TABLE IF NOT EXISTS tenant_quota_reservations (tenant_id TEXT NOT NULL, workflow_id TEXT PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('QUEUED','RUNNING')), reserved_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ, FOREIGN KEY (tenant_id) REFERENCES tenant_quota_limits(tenant_id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS idx_quota_reservations_tenant_state ON tenant_quota_reservations(tenant_id,state);
@@ -39,7 +52,22 @@ const MIGRATIONS = [
     ALTER TABLE checkpoints ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (execution_id,sequence);
     CREATE INDEX IF NOT EXISTS idx_checkpoints_latest ON checkpoints(execution_id,sequence DESC);
     CREATE INDEX IF NOT EXISTS idx_events_tenant_execution_timestamp ON events(tenant_id,execution_id,timestamp);
-  `}
+  `},
+  {version:3,sql:`
+    CREATE TABLE IF NOT EXISTS worker_nodes (
+      tenant_id TEXT NOT NULL,
+      worker_id TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL,
+      heartbeat_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL,
+      capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      PRIMARY KEY (tenant_id, worker_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_heartbeat ON worker_nodes(tenant_id, heartbeat_at);
+    CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_expiry ON worker_nodes(tenant_id, expires_at);
+  `},
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -55,7 +83,7 @@ class PostgresDatabase {
       const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
       const version=Number(current.rows[0].version);
       if(version===0){
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2)',[1,2]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3)',[1,2,3]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
