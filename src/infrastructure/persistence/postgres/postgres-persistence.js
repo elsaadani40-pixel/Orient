@@ -449,7 +449,7 @@ class PostgresWorkflowLeaseRepository {
 
   async renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null) {
     const result = await this.db.query(
-      `UPDATE workflow_leases SET expires_at=$1,payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::text))
+      `UPDATE workflow_leases SET expires_at=$1::timestamptz,payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
        WHERE workflow_id=$2 AND lease_id=$3 AND expires_at > $4 ${tenantId ? 'AND tenant_id=$5' : ''}`,
       tenantId
         ? [new Date(expiresAt).toISOString(), workflowId, leaseId, new Date(now).toISOString(), tenantId]

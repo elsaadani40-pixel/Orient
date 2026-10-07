@@ -98,6 +98,63 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
+
+test('PostgreSQL rejects stale lease renewal after takeover', async () => {
+  const workflowId = 'renew-fence-wf-' + Date.now();
+  await pool.query(
+    "INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,'tenant-renew','RUNNING',NOW(),$2)",
+    [workflowId, { workflowId, tenantId: 'tenant-renew', state: 'RUNNING', metadata: {} }]
+  );
+
+  const first = await persistence.workflowLeases.tryAcquire({
+    workflowId,
+    leaseId: 'renew-lease-a-' + Date.now(),
+    workerId: 'renew-worker-a',
+    acquiredAt: Date.now(),
+    expiresAt: Date.now() + 30000,
+    metadata: { tenantId: 'tenant-renew' }
+  }, 'tenant-renew');
+
+  await pool.query(
+    "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
+    [workflowId]
+  );
+
+  const second = await persistence.workflowLeases.tryAcquire({
+    workflowId,
+    leaseId: 'renew-lease-b-' + Date.now(),
+    workerId: 'renew-worker-b',
+    acquiredAt: Date.now(),
+    expiresAt: Date.now() + 30000,
+    metadata: { tenantId: 'tenant-renew' }
+  }, 'tenant-renew');
+
+  assert.ok(second.fencingToken > first.fencingToken);
+  assert.equal(
+    await persistence.workflowLeases.renewIfOwned(
+      workflowId,
+      first.leaseId,
+      Date.now() + 60000,
+      Date.now(),
+      'tenant-renew'
+    ),
+    false
+  );
+  assert.equal(
+    await persistence.workflowLeases.renewIfOwned(
+      workflowId,
+      second.leaseId,
+      Date.now() + 60000,
+      Date.now(),
+      'tenant-renew'
+    ),
+    true
+  );
+
+  await persistence.workflowLeases.delete(workflowId, second.leaseId, 'tenant-renew');
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+});
+
 test('PostgreSQL approval consumption is single-use under concurrency', async () => {
   const approvalId = 'approval-' + Date.now();
   await persistence.approvals.save({
