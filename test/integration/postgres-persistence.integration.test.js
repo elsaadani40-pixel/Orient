@@ -32,6 +32,96 @@ test('PostgreSQL checkpoints preserve ordered history on a real server', async (
   assert.equal(latest.snapshot.step, 2);
 });
 
+
+test('PostgreSQL fencing rejects stale writes after a lease takeover', async () => {
+  const workflowId = 'fence-wf-' + Date.now();
+  await pool.query(
+    "INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,'tenant-fence','RUNNING',NOW(),$2)",
+    [workflowId, { workflowId, tenantId: 'tenant-fence', state: 'RUNNING', metadata: {} }]
+  );
+
+  const first = await persistence.workflowLeases.tryAcquire({
+    workflowId,
+    leaseId: 'lease-a-' + Date.now(),
+    workerId: 'worker-a',
+    acquiredAt: Date.now(),
+    expiresAt: Date.now() + 30000,
+    metadata: { tenantId: 'tenant-fence' }
+  }, 'tenant-fence');
+
+  assert.ok(first.fencingToken > 0);
+
+  await persistence.workflows.save({
+    workflowId,
+    tenantId: 'tenant-fence',
+    state: 'RUNNING',
+    metadata: { fencingToken: first.fencingToken },
+    toJSON() { return this; }
+  }, 'tenant-fence');
+
+  await pool.query(
+    "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
+    [workflowId]
+  );
+
+  const second = await persistence.workflowLeases.tryAcquire({
+    workflowId,
+    leaseId: 'lease-b-' + Date.now(),
+    workerId: 'worker-b',
+    acquiredAt: Date.now(),
+    expiresAt: Date.now() + 30000,
+    metadata: { tenantId: 'tenant-fence' }
+  }, 'tenant-fence');
+
+  assert.ok(second.fencingToken > first.fencingToken);
+
+  await assert.rejects(
+    () => persistence.workflows.save({
+      workflowId,
+      tenantId: 'tenant-fence',
+      state: 'RUNNING',
+      metadata: { fencingToken: first.fencingToken },
+      toJSON() { return this; }
+    }, 'tenant-fence'),
+    error => error.code === 'WORKFLOW_FENCING_REJECTED'
+  );
+
+  await persistence.workflows.save({
+    workflowId,
+    tenantId: 'tenant-fence',
+    state: 'RUNNING',
+    metadata: { fencingToken: second.fencingToken },
+    toJSON() { return this; }
+  }, 'tenant-fence');
+
+  await persistence.workflowLeases.delete(workflowId, second.leaseId, 'tenant-fence');
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+});
+
+test('PostgreSQL approval consumption is single-use under concurrency', async () => {
+  const approvalId = 'approval-' + Date.now();
+  await persistence.approvals.save({
+    approvalId,
+    tenantId: 'tenant-approval',
+    executionId: 'exec-approval',
+    step: 1,
+    planRevision: 1,
+    tool: 'external.write',
+    capability: 'external.write',
+    scope: { tenant: 'tenant-approval' },
+    issuedAt: new Date(Date.now() - 1000).toISOString(),
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    used: false,
+    metadata: { tenantId: 'tenant-approval' }
+  }, { tenantId: 'tenant-approval' });
+  const results = await Promise.all([
+    persistence.approvals.consume(approvalId, new Date().toISOString(), 'tenant-approval'),
+    persistence.approvals.consume(approvalId, new Date().toISOString(), 'tenant-approval')
+  ]);
+  assert.deepEqual(results.sort(), [false, true]);
+  await pool.query('DELETE FROM approvals WHERE approval_id=$1 AND tenant_id=$2', [approvalId, 'tenant-approval']);
+});
+
 test('PostgreSQL quota admission is atomic across concurrent reservations', async () => {
   await pool.query("INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ('quota-wf-a','tenant-quota','QUEUED',NOW(),'{}'), ('quota-wf-b','tenant-quota','QUEUED',NOW(),'{}')");
   const policy = { maxConcurrent: 1, maxQueued: 1, maxInputChars: 1000, maxToolInputChars: 1000, maxRetries: 2 };
