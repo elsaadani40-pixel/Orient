@@ -68,6 +68,20 @@ const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_heartbeat ON worker_nodes(tenant_id, heartbeat_at);
     CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_expiry ON worker_nodes(tenant_id, expires_at);
   `},
+  {version:4,sql:`
+    CREATE TABLE IF NOT EXISTS workflow_dispatch_claims (
+      tenant_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      worker_id TEXT NOT NULL,
+      claimed_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (tenant_id, workflow_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_dispatch_claims_expiry
+      ON workflow_dispatch_claims(tenant_id, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_workflow_dispatch_claims_worker
+      ON workflow_dispatch_claims(tenant_id, worker_id, expires_at);
+  `},
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
