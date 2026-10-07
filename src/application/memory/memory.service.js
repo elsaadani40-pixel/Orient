@@ -116,12 +116,20 @@ class MemoryService {
         tenantId
       };
     }
-    const decision = this.memoryAccessPolicy.authorize({
-      agentId: context.agentId || 'ORIENT_RUNTIME',
-      scope: resolvedScope,
-      operation
-    });
-    return Object.freeze({ ...decision, tenantId });
+    try {
+      const decision = this.memoryAccessPolicy.authorize({
+        agentId: context.agentId || 'ORIENT_RUNTIME',
+        scope: resolvedScope,
+        operation
+      });
+      return Object.freeze({ ...decision, tenantId });
+    } catch (error) {
+      throw new AppError(
+        error.message,
+        403,
+        error.code || 'MEMORY_ACCESS_FORBIDDEN'
+      );
+    }
   }
 
   audit(event) {
@@ -205,7 +213,7 @@ class MemoryService {
         scope
       });
 
-      const exact = this.repository.findByFingerprint({
+      const exact = this.findExact({
         tenantId,
         scope,
         type: candidate.type,
