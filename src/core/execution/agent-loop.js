@@ -2,6 +2,9 @@ const crypto = require('crypto');
 
 const AppError = require('../errors/AppError');
 
+const EvaluationEngine =
+  require('../agent/evaluation/evaluation-engine');
+
 const ResultReferenceResolver =
   require('./result-reference-resolver');
 
@@ -25,7 +28,8 @@ class AgentLoop {
     maxToolInputChars = 50000,
     agentRegistry = null,
     agentInvocationService = null,
-    capabilityGovernance = null
+    capabilityGovernance = null,
+    evaluationEngine = null
   }) {
     if (!toolRegistry) {
       throw new TypeError('toolRegistry is required');
@@ -38,6 +42,8 @@ class AgentLoop {
     this.agentRegistry = agentRegistry;
     this.agentInvocationService = agentInvocationService;
     this.capabilityGovernance = capabilityGovernance;
+    this.evaluationEngine =
+      evaluationEngine || new EvaluationEngine();
 
     this.name = 'ORIENT_AGENT_LOOP';
     this.version = '0.8.2';
@@ -1326,56 +1332,13 @@ class AgentLoop {
     result,
     stepNumber
   }) {
-    if (result === undefined) {
-      return {
-        outcome: 'failed',
-        nextAction: null,
-        reason:
-          `الخطوة ${stepNumber} لم تُرجع نتيجة`
-      };
-    }
-
-    if (
-      result &&
-      typeof result === 'object' &&
-      (
-        result.nextAction === 'replan' ||
-        result.outcome === 'replan'
-      )
-    ) {
-      return {
-        outcome: 'replan',
-        nextAction: 'replan',
-        nextInput:
-          typeof result.nextInput === 'string'
-            ? result.nextInput.trim()
-            : null,
-        reason:
-          result.reason ||
-          `الخطوة ${stepNumber} طلبت إعادة التخطيط`
-      };
-    }
-
-    const hasNextStep =
-      Array.isArray(plan.steps) &&
-      stepNumber < plan.steps.length;
-
-    return {
-      outcome:
-        hasNextStep
-          ? 'continue'
-          : 'done',
-
-      nextAction:
-        hasNextStep
-          ? 'next_step'
-          : null,
-
-      reason:
-        hasNextStep
-          ? `تم تنفيذ ${step.tool} بنجاح، الانتقال للخطوة التالية`
-          : `تم تنفيذ ${step.tool} بنجاح`
-    };
+    return this.evaluationEngine.evaluate({
+      plan,
+      step,
+      result,
+      stepNumber,
+      observations: []
+    }).toJSON();
   }
 }
 
