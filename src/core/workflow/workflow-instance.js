@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const AppError = require('../errors/AppError');
 const WorkflowDefinition = require('./workflow-definition');
+const lifecyclePolicy = require('./workflow-lifecycle-policy');
 
 const STATES = Object.freeze({
   CREATED: 'CREATED',
@@ -85,6 +86,8 @@ class WorkflowInstance {
       );
     }
 
+    lifecyclePolicy.assertKnownState(payload.state || STATES.CREATED);
+
     const definition = new WorkflowDefinition(definitionPayload);
     const instance = new WorkflowInstance({
       definition,
@@ -124,25 +127,7 @@ class WorkflowInstance {
   }
 
   transition(next, now = () => new Date()) {
-    const allowed = {
-      CREATED: ['QUEUED', 'CANCELLED'],
-      QUEUED: ['RUNNING', 'CANCELLED', 'WAITING', 'FAILED'],
-      RUNNING: ['WAITING', 'COMPLETED', 'FAILED', 'CANCELLED', 'RECOVERING'],
-      WAITING: ['QUEUED', 'RUNNING', 'CANCELLED', 'FAILED'],
-      RECOVERING: ['QUEUED', 'RUNNING', 'FAILED', 'CANCELLED'],
-      COMPLETED: [],
-      FAILED: [],
-      CANCELLED: []
-    };
-
-    if (!allowed[this.state]?.includes(next)) {
-      throw new AppError(
-        'Invalid workflow transition ' + this.state + ' -> ' + next,
-        409,
-        'WORKFLOW_INVALID_TRANSITION'
-      );
-    }
-
+    lifecyclePolicy.assertTransition(this.state, next);
     this.state = next;
     this.updatedAt = now().toISOString();
     return this;
@@ -254,4 +239,5 @@ class WorkflowInstance {
 }
 
 WorkflowInstance.STATES = STATES;
+WorkflowInstance.LIFECYCLE_TRANSITIONS = lifecyclePolicy.TRANSITIONS;
 module.exports = WorkflowInstance;
