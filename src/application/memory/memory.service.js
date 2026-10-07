@@ -45,6 +45,89 @@ function isTemporallyValid(memory, now = new Date()) {
   return temporalScore(memory, now) > 0;
 }
 
+const SOURCE_RELIABILITY = Object.freeze({
+  user: 0.95,
+  system: 0.9,
+  agent: 0.8,
+  external: 0.7,
+  imported: 0.6,
+  unknown: 0.4
+});
+
+function sourceReliability(source = {}) {
+  return SOURCE_RELIABILITY[source.type] || SOURCE_RELIABILITY.unknown;
+}
+
+function evidenceStrength(memory) {
+  if (!Array.isArray(memory.evidence) || !memory.evidence.length) return 0;
+  const weighted = memory.evidence.map(item =>
+    clamp(item.confidence, 0.5) * sourceReliability(item.source)
+  );
+  const mean = weighted.reduce((sum, value) => sum + value, 0) / weighted.length;
+  const countBonus = Math.min(0.15, Math.log2(weighted.length + 1) * 0.05);
+  return Math.min(1, mean + countBonus);
+}
+
+function verificationScore(memory) {
+  if (!memory.verifiedAt) return 0;
+  return Number.isFinite(Date.parse(memory.verifiedAt)) ? 1 : 0;
+}
+
+function conflictRecencyScore(memory, now = Date.now()) {
+  const timestamp = Date.parse(memory.updatedAt || memory.createdAt || memory.verifiedAt);
+  if (!Number.isFinite(timestamp)) return 0;
+  const ageDays = Math.max(0, (now - timestamp) / 86400000);
+  return Math.exp(-ageDays / 90);
+}
+
+function conflictResolutionScore(memory, options = {}) {
+  const normalized = normalizeMemory(memory);
+  const nowDate = options.nowDate || new Date();
+  const temporal = temporalScore(normalized, nowDate);
+  const confidence = clamp(normalized.confidence, 0.5);
+  const source = sourceReliability(normalized.source);
+  const evidence = evidenceStrength(normalized);
+  const verified = verificationScore(normalized);
+  const recency = conflictRecencyScore(normalized, nowDate.getTime());
+  const importance = clamp(normalized.importance, 0.5);
+
+  if (temporal === 0) {
+    return { score: 0, components: { temporal: 0, confidence, source, evidence, verified, recency, importance }, eligible: false };
+  }
+
+  const score =
+    (confidence * 0.25) +
+    (source * 0.20) +
+    (evidence * 0.20) +
+    (verified * 0.15) +
+    (recency * 0.10) +
+    (importance * 0.10);
+
+  return {
+    score: Number(score.toFixed(6)),
+    components: { temporal, confidence, source, evidence, verified, recency, importance },
+    eligible: true
+  };
+}
+
+function compareConflictCandidates(left, right, options = {}) {
+  const leftResult = conflictResolutionScore(left, options);
+  const rightResult = conflictResolutionScore(right, options);
+
+  if (leftResult.eligible !== rightResult.eligible) return leftResult.eligible ? left : right;
+  if (leftResult.score !== rightResult.score) return leftResult.score > rightResult.score ? left : right;
+
+  const leftVerified = Date.parse(left.verifiedAt || '') || 0;
+  const rightVerified = Date.parse(right.verifiedAt || '') || 0;
+  if (leftVerified !== rightVerified) return leftVerified > rightVerified ? left : right;
+
+  const leftUpdated = Date.parse(left.updatedAt || left.createdAt || '') || 0;
+  const rightUpdated = Date.parse(right.updatedAt || right.createdAt || '') || 0;
+  if (leftUpdated !== rightUpdated) return leftUpdated > rightUpdated ? left : right;
+
+  return left;
+}
+
 function relevanceScore(memory, query, options = {}) {
   const lexical = lexicalScore(query, memory.text);
   const recency = recencyScore(memory, options.now || Date.now());
@@ -274,28 +357,36 @@ class MemoryService {
       let memory = candidate;
 
       if (conflict && conflict.text !== candidate.text) {
-        this.repository.update(
-          conflict.id,
-          {
+        const resolution = compareConflictCandidates(candidate, conflict);
+        const candidateScore = conflictResolutionScore(candidate);
+        const conflictScore = conflictResolutionScore(conflict);
+        const candidateWins = resolution.id === candidate.id;
+
+        if (candidateWins) {
+          this.repository.update(conflict.id, {
             state: 'superseded',
             supersededById: candidate.id,
             updatedAt: new Date().toISOString()
-          },
-          tenantId,
-          scope
-        );
-
-        memory = {
-          ...candidate,
-          supersedesId: conflict.id
-        };
+          }, tenantId, scope);
+          memory = { ...candidate, supersedesId: conflict.id };
+        } else {
+          memory = { ...candidate, state: 'contradicted', supersededById: null, supersedesId: null };
+        }
 
         this.audit({
           action: 'memory.conflict.resolved',
           tenantId,
           memoryId: candidate.id,
           relatedMemoryId: conflict.id,
-          resolution: 'newer_candidate_supersedes_previous'
+          resolution: candidateWins
+            ? 'candidate_wins_evidence_policy'
+            : 'existing_memory_wins_evidence_policy',
+          rationale: {
+            policy: 'confidence_source_evidence_verification_recency_importance',
+            candidate: candidateScore,
+            existing: conflictScore,
+            winnerId: resolution.id
+          }
         }, context);
       }
 
@@ -459,3 +550,5 @@ module.exports.relevanceScore = relevanceScore;
 module.exports.lexicalScore = lexicalScore;
 module.exports.temporalScore = temporalScore;
 module.exports.isTemporallyValid = isTemporallyValid;
+module.exports.conflictResolutionScore = conflictResolutionScore;
+module.exports.compareConflictCandidates = compareConflictCandidates;

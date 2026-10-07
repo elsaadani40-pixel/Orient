@@ -244,3 +244,97 @@ test('delete is retention-safe: archive plus audit, not physical removal', () =>
     event.reason === 'retention-policy'
   ));
 });
+
+test('evidence policy keeps a stronger verified existing memory over a newer weak candidate', () => {
+  const { service, repository, audit, context } = createService();
+  const existing = service.add('Preferred city is Alexandria', {
+    type: 'fact',
+    semanticKey: 'user.home.city',
+    confidence: 0.95,
+    importance: 0.95,
+    source: { type: 'user', ref: 'profile' },
+    verifiedAt: '2026-01-01T00:00:00.000Z',
+    evidence: [{
+      kind: 'confirmation',
+      source: { type: 'user' },
+      capturedAt: '2026-01-01T00:00:00.000Z',
+      confidence: 0.95
+    }]
+  }, context);
+
+  repository.update(existing.id, {
+    updatedAt: '2026-01-02T00:00:00.000Z'
+  }, 'default', 'personal');
+
+  const candidate = service.add('Preferred city is Cairo', {
+    type: 'fact',
+    semanticKey: 'user.home.city',
+    confidence: 0.2,
+    importance: 0.2,
+    source: { type: 'external', ref: 'unverified-import' }
+  }, context);
+
+  assert.equal(candidate.state, 'contradicted');
+  assert.equal(repository.findById(existing.id, 'default', 'personal').state, 'active');
+
+  const event = audit.read().find(item =>
+    item.action === 'memory.conflict.resolved' &&
+    item.memoryId === candidate.id
+  );
+  assert.ok(event);
+  assert.equal(event.resolution, 'existing_memory_wins_evidence_policy');
+  assert.ok(event.rationale.candidate.score < event.rationale.existing.score);
+});
+
+test('evidence policy lets a strongly verified candidate replace a weak existing memory', () => {
+  const { service, repository, context } = createService();
+  const existing = service.add('Preferred city is Alexandria', {
+    type: 'fact',
+    semanticKey: 'user.home.city',
+    confidence: 0.2,
+    importance: 0.2,
+    source: { type: 'unknown' }
+  }, context);
+
+  const candidate = service.add('Preferred city is Cairo', {
+    type: 'fact',
+    semanticKey: 'user.home.city',
+    confidence: 0.95,
+    importance: 0.95,
+    source: { type: 'user', ref: 'explicit-confirmation' },
+    verifiedAt: new Date().toISOString(),
+    evidence: [{
+      kind: 'confirmation',
+      source: { type: 'user' },
+      capturedAt: new Date().toISOString(),
+      confidence: 0.99
+    }]
+  }, context);
+
+  assert.equal(candidate.supersedesId, existing.id);
+  assert.equal(repository.findById(existing.id, 'default', 'personal').state, 'superseded');
+  assert.equal(repository.findById(candidate.id, 'default', 'personal').state, 'active');
+});
+
+test('expired conflict candidate cannot win evidence resolution', () => {
+  const { service, repository, context } = createService();
+  const existing = service.add('Preferred city is Alexandria', {
+    type: 'fact',
+    semanticKey: 'user.home.city',
+    confidence: 0.5,
+    source: { type: 'system' }
+  }, context);
+
+  const candidate = service.add('Preferred city is Cairo', {
+    type: 'fact',
+    semanticKey: 'user.home.city',
+    confidence: 1,
+    source: { type: 'user' },
+    verifiedAt: new Date().toISOString(),
+    validUntil: '2020-01-01T00:00:00.000Z'
+  }, context);
+
+  assert.equal(candidate.state, 'contradicted');
+  assert.equal(repository.findById(existing.id, 'default', 'personal').state, 'active');
+});
+
