@@ -38,9 +38,13 @@ function temporalScore(memory, now = new Date()) {
   const until = memory.validUntil ? Date.parse(memory.validUntil) : null;
   const time = now.getTime();
 
-  if (from && time < from) return 0.15;
-  if (until && time > until) return 0;
+  if (Number.isFinite(from) && time < from) return 0;
+  if (Number.isFinite(until) && time > until) return 0;
   return 1;
+}
+
+function isTemporallyValid(memory, now = new Date()) {
+  return temporalScore(memory, now) > 0;
 }
 
 function relevanceScore(memory, query, options = {}) {
@@ -82,7 +86,10 @@ class MemoryService {
     const memories = this.repository
       .findAll({ tenantId })
       .map(normalizeMemory)
-      .filter(memory => memory.state === 'active');
+      .filter(memory =>
+        memory.state === 'active' &&
+        (options.includeExpired || isTemporallyValid(memory, options.nowDate || new Date()))
+      );
 
     const cleanQuery = String(query || '').trim();
 
@@ -312,3 +319,5 @@ class MemoryService {
 module.exports = MemoryService;
 module.exports.relevanceScore = relevanceScore;
 module.exports.lexicalScore = lexicalScore;
+module.exports.temporalScore = temporalScore;
+module.exports.isTemporallyValid = isTemporallyValid;
