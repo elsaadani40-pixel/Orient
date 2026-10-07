@@ -72,9 +72,10 @@ test('tenant quota service enforces scheduler concurrency and queue limits', () 
   );
 
   scheduler.activeCount = () => 0;
+  scheduler.depth = () => 1;
   assert.deepEqual(service.assertWorkflowAdmission(), {
     allowed: true,
-    queued: 2,
+    queued: 1,
     active: 0,
     limits: {
       maxConcurrent: 1,
@@ -82,7 +83,7 @@ test('tenant quota service enforces scheduler concurrency and queue limits', () 
     }
   });
 
-  scheduler.depth = () => 3;
+  scheduler.depth = () => 2;
   assert.throws(
     () => service.assertWorkflowAdmission(),
     (error) => error.code === 'TENANT_QUEUE_QUOTA_EXCEEDED'
