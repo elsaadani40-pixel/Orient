@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: orient-one-strict-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     name: Unit + Architecture Tests (Node ${{ matrix.node }})
@@ -54,7 +58,10 @@ jobs:
           set -euo pipefail
           mapfile -t tests < <(find test/unit -type f -name '*.test.js' -print | sort)
           test "${#tests[@]}" -gt 0
-          node --test --test-timeout=120000 --test-reporter=spec "${tests[@]}"
+          for test_file in "${tests[@]}"; do
+            echo "=== STRICT TEST FILE: $test_file ==="
+            timeout --signal=TERM --kill-after=10s 150s node --test --test-timeout=120000 --test-reporter=spec "$test_file"
+          done
 
   static:
     name: Static Safety Checks
