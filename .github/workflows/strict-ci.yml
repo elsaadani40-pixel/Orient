@@ -1,6 +1,7 @@
 name: ORIENT ONE — Strict CI
 
 # Strict gate: every branch change must pass the full compatibility matrix.
+# Runner diagnostics: fresh commit-triggered run after GitHub-hosted runner allocation failures.
 
 on:
   push:
