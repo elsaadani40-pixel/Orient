@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const WorkflowDefinition = require('../../../../../src/core/workflow/workflow-definition');
-const WorkflowInstance = require('../../../../../src/core/workflow/workflow-instance');
+const WorkflowDefinition = require('../../../../src/core/workflow/workflow-definition');
+const WorkflowInstance = require('../../../../src/core/workflow/workflow-instance');
 
 function instance() {
   return new WorkflowInstance({
