@@ -80,7 +80,7 @@ class EvaluationEngine {
     const resolvedProgress = Number.isFinite(goalProgress)
       ? goalProgress
       : hasNextStep
-        ? Math.max(0, Math.min(1, (stepNumber - 1) / plan.steps.length))
+        ? Math.max(0, Math.min(1, stepNumber / plan.steps.length))
         : 1;
 
     return new Evaluation({
