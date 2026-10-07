@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { PostgresDatabase } = require('./postgres-database');
+const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repository');
 
 function tenantOrLocal(value) {
   return value || 'local';
@@ -555,6 +556,7 @@ class PostgresPersistence {
     this.workflows = new PostgresWorkflowRepository(this.db);
     this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
     this.approvals = new PostgresApprovalRepository(this.db);
+    this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
   }
 
   initialize() {
