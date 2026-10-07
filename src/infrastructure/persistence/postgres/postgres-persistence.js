@@ -249,8 +249,14 @@ class PostgresIdempotencyRepository {
 class PostgresCheckpointRepository {
   constructor(db) { this.db = db; }
 
+  stableStringify(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return '[' + value.map(item => this.stableStringify(item)).join(',') + ']';
+    return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + this.stableStringify(value[key])).join(',') + '}';
+  }
+
   digest(snapshot) {
-    return crypto.createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+    return crypto.createHash('sha256').update(this.stableStringify(snapshot)).digest('hex');
   }
 
   async save(snapshot, { reason = 'step_completed', tenantId = null } = {}) {
