@@ -6,7 +6,7 @@ const PolicyEngine = require('../../../../src/core/agent/policy/policy-engine');
 const AuthorizationService = require('../../../../src/core/agent/authorization/authorization-service');
 const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
 
-test('high risk capability requires matching single use approval', () => {
+test('high risk capability requires matching single use approval', async () => {
   const mapper = new CapabilityMapper({
     mappings: { 'danger.write': 'external.write' }
   });
@@ -23,7 +23,7 @@ test('high risk capability requires matching single use approval', () => {
     approvalService: approvals
   });
 
-  const denied = auth.authorize('danger.write', {
+  const denied = await auth.authorize('danger.write', {
     executionId: 'exec-1',
     step: 1,
     scope: { planRevision: 1 }
@@ -31,7 +31,7 @@ test('high risk capability requires matching single use approval', () => {
   assert.equal(denied.allowed, false);
   assert.equal(denied.reason, 'APPROVAL_REQUIRED');
 
-  const approval = approvals.issue({
+  const approval = await approvals.issue({
     executionId: 'exec-1',
     step: 1,
     tool: 'danger.write',
@@ -39,7 +39,7 @@ test('high risk capability requires matching single use approval', () => {
     scope: { planRevision: 1 }
   });
 
-  const allowed = auth.authorize('danger.write', {
+  const allowed = await auth.authorize('danger.write', {
     executionId: 'exec-1',
     step: 1,
     approval,
@@ -48,9 +48,9 @@ test('high risk capability requires matching single use approval', () => {
   assert.equal(allowed.allowed, true);
   assert.equal(allowed.risk, 'high');
 
-  assert.equal(approvals.consume(approval.approvalId), true);
+  assert.equal(await approvals.consume(approval.approvalId), true);
 
-  const replay = auth.authorize('danger.write', {
+  const replay = await auth.authorize('danger.write', {
     executionId: 'exec-1',
     step: 1,
     approval,

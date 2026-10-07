@@ -314,7 +314,7 @@ class AgentLoop {
             null;
 
           authorization =
-            this.authorizationService
+            await this.authorizationService
               .assertAuthorized(step.tool, {
                 executionId: context.executionId,
                 step: stepNumber,
@@ -361,7 +361,7 @@ class AgentLoop {
           this.authorizationService.approvalService
         ) {
           const consumed =
-            this.authorizationService.approvalService.consume(
+            await this.authorizationService.approvalService.consume(
               authorization.approval.approvalId,
               runtimeContext.tenantId || context.tenantId
             );

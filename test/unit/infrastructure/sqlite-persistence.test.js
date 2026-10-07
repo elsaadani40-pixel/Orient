@@ -56,7 +56,7 @@ test('SQLite persistence survives repository recreation and preserves execution 
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
-test('SQLite approval storage survives restart and remains single-use', () => {
+test('SQLite approval storage survives restart and remains single-use', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-approval-'));
   const filePath = path.join(directory, 'orient.db');
 
@@ -65,7 +65,7 @@ test('SQLite approval storage survives restart and remains single-use', () => {
     repository: firstPersistence.approvals
   });
 
-  const issued = firstApproval.issue({
+  const issued = await firstApproval.issue({
     executionId: 'exec-approval-1',
     step: 1,
     planRevision: 2,
@@ -79,7 +79,7 @@ test('SQLite approval storage survives restart and remains single-use', () => {
     repository: secondPersistence.approvals
   });
 
-  const validation = secondApproval.validate({
+  const validation = await secondApproval.validate({
     approval: issued,
     executionId: 'exec-approval-1',
     step: 1,
@@ -90,8 +90,8 @@ test('SQLite approval storage survives restart and remains single-use', () => {
   });
 
   assert.equal(validation.allowed, true);
-  assert.equal(secondApproval.consume(issued.approvalId), true);
-  assert.equal(secondApproval.consume(issued.approvalId), false);
+  assert.equal(await secondApproval.consume(issued.approvalId), true);
+  assert.equal(await secondApproval.consume(issued.approvalId), false);
 
   fs.rmSync(directory, { recursive: true, force: true });
 });

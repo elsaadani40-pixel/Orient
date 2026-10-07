@@ -2,6 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
 const { PostgresPersistence } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
+const ApprovalService = require('../../src/core/agent/approval/approval-service');
+const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
+const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
+const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
@@ -411,6 +415,77 @@ test('PostgreSQL approval consumption is single-use under concurrency', async ()
   ]);
   assert.deepEqual(results.sort(), [false, true]);
   await pool.query('DELETE FROM approvals WHERE approval_id=$1 AND tenant_id=$2', [approvalId, 'tenant-approval']);
+});
+
+test('PostgreSQL approval authorization is durable, tenant-scoped and replay-safe', async () => {
+  const mapper = new CapabilityMapper({
+    mappings: { 'danger.write': 'external.write' }
+  });
+  const policy = new PolicyEngine({
+    capabilities: ['external.write'],
+    riskByCapability: { 'external.write': 'high' }
+  });
+  const approvals = new ApprovalService({
+    repository: persistence.approvals,
+    tenantId: 'tenant-approval-service'
+  });
+  const auth = new AuthorizationService({
+    capabilityMapper: mapper,
+    capabilityPolicy: policy,
+    approvalService: approvals
+  });
+
+  const approval = await approvals.issue({
+    executionId: 'exec-approval-service',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: { planRevision: 1 },
+    tenantId: 'tenant-approval-service'
+  });
+
+  const allowed = await auth.authorize('danger.write', {
+    executionId: 'exec-approval-service',
+    step: 1,
+    planRevision: 1,
+    approval,
+    scope: { planRevision: 1 },
+    tenantId: 'tenant-approval-service'
+  });
+  assert.equal(allowed.allowed, true);
+
+  const consumed = await approvals.consume(
+    approval.approvalId,
+    'tenant-approval-service'
+  );
+  assert.equal(consumed, true);
+
+  const replay = await auth.authorize('danger.write', {
+    executionId: 'exec-approval-service',
+    step: 1,
+    planRevision: 1,
+    approval,
+    scope: { planRevision: 1 },
+    tenantId: 'tenant-approval-service'
+  });
+  assert.equal(replay.allowed, false);
+  assert.equal(replay.reason, 'APPROVAL_ALREADY_USED');
+
+  const crossTenant = await auth.authorize('danger.write', {
+    executionId: 'exec-approval-service',
+    step: 1,
+    planRevision: 1,
+    approval,
+    scope: { planRevision: 1 },
+    tenantId: 'tenant-other'
+  });
+  assert.equal(crossTenant.allowed, false);
+  assert.equal(crossTenant.reason, 'APPROVAL_NOT_FOUND');
+
+  await pool.query(
+    'DELETE FROM approvals WHERE approval_id=$1 AND tenant_id=$2',
+    [approval.approvalId, 'tenant-approval-service']
+  );
 });
 
 test('PostgreSQL quota admission is atomic across concurrent reservations', async () => {

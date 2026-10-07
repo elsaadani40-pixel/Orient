@@ -36,13 +36,13 @@ test('execution identity is durable and rejects conflicting metadata', () => {
   assert.equal(restored.metadata.tenantId, 'tenant-a');
 });
 
-test('approval authorization is isolated by tenant and remains single-use', () => {
+test('approval authorization is isolated by tenant and remains single-use', async () => {
   const approvalService = new ApprovalService({
     tenantId: 'tenant-a',
     clock: () => 1000
   });
 
-  const approval = approvalService.issue({
+  const approval = await approvalService.issue({
     executionId: 'execution-a',
     step: 1,
     tool: 'mail.send',
@@ -62,7 +62,7 @@ test('approval authorization is isolated by tenant and remains single-use', () =
     approvalService
   });
 
-  const crossTenant = authorization.authorize('mail.send', {
+  const crossTenant = await authorization.authorize('mail.send', {
     executionId: 'execution-a',
     step: 1,
     planRevision: 1,
@@ -74,7 +74,7 @@ test('approval authorization is isolated by tenant and remains single-use', () =
   assert.equal(crossTenant.allowed, false);
   assert.equal(crossTenant.reason, 'APPROVAL_TENANT_MISMATCH');
 
-  const sameTenant = authorization.authorize('mail.send', {
+  const sameTenant = await authorization.authorize('mail.send', {
     executionId: 'execution-a',
     step: 1,
     planRevision: 1,
@@ -84,7 +84,7 @@ test('approval authorization is isolated by tenant and remains single-use', () =
   });
 
   assert.equal(sameTenant.allowed, true);
-  assert.equal(approvalService.consume(approval.approvalId, 'tenant-b'), false);
-  assert.equal(approvalService.consume(approval.approvalId, 'tenant-a'), true);
-  assert.equal(approvalService.consume(approval.approvalId, 'tenant-a'), false);
+  assert.equal(await approvalService.consume(approval.approvalId, 'tenant-b'), false);
+  assert.equal(await approvalService.consume(approval.approvalId, 'tenant-a'), true);
+  assert.equal(await approvalService.consume(approval.approvalId, 'tenant-a'), false);
 });
