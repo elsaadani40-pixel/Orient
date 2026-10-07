@@ -117,7 +117,7 @@ class AsyncWorkflowWorkerService {
           this.lastRecoveryAt = now;
         }
 
-        const worker = this.workerFactory(this.workerId);
+        const worker = this.workerFactory(this.workerId, this.workerCapabilities);
         if (!worker || typeof worker.tick !== 'function') {
           throw new TypeError('workerFactory must return a worker with tick()');
         }
