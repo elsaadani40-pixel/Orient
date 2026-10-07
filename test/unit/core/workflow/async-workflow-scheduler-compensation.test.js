@@ -12,5 +12,8 @@ test('async scheduler compensates lease and durable quota when persistence fails
   const scheduler=new AsyncWorkflowScheduler({tenantId:'tenant-compensation',workflowRepository,leaseRepository,quotaRepository,quotaPolicy:{toJSON(){return{};}},clock:()=>1000,leaseDurationMs:30000});
   await scheduler.enqueueDurable(instance);
   await assert.rejects(()=>scheduler.leaseAsync('worker-a'),/persistence unavailable/);
-  assert.equal(scheduler.active.size,0); assert.equal(leases.size,0); assert.equal(quotaCalls.length,1); assert.equal(quotaCalls[0].workflowId,instance.workflowId);
+  assert.equal(scheduler.active.size,0,'active record leaked');
+  assert.equal(leases.size,0,'durable lease leaked');
+  assert.equal(quotaCalls.length,1,'quota reservation leaked');
+  assert.equal(quotaCalls[0].workflowId,instance.workflowId);
 });
