@@ -39,7 +39,9 @@ class AgentExecutionCoordinator {
       }
 
       context.setPlan(currentPlan);
-      context.transitionAgentTo('executing');
+      if (context.getAgentLifecycle() !== 'executing') {
+        context.transitionAgentTo('executing');
+      }
       loopResult = await this.agentLoop.run({
         plan: currentPlan,
         context,
