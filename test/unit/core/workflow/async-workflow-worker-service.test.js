@@ -90,3 +90,49 @@ test('AsyncWorkflowWorkerService stopAndDrain waits for an in-flight tick', asyn
   assert.equal(ticks, 1);
   assert.equal(service.isRunning(), false);
 });
+
+
+test('AsyncWorkflowWorkerService rejects a polling race after shutdown', async () => {
+  let ticks = 0;
+  const service = new AsyncWorkflowWorkerService({
+    scheduler: { async recoverPersisted() {} },
+    workerFactory: () => ({
+      async tick() {
+        ticks += 1;
+        return { state: 'COMPLETED' };
+      }
+    }),
+    pollIntervalMs: 50,
+    recoveryIntervalMs: 50
+  });
+
+  assert.equal(await service.stopAndDrain(), false);
+  assert.equal(await service.runOnce(), null);
+  assert.equal(ticks, 0);
+
+  assert.equal(service.start(), true);
+  await service.drain();
+  assert.equal(ticks, 1);
+  assert.equal(service.stop(), true);
+});
+
+test('AsyncWorkflowScheduler does not reserve quota after shutdown begins', async () => {
+  const AsyncWorkflowScheduler = require('../../../../src/core/workflow/async-workflow-scheduler');
+
+  let reservations = 0;
+  const scheduler = new AsyncWorkflowScheduler({
+    quotaRepository: {
+      async reserveWorkflow() {
+        reservations += 1;
+      }
+    }
+  });
+
+  scheduler.shutdown();
+
+  await assert.rejects(
+    () => scheduler.enqueueDurable(null),
+    error => error?.code === 'SCHEDULER_SHUTTING_DOWN'
+  );
+  assert.equal(reservations, 0);
+});

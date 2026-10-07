@@ -37,6 +37,7 @@ class AsyncWorkflowWorkerService {
 
   runOnce() {
     if (this.inFlight) return this.inFlight;
+    if (this.stopRequested) return Promise.resolve(null);
 
     this.inFlight = (async () => {
       try {
@@ -94,6 +95,7 @@ class AsyncWorkflowWorkerService {
 
   async stopAndDrain() {
     const wasRunning = this.running || Boolean(this.inFlight);
+    this.stopRequested = true;
     this.stop();
     await this.drain();
     return wasRunning;
