@@ -37,6 +37,17 @@ class PostgresTenantQuotaRepository {
         'DELETE FROM tenant_quota_reservations WHERE tenant_id=$1 AND expires_at IS NOT NULL AND expires_at <= NOW()',
         [tenantId]
       );
+      await client.query(
+        `DELETE FROM tenant_quota_reservations r
+         WHERE r.tenant_id=$1
+           AND NOT EXISTS (SELECT 1 FROM workflows w WHERE w.workflow_id=r.workflow_id AND w.tenant_id=r.tenant_id)`,
+        [tenantId]
+      );
+      const existing = await client.query(
+        'SELECT tenant_id,workflow_id,state,reserved_at,expires_at FROM tenant_quota_reservations WHERE tenant_id=$1 AND workflow_id=$2 LIMIT 1',
+        [tenantId,workflowId]
+      );
+      if (existing.rowCount === 1) return existing.rows[0];
       const counts = (await client.query(
         `SELECT
            COUNT(*) FILTER (WHERE state='RUNNING')::int AS active,
