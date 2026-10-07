@@ -55,11 +55,9 @@ class PostgresTenantQuotaRepository {
          FROM tenant_quota_reservations WHERE tenant_id=$1`,
         [tenantId]
       )).rows[0];
-      if (Number(counts.active) >= Number(row.max_concurrent)) {
-        const error = new Error('Tenant concurrent workflow quota exceeded');
-        error.code = 'TENANT_CONCURRENCY_QUOTA_EXCEEDED';
-        throw error;
-      }
+      // Admission is two-dimensional: maxConcurrent limits RUNNING work,
+      // while maxQueued limits waiting work. A full running slot must not
+      // prevent a workflow from entering the durable queue.
       if (Number(counts.queued) >= Number(row.max_queued)) {
         const error = new Error('Tenant queued workflow quota exceeded');
         error.code = 'TENANT_QUEUE_QUOTA_EXCEEDED';
