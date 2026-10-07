@@ -9,32 +9,88 @@ class MemoryService {
     memoryAccessPolicy = null,
     defaultScope = 'personal'
   } = {}) {
+    if (!repository) {
+      throw new TypeError('repository is required');
+    }
+
     this.repository = repository;
     this.memoryAccessPolicy = memoryAccessPolicy;
     this.defaultScope = defaultScope;
   }
 
-  authorize(context = {}, operation = 'read', scope = this.defaultScope) {
-    if (!this.memoryAccessPolicy) {
-      return null;
+  resolveTenant(context = {}) {
+    const tenantId = context.tenantId;
+
+    if (!tenantId || typeof tenantId !== 'string') {
+      throw new AppError(
+        'Tenant identity is required for memory access',
+        403,
+        'MEMORY_TENANT_REQUIRED'
+      );
     }
 
-    return this.memoryAccessPolicy.authorize({
+    if (
+      context.runtimeTenantId &&
+      context.runtimeTenantId !== tenantId
+    ) {
+      throw new AppError(
+        'Memory tenant does not match canonical runtime tenant',
+        403,
+        'MEMORY_TENANT_CONTEXT_MISMATCH'
+      );
+    }
+
+    return tenantId;
+  }
+
+  resolveScope(context = {}, requestedScope = null) {
+    const scope =
+      requestedScope ||
+      context.memoryScope ||
+      this.defaultScope;
+
+    if (!scope || typeof scope !== 'string') {
+      throw new AppError(
+        'Memory scope is required',
+        403,
+        'MEMORY_SCOPE_REQUIRED'
+      );
+    }
+
+    return scope;
+  }
+
+  authorize(context = {}, operation = 'read', scope = null) {
+    const tenantId = this.resolveTenant(context);
+    const resolvedScope = this.resolveScope(context, scope);
+
+    if (!this.memoryAccessPolicy) {
+      return {
+        allowed: true,
+        agentId: context.agentId || 'ORIENT_RUNTIME',
+        scope: resolvedScope,
+        operation,
+        tenantId
+      };
+    }
+
+    const decision = this.memoryAccessPolicy.authorize({
       agentId: context.agentId || 'ORIENT_RUNTIME',
-      scope: context.memoryScope || scope,
+      scope: resolvedScope,
       operation
+    });
+
+    return Object.freeze({
+      ...decision,
+      tenantId
     });
   }
 
-  tenantId(context = {}) {
-    return context.tenantId || 'local';
-  }
-
   list(query = '', context = {}) {
-    this.authorize(context, 'read');
+    const authorization = this.authorize(context, 'read');
 
     const memories = this.repository
-      .findAll(this.tenantId(context))
+      .findAll(authorization.tenantId, authorization.scope)
       .map(normalizeMemory);
 
     const cleanQuery = String(query || '')
@@ -51,7 +107,17 @@ class MemoryService {
   }
 
   add(text, options = {}, context = {}) {
-    this.authorize(context, 'write');
+    const requestedScope =
+      options &&
+      typeof options === 'object'
+        ? options.scope
+        : null;
+
+    const authorization = this.authorize(
+      context,
+      'write',
+      requestedScope
+    );
 
     const clean = String(text || '').trim();
 
@@ -67,11 +133,20 @@ class MemoryService {
       const memory = createMemory({
         text: clean,
         type: options.type,
-        importance: options.importance
+        importance: options.importance,
+        scope: authorization.scope
       });
 
-      return this.repository.insert(memory, this.tenantId(context));
+      return this.repository.insert(
+        memory,
+        authorization.tenantId,
+        authorization.scope
+      );
     } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+
       throw new AppError(
         error.message,
         400,
@@ -81,11 +156,12 @@ class MemoryService {
   }
 
   get(id, context = {}) {
-    this.authorize(context, 'read');
+    const authorization = this.authorize(context, 'read');
 
     const memory = this.repository.findById(
       id,
-      this.tenantId(context)
+      authorization.tenantId,
+      authorization.scope
     );
 
     if (!memory) {
@@ -100,7 +176,7 @@ class MemoryService {
   }
 
   delete(id, context = {}) {
-    this.authorize(context, 'write');
+    const authorization = this.authorize(context, 'delete');
 
     const cleanId = String(id || '').trim();
 
@@ -114,7 +190,8 @@ class MemoryService {
 
     const deleted = this.repository.deleteById(
       cleanId,
-      this.tenantId(context)
+      authorization.tenantId,
+      authorization.scope
     );
 
     if (!deleted) {
@@ -129,8 +206,12 @@ class MemoryService {
   }
 
   count(context = {}) {
-    this.authorize(context, 'read');
-    return this.repository.findAll(this.tenantId(context)).length;
+    const authorization = this.authorize(context, 'read');
+
+    return this.repository.findAll(
+      authorization.tenantId,
+      authorization.scope
+    ).length;
   }
 }
 

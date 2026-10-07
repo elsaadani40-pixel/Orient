@@ -280,6 +280,10 @@ class PlannerService {
           step: index + 1,
           agentId: step.agentId || normalized.agentId,
           capability: step.capability || null,
+          memoryScope:
+            typeof step.memoryScope === 'string'
+              ? step.memoryScope.trim()
+              : null,
           tool: step.tool || null,
           input:
             this.normalizeStepInput(

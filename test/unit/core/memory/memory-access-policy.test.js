@@ -55,3 +55,14 @@ test('MemoryAccessPolicy denies writes outside the declared scope', () => {
     error => error.code === 'MEMORY_SCOPE_FORBIDDEN'
   );
 });
+
+test('MemoryAccessPolicy denies deletes outside the declared scope', () => {
+  assert.throws(
+    () => policy().authorize({
+      agentId: 'writer',
+      scope: 'research',
+      operation: 'delete'
+    }),
+    error => error.code === 'MEMORY_SCOPE_FORBIDDEN'
+  );
+});

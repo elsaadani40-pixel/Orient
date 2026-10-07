@@ -1,6 +1,7 @@
 name: ORIENT ONE — Strict CI
 
 # Strict gate: every branch change must pass the full compatibility matrix.
+# Runner diagnostics: fresh commit-triggered run after GitHub-hosted runner allocation failures.
 
 on:
   push:
@@ -13,7 +14,7 @@ permissions:
 jobs:
   unit:
     name: Unit + Architecture Tests (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -55,7 +56,7 @@ jobs:
 
   static:
     name: Static Safety Checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
