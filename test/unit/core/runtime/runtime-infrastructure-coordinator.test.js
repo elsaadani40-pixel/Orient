@@ -49,3 +49,25 @@ test('reuses supplied quota policy and quota service', () => {
   assert.equal(coordinator.tenantQuotaService.scheduler, scheduler);
   assert.equal(scheduler.quotaPolicy, quotaPolicy);
 });
+
+
+test('runtime wires optional agent governance services into the execution loop', () => {
+  const OrientRuntime = require('../../../../src/core/runtime/orient-runtime');
+  const agentInvocationService = { authorize() { return { invocationId: 'test' }; } };
+  const capabilityGovernance = { authorizeTool() { return { agentId: 'test', tool: 'test', capability: 'test', risk: 'low' }; } };
+
+  const runtime = new OrientRuntime({
+    toolRegistry: { requireAuthorization() {} },
+    agentOrchestrator: {
+      async plan() {
+        return { plan: { steps: [] }, validation: { valid: true, steps: [] } };
+      }
+    },
+    agentInvocationService,
+    capabilityGovernance
+  });
+
+  assert.equal(runtime.agentLoop.agentInvocationService, agentInvocationService);
+  assert.equal(runtime.agentLoop.capabilityGovernance, capabilityGovernance);
+  runtime.shutdown({ cancelQueued: false });
+});
