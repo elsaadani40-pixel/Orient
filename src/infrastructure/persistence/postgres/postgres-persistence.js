@@ -342,6 +342,26 @@ class PostgresWorkflowRepository {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenant = tenantOrLocal(item.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Workflow');
+    const fencingToken = Number(item.metadata?.fencingToken || 0);
+    if (fencingToken > 0) {
+      const result = await this.db.query(
+        `UPDATE workflows
+         SET state=$3,updated_at=$4,payload=$5
+         WHERE workflow_id=$1 AND tenant_id=$2
+           AND EXISTS (
+             SELECT 1 FROM workflow_leases
+             WHERE workflow_id=$1 AND tenant_id=$2
+               AND fencing_token=$6 AND expires_at > NOW()
+           )`,
+        [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item, fencingToken]
+      );
+      if (result.rowCount !== 1) {
+        const error = new Error('Workflow write rejected by durable fencing token');
+        error.code = 'WORKFLOW_FENCING_REJECTED';
+        throw error;
+      }
+      return item;
+    }
     await this.db.query(
       `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
        VALUES($1,$2,$3,$4,$5)
@@ -401,10 +421,12 @@ class PostgresWorkflowLeaseRepository {
       const result = await client.query(
         `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,acquired_at,expires_at,payload)
          VALUES($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT(workflow_id) DO NOTHING`,
+         ON CONFLICT(workflow_id) DO NOTHING
+         RETURNING fencing_token`,
         [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,acquiredAt,expiresAt,lease]
       );
-      return result.rowCount === 1 ? { ...lease } : null;
+      if (result.rowCount !== 1) return null;
+      return { ...lease, fencingToken: Number(result.rows[0].fencing_token) };
     });
   }
 
