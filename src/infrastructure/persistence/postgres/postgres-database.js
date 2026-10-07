@@ -62,15 +62,20 @@ CREATE TABLE IF NOT EXISTS workflows (
 CREATE INDEX IF NOT EXISTS idx_workflows_tenant_state
   ON workflows(tenant_id, state);
 
+CREATE SEQUENCE IF NOT EXISTS workflow_lease_fencing_seq;
+
 CREATE TABLE IF NOT EXISTS workflow_leases (
   workflow_id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL,
   lease_id TEXT NOT NULL UNIQUE,
+  fencing_token BIGINT NOT NULL DEFAULT nextval('workflow_lease_fencing_seq'),
   worker_id TEXT NOT NULL,
   acquired_at TIMESTAMPTZ NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
   payload JSONB NOT NULL
 );
+ALTER TABLE workflow_leases ADD COLUMN IF NOT EXISTS fencing_token BIGINT NOT NULL DEFAULT nextval('workflow_lease_fencing_seq');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_leases_fencing ON workflow_leases(fencing_token);
 CREATE INDEX IF NOT EXISTS idx_workflow_leases_expiry
   ON workflow_leases(tenant_id, expires_at);
 

@@ -444,10 +444,6 @@ class OrientRuntime {
       );
     }
 
-    if (this.workflowRepository?.save) {
-      this.workflowRepository.save(completed);
-    }
-
     if (completed.state === WorkflowInstance.STATES.COMPLETED) {
       return completed.steps['agent-runtime'].result;
     }

@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const {
   PostgresPersistence,
   PostgresEventRepository,
-  PostgresIdempotencyRepository
+  PostgresIdempotencyRepository,
+  PostgresWorkflowLeaseRepository,
+  PostgresWorkflowRepository
 } = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
 
 function fakeDb(responses = []) {
@@ -79,4 +81,36 @@ test('Postgres persistence rejects cross-tenant writes before SQL execution', as
     error => error.code === 'TENANT_PERSISTENCE_MISMATCH'
   );
   assert.equal(db.calls.length, 0);
+});
+
+
+test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
+  const db = fakeDb([{ rows: [], rowCount: 0 }, { rows: [{ fencing_token: '7' }], rowCount: 1 }]);
+  const repo = new PostgresWorkflowLeaseRepository(db);
+  const lease = await repo.tryAcquire({
+    workflowId: 'wf-1',
+    leaseId: 'lease-1',
+    workerId: 'worker-1',
+    acquiredAt: Date.now(),
+    expiresAt: Date.now() + 30000,
+    metadata: { tenantId: 'tenant-a' }
+  }, 'tenant-a');
+  assert.equal(lease.fencingToken, 7);
+  assert.match(db.calls[1].text, /RETURNING fencing_token/);
+});
+
+test('Postgres workflow writes reject stale fencing tokens', async () => {
+  const db = fakeDb([{ rows: [], rowCount: 0 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  await assert.rejects(
+    () => repo.save({
+      workflowId: 'wf-1',
+      tenantId: 'tenant-a',
+      state: 'RUNNING',
+      updatedAt: new Date().toISOString(),
+      metadata: { fencingToken: 6 },
+      toJSON() { return this; }
+    }, 'tenant-a'),
+    error => error.code === 'WORKFLOW_FENCING_REJECTED'
+  );
 });
