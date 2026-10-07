@@ -103,6 +103,7 @@ class RequestExecutionCoordinator {
     });
 
     context.start();
+    context.record('goal.created', context.goal.snapshot());
     context.metadata.tenantQuota = this.quotaPolicy.toJSON();
     context.record('request.understood', { inputLength: text.length });
     await this.persistenceCoordinator.persistExecution(context, 'insert');
