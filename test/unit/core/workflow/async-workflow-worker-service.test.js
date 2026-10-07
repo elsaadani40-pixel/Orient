@@ -58,3 +58,35 @@ test('AsyncWorkflowWorkerService serializes polling and performs durable recover
   assert.equal(service.isRunning(), false);
   assert.equal(service.stop(), false);
 });
+
+
+test('AsyncWorkflowWorkerService stopAndDrain waits for an in-flight tick', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let ticks = 0;
+  const service = new AsyncWorkflowWorkerService({
+    scheduler: { async recoverPersisted() {} },
+    workerFactory: () => ({
+      async tick() {
+        ticks += 1;
+        await gate;
+        return { state: 'COMPLETED' };
+      }
+    }),
+    pollIntervalMs: 50,
+    recoveryIntervalMs: 50
+  });
+
+  const run = service.runOnce();
+  const stopping = service.stopAndDrain();
+  let drained = false;
+  void stopping.then(() => { drained = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(drained, false);
+  release();
+  await stopping;
+  await run;
+  assert.equal(drained, true);
+  assert.equal(ticks, 1);
+  assert.equal(service.isRunning(), false);
+});
