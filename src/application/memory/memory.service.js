@@ -129,6 +129,28 @@ class MemoryService {
     return this.auditRepository.append(event);
   }
 
+  findExact({ tenantId, scope, type, text }) {
+    if (typeof this.repository.findByFingerprint === 'function') {
+      return this.repository.findByFingerprint({ tenantId, scope, type, text });
+    }
+    return this.repository.findAll(tenantId, scope).find(memory =>
+      memory.state !== 'archived' &&
+      memory.type === type &&
+      String(memory.text || '').trim().toLowerCase() === String(text || '').trim().toLowerCase()
+    ) || null;
+  }
+
+  findConflict(semanticKey, tenantId, scope) {
+    if (!semanticKey) return null;
+    if (typeof this.repository.findActiveBySemanticKey === 'function') {
+      return this.repository.findActiveBySemanticKey(semanticKey, tenantId, scope);
+    }
+    return this.repository.findAll(tenantId, scope).find(memory =>
+      memory.state === 'active' &&
+      memory.semanticKey === semanticKey
+    ) || null;
+  }
+
   list(query = '', context = {}, options = {}) {
     const authorization = this.authorize(context, 'read', options.scope);
     const memories = this.repository
@@ -214,13 +236,11 @@ class MemoryService {
         return updated;
       }
 
-      const conflict = candidate.semanticKey
-        ? this.repository.findActiveBySemanticKey(
-            candidate.semanticKey,
-            tenantId,
-            scope
-          )
-        : null;
+      const conflict = this.findConflict(
+        candidate.semanticKey,
+        tenantId,
+        scope
+      );
 
       let memory = candidate;
 
