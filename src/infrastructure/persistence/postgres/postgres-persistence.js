@@ -180,21 +180,17 @@ class PostgresIdempotencyRepository {
     return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
 
-  async findByKey(key, { tenantId = null } = {}) {
-    const result = await this.db.query(
-      tenantId
-        ? 'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1'
-        : 'SELECT payload FROM idempotency WHERE key=$1 LIMIT 1',
-      tenantId ? [key, tenantId] : [key]
-    );
+  async findByKey(key, { tenantId = 'local' } = {}) {
+    const effectiveTenant = tenantOrLocal(tenantId);
+    const result = await this.db.query('SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',[key,effectiveTenant]);
     if (!result.rows.length) return null;
     const record = result.rows[0].payload;
-    assertTenant(tenantOrLocal(record.tenantId), tenantId, 'Idempotency');
+    assertTenant(tenantOrLocal(record.tenantId), effectiveTenant, 'Idempotency');
     return record;
   }
 
   async find(args) {
-    return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || null });
+    return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || 'local' });
   }
 
   async begin(args) {
@@ -236,18 +232,15 @@ class PostgresIdempotencyRepository {
     return record;
   }
 
-  async delete(key, { tenantId = null } = {}) {
-    const result = await this.db.query(
-      tenantId ? 'DELETE FROM idempotency WHERE key=$1 AND tenant_id=$2' : 'DELETE FROM idempotency WHERE key=$1',
-      tenantId ? [key, tenantId] : [key]
-    );
+  async delete(key, { tenantId = 'local' } = {}) {
+    const effectiveTenant = tenantOrLocal(tenantId);
+    const result = await this.db.query('DELETE FROM idempotency WHERE key=$1 AND tenant_id=$2',[key,effectiveTenant]);
     return result.rowCount === 1;
   }
 
-  async count({ tenantId = null } = {}) {
-    const result = tenantId
-      ? await this.db.query('SELECT COUNT(*)::int AS count FROM idempotency WHERE tenant_id=$1', [tenantId])
-      : await this.db.query('SELECT COUNT(*)::int AS count FROM idempotency');
+  async count({ tenantId = 'local' } = {}) {
+    const effectiveTenant = tenantOrLocal(tenantId);
+    const result = await this.db.query('SELECT COUNT(*)::int AS count FROM idempotency WHERE tenant_id=$1',[effectiveTenant]);
     return Number(result.rows[0].count);
   }
 }
@@ -278,8 +271,9 @@ class PostgresCheckpointRepository {
         error.code = 'CHECKPOINT_TENANT_COLLISION';
         throw error;
       }
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[snapshot.executionId]);
       const sequenceResult = await client.query(
-        'SELECT COALESCE(MAX(sequence),0)+1 AS next_sequence FROM checkpoints WHERE execution_id=$1 FOR UPDATE',
+        'SELECT COALESCE(MAX(sequence),0)+1 AS next_sequence FROM checkpoints WHERE execution_id=$1',
         [snapshot.executionId]
       );
       const sequence = Number(sequenceResult.rows[0].next_sequence);
