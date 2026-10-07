@@ -309,6 +309,82 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
 });
 
 
+
+test('PostgreSQL quota survives stale worker release after lease takeover', async () => {
+  const WorkflowDefinition = require('../../src/core/workflow/workflow-definition');
+  const WorkflowInstance = require('../../src/core/workflow/workflow-instance');
+  const AsyncWorkflowScheduler = require('../../src/core/workflow/async-workflow-scheduler');
+
+  const workflowId = 'quota-takeover-wf-' + Date.now();
+  const tenantId = 'tenant-quota-takeover';
+  const policy = { maxConcurrent: 1, maxQueued: 2, maxInputChars: 1000, maxToolInputChars: 1000, maxRetries: 2 };
+  const definition = new WorkflowDefinition({
+    id: 'quota-takeover-definition',
+    version: 1,
+    name: 'Quota Takeover',
+    steps: [{ id: 'step', tool: 'noop', input: {} }]
+  });
+  const instance = new WorkflowInstance({ definition, workflowId, tenantId });
+  instance.transition('QUEUED');
+  await persistence.workflows.save(instance, tenantId);
+  await persistence.tenantQuotas.ensureTenant(tenantId, policy);
+
+  const schedulerA = new AsyncWorkflowScheduler({
+    workflowRepository: persistence.workflows,
+    leaseRepository: persistence.workflowLeases,
+    quotaRepository: persistence.tenantQuotas,
+    quotaPolicy: policy,
+    tenantId,
+    leaseDurationMs: 30000
+  });
+  const schedulerB = new AsyncWorkflowScheduler({
+    workflowRepository: persistence.workflows,
+    leaseRepository: persistence.workflowLeases,
+    quotaRepository: persistence.tenantQuotas,
+    quotaPolicy: policy,
+    tenantId,
+    leaseDurationMs: 30000
+  });
+
+  await schedulerA.enqueueDurable(instance);
+  const leaseA = await schedulerA.leaseAsync('quota-worker-a');
+  assert.ok(leaseA);
+
+  const beforeTakeover = await persistence.tenantQuotas.snapshot({ tenantId });
+  assert.deepEqual(beforeTakeover, { tenantId, active: 1, queued: 0 });
+
+  await pool.query(
+    "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
+    [workflowId]
+  );
+
+  const recovered = await schedulerB.recoverPersisted();
+  assert.equal(recovered, 1);
+  const leaseB = await schedulerB.leaseAsync('quota-worker-b');
+  assert.ok(leaseB);
+  assert.ok(leaseB.fencingToken > leaseA.fencingToken);
+
+  const afterTakeover = await persistence.tenantQuotas.snapshot({ tenantId });
+  assert.deepEqual(afterTakeover, { tenantId, active: 1, queued: 0 });
+
+  const staleRelease = await schedulerA.releaseAsync(workflowId, leaseA.leaseId);
+  assert.equal(staleRelease, false);
+
+  const afterStaleRelease = await persistence.tenantQuotas.snapshot({ tenantId });
+  assert.deepEqual(afterStaleRelease, { tenantId, active: 1, queued: 0 });
+
+  const currentRelease = await schedulerB.releaseAsync(workflowId, leaseB.leaseId);
+  assert.equal(currentRelease, true);
+  const finalSnapshot = await persistence.tenantQuotas.snapshot({ tenantId });
+  assert.deepEqual(finalSnapshot, { tenantId, active: 0, queued: 0 });
+
+  await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
+  await pool.query('DELETE FROM tenant_quota_reservations WHERE workflow_id=$1', [workflowId]);
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+  await pool.query('DELETE FROM tenant_quota_limits WHERE tenant_id=$1', [tenantId]);
+});
+
+
 test('PostgreSQL approval consumption is single-use under concurrency', async () => {
   const approvalId = 'approval-' + Date.now();
   await persistence.approvals.save({
