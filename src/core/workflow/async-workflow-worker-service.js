@@ -79,7 +79,7 @@ class AsyncWorkflowWorkerService {
   }
 
   stop() {
-    if (!this.running && !this.inFlight) return false;
+    if (!this.running) return false;
     this.running = false;
     this.stopRequested = true;
     if (this.timer) clearInterval(this.timer);
