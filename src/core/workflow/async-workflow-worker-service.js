@@ -37,6 +37,7 @@ class AsyncWorkflowWorkerService {
 
   runOnce() {
     if (this.inFlight) return this.inFlight;
+    if (this.stopRequested) return Promise.resolve(null);
 
     this.inFlight = (async () => {
       try {
