@@ -167,6 +167,10 @@ class OrientRuntime {
         scheduler: this.workflowScheduler
       });
 
+    if (this.workflowScheduler?.async) {
+      this.workflowScheduler.quotaRepository = this.tenantQuotaRepository;
+    }
+
     if (this.tenantQuotaService.scheduler !== this.workflowScheduler) {
       this.tenantQuotaService.scheduler = this.workflowScheduler;
     }
