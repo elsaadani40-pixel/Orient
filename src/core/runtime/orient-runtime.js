@@ -144,7 +144,9 @@ class OrientRuntime {
         idempotencyRepository:
           persistence?.idempotency || null,
         maxToolInputChars,
-        agentRegistry: this.agentRegistry
+        agentRegistry: this.agentRegistry,
+        agentInvocationService,
+        capabilityGovernance
       });
 
     this.agentExecutionCoordinator = new AgentExecutionCoordinator({
