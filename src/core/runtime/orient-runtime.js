@@ -487,6 +487,15 @@ class OrientRuntime {
         message: 'لم يتم إرسال طلب.'
       };
     }
+    if (text.length > this.maxInputChars) {
+      return {
+        requestId,
+        type: 'error',
+        code: 'INPUT_TOO_LARGE',
+        message: 'حجم الطلب يتجاوز الحد المسموح.'
+      };
+    }
+
     this.tenantQuotaService.assertTenant(this.tenantId);
     this.tenantQuotaService.assertInputSize(text);
 
