@@ -34,7 +34,7 @@ class AsyncWorkflowWorkerService {
     return this.running;
   }
 
-  async runOnce() {
+  runOnce() {
     if (this.inFlight) return this.inFlight;
 
     this.inFlight = (async () => {
