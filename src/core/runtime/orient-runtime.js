@@ -22,12 +22,9 @@ const TenantQuotaPolicy =
 const TenantQuotaService =
   require('../security/tenant-quota-service');
 
-const {
-  WorkflowDefinition,
-  WorkflowInstance,
-  WorkflowScheduler,
-  WorkflowWorker
-} = require('../workflow');
+const { WorkflowDefinition, WorkflowInstance, WorkflowScheduler, WorkflowWorker } = require('../workflow');
+const AsyncWorkflowScheduler = require('../workflow/async-workflow-scheduler');
+const AsyncWorkflowWorker = require('../workflow/async-workflow-worker');
 
 class OrientRuntime {
   constructor({
@@ -117,7 +114,17 @@ class OrientRuntime {
 
     this.workflowScheduler =
       workflowScheduler ||
-      new WorkflowScheduler({
+      (persistence?.isAsync
+        ? new AsyncWorkflowScheduler({
+            maxConcurrent,
+            maxQueueDepth,
+            maxRetries,
+            leaseDurationMs,
+            tenantId: this.tenantId,
+            workflowRepository: this.workflowRepository,
+            leaseRepository: persistence.workflowLeases
+          })
+        : new WorkflowScheduler({
         maxConcurrent,
         maxQueueDepth,
         maxRetries,
@@ -125,12 +132,9 @@ class OrientRuntime {
         tenantId: this.tenantId,
         workflowRepository: this.workflowRepository,
         leaseStore: persistence?.workflowLeases
-          ? new (require('../workflow/workflow-lease-store'))({
-              repository: persistence.workflowLeases,
-              tenantId: this.tenantId
-            })
+          ? new (require('../workflow/workflow-lease-store'))({ repository: persistence.workflowLeases, tenantId: this.tenantId })
           : null
-      });
+      }));
 
     this.tenantQuotaPolicy =
       quotaPolicy instanceof TenantQuotaPolicy
@@ -158,9 +162,9 @@ class OrientRuntime {
     // Rebuild the in-memory dispatch queue from durable workflow state.
     // Persisted RUNNING workflows are only recovered when their durable lease
     // has expired, preventing two workers from owning the same execution.
-    if (!workflowScheduler && this.workflowRepository?.findAll) {
-      this.workflowScheduler.recoverPersisted();
-    }
+    this.recoveryReady = !workflowScheduler && this.workflowRepository?.findAll
+      ? Promise.resolve(this.workflowScheduler.recoverPersisted())
+      : Promise.resolve(0);
 
     this.persistedEventOffsets =
       new WeakMap();
@@ -210,7 +214,7 @@ class OrientRuntime {
     return this.persistence.events.appendMany(scopedEvents, { tenantId: this.tenantId });
   }
 
-  persistExecution(context, mode = 'update') {
+  async persistExecution(context, mode = 'update') {
     if (
       !this.persistence ||
       !this.persistence.executions
@@ -232,16 +236,16 @@ class OrientRuntime {
     return this.persistence.executions.update(snapshot.executionId, snapshot, { tenantId: this.tenantId });
   }
 
-  checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
+  async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
     if (!context) {
       throw new TypeError('context is required');
     }
 
     const snapshot =
-      this.persistExecution(
+      (await this.persistExecution(
         context,
         mode
-      ) || context.snapshot();
+      )) || context.snapshot();
 
     const events = Array.isArray(context.events)
       ? context.events
@@ -280,9 +284,9 @@ class OrientRuntime {
 
     return {
       snapshot,
-      events: persistedEvents,
-      eventCount: persistedEvents.length,
-      checkpoint: durableCheckpoint
+      events: persistedEvents?.then ? await persistedEvents : persistedEvents,
+      eventCount: (persistedEvents?.then ? (await persistedEvents).length : persistedEvents.length),
+      checkpoint: durableCheckpoint?.then ? await durableCheckpoint : durableCheckpoint
     };
   }
 
@@ -350,6 +354,7 @@ class OrientRuntime {
   }
 
   async executeWorkflow(input, { approval = null, approvals = {}, priority = 0, deadlineAt = null } = {}) {
+    await this.recoveryReady;
     const text = String(input || '').trim();
 
     if (!text) {
@@ -394,24 +399,21 @@ class OrientRuntime {
     });
 
     instance.metadata.priority = priority;
-    if (this.workflowRepository?.save) {
-      this.workflowRepository.save(instance);
+    if (this.workflowScheduler.async) {
+      await this.workflowScheduler.enqueueDurable(instance, { priority, deadlineAt });
+    } else {
+      if (this.workflowRepository?.save) this.workflowRepository.save(instance);
+      this.workflowScheduler.enqueue(instance, { priority, deadlineAt });
+      if (this.workflowRepository?.save) this.workflowRepository.save(instance);
     }
 
-    this.workflowScheduler.enqueue(instance, {
-      priority,
-      deadlineAt
-    });
-
-    if (this.workflowRepository?.save) {
-      this.workflowRepository.save(instance);
-    }
-
-    const worker = new WorkflowWorker({
+    const WorkerClass = this.workflowScheduler.async ? AsyncWorkflowWorker : WorkflowWorker;
+    const worker = new WorkerClass({
       scheduler: this.workflowScheduler,
       eventSink: (event) => {
         if (this.workflowRepository?.save) {
-          this.workflowRepository.save(instance);
+          const persisted = this.workflowRepository.save(instance);
+          if (persisted?.then) persisted.catch(() => {});
         }
 
         if (this.persistence?.events?.append) {
@@ -521,7 +523,7 @@ class OrientRuntime {
       }
     );
 
-    this.persistExecution(
+    await this.persistExecution(
       context,
       'insert'
     );
@@ -597,7 +599,7 @@ class OrientRuntime {
               tenantId: this.tenantId,
               agentId: plan.agentId || 'ORIENT_RUNTIME',
               onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = 'step_completed' } = {}) => {
-                this.checkpoint(
+                return this.checkpoint(
                   context,
                   'update',
                   reason + ':plan-' + checkpointPlanRevision + ':step-' + step
@@ -748,12 +750,12 @@ class OrientRuntime {
 
       context.complete();
 
-      this.persistExecution(
+      await this.persistExecution(
         context,
         'update'
       );
 
-      this.persistEvents(
+      await this.persistEvents(
         context
       );
 
@@ -1054,9 +1056,9 @@ class OrientRuntime {
 
       context.complete();
 
-      this.persistExecution(context, 'update');
-      this.persistEvents(context);
-      this.checkpoint(context, 'update', 'execution_completed');
+      await this.persistExecution(context, 'update');
+      await this.persistEvents(context);
+      await this.checkpoint(context, 'update', 'execution_completed');
 
       return {
         resumed: true,
@@ -1091,9 +1093,9 @@ class OrientRuntime {
 
       context.fail(error);
 
-      this.persistExecution(context, 'update');
-      this.persistEvents(context);
-      this.checkpoint(context, 'update', 'resume_failed');
+      await this.persistExecution(context, 'update');
+      await this.persistEvents(context);
+      await this.checkpoint(context, 'update', 'resume_failed');
 
       throw error;
     }
