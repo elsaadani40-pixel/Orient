@@ -15,6 +15,13 @@ const OBSERVATION_EVENTS = Object.freeze({
   EVALUATION_COMPLETED: 'evaluation.completed',
   DECISION_CREATED: 'decision.created',
 
+  MEMORY_CREATED: 'memory.created',
+  MEMORY_REINFORCED: 'memory.reinforced',
+  MEMORY_CONFLICT_RESOLVED: 'memory.conflict.resolved',
+  MEMORY_ACCESSED: 'memory.accessed',
+  MEMORY_CONSOLIDATED: 'memory.consolidated',
+  MEMORY_ARCHIVED: 'memory.archived',
+
   RECOVERY_STARTED: 'recovery.started',
   RECOVERY_COMPLETED: 'recovery.completed',
 
