@@ -249,6 +249,8 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
     leaseDurationMs: 30000
   });
 
+  await schedulerA.enqueueDurable(instance);
+
   let takeover = null;
   let allowInitialRenew = true;
   const workerA = new AsyncWorkflowWorker({
