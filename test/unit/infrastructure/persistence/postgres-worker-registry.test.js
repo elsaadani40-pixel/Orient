@@ -32,7 +32,7 @@ test('worker registry persists tenant-scoped worker registration', async () => {
 
   assert.equal(result.workerId, 'worker-a');
   assert.equal(result.tenantId, 'tenant-a');
-  assert.match(db.calls[0].sql, /ON CONFLICT(tenant_id,worker_id)/);
+  assert.match(db.calls[0].sql, /ON CONFLICT\(tenant_id,worker_id\)/);
   assert.deepEqual(db.calls[0].values.slice(0, 2), ['tenant-a', 'worker-a']);
 });
 
