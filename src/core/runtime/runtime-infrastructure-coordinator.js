@@ -14,6 +14,8 @@ class RuntimeInfrastructureCoordinator {
     tenantId = 'local',
     maxConcurrent = 1,
     maxQueueDepth = 1000,
+    workflowDispatchWindow = 2,
+    workflowAgingQuantumMs = 30000,
     maxRetries = 2,
     leaseDurationMs = 30000,
     maxInputChars = 100000,
@@ -48,6 +50,8 @@ class RuntimeInfrastructureCoordinator {
         ? new AsyncWorkflowScheduler({
             maxConcurrent,
             maxQueueDepth,
+            dispatchWindow: workflowDispatchWindow,
+            agingQuantumMs: workflowAgingQuantumMs,
             maxRetries,
             leaseDurationMs,
             tenantId: this.tenantId,

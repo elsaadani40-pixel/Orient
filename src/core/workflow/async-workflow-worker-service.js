@@ -113,11 +113,11 @@ class AsyncWorkflowWorkerService {
           typeof this.scheduler.recoverPersisted === 'function' &&
           (this.lastRecoveryAt === null || now - this.lastRecoveryAt >= this.recoveryIntervalMs)
         ) {
-          await this.scheduler.recoverPersisted(this.workerId);
+          await this.scheduler.recoverPersisted(this.workerId, this.workerCapabilities);
           this.lastRecoveryAt = now;
         }
 
-        const worker = this.workerFactory(this.workerId);
+        const worker = this.workerFactory(this.workerId, this.workerCapabilities);
         if (!worker || typeof worker.tick !== 'function') {
           throw new TypeError('workerFactory must return a worker with tick()');
         }

@@ -255,6 +255,8 @@ const runtime =
     persistence,
     tenantId: config.defaultTenantId,
     maxQueueDepth: config.maxQueueDepth,
+    workflowDispatchWindow: config.workflowDispatchWindow,
+    workflowAgingQuantumMs: config.workflowAgingQuantumMs,
     maxRetries: config.maxWorkflowRetries,
     leaseDurationMs: config.workflowLeaseMs,
     maxInputChars: config.maxInputChars,

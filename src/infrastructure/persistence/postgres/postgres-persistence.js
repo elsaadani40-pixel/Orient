@@ -376,9 +376,13 @@ class PostgresWorkflowRepository {
     return item;
   }
 
-  async claimQueued({tenantId='local',workerId,limit=100,claimTtlMs=5000}={}) {
+  async claimQueued({tenantId='local',workerId,limit=100,claimTtlMs=5000,workerCapabilities=[],agingQuantumMs=30000}={}) {
     if (!workerId) throw new TypeError('workerId is required');
     const safeLimit=Math.max(1,Math.min(1000,Number(limit)||100));
+    const capabilities=Array.isArray(workerCapabilities)
+      ? [...new Set(workerCapabilities.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()))]
+      : [];
+    const safeAgingQuantumMs=Math.max(1000,Number(agingQuantumMs)||30000);
     const expiresAt=new Date(Date.now()+Math.max(1000,Number(claimTtlMs)||5000)).toISOString();
     return this.db.transaction(async client => {
       await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND expires_at <= NOW()',[tenantId]);
@@ -386,15 +390,19 @@ class PostgresWorkflowRepository {
         `WITH candidates AS (
            SELECT w.workflow_id FROM workflows w
            WHERE w.tenant_id=$1 AND w.state IN ('QUEUED','WAITING','RECOVERING','RUNNING')
+             AND COALESCE(w.payload->'metadata'->'requiredCapabilities','[]'::jsonb) <@ $4::jsonb
              AND NOT EXISTS (SELECT 1 FROM workflow_dispatch_claims c WHERE c.tenant_id=w.tenant_id AND c.workflow_id=w.workflow_id AND c.expires_at > NOW())
              AND NOT EXISTS (SELECT 1 FROM workflow_leases l WHERE l.tenant_id=w.tenant_id AND l.workflow_id=w.workflow_id AND l.expires_at > NOW())
-           ORDER BY COALESCE((w.payload->>'priority')::int,0) DESC, w.updated_at ASC
+           ORDER BY (
+             COALESCE((w.payload->>'priority')::int,0)
+             + FLOOR(GREATEST(0,EXTRACT(EPOCH FROM (NOW()-w.updated_at))*1000) / $5)
+           ) DESC, w.updated_at ASC
            FOR UPDATE SKIP LOCKED LIMIT $2
          )
          INSERT INTO workflow_dispatch_claims(tenant_id,workflow_id,worker_id,claimed_at,expires_at)
-         SELECT $1,workflow_id,$3,NOW(),$4 FROM candidates
+         SELECT $1,workflow_id,$3,NOW(),$6 FROM candidates
          ON CONFLICT (tenant_id,workflow_id) DO NOTHING RETURNING workflow_id`,
-        [tenantId,safeLimit,workerId,expiresAt]
+        [tenantId,safeLimit,workerId,JSON.stringify(capabilities),safeAgingQuantumMs,expiresAt]
       );
       if(!result.rows.length) return [];
       const ids=result.rows.map(row=>row.workflow_id);
