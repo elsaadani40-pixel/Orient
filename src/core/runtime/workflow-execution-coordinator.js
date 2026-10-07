@@ -9,6 +9,8 @@ class WorkflowExecutionCoordinator {
     workflowRepository = null,
     persistence = null,
     tenantId = 'local',
+    userId = 'local',
+    workspaceId = 'local',
     executeRequest
   } = {}) {
     if (!scheduler) throw new TypeError('scheduler is required');
@@ -20,6 +22,8 @@ class WorkflowExecutionCoordinator {
     this.workflowRepository = workflowRepository;
     this.persistence = persistence;
     this.tenantId = tenantId || 'local';
+    this.userId = userId || 'local';
+    this.workspaceId = workspaceId || 'local';
     this.executeRequest = executeRequest;
   }
 
@@ -56,8 +60,8 @@ class WorkflowExecutionCoordinator {
     const instance = new WorkflowInstance({
       definition,
       tenantId: this.tenantId,
-      userId: this.executeRequest.userId || 'local',
-      workspaceId: this.executeRequest.workspaceId || 'local',
+      userId: this.userId,
+      workspaceId: this.workspaceId,
       input: { text }
     });
 
