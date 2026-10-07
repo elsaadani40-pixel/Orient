@@ -95,6 +95,7 @@ class AsyncWorkflowWorkerService {
 
   async stopAndDrain() {
     const wasRunning = this.running || Boolean(this.inFlight);
+    this.stopRequested = true;
     this.stop();
     await this.drain();
     return wasRunning;
