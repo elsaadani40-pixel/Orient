@@ -113,7 +113,7 @@ class AsyncWorkflowWorkerService {
           typeof this.scheduler.recoverPersisted === 'function' &&
           (this.lastRecoveryAt === null || now - this.lastRecoveryAt >= this.recoveryIntervalMs)
         ) {
-          await this.scheduler.recoverPersisted();
+          await this.scheduler.recoverPersisted(this.workerId);
           this.lastRecoveryAt = now;
         }
 

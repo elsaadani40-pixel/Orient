@@ -376,6 +376,38 @@ class PostgresWorkflowRepository {
     return item;
   }
 
+  async claimQueued({tenantId='local',workerId,limit=100,claimTtlMs=5000}={}) {
+    if (!workerId) throw new TypeError('workerId is required');
+    const safeLimit=Math.max(1,Math.min(1000,Number(limit)||100));
+    const expiresAt=new Date(Date.now()+Math.max(1000,Number(claimTtlMs)||5000)).toISOString();
+    return this.db.transaction(async client => {
+      await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND expires_at <= NOW()',[tenantId]);
+      const result=await client.query(
+        `WITH candidates AS (
+           SELECT w.workflow_id FROM workflows w
+           WHERE w.tenant_id=$1 AND w.state IN ('QUEUED','WAITING','RECOVERING','RUNNING')
+             AND NOT EXISTS (SELECT 1 FROM workflow_dispatch_claims c WHERE c.tenant_id=w.tenant_id AND c.workflow_id=w.workflow_id AND c.expires_at > NOW())
+             AND NOT EXISTS (SELECT 1 FROM workflow_leases l WHERE l.tenant_id=w.tenant_id AND l.workflow_id=w.workflow_id AND l.expires_at > NOW())
+           ORDER BY COALESCE((w.payload->>'priority')::int,0) DESC, w.updated_at ASC
+           FOR UPDATE SKIP LOCKED LIMIT $2
+         )
+         INSERT INTO workflow_dispatch_claims(tenant_id,workflow_id,worker_id,claimed_at,expires_at)
+         SELECT $1,workflow_id,$3,NOW(),$4 FROM candidates
+         ON CONFLICT (tenant_id,workflow_id) DO NOTHING RETURNING workflow_id`,
+        [tenantId,safeLimit,workerId,expiresAt]
+      );
+      if(!result.rows.length) return [];
+      const ids=result.rows.map(row=>row.workflow_id);
+      const workflows=await client.query('SELECT payload FROM workflows WHERE tenant_id=$1 AND workflow_id=ANY($2::text[])',[tenantId,ids]);
+      const byId=new Map(workflows.rows.map(row=>[row.payload.workflowId,row.payload]));
+      return ids.map(id=>byId.get(id)).filter(Boolean);
+    });
+  }
+
+  async releaseDispatchClaim(workflowId,workerId,tenantId='local') {
+    const result=await this.db.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3',[tenantId,workflowId,workerId]);
+    return result.rowCount===1;
+  }
   async findById(workflowId, tenantId = null) {
     const result = await this.db.query(
       tenantId ? 'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload FROM workflows WHERE workflow_id=$1 LIMIT 1',
