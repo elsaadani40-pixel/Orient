@@ -1,7 +1,7 @@
 name: ORIENT ONE — Strict CI
 
 # Strict gate: every branch change must pass the full compatibility matrix.
-# Runner diagnostics: fresh commit-triggered run after GitHub-hosted runner allocation failures.
+# Use the current GitHub-hosted Ubuntu image while preserving every strict check.
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 jobs:
   unit:
     name: Unit + Architecture Tests (Node ${{ matrix.node }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -23,25 +23,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           check-latest: true
-
       - name: Install Node dependencies
         shell: bash
         run: |
           set -euo pipefail
           npm install --ignore-scripts --no-audit --no-fund
-
       - name: Verify SQLite runtime
         shell: bash
         run: |
           set -euo pipefail
           sqlite3 --version
-
       - name: Verify repository hygiene
         shell: bash
         run: |
@@ -52,7 +48,6 @@ jobs:
             echo "Sensitive file tracked"
             exit 1
           }
-
       - name: Run strict Node test suite
         shell: bash
         run: |
@@ -63,11 +58,10 @@ jobs:
 
   static:
     name: Static Safety Checks
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Verify JavaScript syntax
         shell: bash
         run: |
@@ -75,7 +69,6 @@ jobs:
           while IFS= read -r file; do
             node --check "$file"
           done < <(find src test -type f -name '*.js' -print | sort)
-
       - name: Reject obvious secret patterns
         shell: bash
         run: |
@@ -87,7 +80,7 @@ jobs:
 
   postgres-integration:
     name: PostgreSQL Integration (Node 20)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:17
@@ -104,16 +97,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
           check-latest: true
-
       - name: Install PostgreSQL client dependency
         run: npm install --no-save pg@^8.23.1
-
       - name: Run PostgreSQL integration suite
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
