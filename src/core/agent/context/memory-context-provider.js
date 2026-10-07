@@ -7,9 +7,10 @@ class MemoryContextProvider {
     this.memoryService = memoryService;
   }
 
-  async provide({ query = '' } = {}) {
+  async provide({ query = '', context = {} } = {}) {
     const memories = this.memoryService.list(
-      String(query || '').trim()
+      String(query || '').trim(),
+      context
     );
 
     return {

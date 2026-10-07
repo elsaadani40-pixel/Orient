@@ -39,6 +39,22 @@ function createMemoryTools(memoryService) {
     },
   });
 
+  const memoryHistory = new ToolInterface({
+    name: 'memory.history',
+    description: 'عرض سجل التدقيق والقرارات المرتبطة بذاكرة ORIENT ONE',
+    execute: async (input, context) => {
+      const id =
+        typeof input === 'string'
+          ? input
+          : input && input.id;
+
+      return {
+        memoryId: id,
+        history: memoryService.history(id, context),
+      };
+    },
+  });
+
   const deleteMemory = new ToolInterface({
     name: 'memory.delete',
     description: 'حذف معلومة من ذاكرة ORIENT ONE',
@@ -57,6 +73,7 @@ function createMemoryTools(memoryService) {
     listMemory,
     addMemory,
     deleteMemory,
+    memoryHistory,
   ];
 }
 

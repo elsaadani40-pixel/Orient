@@ -132,9 +132,30 @@ class MemoryService {
     }
   }
 
-  audit(event) {
+  audit(event, context = {}) {
     if (!this.auditRepository) return null;
-    return this.auditRepository.append(event);
+    return this.auditRepository.append({
+      ...event,
+      agentId: context.agentId || 'ORIENT_RUNTIME',
+      scope: event.scope || context.memoryScope || this.defaultScope,
+      executionId: event.executionId || context.executionId || null,
+      goalId: event.goalId || context.goalId || null,
+      decisionId: event.decisionId || context.decisionId || null,
+      correlationId: event.correlationId || context.correlationId || null,
+      traceId: event.traceId || context.traceId || null
+    });
+  }
+
+  history(id, context = {}) {
+    const authorization = this.authorize(context, 'read');
+    if (!this.auditRepository || typeof this.auditRepository.findByMemoryId !== 'function') {
+      return [];
+    }
+    return this.auditRepository.findByMemoryId(
+      id,
+      authorization.tenantId,
+      authorization.scope
+    );
   }
 
   findExact({ tenantId, scope, type, text }) {
@@ -239,7 +260,7 @@ class MemoryService {
           tenantId,
           memoryId: exact.id,
           evidence: candidate.evidence
-        });
+        }, context);
 
         return updated;
       }
@@ -275,7 +296,7 @@ class MemoryService {
           memoryId: candidate.id,
           relatedMemoryId: conflict.id,
           resolution: 'newer_candidate_supersedes_previous'
-        });
+        }, context);
       }
 
       const inserted = this.repository.insert(memory, tenantId, scope);
@@ -286,7 +307,7 @@ class MemoryService {
         memoryId: inserted.id,
         source: inserted.source,
         confidence: inserted.confidence
-      });
+      }, context);
 
       return inserted;
     } catch (error) {
@@ -322,7 +343,7 @@ class MemoryService {
       action: 'memory.accessed',
       tenantId: authorization.tenantId,
       memoryId: id
-    });
+    }, context);
 
     return normalized;
   }
@@ -383,7 +404,7 @@ class MemoryService {
       changes.push({ winnerId: winner.id, supersededId: loser.id });
     }
 
-    this.audit({ action: 'memory.consolidated', tenantId, changes });
+    this.audit({ action: 'memory.consolidated', tenantId, changes }, context);
 
     return { tenantId, scope, consolidated: changes.length, changes };
   }
@@ -415,7 +436,7 @@ class MemoryService {
       tenantId: authorization.tenantId,
       memoryId: id,
       reason: context.reason || 'manual'
-    });
+    }, context);
 
     return true;
   }

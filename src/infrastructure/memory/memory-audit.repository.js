@@ -47,10 +47,11 @@ class MemoryAuditRepository {
     return record;
   }
 
-  findByMemoryId(memoryId, tenantId = 'local') {
+  findByMemoryId(memoryId, tenantId = 'local', scope = null) {
     return this.read().filter(event =>
       event.tenantId === tenantId &&
-      event.memoryId === memoryId
+      event.memoryId === memoryId &&
+      (!scope || event.scope === scope || (!event.scope && scope === 'personal'))
     );
   }
 }
