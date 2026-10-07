@@ -54,7 +54,12 @@ class EvaluationEngine {
           `الخطوة ${stepNumber} طلبت إعادة التخطيط`,
         recommendations: [
           result.nextInput ? 'replan_with_next_input' : 'replan'
-        ]
+        ],
+        nextAction: 'replan',
+        nextInput:
+          typeof result.nextInput === 'string'
+            ? result.nextInput.trim()
+            : null
       });
     }
 
@@ -75,7 +80,8 @@ class EvaluationEngine {
       reason: hasNextStep
         ? `تم تنفيذ ${step?.tool || 'الخطوة'} بنجاح، الانتقال للخطوة التالية`
         : `تم تنفيذ ${step?.tool || 'الخطوة'} بنجاح`,
-      recommendations: hasNextStep ? ['next_step'] : []
+      recommendations: hasNextStep ? ['next_step'] : [],
+      nextAction: hasNextStep ? 'next_step' : null
     });
   }
 }
