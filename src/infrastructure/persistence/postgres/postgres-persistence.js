@@ -528,6 +528,7 @@ class PostgresApprovalRepository {
 
 class PostgresPersistence {
   constructor({ pool, schema } = {}) {
+    this.isAsync = true;
     this.db = pool instanceof PostgresDatabase ? pool : new PostgresDatabase({ pool, schema });
     this.executions = new PostgresExecutionRepository(this.db);
     this.events = new PostgresEventRepository(this.db);
