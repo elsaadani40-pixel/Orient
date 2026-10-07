@@ -38,10 +38,11 @@ class PostgresExecutionRepository {
   }
 
   async insert(execution, { tenantId = null } = {}) {
+    const generatedExecutionId = execution.id || execution.executionId || crypto.randomUUID();
     const normalized = {
       ...execution,
-      id: execution.id || execution.executionId || crypto.randomUUID(),
-      executionId: execution.executionId || execution.id || crypto.randomUUID(),
+      id: generatedExecutionId,
+      executionId: generatedExecutionId,
       executionVersion: Number(execution.executionVersion || 1),
       status: execution.status || 'created',
       agentLifecycle: execution.agentLifecycle || 'created',
