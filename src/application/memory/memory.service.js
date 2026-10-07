@@ -357,28 +357,36 @@ class MemoryService {
       let memory = candidate;
 
       if (conflict && conflict.text !== candidate.text) {
-        this.repository.update(
-          conflict.id,
-          {
+        const resolution = compareConflictCandidates(candidate, conflict);
+        const candidateScore = conflictResolutionScore(candidate);
+        const conflictScore = conflictResolutionScore(conflict);
+        const candidateWins = resolution.id === candidate.id;
+
+        if (candidateWins) {
+          this.repository.update(conflict.id, {
             state: 'superseded',
             supersededById: candidate.id,
             updatedAt: new Date().toISOString()
-          },
-          tenantId,
-          scope
-        );
-
-        memory = {
-          ...candidate,
-          supersedesId: conflict.id
-        };
+          }, tenantId, scope);
+          memory = { ...candidate, supersedesId: conflict.id };
+        } else {
+          memory = { ...candidate, state: 'contradicted', supersededById: null, supersedesId: null };
+        }
 
         this.audit({
           action: 'memory.conflict.resolved',
           tenantId,
           memoryId: candidate.id,
           relatedMemoryId: conflict.id,
-          resolution: 'newer_candidate_supersedes_previous'
+          resolution: candidateWins
+            ? 'candidate_wins_evidence_policy'
+            : 'existing_memory_wins_evidence_policy',
+          rationale: {
+            policy: 'confidence_source_evidence_verification_recency_importance',
+            candidate: candidateScore,
+            existing: conflictScore,
+            winnerId: resolution.id
+          }
         }, context);
       }
 
