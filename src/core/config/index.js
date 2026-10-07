@@ -9,6 +9,11 @@ const config = Object.freeze({
   port: positiveInteger(process.env.PORT, 8080),
   host: process.env.HOST || '127.0.0.1',
   nodeEnv: process.env.NODE_ENV || 'development',
+  persistenceMode: process.env.ORIENT_PERSISTENCE || 'json',
+  databaseUrl: process.env.ORIENT_DATABASE_URL || process.env.DATABASE_URL || '',
+  databasePoolMax: positiveInteger(process.env.ORIENT_DATABASE_POOL_MAX, 10),
+  databaseIdleTimeoutMs: positiveInteger(process.env.ORIENT_DATABASE_IDLE_TIMEOUT_MS, 30000),
+  databaseConnectionTimeoutMs: positiveInteger(process.env.ORIENT_DATABASE_CONNECTION_TIMEOUT_MS, 5000),
   defaultTenantId: process.env.ORIENT_TENANT_ID || 'local',
   dataFile: path.join(__dirname, '../../../data/memories.json'),
   agentDataDirectory: path.join(__dirname, '../../../data/agent'),
@@ -26,7 +31,7 @@ const config = Object.freeze({
   ollamaModel: process.env.ORIENT_OLLAMA_MODEL || 'llama3.2:3b',
   ollamaTimeoutMs: positiveInteger(process.env.ORIENT_OLLAMA_TIMEOUT_MS, 60000),
   appName: 'ORIENT ONE',
-  version: '0.10.0'
+  version: '0.11.0'
 });
 
 module.exports = config;

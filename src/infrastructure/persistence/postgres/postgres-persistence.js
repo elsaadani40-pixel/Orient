@@ -568,6 +568,23 @@ class PostgresPersistence {
   initialize() {
     return this.db.initialize();
   }
+
+  health() {
+    return {
+      adapter: 'postgres',
+      ready: true,
+      repositories: {
+        executions: true,
+        events: true,
+        idempotency: true,
+        checkpoints: true,
+        workflows: true,
+        workflowLeases: true,
+        approvals: true,
+        tenantQuotas: true
+      }
+    };
+  }
 }
 
 module.exports = {
