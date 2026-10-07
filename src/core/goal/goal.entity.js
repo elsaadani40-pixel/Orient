@@ -46,7 +46,7 @@ class Goal {
   }
 
   transitionTo(nextStatus) {
-    if (!Object.prototype.hasOwnProperty.call(GOAL_STATUS, nextStatus)) {
+    if (!Object.values(GOAL_STATUS).includes(nextStatus)) {
       throw new TypeError('invalid goal status');
     }
     if (!TRANSITIONS[this.status].has(nextStatus)) {
