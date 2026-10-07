@@ -160,5 +160,5 @@ test('Postgres tenant quota reservation is atomically admission-controlled', asy
     policy: { maxConcurrent: 1, maxQueued: 2, maxInputChars: 100, maxToolInputChars: 100, maxRetries: 2 }
   });
   assert.equal(reservation.workflowId, 'wf-2');
-  assert.match(db.calls[6].text, /ON CONFLICT\\(workflow_id\\) DO NOTHING/);
+  assert.match(db.calls[6].text, /ON CONFLICT\(workflow_id\) DO NOTHING/);
 })
