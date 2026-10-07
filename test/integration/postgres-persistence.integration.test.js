@@ -357,6 +357,10 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
     "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
     [workflowId]
   );
+  await pool.query(
+    "UPDATE tenant_quota_reservations SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1 AND tenant_id=$2",
+    [workflowId, tenantId]
+  );
 
   const recovered = await schedulerB.recoverPersisted();
   assert.equal(recovered, 1);
