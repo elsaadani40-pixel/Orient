@@ -92,16 +92,16 @@ class OrientRuntime {
     this.persistence =
       persistence;
 
+    this.tenantId = tenantId || 'local';
+    this.userId = userId || 'local';
+    this.workspaceId = workspaceId || 'local';
+    this.maxInputChars = maxInputChars;
+
     this.persistenceCoordinator = new ExecutionPersistenceCoordinator({
       persistence,
       tenantId: this.tenantId,
       persistedEventOffsets: new WeakMap()
     });
-
-    this.tenantId = tenantId || 'local';
-    this.userId = userId || 'local';
-    this.workspaceId = workspaceId || 'local';
-    this.maxInputChars = maxInputChars;
 
     this.agentRegistry =
       agentRegistry || new AgentRegistry();
