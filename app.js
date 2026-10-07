@@ -1,4 +1,5 @@
 const config = require('./src/core/config');
+const path = require('path');
 const logger = require('./src/core/logging/logger');
 
 const JsonMemoryRepository =
@@ -6,6 +7,9 @@ const JsonMemoryRepository =
 
 const MemoryService =
   require('./src/application/memory/memory.service');
+
+const MemoryAuditRepository =
+  require('./src/infrastructure/memory/memory-audit.repository');
 
 const ToolRegistry =
   require('./src/core/tools/tool.registry');
@@ -83,8 +87,13 @@ const createServer =
 const repository =
   new JsonMemoryRepository(config.dataFile);
 
+const memoryAuditRepository =
+  new MemoryAuditRepository(
+    path.join(config.agentDataDirectory, 'memory-audit.json')
+  );
+
 const memoryService =
-  new MemoryService(repository);
+  new MemoryService(repository, memoryAuditRepository);
 
 const toolRegistry =
   new ToolRegistry();
