@@ -34,7 +34,7 @@ test('EvaluationEngine is the canonical evaluation decision point', () => {
     result: { saved: true }
   });
   assert.equal(first.outcome, 'continue');
-  assert.equal(first.nextAction, undefined);
+  assert.equal(first.nextAction, 'next_step');
   assert.equal(first.goalProgress, 0.5);
 
   const final = engine.evaluate({
@@ -60,6 +60,9 @@ test('EvaluationEngine is the canonical evaluation decision point', () => {
     result: undefined
   });
   assert.equal(failed.outcome, 'failed');
+
+  const noAction = engine.evaluate({ plan: { steps: [] }, result: null, stepNumber: 0 });
+  assert.equal(noAction.outcome, 'no_action');
 });
 
 test('AgentLoop delegates evaluation to the injected canonical engine', async () => {
