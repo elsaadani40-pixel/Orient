@@ -43,6 +43,16 @@ CREATE INDEX IF NOT EXISTS idx_quota_reservations_expiry ON tenant_quota_reserva
 `;
 const MIGRATIONS = [
   {version:1,sql:BASE_SCHEMA},
+  {version:2,sql:`
+    UPDATE idempotency SET tenant_id='local' WHERE tenant_id IS NULL;
+    ALTER TABLE idempotency DROP CONSTRAINT IF EXISTS idempotency_pkey;
+    ALTER TABLE idempotency ALTER COLUMN tenant_id SET NOT NULL;
+    ALTER TABLE idempotency ADD CONSTRAINT idempotency_pkey PRIMARY KEY (tenant_id,key);
+    ALTER TABLE checkpoints DROP CONSTRAINT IF EXISTS checkpoints_pkey;
+    ALTER TABLE checkpoints ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (execution_id,sequence);
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_latest ON checkpoints(execution_id,sequence DESC);
+    CREATE INDEX IF NOT EXISTS idx_events_tenant_execution_timestamp ON events(tenant_id,execution_id,timestamp);
+  `}
   {version:3,sql:`
     CREATE TABLE IF NOT EXISTS worker_nodes (
       tenant_id TEXT NOT NULL,
@@ -58,16 +68,6 @@ const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_heartbeat ON worker_nodes(tenant_id, heartbeat_at);
     CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_expiry ON worker_nodes(tenant_id, expires_at);
   `},
-  {version:2,sql:`
-    UPDATE idempotency SET tenant_id='local' WHERE tenant_id IS NULL;
-    ALTER TABLE idempotency DROP CONSTRAINT IF EXISTS idempotency_pkey;
-    ALTER TABLE idempotency ALTER COLUMN tenant_id SET NOT NULL;
-    ALTER TABLE idempotency ADD CONSTRAINT idempotency_pkey PRIMARY KEY (tenant_id,key);
-    ALTER TABLE checkpoints DROP CONSTRAINT IF EXISTS checkpoints_pkey;
-    ALTER TABLE checkpoints ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (execution_id,sequence);
-    CREATE INDEX IF NOT EXISTS idx_checkpoints_latest ON checkpoints(execution_id,sequence DESC);
-    CREATE INDEX IF NOT EXISTS idx_events_tenant_execution_timestamp ON events(tenant_id,execution_id,timestamp);
-  `}
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
