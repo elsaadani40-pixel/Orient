@@ -755,7 +755,7 @@ class OrientRuntime {
         'update'
       );
 
-      this.persistEvents(
+      await this.persistEvents(
         context
       );
 
@@ -1093,7 +1093,7 @@ class OrientRuntime {
 
       context.fail(error);
 
-      this.persistExecution(context, 'update');
+      await this.persistExecution(context, 'update');
       await this.persistEvents(context);
       await this.checkpoint(context, 'update', 'resume_failed');
 
