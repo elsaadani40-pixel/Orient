@@ -143,6 +143,25 @@ test('Postgres checkpoint repository appends history and returns the latest chec
   assert.match(db.calls[5].text, /pg_advisory_xact_lock/);
 });
 
+test('Postgres tenant quota queues work when the running quota is full', async () => {
+  const db = fakeDb([
+    { rows: [], rowCount: 1 },
+    { rows: [{ max_concurrent: 1, max_queued: 2 }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ active: 1, queued: 0 }], rowCount: 1 },
+    { rows: [{ tenant_id: 'tenant-a', workflow_id: 'wf-queued', state: 'QUEUED', reserved_at: new Date().toISOString(), expires_at: null }], rowCount: 1 }
+  ]);
+  const repo = new PostgresTenantQuotaRepository(db);
+  const reservation = await repo.reserveWorkflow({
+    tenantId: 'tenant-a',
+    workflowId: 'wf-queued',
+    policy: { maxConcurrent: 1, maxQueued: 2, maxInputChars: 100, maxToolInputChars: 100, maxRetries: 2 }
+  });
+  assert.equal(reservation.state, 'QUEUED');
+  assert.equal(reservation.workflowId, 'wf-queued');
+});
+
 test('Postgres tenant quota reservation is atomically admission-controlled', async () => {
   const db = fakeDb([
     { rows: [], rowCount: 1 },
