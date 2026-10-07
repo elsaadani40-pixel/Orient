@@ -32,14 +32,14 @@ test('approval is single use, scoped and expires', async () => {
     capability: 'external.write', scope: { planRevision: 1 }, ttlMs: 100
   });
 
-  assert.equal(service.validate({
+  assert.equal((await service.validate({
     approval: fresh, executionId: 'exec-1', step: 1,
     tool: 'danger.write', capability: 'external.write',
     scope: { planRevision: 2 }
   })).reason, 'APPROVAL_SCOPE_MISMATCH');
 
   now += 101;
-  assert.equal(service.validate({
+  assert.equal((await service.validate({
     approval: fresh, executionId: 'exec-1', step: 1,
     tool: 'danger.write', capability: 'external.write',
     scope: { planRevision: 1 }
