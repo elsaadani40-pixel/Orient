@@ -3,7 +3,10 @@ class ToolInterface {
     name,
     description,
     execute,
-    retryable = false
+    retryable = false,
+    capabilities = [],
+    risk = null,
+    sandbox = null
   }) {
     if (!name || typeof name !== 'string') {
       throw new TypeError(
@@ -17,6 +20,12 @@ class ToolInterface {
       );
     }
 
+    if (!Array.isArray(capabilities)) {
+      throw new TypeError(
+        `Tool "${name}" capabilities must be an array`
+      );
+    }
+
     this.name = name;
     this.description =
       description || '';
@@ -25,6 +34,27 @@ class ToolInterface {
 
     this.retryable =
       retryable === true;
+
+    this.capabilities = Object.freeze(
+      [...new Set(capabilities.filter(
+        capability =>
+          typeof capability === 'string' &&
+          capability.trim()
+      ))]
+    );
+
+    this.risk =
+      typeof risk === 'string' && risk.trim()
+        ? risk.trim()
+        : null;
+
+    this.sandbox =
+      sandbox && typeof sandbox === 'object'
+        ? Object.freeze({
+            required: sandbox.required === true,
+            profile: sandbox.profile || null
+          })
+        : null;
   }
 }
 
