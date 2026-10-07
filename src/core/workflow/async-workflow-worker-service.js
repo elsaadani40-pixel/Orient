@@ -28,6 +28,7 @@ class AsyncWorkflowWorkerService {
     this.timer = null;
     this.lastRecoveryAt = null;
     this.inFlight = null;
+    this.stopRequested = false;
   }
 
   isRunning() {
@@ -67,6 +68,7 @@ class AsyncWorkflowWorkerService {
 
   start() {
     if (this.running) return false;
+    this.stopRequested = false;
     this.running = true;
     void this.runOnce();
     this.timer = setInterval(() => {
@@ -79,13 +81,22 @@ class AsyncWorkflowWorkerService {
   stop() {
     if (!this.running) return false;
     this.running = false;
+    this.stopRequested = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     return true;
   }
 
   async drain() {
-    if (this.inFlight) await this.inFlight;
+    while (this.inFlight) await this.inFlight;
+    return true;
+  }
+
+  async stopAndDrain() {
+    const wasRunning = this.running || Boolean(this.inFlight);
+    this.stop();
+    await this.drain();
+    return wasRunning;
   }
 }
 
