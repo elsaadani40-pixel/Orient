@@ -26,6 +26,7 @@ const { WorkflowDefinition, WorkflowInstance, WorkflowScheduler, WorkflowWorker 
 const AsyncWorkflowScheduler = require('../workflow/async-workflow-scheduler');
 const AsyncWorkflowWorker = require('../workflow/async-workflow-worker');
 const PostgresTenantQuotaRepository = require('../../infrastructure/persistence/postgres/postgres-tenant-quota-repository');
+const ExecutionPersistenceCoordinator = require('./execution-persistence-coordinator');
 
 class OrientRuntime {
   constructor({
@@ -90,6 +91,12 @@ class OrientRuntime {
 
     this.persistence =
       persistence;
+
+    this.persistenceCoordinator = new ExecutionPersistenceCoordinator({
+      persistence,
+      tenantId: this.tenantId,
+      persistedEventOffsets: new WeakMap()
+    });
 
     this.tenantId = tenantId || 'local';
     this.userId = userId || 'local';
@@ -207,107 +214,15 @@ class OrientRuntime {
   }
 
   persistEvents(context) {
-    if (
-      !this.persistence ||
-      !this.persistence.events
-    ) {
-      return [];
-    }
-
-    const events =
-      Array.isArray(context.events)
-        ? context.events
-        : [];
-
-    if (!events.length) {
-      return [];
-    }
-
-    const scopedEvents = events.map((event) => ({
-      ...event,
-      data: {
-        ...(event.data || {}),
-        tenantId: context.tenantId
-      }
-    }));
-
-    return this.persistence.events.appendMany(scopedEvents, { tenantId: this.tenantId });
+    return this.persistenceCoordinator.persistEvents(context);
   }
 
   async persistExecution(context, mode = 'update') {
-    if (
-      !this.persistence ||
-      !this.persistence.executions
-    ) {
-      return null;
-    }
-
-    const snapshot =
-      context.snapshot();
-
-    if (snapshot.tenantId && snapshot.tenantId !== this.tenantId) {
-      throw Object.assign(new Error('Execution tenant does not match runtime tenant'), { code: 'TENANT_CONTEXT_MISMATCH' });
-    }
-
-    if (mode === 'insert') {
-      return this.persistence.executions.insert(snapshot, { tenantId: this.tenantId });
-    }
-
-    return this.persistence.executions.update(snapshot.executionId, snapshot, { tenantId: this.tenantId });
+    return this.persistenceCoordinator.persistExecution(context, mode);
   }
 
   async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
-    if (!context) {
-      throw new TypeError('context is required');
-    }
-
-    const snapshot =
-      (await this.persistExecution(
-        context,
-        mode
-      )) || context.snapshot();
-
-    const events = Array.isArray(context.events)
-      ? context.events
-      : [];
-
-    let offset =
-      this.persistedEventOffsets.get(context) || 0;
-
-    if (offset > events.length) {
-      offset = 0;
-    }
-
-    const pendingEvents =
-      events.slice(offset).map((event) => ({
-        ...event,
-        data: {
-          ...(event.data || {}),
-          tenantId: context.tenantId
-        }
-      }));
-
-    const persistedEvents =
-      pendingEvents.length
-        ? this.persistence?.events?.appendMany(pendingEvents, { tenantId: this.tenantId }) || []
-        : [];
-
-    this.persistedEventOffsets.set(
-      context,
-      events.length
-    );
-
-    const durableCheckpoint =
-      this.persistence?.checkpoints?.save
-        ? this.persistence.checkpoints.save(snapshot, { reason, tenantId: this.tenantId })
-        : null;
-
-    return {
-      snapshot,
-      events: persistedEvents?.then ? await persistedEvents : persistedEvents,
-      eventCount: (persistedEvents?.then ? (await persistedEvents).length : persistedEvents.length),
-      checkpoint: durableCheckpoint?.then ? await durableCheckpoint : durableCheckpoint
-    };
+    return this.persistenceCoordinator.checkpoint(context, mode, reason);
   }
 
   planFingerprint(plan) {
