@@ -13,6 +13,16 @@ class EvaluationEngine {
       throw new TypeError('Observations must be an array');
     }
 
+    if (Array.isArray(plan?.steps) && plan.steps.length === 0) {
+      return new Evaluation({
+        outcome: 'no_action',
+        goalProgress: 0,
+        confidence: 1,
+        reason: 'لا توجد خطوات قابلة للتنفيذ',
+        nextAction: null
+      });
+    }
+
     if (result === undefined) {
       return new Evaluation({
         outcome: 'failed',
