@@ -186,7 +186,7 @@ class OrientRuntime {
       '0.9.0';
   }
 
-  async persistEvents(context) {
+  persistEvents(context) {
     if (
       !this.persistence ||
       !this.persistence.events
@@ -269,7 +269,7 @@ class OrientRuntime {
 
     const persistedEvents =
       pendingEvents.length
-        ? await this.persistence?.events?.appendMany(pendingEvents, { tenantId: this.tenantId }) || []
+        ? this.persistence?.events?.appendMany(pendingEvents, { tenantId: this.tenantId }) || []
         : [];
 
     this.persistedEventOffsets.set(
@@ -284,9 +284,9 @@ class OrientRuntime {
 
     return {
       snapshot,
-      events: persistedEvents,
-      eventCount: persistedEvents.length,
-      checkpoint: durableCheckpoint
+      events: persistedEvents?.then ? await persistedEvents : persistedEvents,
+      eventCount: (persistedEvents?.then ? (await persistedEvents).length : persistedEvents.length),
+      checkpoint: durableCheckpoint?.then ? await durableCheckpoint : durableCheckpoint
     };
   }
 
