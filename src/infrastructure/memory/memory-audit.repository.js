@@ -2,8 +2,9 @@ const fs = require('fs');
 const path = require('path');
 
 class MemoryAuditRepository {
-  constructor(filePath) {
+  constructor(filePath, { eventSink = null } = {}) {
     this.filePath = filePath;
+    this.eventSink = eventSink;
     this.ensureStorage();
   }
 
@@ -19,6 +20,11 @@ class MemoryAuditRepository {
     if (!raw.trim()) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
+  }
+
+  setEventSink(eventSink) {
+    this.eventSink = typeof eventSink === 'function' ? eventSink : null;
+    return this;
   }
 
   append(event) {
@@ -42,6 +48,21 @@ class MemoryAuditRepository {
         if (fs.existsSync(temporaryFile)) fs.unlinkSync(temporaryFile);
       } catch {}
       throw new Error(`Memory audit write failed: ${error.message}`);
+    }
+
+    if (this.eventSink) {
+      const eventTypeByAction = {
+        'memory.created': 'memory.created',
+        'memory.reinforced': 'memory.reinforced',
+        'memory.conflict.resolved': 'memory.conflict.resolved',
+        'memory.accessed': 'memory.accessed',
+        'memory.consolidated': 'memory.consolidated',
+        'memory.archived': 'memory.archived'
+      };
+      this.eventSink({
+        ...record,
+        type: record.type || eventTypeByAction[record.action] || 'memory.updated'
+      });
     }
 
     return record;

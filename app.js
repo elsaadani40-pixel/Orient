@@ -148,6 +148,10 @@ const observationBus =
 const eventStore =
   new AgentEventStore();
 
+memoryAuditRepository.setEventSink(
+  (event) => eventStore.append(event)
+);
+
 const eventPublisher =
   new AgentEventPublisher(
     observationBus

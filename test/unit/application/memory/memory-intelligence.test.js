@@ -153,6 +153,33 @@ test('consolidation is loss-minimizing and auditable', () => {
 });
 
 
+
+test('memory lifecycle audit can feed the agent event store with trace provenance', () => {
+  const { service, audit, context } = createService();
+  const events = [];
+  audit.setEventSink(event => events.push(event));
+
+  const traceContext = {
+    ...context,
+    executionId: 'exec-memory-1',
+    goalId: 'goal-memory-1',
+    decisionId: 'decision-memory-1',
+    traceId: 'trace-memory-1'
+  };
+
+  const memory = service.add('Event-store linked memory', {
+    type: 'note'
+  }, traceContext);
+
+  const created = events.find(event => event.type === 'memory.created');
+  assert.ok(created);
+  assert.equal(created.memoryId, memory.id);
+  assert.equal(created.executionId, 'exec-memory-1');
+  assert.equal(created.goalId, 'goal-memory-1');
+  assert.equal(created.decisionId, 'decision-memory-1');
+  assert.equal(created.traceId, 'trace-memory-1');
+});
+
 test('memory audit carries execution and decision trace context', () => {
   const { service, context } = createService();
   const traceContext = {
