@@ -148,7 +148,7 @@ test('consolidation is loss-minimizing and auditable', () => {
 
   const result = service.consolidate();
   assert.equal(result.consolidated, 1);
-  assert.equal(service.get(second.id).state, 'superseded');
+  assert.throws(\n    () => service.get(first.id),\n    error => error.code === 'MEMORY_NOT_FOUND'\n  );
   assert.ok(audit.read().some(event => event.action === 'memory.consolidated'));
 });
 
