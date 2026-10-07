@@ -6,6 +6,8 @@ const JsonMemoryRepository =
 
 const MemoryService =
   require('./src/application/memory/memory.service');
+const MemoryAuditRepository =
+  require('./src/infrastructure/memory/memory-audit.repository');
 
 const AgentRegistry =
   require('./src/core/agent/boundary/agent-registry');
@@ -115,10 +117,16 @@ const agentInvocationService =
     agentRegistry
   });
 
+const memoryAuditRepository =
+  new MemoryAuditRepository(
+    require('path').join(config.agentDataDirectory, 'memory-audit.json')
+  );
+
 const memoryService =
   new MemoryService(repository, {
     memoryAccessPolicy,
-    defaultScope: 'personal'
+    defaultScope: 'personal',
+    auditRepository: memoryAuditRepository
   });
 
 const toolRegistry =
