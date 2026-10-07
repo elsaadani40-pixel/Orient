@@ -51,9 +51,17 @@ class MemoryAuditRepository {
     }
 
     if (this.eventSink) {
+      const eventTypeByAction = {
+        'memory.created': 'memory.created',
+        'memory.reinforced': 'memory.reinforced',
+        'memory.conflict.resolved': 'memory.conflict.resolved',
+        'memory.accessed': 'memory.accessed',
+        'memory.consolidated': 'memory.consolidated',
+        'memory.archived': 'memory.archived'
+      };
       this.eventSink({
         ...record,
-        type: record.type || `memory.${String(record.action || 'updated').replace(/^memory\\./, '').replace(/\\./g, '_')}`
+        type: record.type || eventTypeByAction[record.action] || 'memory.updated'
       });
     }
 
