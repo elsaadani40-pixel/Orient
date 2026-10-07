@@ -1,12 +1,16 @@
 name: ORIENT ONE — Strict CI
 
-# Strict gate: every branch change must pass the full compatibility matrix.
-# Runner diagnostics: fresh commit-triggered run after GitHub-hosted runner allocation failures.
+# Strict gate: every branch change must pass through PR CI; main is also validated directly.
+# Keep one active CI generation per PR/branch so stale runs cannot consume the queue.
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main"]
   pull_request:
+
+concurrency:
+  group: orient-strict-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -48,7 +52,7 @@ jobs:
           set -euo pipefail
           test ! -e ORIENT-ONE-AUDIT-PACKAGE.md
           test ! -e ORIENT-ONE-AUDIT-PACKAGE-SAFE.md
-          ! git ls-files | grep -E '(^|/)(\.env|.*\.pem|.*\.key)$' || {
+          ! git ls-files | grep -E '(^|/)(\\.env|.*\\.pem|.*\\.key)$' || {
             echo "Sensitive file tracked"
             exit 1
           }
