@@ -81,7 +81,10 @@ test('semantic conflicts supersede the previous active fact', () => {
   });
 
   assert.equal(newMemory.supersedesId, oldMemory.id);
-  assert.equal(service.get(oldMemory.id).state, 'superseded');
+  assert.throws(
+    () => service.get(oldMemory.id),
+    error => error.code === 'MEMORY_NOT_FOUND'
+  );
   assert.equal(service.search('Cairo')[0].id, newMemory.id);
 });
 
