@@ -27,6 +27,7 @@ const AsyncWorkflowScheduler = require('../workflow/async-workflow-scheduler');
 const AsyncWorkflowWorker = require('../workflow/async-workflow-worker');
 const PostgresTenantQuotaRepository = require('../../infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 const ExecutionPersistenceCoordinator = require('./execution-persistence-coordinator');
+const WorkflowExecutionCoordinator = require('./workflow-execution-coordinator');
 
 class OrientRuntime {
   constructor({
@@ -193,8 +194,15 @@ class OrientRuntime {
       ? Promise.resolve(this.workflowScheduler.recoverPersisted())
       : Promise.resolve(0);
 
-    this.persistedEventOffsets =
-      new WeakMap();
+    this.workflowExecutionCoordinator = new WorkflowExecutionCoordinator({
+      scheduler: this.workflowScheduler,
+      workflowRepository: this.workflowRepository,
+      persistence: this.persistence,
+      tenantId: this.tenantId,
+      userId: this.userId,
+      workspaceId: this.workspaceId,
+      executeRequest: (requestInput, options) => this.execute(requestInput, options)
+    });
 
     this.agentLoop =
       new AgentLoop({
@@ -288,123 +296,8 @@ class OrientRuntime {
       : null;
   }
 
-  async executeWorkflow(input, { approval = null, approvals = {}, priority = 0, deadlineAt = null } = {}) {
-    await this.recoveryReady;
-    await this.quotaReady;
-    const text = String(input || '').trim();
-
-    if (!text) {
-      return {
-        type: 'error',
-        message: 'لم يتم إرسال طلب.'
-      };
-    }
-    if (text.length > this.maxInputChars) {
-      return {
-        type: 'error',
-        code: 'INPUT_TOO_LARGE',
-        message: 'حجم الطلب يتجاوز الحد المسموح.'
-      };
-    }
-
-    this.tenantQuotaService.assertTenant(this.tenantId);
-    this.tenantQuotaService.assertInputSize(text);
-    if (!this.tenantQuotaRepository) this.tenantQuotaService.assertWorkflowAdmission();
-
-    const definition = new WorkflowDefinition({
-      id: 'orient.request.execution',
-      version: 1,
-      name: 'ORIENT Request Execution',
-      steps: [
-        {
-          id: 'agent-runtime',
-          agent: 'ORIENT_RUNTIME',
-          metadata: {
-            executionMode: 'canonical-agent-runtime'
-          }
-        }
-      ]
-    });
-
-    const instance = new WorkflowInstance({
-      definition,
-      tenantId: this.tenantId,
-      userId: this.userId,
-      workspaceId: this.workspaceId,
-      input: { text }
-    });
-
-    instance.metadata.priority = priority;
-    if (this.workflowScheduler.async) {
-      await this.workflowScheduler.enqueueDurable(instance, { priority, deadlineAt });
-    } else {
-      if (this.workflowRepository?.save) this.workflowRepository.save(instance);
-      this.workflowScheduler.enqueue(instance, { priority, deadlineAt });
-      if (this.workflowRepository?.save) this.workflowRepository.save(instance);
-    }
-
-    const WorkerClass = this.workflowScheduler.async ? AsyncWorkflowWorker : WorkflowWorker;
-    const worker = new WorkerClass({
-      scheduler: this.workflowScheduler,
-      eventSink: (event) => {
-        if (this.workflowRepository?.save) {
-          const persisted = this.workflowRepository.save(instance);
-          if (persisted?.then) persisted.catch(() => {});
-        }
-
-        if (this.persistence?.events?.append) {
-          this.persistence.events.append({
-            id: event.eventId || crypto.randomUUID(),
-            type: event.type,
-            executionId: instance.workflowId,
-            timestamp: event.timestamp || new Date().toISOString(),
-            data: {
-              ...(event.payload || event),
-              tenantId: this.tenantId
-            }
-          });
-        }
-      },
-      executor: async () => this.execute(text, {
-        approval,
-        approvals
-      })
-    });
-
-    const completed = await worker.tick();
-
-    if (!completed) {
-      throw Object.assign(
-        new Error('Workflow could not acquire a worker lease'),
-        { code: 'WORKFLOW_LEASE_UNAVAILABLE' }
-      );
-    }
-
-    if (completed.state === WorkflowInstance.STATES.COMPLETED) {
-      return completed.steps['agent-runtime'].result;
-    }
-
-    if (completed.state === WorkflowInstance.STATES.WAITING) {
-      return {
-        type: 'workflow_waiting',
-        workflowId: completed.workflowId,
-        state: completed.state,
-        retry: completed.retry,
-        execution: completed.toJSON()
-      };
-    }
-
-    throw Object.assign(
-      new Error(
-        completed.steps['agent-runtime']?.error?.message ||
-        'Workflow execution failed'
-      ),
-      {
-        code:
-          completed.steps['agent-runtime']?.error?.code ||
-          'WORKFLOW_EXECUTION_FAILED'
-      }
-    );
+  async executeWorkflow(input, options = {}) {
+    return this.workflowExecutionCoordinator.execute(input, options);
   }
 
   async execute(input, { approval = null, approvals = {} } = {}) {
