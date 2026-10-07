@@ -385,7 +385,7 @@ class PostgresWorkflowRepository {
       const result=await client.query(
         `WITH candidates AS (
            SELECT w.workflow_id FROM workflows w
-           WHERE w.tenant_id=$1 AND w.state IN ('QUEUED','WAITING','RECOVERING')
+           WHERE w.tenant_id=$1 AND w.state IN ('QUEUED','WAITING','RECOVERING','RUNNING')
              AND NOT EXISTS (SELECT 1 FROM workflow_dispatch_claims c WHERE c.tenant_id=w.tenant_id AND c.workflow_id=w.workflow_id AND c.expires_at > NOW())
              AND NOT EXISTS (SELECT 1 FROM workflow_leases l WHERE l.tenant_id=w.tenant_id AND l.workflow_id=w.workflow_id AND l.expires_at > NOW())
            ORDER BY COALESCE((w.payload->>'priority')::int,0) DESC, w.updated_at ASC
