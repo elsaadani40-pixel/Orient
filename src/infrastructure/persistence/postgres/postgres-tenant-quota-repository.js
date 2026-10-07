@@ -81,33 +81,36 @@ class PostgresTenantQuotaRepository {
   }
 
   async promoteWorkflow({tenantId,workflowId,expiresAt=null}) {
+    const normalizedExpiresAt=expiresAt==null?null:new Date(expiresAt).toISOString();
     const result = await this.db.query(
       `UPDATE tenant_quota_reservations
        SET state='RUNNING',expires_at=$3
        WHERE tenant_id=$1 AND workflow_id=$2 AND state='QUEUED'
        RETURNING tenant_id,workflow_id,state,reserved_at,expires_at`,
-      [tenantId,workflowId,expiresAt]
+      [tenantId,workflowId,normalizedExpiresAt]
     );
     return result.rowCount === 1 ? this.toModel(result.rows[0]) : null;
   }
 
   async queueWorkflow({tenantId,workflowId,expiresAt=null}) {
+    const normalizedExpiresAt=expiresAt==null?null:new Date(expiresAt).toISOString();
     const result = await this.db.query(
       `UPDATE tenant_quota_reservations
        SET state='QUEUED',expires_at=$3
        WHERE tenant_id=$1 AND workflow_id=$2
        RETURNING tenant_id,workflow_id,state,reserved_at,expires_at`,
-      [tenantId,workflowId,expiresAt]
+      [tenantId,workflowId,normalizedExpiresAt]
     );
     return result.rowCount === 1 ? this.toModel(result.rows[0]) : null;
   }
 
   async refreshWorkflow({tenantId,workflowId,expiresAt}) {
+    const normalizedExpiresAt=new Date(expiresAt).toISOString();
     const result = await this.db.query(
       `UPDATE tenant_quota_reservations
        SET expires_at=$3
        WHERE tenant_id=$1 AND workflow_id=$2 AND state='RUNNING'`,
-      [tenantId,workflowId,expiresAt]
+      [tenantId,workflowId,normalizedExpiresAt]
     );
     return result.rowCount === 1;
   }
