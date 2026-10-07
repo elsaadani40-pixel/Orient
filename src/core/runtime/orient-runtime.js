@@ -264,6 +264,14 @@ class OrientRuntime {
     return this.persistenceCoordinator.checkpoint(context, mode, reason);
   }
 
+  planFingerprint(plan) {
+    return this.requestExecutionCoordinator.planFingerprint(plan);
+  }
+
+  validateReplannedPlan(plan, previousFingerprint) {
+    return this.requestExecutionCoordinator.validateReplannedPlan(plan, previousFingerprint);
+  }
+
   shutdown(options = {}) {
     return this.workflowScheduler?.shutdown
       ? this.workflowScheduler.shutdown(options)
