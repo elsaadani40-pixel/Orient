@@ -83,6 +83,21 @@ function createServer({ memoryRoutes, agentRoutes }) {
         return;
       }
 
+      const executionApprovalsMatch =
+        requestUrl.pathname.match(/^\/executions\/([^/]+)\/approvals$/);
+
+      if (
+        req.method === 'GET' &&
+        executionApprovalsMatch
+      ) {
+        await agentRoutes.approvals(
+          req,
+          res,
+          decodeURIComponent(executionApprovalsMatch[1])
+        );
+        return;
+      }
+
       const executionResumeMatch =
         requestUrl.pathname.match(/^\/executions\/([^/]+)\/resume$/);
 
