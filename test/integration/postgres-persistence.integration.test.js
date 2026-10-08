@@ -99,6 +99,9 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
   }, 'tenant-fence');
 
   await persistence.workflowLeases.delete(workflowId, second.leaseId, 'tenant-fence');
+  await persistence.workers.unregister('stale-worker-a', tenantId);
+  await persistence.workers.unregister('worker', tenantId);
+  await persistence.workers.unregister('recovery-worker-b', tenantId);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
@@ -195,6 +198,9 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
     [workflowId]
   );
 
+  await persistence.workers.register({ workerId: 'worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, 'tenant-recovery');
+  await persistence.workers.register({ workerId: 'recovery-worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, 'tenant-recovery');
+
   const scheduler = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
     leaseRepository: persistence.workflowLeases,
@@ -217,6 +223,8 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
   assert.equal(takeover.instance.state, 'RUNNING');
 
   await scheduler.releaseAsync(workflowId, takeover.leaseId);
+  await persistence.workers.unregister('worker', 'tenant-recovery');
+  await persistence.workers.unregister('recovery-worker', 'tenant-recovery');
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
@@ -252,6 +260,10 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
     tenantId,
     leaseDurationMs: 30000
   });
+
+  await persistence.workers.register({ workerId: 'stale-worker-a', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+  await persistence.workers.register({ workerId: 'worker', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+  await persistence.workers.register({ workerId: 'recovery-worker-b', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
 
   await schedulerA.enqueueDurable(instance);
 
