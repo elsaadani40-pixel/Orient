@@ -20,7 +20,7 @@ class WorkflowLeaseStore {
   acquire(workflowId, workerId = crypto.randomUUID(), metadata = {}) {
     if (!workflowId) throw new AppError('workflowId is required', 400, 'LEASE_WORKFLOW_REQUIRED');
     const now = this.now();
-    const lease = {
+    let lease = {
       workflowId,
       leaseId: crypto.randomUUID(),
       workerId,
