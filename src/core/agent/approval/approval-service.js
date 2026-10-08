@@ -53,6 +53,22 @@ class ApprovalService {
     return { allowed: true, approval: { ...stored } };
   }
 
+  async findReusable({ executionId, step, tool, planRevision = 1, tenantId = this.tenantId } = {}) {
+    if (!executionId || !Number.isInteger(step) || step < 1 || !tool) return null;
+    const candidates = this.repository?.findByExecution
+      ? await this.repository.findByExecution({ executionId, step, tool, planRevision, tenantId })
+      : Array.from(this.approvals.values())
+        .filter(record => record.executionId === String(executionId) && Number(record.step) === step && record.tool === tool && Number(record.planRevision || 1) === Number(planRevision))
+        .sort((x, y) => Date.parse(y.issuedAt || 0) - Date.parse(x.issuedAt || 0));
+    for (const candidate of candidates) {
+      if (!candidate || candidate.used) continue;
+      if (tenantId && candidate.tenantId !== tenantId && candidate.metadata?.tenantId !== tenantId) continue;
+      if (!candidate.expiresAt || this.clock() >= Date.parse(candidate.expiresAt)) continue;
+      return { ...candidate };
+    }
+    return null;
+  }
+
   async consume(approvalId, tenantId = this.tenantId) {
     const stored = this.repository?.findById
       ? await this.repository.findById(approvalId, { tenantId })
