@@ -112,7 +112,9 @@ test('application and HTTP layers cannot bypass the canonical runtime', () => {
   const path = require('path');
   const repositoryRoot = path.resolve(__dirname, '../../../..');
   const forbiddenImports = [
-    /core\\/execution\\/agent-loop/,\n    /core\\/agent\\/orchestrator\\/agent-orchestrator/,\n    /core\\/runtime\\/request-execution-coordinator/
+    'core/execution/agent-loop',
+    'core/agent/orchestrator/agent-orchestrator',
+    'core/runtime/request-execution-coordinator'
   ];
 
   const files = [];
