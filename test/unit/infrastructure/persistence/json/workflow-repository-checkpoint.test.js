@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const WorkflowRepository = require('../../../../src/infrastructure/persistence/json/workflow.repository');
+const WorkflowRepository = require('../../../../../src/infrastructure/persistence/json/workflow.repository');
 
 function makeRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-workflow-'));
