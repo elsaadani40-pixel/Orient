@@ -96,6 +96,9 @@ class ExecutionContext {
     this.status =
       EXECUTION_STATUS.CREATED;
 
+    this.cancellationRequested = false;
+    this.cancellationReason = null;
+
     this.agentState =
       new AgentState({
         agentId: 'default-agent',
@@ -611,6 +614,17 @@ class ExecutionContext {
     return this;
   }
 
+  requestCancellation(reason = 'Execution cancellation requested') {
+    this.cancellationRequested = true;
+    this.cancellationReason = String(reason || 'Execution cancellation requested');
+    this.record('execution.cancellation.requested', { reason: this.cancellationReason });
+    return this;
+  }
+
+  isCancellationRequested() {
+    return this.cancellationRequested === true;
+  }
+
   cancel(
     reason = 'Execution cancelled'
   ) {
@@ -728,6 +742,9 @@ class ExecutionContext {
 
     context.status =
       snapshot.status || EXECUTION_STATUS.CREATED;
+
+    context.cancellationRequested = Boolean(snapshot.cancellationRequested);
+    context.cancellationReason = snapshot.cancellationReason || null;
 
     context.startedAt =
       snapshot.startedAt || null;
@@ -853,6 +870,12 @@ class ExecutionContext {
 
       status:
         this.status,
+
+      cancellationRequested:
+        this.cancellationRequested,
+
+      cancellationReason:
+        this.cancellationReason,
 
       agentLifecycle:
         this.getAgentLifecycle(),
