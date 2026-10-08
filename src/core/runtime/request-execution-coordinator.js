@@ -139,7 +139,21 @@ class RequestExecutionCoordinator {
 
       const { plan, loopResult, replanningDecision } = executionResult;
       context.complete();
-      await this.persistenceCoordinator.persistExecution(context, 'update');
+      const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
+
+      if (persistedExecution?.status !== context.status) {
+        if (persistedExecution?.status === 'cancelled') {
+          return {
+            requestId,
+            type: 'execution_cancelled',
+            execution: persistedExecution
+          };
+        }
+        throw Object.assign(new Error('Execution outcome persistence diverged from runtime state'), {
+          code: 'EXECUTION_OUTCOME_DIVERGENCE'
+        });
+      }
+
       await this.persistenceCoordinator.persistEvents(context);
 
       const result = loopResult.result;
