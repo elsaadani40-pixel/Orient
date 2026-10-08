@@ -43,7 +43,7 @@ class PostgresWorkerRegistryRepository {
          status=EXCLUDED.status,
          capabilities=EXCLUDED.capabilities,
          metadata=EXCLUDED.metadata`,
-      [item.tenantId,item.workerId,item.startedAt,item.heartbeatAt,item.expiresAt,item.status,item.capabilities,item.metadata]
+      [item.tenantId,item.workerId,item.startedAt,item.heartbeatAt,item.expiresAt,item.status,JSON.stringify(item.capabilities),item.metadata]
     );
     return item;
   }

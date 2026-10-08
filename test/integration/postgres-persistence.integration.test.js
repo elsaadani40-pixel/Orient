@@ -195,6 +195,9 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
     [workflowId]
   );
 
+  await persistence.workers.register({ workerId: 'worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, 'tenant-recovery');
+  await persistence.workers.register({ workerId: 'recovery-worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, 'tenant-recovery');
+
   const scheduler = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
     leaseRepository: persistence.workflowLeases,
@@ -217,6 +220,8 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
   assert.equal(takeover.instance.state, 'RUNNING');
 
   await scheduler.releaseAsync(workflowId, takeover.leaseId);
+  await persistence.workers.unregister('worker', 'tenant-recovery');
+  await persistence.workers.unregister('recovery-worker', 'tenant-recovery');
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
@@ -252,6 +257,10 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
     tenantId,
     leaseDurationMs: 30000
   });
+
+  await persistence.workers.register({ workerId: 'stale-worker-a', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+  await persistence.workers.register({ workerId: 'worker', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+  await persistence.workers.register({ workerId: 'recovery-worker-b', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
 
   await schedulerA.enqueueDurable(instance);
 
@@ -332,6 +341,8 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   instance.transition('QUEUED');
   await persistence.workflows.save(instance, tenantId);
   await persistence.tenantQuotas.ensureTenant(tenantId, policy);
+
+  await persistence.workers.register({ workerId: 'worker', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
 
   const schedulerA = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
@@ -575,16 +586,29 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
     [workflowId, { workflowId, tenantId: 'tenant-claim', state: 'QUEUED', metadata: {} }]
   );
 
+  const workers = ['worker-a', 'worker-b', 'worker-recovery'].map(id => id + '-' + Date.now());
+  for (const workerId of workers) {
+    await persistence.workers.register({
+      workerId,
+      tenantId: 'tenant-claim',
+      status: 'READY',
+      capabilities: [],
+      heartbeatAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60000).toISOString()
+    }, 'tenant-claim');
+  }
+  const [workerA, workerB] = workers;
+
   const [a, b] = await Promise.all([
     persistence.workflows.claimQueued({
       tenantId: 'tenant-claim',
-      workerId: 'worker-a-' + Date.now(),
+      workerId: workerA,
       limit: 1,
       claimTtlMs: 60000
     }),
     persistence.workflows.claimQueued({
       tenantId: 'tenant-claim',
-      workerId: 'worker-b-' + Date.now(),
+      workerId: workerB,
       limit: 1,
       claimTtlMs: 60000
     })
@@ -597,14 +621,17 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
     [workflowId]
   );
 
+  const workerRecovery = workers[2];
+
   const recovered = await persistence.workflows.claimQueued({
     tenantId: 'tenant-claim',
-    workerId: 'worker-recovery',
+    workerId: workerRecovery,
     limit: 1,
     claimTtlMs: 60000
   });
   assert.equal(recovered.length, 1);
 
-  await persistence.workflows.releaseDispatchClaim(workflowId, 'worker-recovery', 'tenant-claim');
+  await persistence.workflows.releaseDispatchClaim(workflowId, workerRecovery, 'tenant-claim');
+  for (const workerId of workers) await persistence.workers.unregister(workerId, 'tenant-claim');
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
