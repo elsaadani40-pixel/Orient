@@ -4,22 +4,22 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const AgentRegistry = require('../../src/core/agent/boundary/agent-registry');
-const { registerDefaultAgents } = require('../../src/core/agent/catalog/default-agents');
-const PlannerService = require('../../src/application/planner/planner.service');
-const PlanValidator = require('../../src/core/planning/validation/plan-validator');
-const Replanner = require('../../src/core/planning/replanning/replanner');
-const DecisionEngine = require('../../src/core/agent/decision/decision-engine');
-const RecoveryEngine = require('../../src/core/agent/recovery/recovery-engine');
-const AgentOrchestrator = require('../../src/core/agent/orchestrator/agent-orchestrator');
-const ToolRegistry = require('../../src/core/tools/tool.registry');
-const OrientRuntime = require('../../src/core/runtime/orient-runtime');
-const createProjectTools = require('../../src/application/tools/project.tools');
-const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
-const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
-const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
-const ApprovalService = require('../../src/core/agent/approval/approval-service');
-const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
+const AgentRegistry = require(path.join(process.cwd(), 'src/core/agent/boundary/agent-registry'));
+const { registerDefaultAgents } = require(path.join(process.cwd(), 'src/core/agent/catalog/default-agents'));
+const PlannerService = require(path.join(process.cwd(), 'src/application/planner/planner.service'));
+const PlanValidator = require(path.join(process.cwd(), 'src/core/planning/validation/plan-validator'));
+const Replanner = require(path.join(process.cwd(), 'src/core/planning/replanning/replanner'));
+const DecisionEngine = require(path.join(process.cwd(), 'src/core/agent/decision/decision-engine'));
+const RecoveryEngine = require(path.join(process.cwd(), 'src/core/agent/recovery/recovery-engine'));
+const AgentOrchestrator = require(path.join(process.cwd(), 'src/core/agent/orchestrator/agent-orchestrator'));
+const ToolRegistry = require(path.join(process.cwd(), 'src/core/tools/tool.registry'));
+const OrientRuntime = require(path.join(process.cwd(), 'src/core/runtime/orient-runtime'));
+const createProjectTools = require(path.join(process.cwd(), 'src/application/tools/project.tools'));
+const CapabilityMapper = require(path.join(process.cwd(), 'src/core/agent/capability/capability-mapper'));
+const PolicyEngine = require(path.join(process.cwd(), 'src/core/agent/policy/policy-engine'));
+const AuthorizationService = require(path.join(process.cwd(), 'src/core/agent/authorization/authorization-service'));
+const ApprovalService = require(path.join(process.cwd(), 'src/core/agent/approval/approval-service'));
+const JsonPersistence = require(path.join(process.cwd(), 'src/infrastructure/persistence/json/json-persistence'));
 
 function createRuntime(root, { approvalService = null, persistence: persisted = null } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
@@ -210,22 +210,22 @@ test('high-risk side effect survives an actual process restart without duplicate
 
   const childScript = `
 const path = require('node:path');
-const AgentRegistry = require('../../src/core/agent/boundary/agent-registry');
-const { registerDefaultAgents } = require('../../src/core/agent/catalog/default-agents');
-const PlannerService = require('../../src/application/planner/planner.service');
-const PlanValidator = require('../../src/core/planning/validation/plan-validator');
-const Replanner = require('../../src/core/planning/replanning/replanner');
-const DecisionEngine = require('../../src/core/agent/decision/decision-engine');
-const RecoveryEngine = require('../../src/core/agent/recovery/recovery-engine');
-const AgentOrchestrator = require('../../src/core/agent/orchestrator/agent-orchestrator');
-const ToolRegistry = require('../../src/core/tools/tool.registry');
-const OrientRuntime = require('../../src/core/runtime/orient-runtime');
-const createProjectTools = require('../../src/application/tools/project.tools');
-const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
-const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
-const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
-const ApprovalService = require('../../src/core/agent/approval/approval-service');
-const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
+const AgentRegistry = require(path.join(process.cwd(), 'src/core/agent/boundary/agent-registry'));
+const { registerDefaultAgents } = require(path.join(process.cwd(), 'src/core/agent/catalog/default-agents'));
+const PlannerService = require(path.join(process.cwd(), 'src/application/planner/planner.service'));
+const PlanValidator = require(path.join(process.cwd(), 'src/core/planning/validation/plan-validator'));
+const Replanner = require(path.join(process.cwd(), 'src/core/planning/replanning/replanner'));
+const DecisionEngine = require(path.join(process.cwd(), 'src/core/agent/decision/decision-engine'));
+const RecoveryEngine = require(path.join(process.cwd(), 'src/core/agent/recovery/recovery-engine'));
+const AgentOrchestrator = require(path.join(process.cwd(), 'src/core/agent/orchestrator/agent-orchestrator'));
+const ToolRegistry = require(path.join(process.cwd(), 'src/core/tools/tool.registry'));
+const OrientRuntime = require(path.join(process.cwd(), 'src/core/runtime/orient-runtime'));
+const createProjectTools = require(path.join(process.cwd(), 'src/application/tools/project.tools'));
+const CapabilityMapper = require(path.join(process.cwd(), 'src/core/agent/capability/capability-mapper'));
+const PolicyEngine = require(path.join(process.cwd(), 'src/core/agent/policy/policy-engine'));
+const AuthorizationService = require(path.join(process.cwd(), 'src/core/agent/authorization/authorization-service'));
+const ApprovalService = require(path.join(process.cwd(), 'src/core/agent/approval/approval-service'));
+const JsonPersistence = require(path.join(process.cwd(), 'src/infrastructure/persistence/json/json-persistence'));
 
 (async () => {
   const root = process.argv[1];
