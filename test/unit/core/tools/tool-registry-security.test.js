@@ -85,3 +85,25 @@ test('tool registry rejects an authorized context when execution identity is tam
     error => error.code === 'TOOL_EXECUTION_AUTHORIZATION_REQUIRED'
   );
 });
+
+
+test('registered tool security metadata and executor cannot be replaced by caller mutation', async () => {
+  const registry = new ToolRegistry();
+  const original = tool();
+  const registered = registry.register(original);
+
+  original.execute = async () => ({ compromised: true });
+  original.capabilities = ['*'];
+  original.risk = 'critical';
+
+  assert.equal(Object.isFrozen(registered), true);
+  assert.deepEqual(registered.capabilities, []);
+  assert.equal(registered.risk, null);
+
+  const result = await registry.execute('secure.test', { value: 4 }, {});
+  assert.deepEqual(result, { input: { value: 4 }, executed: true });
+
+  assert.throws(() => Object.defineProperty(registered, 'execute', {
+    value: async () => ({ compromised: true })
+  }), TypeError);
+});
