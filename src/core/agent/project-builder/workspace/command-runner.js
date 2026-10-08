@@ -1,5 +1,34 @@
 const { spawn } = require('child_process');
 
+function terminateProcessTree(child) {
+  if (!child || !child.pid) {
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    child.kill('SIGTERM');
+    return;
+  }
+
+  try {
+    process.kill(-child.pid, 'SIGTERM');
+  } catch (error) {
+    if (error.code !== 'ESRCH') {
+      child.kill('SIGTERM');
+    }
+  }
+
+  setTimeout(() => {
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+    } catch (error) {
+      if (error.code !== 'ESRCH') {
+        child.kill('SIGKILL');
+      }
+    }
+  }, 100);
+}
+
 class CommandRunner {
   constructor({ policy }) {
     if (!policy) {
@@ -32,7 +61,8 @@ class CommandRunner {
         {
           cwd: workingDirectory,
           shell: false,
-          windowsHide: true
+          windowsHide: true,
+          detached: process.platform !== 'win32'
         }
       );
 
@@ -70,7 +100,7 @@ class CommandRunner {
       );
 
       const timer = setTimeout(() => {
-        child.kill('SIGTERM');
+        terminateProcessTree(child);
 
         reject(
           new Error(
