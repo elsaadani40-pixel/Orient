@@ -8,3 +8,5 @@ module.exports = {
   AsyncWorkflowWorker: require('./async-workflow-worker'),
   AsyncWorkflowWorkerService: require('./async-workflow-worker-service')
 };
+
+module.exports.MissionEventProjection = require('./mission-event-projection');
