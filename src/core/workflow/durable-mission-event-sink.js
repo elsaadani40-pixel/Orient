@@ -36,7 +36,13 @@ class DurableMissionEventSink {
 
   append(instance, type, data = {}, { persist = true } = {}) {
     const event = this._event(instance, type, data);
-    const persisted = this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
+    let persisted;
+    try {
+      persisted = this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
+    } catch (error) {
+      error.code = error.code || 'MISSION_EVENT_PERSISTENCE_FAILED';
+      throw error;
+    }
     if (persist && this.workflowRepository?.save) {
       try {
         this.workflowRepository.save(instance);
