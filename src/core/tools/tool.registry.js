@@ -1,10 +1,11 @@
 const AppError = require('../errors/AppError');
-const { isAuthorized } = require('./tool-execution-authorization');
+const { createToolExecutionAuthorizer } = require('./tool-execution-authorization');
 
 class ToolRegistry {
   constructor() {
     this.tools = new Map();
     this.authorizationRequired = false;
+    this.executionAuthorizer = createToolExecutionAuthorizer();
   }
 
   requireAuthorization() {
@@ -65,7 +66,13 @@ class ToolRegistry {
       );
     }
 
-    if (this.authorizationRequired && !isAuthorized(context)) {
+    if (this.authorizationRequired && !this.executionAuthorizer.isAuthorized(context, {
+      tool: name,
+      agentId: context.agentId,
+      executionId: context.executionId,
+      step: context.step,
+      planRevision: Number(context.plan?.revision || context.planRevision || 1)
+    })) {
       throw new AppError(
         `الأداة "${name}" تتطلب تفويضًا من مسار التنفيذ المصرح به`,
         403,
@@ -74,6 +81,10 @@ class ToolRegistry {
     }
 
     return tool.execute(input, context);
+  }
+
+  authorizeExecutionContext(context, decision, binding = {}) {
+    return this.executionAuthorizer.authorizeContext(context, decision, binding);
   }
 }
 
