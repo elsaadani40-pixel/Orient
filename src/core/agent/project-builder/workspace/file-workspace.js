@@ -1,6 +1,4 @@
 const fs = require('fs/promises');
-const path = require('path');
-
 class FileWorkspace {
   constructor({ policy }) {
     if (!policy) {
