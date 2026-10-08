@@ -98,6 +98,23 @@ function createServer({ memoryRoutes, agentRoutes }) {
         return;
       }
 
+      const executionCancelMatch =
+        requestUrl.pathname.match(/^\\/executions\\/([^/]+)\\/cancel$/);
+
+      if (
+        req.method === 'POST' &&
+        executionCancelMatch
+      ) {
+        const body = await readBody(req);
+        await agentRoutes.cancel(
+          req,
+          res,
+          decodeURIComponent(executionCancelMatch[1]),
+          body
+        );
+        return;
+      }
+
       const executionResumeMatch =
         requestUrl.pathname.match(/^\/executions\/([^/]+)\/resume$/);
 
