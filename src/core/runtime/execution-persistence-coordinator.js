@@ -65,7 +65,7 @@ class ExecutionPersistenceCoordinator {
 
     let persistedEvents = [];
     if (pendingEvents.length && this.persistence?.events?.appendMany) {
-      persistedEvents = this.persistence.events.appendMany(
+      persistedEvents = await this.persistence.events.appendMany(
         pendingEvents,
         { tenantId: this.tenantId }
       );
