@@ -51,6 +51,7 @@ class ApprovalService {
       : this.approvals.get(approvalId);
     if (!stored || stored.used) return false;
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return false;
+    if (!stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) return false;
     const usedAt = new Date(this.clock()).toISOString();
     if (this.repository?.consume) {
       const consumed = await this.repository.consume(approvalId, usedAt, tenantId);
