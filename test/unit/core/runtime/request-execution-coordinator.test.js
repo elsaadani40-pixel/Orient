@@ -153,7 +153,7 @@ test('forwards request-local approval collection to execution without corrupting
         };
       }
     },
-    recoveryCoordinator: {},
+    recoveryCoordinator: { fail: async () => {} },
     persistence: null,
     persistenceCoordinator: {
       persistExecution: async () => {},
