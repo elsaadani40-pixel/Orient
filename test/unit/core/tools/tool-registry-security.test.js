@@ -2,7 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const ToolRegistry = require('../../../../src/core/tools/tool.registry');
-const { authorizeContext } = require('../../../../src/core/tools/tool-execution-authorization');
 
 function tool() {
   return {
@@ -31,14 +30,58 @@ test('tool registry accepts only an internal authorized execution context', asyn
   registry.requireAuthorization();
 
   const context = {};
-  authorizeContext(context, {
+  registry.authorizeExecutionContext(context, {
     allowed: true,
     capability: 'test.execute',
     risk: 'low',
     requiresApproval: false
+  }, {
+    tool: 'secure.test',
+    agentId: 'agent.test',
+    executionId: 'exec-1',
+    step: 1,
+    planRevision: 1
   });
+  context.agentId = 'agent.test';
+  context.executionId = 'exec-1';
+  context.step = 1;
+  context.planRevision = 1;
 
   const result = await registry.execute('secure.test', { value: 2 }, context);
   assert.deepEqual(result, { input: { value: 2 }, executed: true });
   assert.equal(Object.keys(context).length, 0);
+});
+
+
+test('tool registry rejects an authorized context when execution identity is tampered', async () => {
+  const registry = new ToolRegistry();
+  registry.register(tool());
+  registry.requireAuthorization();
+
+  const context = {
+    agentId: 'agent.test',
+    executionId: 'exec-1',
+    step: 1,
+    planRevision: 1
+  };
+
+  registry.authorizeExecutionContext(context, {
+    allowed: true,
+    capability: 'test.execute',
+    risk: 'low',
+    requiresApproval: false
+  }, {
+    tool: 'secure.test',
+    agentId: 'agent.test',
+    executionId: 'exec-1',
+    step: 1,
+    planRevision: 1
+  });
+
+  context.agentId = 'other.agent';
+
+  await assert.rejects(
+    () => registry.execute('secure.test', { value: 3 }, context),
+    error => error.code === 'TOOL_EXECUTION_AUTHORIZATION_REQUIRED'
+  );
 });
