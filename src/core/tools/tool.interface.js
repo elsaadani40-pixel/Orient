@@ -1,3 +1,5 @@
+const { createSandboxPolicy } = require('../security/sandbox/sandbox-policy');
+
 class ToolInterface {
   constructor({
     name,
@@ -52,9 +54,11 @@ class ToolInterface {
       sandbox && typeof sandbox === 'object'
         ? Object.freeze({
             required: sandbox.required === true,
-            profile: sandbox.profile || null
+            profile: sandbox.profile && typeof sandbox.profile === 'object' ? createSandboxPolicy(sandbox.profile) : sandbox.profile || null
           })
         : null;
+
+    Object.freeze(this);
   }
 }
 
