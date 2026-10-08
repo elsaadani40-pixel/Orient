@@ -130,7 +130,7 @@ class PostgresTenantQuotaRepository {
     const normalizedExpiresAt=expiresAt==null?null:new Date(expiresAt).toISOString();
     const result = await this.db.query(
       `UPDATE tenant_quota_reservations
-       SET state='QUEUED',expires_at=$3
+       SET state='QUEUED',expires_at=$3,fencing_token=NULL
        WHERE tenant_id=$1 AND workflow_id=$2
        RETURNING tenant_id,workflow_id,state,reserved_at,expires_at`,
       [tenantId,workflowId,normalizedExpiresAt]
@@ -138,13 +138,13 @@ class PostgresTenantQuotaRepository {
     return result.rowCount === 1 ? this.toModel(result.rows[0]) : null;
   }
 
-  async refreshWorkflow({tenantId,workflowId,expiresAt}) {
+  async refreshWorkflow({tenantId,workflowId,expiresAt,fencingToken=null}) {
     const normalizedExpiresAt=new Date(expiresAt).toISOString();
     const result = await this.db.query(
       `UPDATE tenant_quota_reservations
        SET expires_at=$3
-       WHERE tenant_id=$1 AND workflow_id=$2 AND state='RUNNING'`,
-      [tenantId,workflowId,normalizedExpiresAt]
+       WHERE tenant_id=$1 AND workflow_id=$2 AND state='RUNNING' AND ($4::bigint IS NULL OR fencing_token=$4)`,
+      [tenantId,workflowId,normalizedExpiresAt,fencingToken==null?null:Number(fencingToken)]
     );
     return result.rowCount === 1;
   }
