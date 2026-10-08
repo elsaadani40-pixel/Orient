@@ -21,7 +21,6 @@ test('lease-loss recovery preserves completed work and requeues only in-flight s
   mission.markStepRunning('done');
   mission.markStepCompleted('done', { ok: true });
   mission.markStepRunning('running');
-  mission.transition('QUEUED');
   mission.transition('RUNNING');
   mission.metadata.fencingToken = 7;
 
