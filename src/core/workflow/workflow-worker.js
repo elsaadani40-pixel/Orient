@@ -52,7 +52,7 @@ class WorkflowWorker {
         }
 
         const step = ready[0];
-        this.scheduler.assertCurrent(instance.workflowId, lease.leaseId, lease.fencingToken);
+        if (lease.fencingToken !== undefined) this.scheduler.assertCurrent(instance.workflowId, lease.leaseId, lease.fencingToken);
         instance.markStepRunning(step.id);
         instance.metadata.failedStepId = null;
         this.emit('workflow.step.started', { workflowId: instance.workflowId, leaseId: lease.leaseId, fencingToken: lease.fencingToken, stepId: step.id, attempt: instance.steps[step.id].attempts });
