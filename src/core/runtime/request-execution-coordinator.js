@@ -185,6 +185,29 @@ class RequestExecutionCoordinator {
       });
     }
 
+    // Reconcile a crash window where execution persistence reached a terminal
+    // state before the corresponding checkpoint update. The durable execution
+    // record is authoritative for terminal state; never re-run side effects.
+    const durableExecution = typeof this.persistence?.executions?.findById === 'function'
+      ? this.persistence.executions.findById(executionId, { tenantId: this.tenantId })
+      : null;
+
+    if (durableExecution && ['completed', 'failed', 'cancelled'].includes(durableExecution.status)) {
+      if (typeof this.persistence.checkpoints.save === 'function') {
+        this.persistence.checkpoints.save(
+          durableExecution,
+          { reason: 'recovery_reconciled_terminal', tenantId: this.tenantId }
+        );
+      }
+
+      return {
+        resumed: false,
+        reason: 'execution_already_terminal',
+        reconciled: true,
+        execution: durableExecution
+      };
+    }
+
     if (!context.isActive()) {
       return {
         resumed: false,
