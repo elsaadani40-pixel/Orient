@@ -113,3 +113,29 @@ test('agent loop enables the registry authorization boundary when an authorizati
     error => error.code === 'TOOL_EXECUTION_AUTHORIZATION_REQUIRED'
   );
 });
+
+
+test('tool registry rejects registration after sealing', () => {
+  const registry = new ToolRegistry();
+  registry.register(tool());
+  registry.seal();
+
+  assert.throws(
+    () => registry.register({
+      name: 'late.tool',
+      execute: async () => ({})
+    }),
+    error => error.code === 'TOOL_REGISTRY_SEALED'
+  );
+});
+
+test('tool registry isolates the registered execution function from source mutation', async () => {
+  const registry = new ToolRegistry();
+  const definition = tool();
+  registry.register(definition);
+
+  definition.execute = async () => ({ executed: false });
+
+  const result = await registry.execute('secure.test', { value: 5 }, {});
+  assert.deepEqual(result, { input: { value: 5 }, executed: true });
+});
