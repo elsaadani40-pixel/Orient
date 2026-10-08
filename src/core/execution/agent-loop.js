@@ -177,6 +177,15 @@ class AgentLoop {
         lastStepResult.result;
     }
 
+    const throwIfCancellationRequested = () => {
+      if (typeof runtimeContext.isCancellationRequested === 'function' && runtimeContext.isCancellationRequested()) {
+        const reason = runtimeContext.cancellationReason || 'Execution cancellation requested';
+        context.requestCancellation(reason);
+        context.record('execution.cancellation.observed', { reason, currentStep: context.currentStep });
+        throw new AppError('Execution cancellation requested', 409, 'EXECUTION_CANCELLATION_REQUESTED');
+      }
+    };
+
     for (
       let index = 0;
       index < steps.length;
@@ -184,6 +193,8 @@ class AgentLoop {
     ) {
       const stepNumber = index + 1;
       const step = steps[index];
+
+      throwIfCancellationRequested();
 
       if (completedSteps.has(stepNumber)) {
         context.record(
@@ -395,6 +406,7 @@ class AgentLoop {
       let executionAuthorization = null;
 
       if (this.authorizationService && !recoveringPersistedOperation) {
+        throwIfCancellationRequested();
         let authorization;
 
         try {
@@ -859,6 +871,8 @@ class AgentLoop {
 
         throw error;
       }
+
+      throwIfCancellationRequested();
 
       const toolDefinition =
         this.toolRegistry.get(
