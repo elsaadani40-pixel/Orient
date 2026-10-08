@@ -59,6 +59,7 @@ class WorkflowWorker {
 
         try {
           const result = await this.executor({ instance, step, lease });
+          if (lease.fencingToken !== undefined) this.scheduler.assertCurrent(instance.workflowId, lease.leaseId, lease.fencingToken);
           if (instance.cancelRequested) {
             const from = instance.state;
             instance.cancelStep(step.id); instance.transition('CANCELLED');
