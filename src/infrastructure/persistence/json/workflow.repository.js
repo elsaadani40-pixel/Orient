@@ -47,7 +47,14 @@ class WorkflowRepository {
         finally { try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {} }
       } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        if (Date.now() - fs.statSync(this.lockPath).mtimeMs > 30000) {
+        let lockAgeMs = 0;
+        try {
+          lockAgeMs = Date.now() - fs.statSync(this.lockPath).mtimeMs;
+        } catch (statError) {
+          if (statError.code === 'ENOENT') continue;
+          throw statError;
+        }
+        if (lockAgeMs > 30000) {
           try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {}
           continue;
         }
