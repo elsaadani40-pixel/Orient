@@ -253,6 +253,12 @@ class ExecutionRepository {
       if (tenantId && current.metadata?.tenantId !== tenantId && !(tenantId === 'local' && !current.metadata?.tenantId)) return null;
       if (tenantId && patch.metadata?.tenantId && patch.metadata.tenantId !== tenantId) throw new Error('Execution tenant mismatch');
 
+      // A durable cancellation request wins over a later terminal completion write.
+      // This is the atomic outcome boundary for JSON persistence.
+      if (current.cancellationRequested && patch.status === 'completed') {
+        return current;
+      }
+
       const updated = this.normalize({
         ...current,
         ...patch,
