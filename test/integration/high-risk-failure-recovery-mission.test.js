@@ -282,7 +282,7 @@ const JsonPersistence = require(path.join(process.cwd(), 'src/infrastructure/per
     return runtime.persistenceCoordinator.checkpoint(context, mode, reason);
   };
   await runtime.resume(executionId, { approval });
-})().catch(() => process.exit(74));
+})().catch(error => { console.error(error && error.stack || error); process.exit(74); });
 `;
 
   const child = spawnSync(process.execPath, ['-e', childScript, root, challenge.executionId, JSON.stringify(approval), executionCountPath], {
