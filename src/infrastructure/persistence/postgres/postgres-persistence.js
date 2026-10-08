@@ -79,11 +79,15 @@ class PostgresExecutionRepository {
       tenantId: effectiveTenant,
       updatedAt: new Date().toISOString()
     };
+    if (current.cancellationRequested && patch.status === 'completed') {
+      return current;
+    }
+
     await this.db.query(
       'UPDATE executions SET payload=$3,updated_at=$4 WHERE execution_id=$1 AND tenant_id=$2',
       [executionId, effectiveTenant, updated, updated.updatedAt]
     );
-    return updated;
+    return this.findById(executionId, { tenantId: effectiveTenant });
   }
 
   async requestCancellation(executionId, reason = 'Execution cancellation requested', { tenantId = null } = {}) {
