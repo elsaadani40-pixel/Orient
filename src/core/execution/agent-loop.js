@@ -465,7 +465,13 @@ class AgentLoop {
           // input. A symbolic dependency such as $step.N.result is not
           // sufficient across a process boundary unless its resolved value
           // is durably captured at the authorization boundary.
-          step.resolvedInput = resolvedInput;
+          context.metadata = {
+            ...(context.metadata || {}),
+            pendingStepInputs: {
+              ...(context.metadata?.pendingStepInputs || {}),
+              [String(stepNumber)]: resolvedInput
+            }
+          };
           error.executionContext = {
               executionId: context.executionId,
               step: stepNumber,
@@ -1099,6 +1105,14 @@ class AgentLoop {
       step.resolvedInput !== undefined
     ) {
       return step.resolvedInput;
+    }
+
+    const pendingStepInputs = context.metadata?.pendingStepInputs;
+    if (
+      pendingStepInputs &&
+      Object.prototype.hasOwnProperty.call(pendingStepInputs, String(stepNumber))
+    ) {
+      return pendingStepInputs[String(stepNumber)];
     }
 
     const persistedRunningStep = Array.isArray(context.steps)
