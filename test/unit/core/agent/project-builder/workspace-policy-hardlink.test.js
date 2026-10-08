@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const WorkspacePolicy = require('../../../../../../src/core/agent/project-builder/workspace/workspace-policy');
+const WorkspacePolicy = require('../../../../../src/core/agent/project-builder/workspace/workspace-policy');
 
 test('rejects writes to a hardlinked file that could modify a file outside the workspace', () => {
   if (process.platform === 'win32') {
