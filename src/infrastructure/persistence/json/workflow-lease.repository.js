@@ -97,6 +97,16 @@ class WorkflowLeaseRepository {
     });
   }
 
+  assertCurrent(workflowId, leaseId, fencingToken, now = Date.now(), tenantId = null) {
+    return this.withLock(() => {
+      const current = this.read().find(item => item.workflowId === workflowId);
+      if (!current || current.leaseId !== leaseId) return false;
+      if (tenantId && current.metadata?.tenantId !== tenantId) return false;
+      if (Number(current.expiresAt) <= now) return false;
+      return Number(current.fencingToken) === Number(fencingToken);
+    });
+  }
+
   renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null) {
     return this.withLock(() => {
       const items = this.read();
