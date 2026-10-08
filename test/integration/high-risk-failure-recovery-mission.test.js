@@ -207,6 +207,11 @@ test('high-risk side effect survives an actual process restart without duplicate
   });
   const runtime = createRuntime(root, { approvalService: approvals });
   const { challenge, approval } = await approveChallenge(runtime, approvals, root);
+  const checkpoint = runtime.persistence.checkpoints.findLatest(challenge.executionId, { tenantId: 'tenant-mission-8' });
+  const completedSteps = checkpoint.snapshot.steps.filter(step => step.status === 'completed');
+  assert.ok(completedSteps.length > 0);
+  const crashStep = completedSteps[completedSteps.length - 1].step + 1;
+  assert.ok(completedSteps[completedSteps.length - 1].result);
 
   const childScript = `
 const path = require('node:path');
