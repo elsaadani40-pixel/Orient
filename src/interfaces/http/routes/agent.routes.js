@@ -57,6 +57,25 @@ function createAgentRoutes(agentService) {
       res.end(JSON.stringify(result, null, 2));
     },
 
+    async cancel(req, res, executionId, body) {
+      let options = {};
+      if (body) {
+        try {
+          options = typeof body === 'string' ? JSON.parse(body) : body;
+        } catch {
+          throw new AppError('Invalid JSON body', 400, 'INVALID_JSON');
+        }
+      }
+
+      const result = await agentService.cancelExecution(executionId, options || {});
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+      });
+      res.end(JSON.stringify(result, null, 2));
+    },
+
     async execute(req, res, body) {
       let input = '';
 
