@@ -17,6 +17,7 @@ class RequestExecutionCoordinator {
     userId,
     workspaceId,
     maxInputChars,
+    approvalService = null,
     resumeLeaseDurationMs = 30000
   }) {
     if (!agentOrchestrator) throw new TypeError('agentOrchestrator is required');
@@ -35,6 +36,7 @@ class RequestExecutionCoordinator {
     this.userId = userId || 'local';
     this.workspaceId = workspaceId || 'local';
     this.maxInputChars = maxInputChars;
+    this.approvalService = approvalService;
     this.resumeLeaseDurationMs = resumeLeaseDurationMs;
   }
 
@@ -120,8 +122,8 @@ class RequestExecutionCoordinator {
         planRevision: 1,
         replans: 0,
         previousFingerprint: this.planFingerprint(orchestration.plan),
-        approval,
-        approvals,
+        approval: durableApproval,
+        approvals:
         requestId,
         input: text,
         tenantId: this.tenantId
@@ -265,6 +267,38 @@ class RequestExecutionCoordinator {
         sequence: checkpoint.sequence,
         planRevision
       });
+
+      // A human approval is durable execution state, not request-local input.
+      // After a real process restart the caller may not resend the approval;
+      // recover the still-valid approval that was issued for this exact
+      // execution/step/tool/revision before entering AgentLoop.
+      let durableApproval = approval;
+      if (!durableApproval && this.approvalService?.findReusable) {
+        const pending = context.metadata?.pendingStepInputs || {};
+        const pendingSteps = Object.keys(pending)
+          .map(Number)
+          .filter(Number.isInteger)
+          .sort((a, b) => a - b);
+        const pendingStep = pendingSteps[0];
+        const pendingPlanStep = pendingStep ? plan.steps[pendingStep - 1] : null;
+        if (pendingStep && pendingPlanStep?.tool) {
+          durableApproval = await this.approvalService.findReusable({
+            executionId,
+            step: pendingStep,
+            tool: pendingPlanStep.tool,
+            planRevision,
+            tenantId: this.tenantId
+          });
+          if (durableApproval) {
+            context.record('approval.recovered', {
+              step: pendingStep,
+              planRevision,
+              approvalId: durableApproval.approvalId,
+              source: 'durable_approval_store'
+            });
+          }
+        }
+      }
 
       const executionResult = await this.agentExecutionCoordinator.run({
         context,
