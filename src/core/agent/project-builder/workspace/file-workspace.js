@@ -40,27 +40,16 @@ class FileWorkspace {
   }
 
   async writeText(relativePath, content) {
-    const target =
-      this.policy.assertWrite(relativePath);
-
-    await fs.mkdir(path.dirname(target), { recursive: true });
-
-    await fs.writeFile(
-      target,
-      content,
-      'utf8'
+    return this.policy.writeFile(
+      relativePath,
+      content
     );
-
-    return target;
   }
 
   async removeFile(relativePath) {
-    const target =
-      this.policy.assertWrite(relativePath);
-
-    await fs.unlink(target);
-
-    return target;
+    return this.policy.removeFile(
+      relativePath
+    );
   }
 }
 
