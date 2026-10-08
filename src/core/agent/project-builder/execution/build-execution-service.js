@@ -71,7 +71,7 @@ class BuildExecutionService {
           rollback = await this.modifier.rollback(snapshots);
         } catch (rollbackError) {
           return new BuildExecutionResult({
-            status: 'rollback-failed',
+            status: 'failed',
             plan,
             changeSet,
             modification,
@@ -85,7 +85,7 @@ class BuildExecutionService {
         }
 
         return new BuildExecutionResult({
-          status: 'failed-and-rolled-back',
+          status: 'failed',
           plan,
           changeSet,
           modification,
