@@ -57,7 +57,7 @@ class BuildExecutionService {
 
       const verificationPassed =
         verification?.status === 'passed' &&
-        verification?.definitionOfDoneSatisfied === true;
+        verification?.failed === 0;
 
       if (!verificationPassed) {
         if (!supportsRollback) {
