@@ -139,3 +139,18 @@ test('tool registry isolates the registered execution function from source mutat
   const result = await registry.execute('secure.test', { value: 5 }, {});
   assert.deepEqual(result, { input: { value: 5 }, executed: true });
 });
+
+
+test('tool registry rejects duplicate registration without replacing the original tool', async () => {
+  const registry = new ToolRegistry();
+  const original = tool();
+  registry.register(original);
+
+  assert.throws(
+    () => registry.register({ name: 'secure.test', execute: async () => ({ executed: false }) }),
+    error => error.code === 'TOOL_ALREADY_REGISTERED' && error.statusCode === 409
+  );
+
+  const result = await registry.execute('secure.test', { value: 6 }, {});
+  assert.deepEqual(result, { input: { value: 6 }, executed: true });
+});
