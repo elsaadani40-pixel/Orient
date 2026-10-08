@@ -530,6 +530,44 @@ test('PostgreSQL worker lease cannot resurrect a durably cancelled workflow', as
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
+test('PostgreSQL durable claims require a live registered worker identity', async () => {
+  const workflowId = 'worker-auth-' + Date.now();
+  await pool.query(
+    "INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,'tenant-worker-auth','QUEUED',NOW(),$2)",
+    [workflowId, { workflowId, tenantId: 'tenant-worker-auth', state: 'QUEUED', metadata: {} }]
+  );
+
+  await assert.rejects(
+    () => persistence.workflows.claimQueued({
+      tenantId: 'tenant-worker-auth',
+      workerId: 'unregistered-worker',
+      limit: 1
+    }),
+    error => error.code === 'WORKER_NOT_ACTIVE'
+  );
+
+  await persistence.workers.register({
+    workerId: 'registered-worker',
+    tenantId: 'tenant-worker-auth',
+    status: 'READY',
+    capabilities: ['research.read'],
+    heartbeatAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, 'tenant-worker-auth');
+
+  const claimed = await persistence.workflows.claimQueued({
+    tenantId: 'tenant-worker-auth',
+    workerId: 'registered-worker',
+    workerCapabilities: ['research.read'],
+    limit: 1
+  });
+  assert.equal(claimed.length, 1);
+
+  await persistence.workflows.releaseDispatchClaim(workflowId, 'registered-worker', 'tenant-worker-auth');
+  await persistence.workers.unregister('registered-worker', 'tenant-worker-auth');
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+});
+
 test('PostgreSQL dispatch claims are exclusive across concurrent workers and expire safely', async () => {
   const workflowId = 'claim-wf-' + Date.now();
   await pool.query(
