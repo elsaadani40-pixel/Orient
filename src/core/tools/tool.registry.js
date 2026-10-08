@@ -26,8 +26,21 @@ class ToolRegistry {
       );
     }
 
-    this.tools.set(tool.name, tool);
-    return tool;
+    const registeredTool = Object.freeze({
+      ...tool,
+      capabilities: Object.freeze(Array.isArray(tool.capabilities) ? [...tool.capabilities] : []),
+      sandbox: tool.sandbox && typeof tool.sandbox === 'object'
+        ? Object.freeze({
+            ...tool.sandbox,
+            profile: tool.sandbox.profile && typeof tool.sandbox.profile === 'object'
+              ? Object.freeze({ ...tool.sandbox.profile })
+              : tool.sandbox.profile
+          })
+        : tool.sandbox
+    });
+
+    this.tools.set(tool.name, registeredTool);
+    return registeredTool;
   }
 
   get(name) {
