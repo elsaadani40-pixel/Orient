@@ -54,7 +54,7 @@ class ToolInterface {
       sandbox && typeof sandbox === 'object'
         ? Object.freeze({
             required: sandbox.required === true,
-            profile: sandbox.profile ? createSandboxPolicy(sandbox.profile) : null
+            profile: sandbox.profile && typeof sandbox.profile === 'object' ? createSandboxPolicy(sandbox.profile) : sandbox.profile || null
           })
         : null;
 
