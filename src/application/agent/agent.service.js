@@ -26,6 +26,10 @@ class AgentService {
 
     return this.runtime.execute(clean);
   }
+
+  getExecutionStatus(executionId) {
+    return this.runtime.getExecutionStatus(executionId);
+  }
 }
 
 module.exports = AgentService;
