@@ -56,3 +56,79 @@ test('rejects oversized request before orchestration', async () => {
   assert.equal(result.code, 'INPUT_TOO_LARGE');
   assert.equal(orchestrated, false);
 });
+
+
+test('reconciles a terminal durable execution instead of replaying an active checkpoint', async () => {
+  let executionAttempts = 0;
+  let checkpointSaves = 0;
+
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {
+      run: async () => {
+        executionAttempts += 1;
+        throw new Error('resume must not execute');
+      }
+    },
+    recoveryCoordinator: {},
+    persistence: {
+      executions: {
+        findById: () => ({
+          executionId: 'execution-terminal',
+          requestId: 'request-terminal',
+          goalId: 'goal-terminal',
+          tenantId: 'tenant-a',
+          metadata: { tenantId: 'tenant-a' },
+          input: 'already completed',
+          status: 'completed',
+          agentLifecycle: 'completed',
+          result: { value: 'durable' }
+        })
+      },
+      checkpoints: {
+        findLatest: () => ({
+          checkpointId: 'checkpoint-active',
+          sequence: 4,
+          snapshot: {
+            executionId: 'execution-terminal',
+            requestId: 'request-terminal',
+            goalId: 'goal-terminal',
+            tenantId: 'tenant-a',
+            metadata: { tenantId: 'tenant-a' },
+            input: 'already completed',
+            status: 'running',
+            agentLifecycle: 'executing',
+            plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool' }] },
+            events: []
+          },
+          snapshotSha256: null
+        }),
+        save: (snapshot, options) => {
+          checkpointSaves += 1;
+          assert.equal(snapshot.status, 'completed');
+          assert.equal(options.reason, 'recovery_reconciled_terminal');
+          return snapshot;
+        }
+      }
+    },
+    persistenceCoordinator: {},
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    userId: 'user-a',
+    workspaceId: 'workspace-a',
+    maxInputChars: 1000
+  });
+
+  const result = await coordinator.resume('execution-terminal');
+
+  assert.equal(result.resumed, false);
+  assert.equal(result.reason, 'execution_already_terminal');
+  assert.equal(result.reconciled, true);
+  assert.equal(result.execution.status, 'completed');
+  assert.equal(executionAttempts, 0);
+  assert.equal(checkpointSaves, 1);
+});
