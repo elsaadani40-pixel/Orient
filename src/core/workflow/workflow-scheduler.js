@@ -263,6 +263,9 @@ class WorkflowScheduler {
       }
 
       const previousState = instance.state;
+      if (lease.fencingToken !== undefined) {
+        instance.metadata = { ...instance.metadata, fencingToken: lease.fencingToken };
+      }
       try {
         instance.transition('RUNNING');
       } catch (error) {
@@ -278,6 +281,7 @@ class WorkflowScheduler {
         instance,
         leaseId: lease.leaseId,
         workerId: lease.workerId,
+        fencingToken: lease.fencingToken,
         issuedAt: lease.acquiredAt,
         expiresAt: lease.expiresAt,
         deadlineAt: item.deadlineAt,
