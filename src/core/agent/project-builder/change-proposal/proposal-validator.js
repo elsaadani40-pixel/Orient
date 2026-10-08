@@ -91,7 +91,10 @@ class ProposalValidator {
         errors.push({
           index,
           name: error.name,
-          message: error.message
+          code: error.code,
+          message: error.message,
+          expectedContentSha256: error.expectedContentSha256,
+          actualContentSha256: error.actualContentSha256
         });
       }
     }
