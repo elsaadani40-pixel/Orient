@@ -105,3 +105,37 @@ test('worker refuses to execute a step when durable lease renewal is lost', asyn
   assert.equal(executed, false);
   assert.equal(released, true);
 });
+
+
+test('application and HTTP layers cannot bypass the canonical runtime', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const repositoryRoot = path.resolve(__dirname, '../../../..');
+  const forbiddenImports = [
+    /core\\/execution\\/agent-loop/,\n    /core\\/agent\\/orchestrator\\/agent-orchestrator/,\n    /core\\/runtime\\/request-execution-coordinator/
+  ];
+
+  const files = [];
+  function collect(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) collect(absolute);
+      else if (entry.isFile() && entry.name.endsWith('.js')) files.push(absolute);
+    }
+  }
+
+  for (const layer of ['src/application', 'src/interfaces']) {
+    collect(path.join(repositoryRoot, layer));
+  }
+
+  for (const file of files) {
+    const source = fs.readFileSync(file, 'utf8');
+    for (const pattern of forbiddenImports) {
+      assert.equal(
+        pattern.test(source),
+        false,
+        `Canonical runtime bypass detected in ${path.relative(repositoryRoot, file)}: ${pattern}`
+      );
+    }
+  }
+});
