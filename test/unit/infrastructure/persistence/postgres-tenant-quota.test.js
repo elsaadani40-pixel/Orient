@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const PostgresTenantQuotaRepository = require('../../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
+const PostgresTenantQuotaRepository = require('../../../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 
 test('tenant promotion enforces max concurrent atomically', async () => {
   const queries = [];
