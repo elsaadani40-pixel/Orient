@@ -147,7 +147,10 @@ test('forwards request-local approval collection to execution without corrupting
     agentExecutionCoordinator: {
       run: async (args) => {
         received = args;
+        args.context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
         args.context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+        args.context.transitionAgentTo(AgentState.LIFECYCLE.OBSERVING);
+        args.context.transitionAgentTo(AgentState.LIFECYCLE.EVALUATING);
         return {
           plan: args.plan,
           loopResult: { result: { ok: true }, evaluation: { success: true } },
