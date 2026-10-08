@@ -63,7 +63,7 @@ class CommandRunner {
           shell: false,
           windowsHide: true,
           detached: process.platform !== 'win32',
-          env: { ...process.env, ...this.policy.environment }
+          env: (() => { const env = { ...process.env, ...this.policy.environment }; delete env.NODE_TEST_CONTEXT; return env; })()
         }
       );
 
