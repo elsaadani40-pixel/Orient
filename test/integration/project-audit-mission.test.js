@@ -20,7 +20,6 @@ function createRuntime(root) {
   registerDefaultAgents(registry);
   const toolRegistry = new ToolRegistry();
   for (const tool of createProjectTools({ projectRoot: root })) toolRegistry.register(tool);
-
   const orchestrator = new AgentOrchestrator({
     planner: new PlannerService(),
     planValidator: new PlanValidator({ maxSteps: 5, toolRegistry }),
@@ -28,13 +27,7 @@ function createRuntime(root) {
     decisionEngine: new DecisionEngine(),
     recoveryEngine: new RecoveryEngine()
   });
-
-  return new OrientRuntime({
-    toolRegistry,
-    agentOrchestrator: orchestrator,
-    tenantId: 'tenant-mission',
-    agentRegistry: registry
-  });
+  return new OrientRuntime({ toolRegistry, agentOrchestrator: orchestrator, tenantId: 'tenant-mission', agentRegistry: registry });
 }
 
 test('project audit mission completes through canonical runtime without write or command access', async () => {
@@ -43,10 +36,8 @@ test('project audit mission completes through canonical runtime without write or
   fs.mkdirSync(path.join(root, 'test'));
   fs.writeFileSync(path.join(root, 'AGENT.md'), '# test');
   fs.writeFileSync(path.join(root, 'package.json'), '{"name":"mission-fixture"}');
-
   const runtime = createRuntime(root);
   const result = await runtime.execute('افحص المشروع');
-
   assert.equal(result.type, 'tool_result');
   assert.equal(result.result.status, 'healthy');
   assert.equal(result.result.score, 100);
@@ -55,7 +46,6 @@ test('project audit mission completes through canonical runtime without write or
   assert.equal(result.result.audit.modificationAllowed, false);
   assert.equal(result.result.audit.commandExecutionAllowed, false);
   assert.equal(result.execution.status, 'completed');
-
   runtime.shutdown({ cancelQueued: false });
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -66,10 +56,8 @@ test('project change-proposal mission finds a real issue and never executes the 
   const manifestPath = path.join(root, 'package.json');
   const original = '{"name":"proposal-fixture"}\n';
   fs.writeFileSync(manifestPath, original);
-
   const runtime = createRuntime(root);
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا');
-
   assert.equal(result.type, 'tool_result');
   assert.equal(result.result.status, 'actionable');
   assert.equal(result.result.execution.allowed, false);
@@ -80,7 +68,6 @@ test('project change-proposal mission finds a real issue and never executes the 
   assert.equal(result.result.proposals[0].path, 'package.json');
   assert.match(result.result.proposals[0].content, /"test": "node --test"/);
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), original);
-
   runtime.shutdown({ cancelQueued: false });
   fs.rmSync(root, { recursive: true, force: true });
 });
