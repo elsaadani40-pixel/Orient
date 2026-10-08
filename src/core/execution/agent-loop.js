@@ -602,7 +602,8 @@ class AgentLoop {
         step: stepNumber,
         tool: step.tool,
         planRevision,
-        operationId
+        operationId,
+        resolvedInput
       });
 
       const idempotency =
@@ -1087,6 +1088,21 @@ class AgentLoop {
     stepResults,
     lastResult
   }) {
+    const persistedRunningStep = Array.isArray(context.steps)
+      ? context.steps.find(item =>
+          item &&
+          item.status === 'running' &&
+          Number(item.step) === stepNumber &&
+          Number(item.planRevision || 1) === Number(context.metadata?.planRevision || 1) &&
+          item.resolvedInput !== null &&
+          item.resolvedInput !== undefined
+        )
+      : null;
+
+    if (persistedRunningStep) {
+      return persistedRunningStep.resolvedInput;
+    }
+
     const exactStepReference =
       typeof step.input === 'string'
         ? step.input.trim().match(/^\$step\.(\d+)\.result$/)
