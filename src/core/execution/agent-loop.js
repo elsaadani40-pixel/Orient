@@ -1105,7 +1105,8 @@ class AgentLoop {
         previousResult:
           lastResult,
 
-        stepResults
+        stepResults,
+        persistedSteps: context.steps
       }
     );
   }
