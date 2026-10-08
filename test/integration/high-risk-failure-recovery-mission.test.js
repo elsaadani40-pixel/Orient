@@ -231,7 +231,8 @@ const JsonPersistence = require(path.join(process.cwd(), 'src/infrastructure/per
   const root = process.argv[1];
   const executionId = process.argv[2];
   const approval = JSON.parse(process.argv[3]);
-  const executionCountPath = process.argv[4];
+  const crashStep = Number(process.argv[4]);
+  const executionCountPath = process.argv[5];
   const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const registry = new AgentRegistry();
   registerDefaultAgents(registry);
@@ -278,14 +279,14 @@ const JsonPersistence = require(path.join(process.cwd(), 'src/infrastructure/per
     return originalExecute(name, input, context);
   };
   runtime.checkpoint = async (context, mode, reason) => {
-    if (reason === 'step_completed:plan-1:step-2') process.exit(73);
+    if (reason === 'step_completed:plan-1:step-' + crashStep) process.exit(73);
     return runtime.persistenceCoordinator.checkpoint(context, mode, reason);
   };
   await runtime.resume(executionId, { approval });
 })().catch(error => { console.error(error && error.stack || error); process.exit(74); });
 `;
 
-  const child = spawnSync(process.execPath, ['-e', childScript, root, challenge.executionId, JSON.stringify(approval), executionCountPath], {
+  const child = spawnSync(process.execPath, ['-e', childScript, root, challenge.executionId, JSON.stringify(approval), String(crashStep), executionCountPath], {
     cwd: process.cwd(),
     encoding: 'utf8'
   });
