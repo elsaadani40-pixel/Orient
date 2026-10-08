@@ -28,3 +28,36 @@ test('durable workflow dispatch claims are tenant-scoped and worker-owned',async
   await repo.releaseDispatchClaim('wf-1','worker-a','tenant-a');
   assert.deepEqual(calls.at(-1).values,['tenant-a','wf-1','worker-a']);
 });
+
+
+test('expired dispatch claims are reclaimed by a replacement worker', async () => {
+  const calls = [];
+  const db = {
+    async transaction(work) {
+      const client = {
+        query: async (sql, values) => {
+          calls.push({ sql, values });
+          if (sql.includes('SELECT worker_id,capabilities')) return { rows: [{ worker_id: values[1], capabilities: [], status: 'READY', expires_at: new Date(Date.now() + 60000).toISOString() }] };
+          if (sql.includes('DELETE FROM workflow_dispatch_claims')) return { rowCount: 1, rows: [] };
+          if (sql.includes('INSERT INTO workflow_dispatch_claims')) return { rows: [{ workflow_id: 'wf-recover' }] };
+          if (sql.includes('SELECT payload FROM workflows')) return { rows: [{ payload: { workflowId: 'wf-recover', tenantId: 'tenant-a', state: 'QUEUED' } }] };
+          return { rowCount: 1, rows: [] };
+        }
+      };
+      return work(client);
+    },
+    async query(sql, values) { calls.push({ sql, values }); return { rowCount: 0, rows: [] }; }
+  };
+  const repo = new PostgresWorkflowRepository(db, { register() {} });
+  const claimed = await repo.claimQueued({ tenantId: 'tenant-a', workerId: 'worker-new', limit: 1, claimTtlMs: 5000 });
+  assert.equal(claimed.length, 1);
+  assert.equal(claimed[0].workflowId, 'wf-recover');
+  const cleanup = calls.find(x => x.sql.includes('DELETE FROM workflow_dispatch_claims'));
+  assert.deepEqual(cleanup.values, ['tenant-a']);
+});
+
+test('releaseDispatchClaim remains worker-owned', async () => {
+  const db = { async query(sql, values) { return { rowCount: sql.includes('worker_id=$3') && values[2] === 'worker-new' ? 0 : 1, rows: [] }; } };
+  const repo = new PostgresWorkflowRepository(db);
+  assert.equal(await repo.releaseDispatchClaim('wf-recover', 'worker-new', 'tenant-a'), false);
+});
