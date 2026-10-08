@@ -64,3 +64,61 @@ test('durable JSON checkpoints serialize concurrent saves and preserve sequence'
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('durable resume lease allows one concurrent recovery owner and expires after crash', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-resume-lease-'));
+  const filePath = path.join(directory, 'checkpoints.json');
+  const modulePath = path.resolve(__dirname, '../../../src/infrastructure/persistence/json/checkpoint.repository.js');
+  const repository = new CheckpointRepository(filePath);
+  repository.save({
+    executionId: 'recoverable-execution',
+    tenantId: 'local',
+    input: 'crash recovery',
+    status: 'running'
+  }, { tenantId: 'local', reason: 'lease-test' });
+
+  const worker = `
+    const Repository = require(process.argv[1]);
+    const repository = new Repository(process.argv[2]);
+    try {
+      const lease = repository.acquireResumeLease('recoverable-execution', {
+        tenantId: 'local',
+        leaseDurationMs: 1000
+      });
+      process.stdout.write('acquired:' + lease.leaseId);
+    } catch (error) {
+      process.stdout.write(error.code || 'error');
+    }
+  `;
+
+  const workers = [];
+  try {
+    for (let index = 0; index < 6; index += 1) {
+      workers.push(new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['-e', worker, modulePath, filePath], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.on('error', reject);
+        child.on('exit', code => code === 0 ? resolve(stdout) : reject(new Error(stderr)));
+      }));
+    }
+
+    const results = await Promise.all(workers);
+    assert.equal(results.filter(value => value.startsWith('acquired:')).length, 1);
+    assert.equal(results.filter(value => value === 'CHECKPOINT_RESUME_LEASE_HELD').length, 5);
+
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    const recoveredLease = repository.acquireResumeLease('recoverable-execution', {
+      tenantId: 'local',
+      leaseDurationMs: 1000
+    });
+    assert.ok(recoveredLease.leaseId);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
