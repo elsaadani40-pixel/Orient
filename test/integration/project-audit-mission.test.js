@@ -19,6 +19,7 @@ const CapabilityMapper = require('../../src/core/agent/capability/capability-map
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
+const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
 function createRuntime(root, { secure = false, approvalService = null } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
   const registry = new AgentRegistry(); registerDefaultAgents(registry);
