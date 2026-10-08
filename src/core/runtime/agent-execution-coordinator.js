@@ -13,7 +13,7 @@ class AgentExecutionCoordinator {
     this.validateReplannedPlan = validateReplannedPlan;
   }
 
-  async run({ context, plan, validation, planRevision = 1, replans = 0, previousFingerprint, approval = null, approvals = {}, requestId = context.requestId, input = context.input, tenantId, agentId = null, resumed = false }) {
+  async run({ context, plan, validation, planRevision = 1, replans = 0, previousFingerprint, approval = null, approvals = {}, requestId = context.requestId, input = context.input, tenantId, agentId = null, resumed = false, isCancellationRequested = null, cancellationReason = null }) {
     let loopResult = null;
     let replanningDecision = null;
     let currentPlan = plan;
@@ -66,6 +66,8 @@ class AgentExecutionCoordinator {
           approvals,
           tenantId,
           agentId: currentPlan.agentId || agentId || 'ORIENT_RUNTIME',
+          isCancellationRequested,
+          cancellationReason,
           onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = resumed ? 'resume_step_completed' : 'step_completed' } = {}) => {
             context.metadata.planRevision = checkpointPlanRevision;
             context.metadata.replans = currentReplans;
@@ -73,6 +75,12 @@ class AgentExecutionCoordinator {
           }
         }
       });
+
+      if (typeof isCancellationRequested === 'function' && isCancellationRequested()) {
+        const reason = cancellationReason || 'Execution cancellation requested';
+        context.requestCancellation(reason);
+        throw Object.assign(new Error('Execution cancellation requested'), { code: 'EXECUTION_CANCELLATION_REQUESTED' });
+      }
 
       context.transitionAgentTo('observing');
       context.record('observations.collected', { count: context.observations.length, planRevision: currentRevision });
