@@ -21,7 +21,7 @@ test('WorkflowWorker refuses to commit a step after fencing is lost during execu
     readySteps() { return completed ? [] : [step]; },
     markStepRunning(id) { this.steps[id].state = 'RUNNING'; this.steps[id].attempts += 1; },
     markStepCompleted() { completed = true; this.steps['step-1'].state = 'COMPLETED'; },
-    markStepFailed() { throw new Error('unexpected step failure'); },
+    markStepFailed(id, error) { this.steps[id].state = 'FAILED'; this.steps[id].error = { code: error.code }; },
     transition(state) { this.state = state; }
   };
   const lease = {
