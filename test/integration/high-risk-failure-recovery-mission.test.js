@@ -231,6 +231,7 @@ const JsonPersistence = require('../../src/infrastructure/persistence/json/json-
   const root = process.argv[1];
   const executionId = process.argv[2];
   const approval = JSON.parse(process.argv[3]);
+  const executionCountPath = process.argv[4];
   const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const registry = new AgentRegistry();
   registerDefaultAgents(registry);
@@ -270,8 +271,9 @@ const JsonPersistence = require('../../src/infrastructure/persistence/json/json-
   const originalExecute = runtime.toolRegistry.execute.bind(runtime.toolRegistry);
   runtime.toolRegistry.execute = async (name, input, context) => {
     if (name === 'project.execute_change') {
-      const count = Number(require('node:fs').readFileSync(${JSON.stringify('${path.join(root, '.orient-side-effect-count')}')}, 'utf8')) + 1;
-      require('node:fs').writeFileSync(${JSON.stringify('EXECUTION_COUNT_PATH_PLACEHOLDER')}, String(count));
+      const fs = require('node:fs');
+      const count = Number(fs.readFileSync(executionCountPath, 'utf8')) + 1;
+      fs.writeFileSync(executionCountPath, String(count));
     }
     return originalExecute(name, input, context);
   };
@@ -283,7 +285,7 @@ const JsonPersistence = require('../../src/infrastructure/persistence/json/json-
 })().catch(() => process.exit(74));
 `;
 
-  const child = spawnSync(process.execPath, ['-e', childScript, root, challenge.executionId, JSON.stringify(approval)], {
+  const child = spawnSync(process.execPath, ['-e', childScript, root, challenge.executionId, JSON.stringify(approval), executionCountPath], {
     cwd: process.cwd(),
     encoding: 'utf8'
   });
