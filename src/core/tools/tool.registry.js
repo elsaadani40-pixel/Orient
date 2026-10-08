@@ -40,7 +40,17 @@ class ToolRegistry {
   list() {
     return Array.from(this.tools.values()).map((tool) => ({
       name: tool.name,
-      description: tool.description
+      description: tool.description,
+      capabilities: Array.isArray(tool.capabilities)
+        ? [...tool.capabilities]
+        : [],
+      risk: tool.risk || null,
+      sandbox: tool.sandbox
+        ? {
+            required: tool.sandbox.required === true,
+            profile: tool.sandbox.profile || null
+          }
+        : null
     }));
   }
 

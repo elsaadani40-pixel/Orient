@@ -24,6 +24,7 @@ const TRANSITIONS = Object.freeze({
 
   [UNDERSTANDING]: new Set([
     PLANNING,
+    COMPLETED,
     FAILED,
     CANCELLED
   ]),

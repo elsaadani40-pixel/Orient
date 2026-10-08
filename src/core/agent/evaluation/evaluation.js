@@ -5,7 +5,9 @@ class Evaluation {
     confidence = 1,
     reason = '',
     blockers = [],
-    recommendations = []
+    recommendations = [],
+    nextAction = null,
+    nextInput = null
   } = {}) {
     if (!outcome) {
       throw new Error('outcome is required');
@@ -17,6 +19,8 @@ class Evaluation {
     this.reason = reason;
     this.blockers = [...blockers];
     this.recommendations = [...recommendations];
+    this.nextAction = nextAction;
+    this.nextInput = nextInput;
   }
 
   toJSON() {

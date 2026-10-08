@@ -1,12 +1,16 @@
 name: ORIENT ONE — Strict CI
 
-# Strict gate: every branch change must pass the full compatibility matrix.
-# Runner diagnostics: fresh commit-triggered run after GitHub-hosted runner allocation failures.
+# Strict gate: every branch change must pass through PR CI; main is also validated directly.
+# Keep one active CI generation per PR/branch so stale runs cannot consume the queue.
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main"]
   pull_request:
+
+concurrency:
+  group: orient-strict-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,7 +18,8 @@ permissions:
 jobs:
   unit:
     name: Unit + Architecture Tests (Node ${{ matrix.node }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +38,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm install --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Verify SQLite runtime
         shell: bash
@@ -47,7 +52,7 @@ jobs:
           set -euo pipefail
           test ! -e ORIENT-ONE-AUDIT-PACKAGE.md
           test ! -e ORIENT-ONE-AUDIT-PACKAGE-SAFE.md
-          ! git ls-files | grep -E '(^|/)(\.env|.*\.pem|.*\.key)$' || {
+          ! git ls-files | grep -E '(^|/)(\\.env|.*\\.pem|.*\\.key)$' || {
             echo "Sensitive file tracked"
             exit 1
           }
@@ -58,11 +63,11 @@ jobs:
           set -euo pipefail
           mapfile -t tests < <(find test/unit -type f -name '*.test.js' -print | sort)
           test "${#tests[@]}" -gt 0
-          node --test --test-reporter=spec "${tests[@]}"
+          node --test --test-timeout=120000 --test-reporter=spec "${tests[@]}"
 
   static:
     name: Static Safety Checks
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,10 +89,9 @@ jobs:
             exit 1
           fi
 
-
   postgres-integration:
     name: PostgreSQL Integration (Node 20)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:17
@@ -112,7 +116,7 @@ jobs:
           check-latest: true
 
       - name: Install PostgreSQL client dependency
-        run: npm install --no-save pg@^8.23.1
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Run PostgreSQL integration suite
         env:
