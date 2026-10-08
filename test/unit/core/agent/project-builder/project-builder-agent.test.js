@@ -2340,7 +2340,7 @@ test('project builder validates the execution change set before modifying files'
   const result = await agent.execute({
     changeSet: {
       changes: [{
-        action: 'create',
+        action: 'update',
         path: 'missing-update.txt',
         content: 'must not execute'
       }]
