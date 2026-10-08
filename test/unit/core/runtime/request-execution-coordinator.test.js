@@ -132,3 +132,49 @@ test('reconciles a terminal durable execution instead of replaying an active che
   assert.equal(executionAttempts, 0);
   assert.equal(checkpointSaves, 1);
 });
+
+
+test('forwards request-local approval collection to execution without corrupting it', async () => {
+  let received = null;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async (args) => {
+        received = args;
+        return {
+          plan: args.plan,
+          loopResult: { result: { ok: true }, evaluation: { success: true } },
+          replanningDecision: { toJSON: () => ({ replanned: false }) }
+        };
+      }
+    },
+    recoveryCoordinator: {},
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async () => {},
+      persistEvents: async () => {}
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    userId: 'user-a',
+    workspaceId: 'workspace-a',
+    maxInputChars: 1000
+  });
+
+  const approvals = { 1: { approvalId: 'approval-1' } };
+  await coordinator.execute('run approved tool', { approvals });
+
+  assert.strictEqual(received.approvals, approvals);
+  assert.equal(received.requestId.length > 0, true);
+  assert.equal(received.input, 'run approved tool');
+  assert.equal(received.tenantId, 'tenant-a');
+});
