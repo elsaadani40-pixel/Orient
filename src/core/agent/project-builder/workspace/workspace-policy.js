@@ -93,7 +93,18 @@ class WorkspacePolicy {
       );
     }
 
-    return this.resolve(relativePath);
+    const resolved = this.resolve(relativePath);
+
+    if (fs.existsSync(resolved)) {
+      const stats = fs.lstatSync(resolved);
+      if (stats.isFile() && stats.nlink > 1) {
+        throw new Error(
+          'Workspace write target is a hardlink and is denied'
+        );
+      }
+    }
+
+    return resolved;
   }
 
   assertCommand(command) {
