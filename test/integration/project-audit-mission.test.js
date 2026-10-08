@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const AgentRegistry = require('../../src/core/agent/boundary/agent-registry');
 const { registerDefaultAgents } = require('../../src/core/agent/catalog/default-agents');
 const PlannerService = require('../../src/application/planner/planner.service');
@@ -70,6 +71,84 @@ test('verification failure rolls the project back to its pre-execution state', a
   assert.equal(result.result.status, 'failed');
   assert.equal(result.result.rollback.rolledBack, true);
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), original);
+
+  runtime.shutdown({ cancelQueued: false });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('project change precondition blocks stale proposals after external mutation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-precondition-'));
+  fs.mkdirSync(path.join(root, 'test'));
+  const manifestPath = path.join(root, 'package.json');
+  fs.writeFileSync(manifestPath, '{"name":"precondition-fixture"}\n');
+
+  const runtime = createRuntime(root);
+  const proposal = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا');
+  assert.equal(proposal.result.proposals.length, 1);
+
+  fs.writeFileSync(manifestPath, '{"name":"externally-modified"}\n');
+
+  await assert.rejects(
+    runtime.execute('نفذ التغيير المقترح وتحقق منه'),
+    error => error && error.code === 'CHANGE_PRECONDITION_FAILED'
+  );
+  assert.equal(fs.readFileSync(manifestPath, 'utf8'), '{"name":"externally-modified"}\n');
+
+  runtime.shutdown({ cancelQueued: false });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('project change reconciliation recognizes an already-applied post-state without reapplying it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-reconcile-'));
+  fs.mkdirSync(path.join(root, 'test'));
+  const manifestPath = path.join(root, 'package.json');
+  fs.writeFileSync(manifestPath, '{"name":"reconcile-fixture"}\n');
+
+  const runtime = createRuntime(root);
+  const proposal = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا');
+  const tool = runtime.toolRegistry.get('project.execute_change');
+  const reconciledInput = proposal.result;
+
+  fs.writeFileSync(manifestPath, proposal.result.proposals[0].content);
+  const reconciliation = await tool.reconcile(reconciledInput, {
+    operationId: 'recovery-test',
+    executionId: proposal.requestId,
+    step: 2,
+    planRevision: 1,
+    tool: 'project.execute_change'
+  });
+
+  assert.equal(reconciliation.status, 'completed');
+  assert.equal(reconciliation.result.status, 'verified');
+  assert.equal(reconciliation.result.reconciled, true);
+  assert.equal(fs.readFileSync(manifestPath, 'utf8'), proposal.result.proposals[0].content);
+
+  runtime.shutdown({ cancelQueued: false });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('project change reconciliation refuses an unexpected external state', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-reconcile-conflict-'));
+  fs.mkdirSync(path.join(root, 'test'));
+  const manifestPath = path.join(root, 'package.json');
+  fs.writeFileSync(manifestPath, '{"name":"reconcile-conflict"}\n');
+
+  const runtime = createRuntime(root);
+  const proposal = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا');
+  const tool = runtime.toolRegistry.get('project.execute_change');
+
+  fs.writeFileSync(manifestPath, '{"name":"unexpected-external-change"}\n');
+  const reconciliation = await tool.reconcile(proposal.result, {
+    operationId: 'recovery-conflict-test',
+    executionId: proposal.requestId,
+    step: 2,
+    planRevision: 1,
+    tool: 'project.execute_change'
+  });
+
+  assert.equal(reconciliation.status, 'conflict');
+  assert.equal(reconciliation.reason, 'external_state_does_not_match_expected_post_state');
+  assert.equal(fs.readFileSync(manifestPath, 'utf8'), '{"name":"unexpected-external-change"}\n');
 
   runtime.shutdown({ cancelQueued: false });
   fs.rmSync(root, { recursive: true, force: true });
