@@ -194,6 +194,14 @@ class WorkflowScheduler {
     if (active) {
       active.cancelled = true;
       active.instance.requestCancel();
+      if (this.workflowRepository?.save) this.persist(active.instance);
+    }
+
+    if (!queued && !active && this.workflowRepository?.requestCancellation) {
+      const requested = this.workflowRepository.requestCancellation(workflowId, this.tenantId);
+      if (!requested) return false;
+      this.cancelled.add(workflowId);
+      return true;
     }
 
     this.cancelled.add(workflowId);
