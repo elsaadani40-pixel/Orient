@@ -16,7 +16,8 @@ class RequestExecutionCoordinator {
     tenantId,
     userId,
     workspaceId,
-    maxInputChars
+    maxInputChars,
+    resumeLeaseDurationMs = 30000
   }) {
     if (!agentOrchestrator) throw new TypeError('agentOrchestrator is required');
     if (!agentExecutionCoordinator) throw new TypeError('agentExecutionCoordinator is required');
@@ -34,6 +35,7 @@ class RequestExecutionCoordinator {
     this.userId = userId || 'local';
     this.workspaceId = workspaceId || 'local';
     this.maxInputChars = maxInputChars;
+    this.resumeLeaseDurationMs = resumeLeaseDurationMs;
   }
 
   planFingerprint(plan) {
@@ -191,6 +193,13 @@ class RequestExecutionCoordinator {
       };
     }
 
+    const resumeLease = typeof this.persistence.checkpoints.acquireResumeLease === 'function'
+      ? this.persistence.checkpoints.acquireResumeLease(executionId, {
+          tenantId: this.tenantId,
+          leaseDurationMs: this.resumeLeaseDurationMs
+        })
+      : null;
+
     const plan = context.plan;
     if (!plan || !Array.isArray(plan.steps)) {
       throw Object.assign(new Error('Checkpoint does not contain a resumable plan'), {
@@ -237,6 +246,9 @@ class RequestExecutionCoordinator {
       await this.persistenceCoordinator.persistExecution(context, 'update');
       await this.persistenceCoordinator.persistEvents(context);
       await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_completed');
+      if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+        this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+      }
 
       return {
         resumed: true,
@@ -252,6 +264,9 @@ class RequestExecutionCoordinator {
         error,
         checkpointReason: 'resume_failed'
       });
+      if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+        this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+      }
       throw error;
     }
   }
