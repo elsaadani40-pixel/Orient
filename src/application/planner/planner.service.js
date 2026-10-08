@@ -61,6 +61,9 @@ class PlannerService {
       }
     }
 
+    const projectAudit = this.extractProjectAudit(text);
+    if (projectAudit) return this.normalizePlan(projectAudit);
+
     const multiStepPlan =
       this.extractMultiStepPlan(text);
 
@@ -357,6 +360,16 @@ class PlannerService {
     }
 
     return value;
+  }
+
+  extractProjectAudit(text) {
+    const value = String(text || '').trim();
+    if (!/(افحص|راجع|دقق|حلل|audit|review) .*?(المشروع|المستودع|repository|project)/i.test(value)) return null;
+    return {
+      intent: 'project.audit', tool: 'project.audit', input: null, agentId: 'PROJECT_BUILDER_AGENT',
+      confidence: 0.99, reason: 'تم التعرف على مهمة فحص مشروع قراءة فقط',
+      steps: [{ step: 1, tool: 'project.audit', input: null, dependsOn: null }]
+    };
   }
 
   extractMultiStepPlan(text) {

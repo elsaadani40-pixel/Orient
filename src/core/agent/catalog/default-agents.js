@@ -36,6 +36,11 @@ const DEFAULT_AGENTS = Object.freeze([
     risk: 'medium'
   }),
   new AgentDefinition({
+    id: 'PROJECT_BUILDER_AGENT', name: 'ORIENT Project Builder Agent', version: 1,
+    description: 'Read-only project audit specialist; modification and command execution remain policy-gated.',
+    capabilities: ['tool:project.audit', 'workspace.read', 'model:text-generation'], allowedMemoryScopes: ['shared.project'], allowedAgentTargets: [], risk: 'low'
+  }),
+  new AgentDefinition({
     id: 'ORIENT_RUNTIME',
     name: 'ORIENT Canonical Runtime',
     version: 1,
