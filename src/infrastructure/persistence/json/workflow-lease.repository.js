@@ -8,7 +8,15 @@ class WorkflowLeaseRepository {
     this.filePath = path.resolve(filePath);
     this.lockPath = this.filePath + '.lock';
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    if (!fs.existsSync(this.filePath)) this.write([]);
+    if (!fs.existsSync(this.filePath)) {
+      try {
+        const fd = fs.openSync(this.filePath, 'wx', 0o600);
+        try { fs.writeFileSync(fd, '[]\\n', 'utf8'); fs.fsyncSync(fd); }
+        finally { fs.closeSync(fd); }
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+    }
   }
 
   read() {
