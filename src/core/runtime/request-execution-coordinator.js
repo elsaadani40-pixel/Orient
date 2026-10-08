@@ -124,6 +124,7 @@ class RequestExecutionCoordinator {
         previousFingerprint: this.planFingerprint(orchestration.plan),
         approval,
         approvals,
+        requestId,
         input: text,
         tenantId: this.tenantId
       });
