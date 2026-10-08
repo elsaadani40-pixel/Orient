@@ -1,7 +1,4 @@
-cons  {version:5,sql:`
-    ALTER TABLE tenant_quota_reservations ADD COLUMN IF NOT EXISTS fencing_token BIGINT;
-  `},
-t crypto = require('crypto');
+const crypto = require('crypto');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -84,7 +81,10 @@ const MIGRATIONS = [
       ON workflow_dispatch_claims(tenant_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_workflow_dispatch_claims_worker
       ON workflow_dispatch_claims(tenant_id, worker_id, expires_at);
+  `},  {version:5,sql:`
+    ALTER TABLE tenant_quota_reservations ADD COLUMN IF NOT EXISTS fencing_token BIGINT;
   `},
+
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
