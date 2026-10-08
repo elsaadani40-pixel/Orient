@@ -348,7 +348,7 @@ class PostgresCheckpointRepository {
 }
 
 class PostgresWorkflowRepository {
-  constructor(db) { this.db = db; }
+  constructor(db, workerRegistry = null) { this.db = db; this.workerRegistry = workerRegistry; }
 
   async save(instance, tenantId = null) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
@@ -394,6 +394,32 @@ class PostgresWorkflowRepository {
     const safeAgingQuantumMs=Math.max(1000,Number(agingQuantumMs)||30000);
     const expiresAt=new Date(Date.now()+Math.max(1000,Number(claimTtlMs)||5000)).toISOString();
     return this.db.transaction(async client => {
+      if (this.workerRegistry) {
+        const worker = await client.query(
+          'SELECT worker_id,capabilities,status,expires_at FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
+          [tenantId, workerId]
+        );
+        if (!worker.rows.length || new Date(worker.rows[0].expires_at).getTime() <= Date.now()) {
+          const error = new Error('Worker is not registered or its lease has expired');
+          error.code = 'WORKER_NOT_ACTIVE';
+          throw error;
+        }
+        if (worker.rows[0].status !== 'READY') {
+          const error = new Error('Worker is not ready to claim work');
+          error.code = 'WORKER_NOT_READY';
+          throw error;
+        }
+        const registeredCapabilities = Array.isArray(worker.rows[0].capabilities)
+          ? [...new Set(worker.rows[0].capabilities.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()))]
+          : [];
+        const missing = capabilities.filter(capability => !registeredCapabilities.includes(capability));
+        if (missing.length) {
+          const error = new Error('Worker claim capabilities are not registered');
+          error.code = 'WORKER_CAPABILITY_MISMATCH';
+          error.missingCapabilities = missing;
+          throw error;
+        }
+      }
       await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND expires_at <= NOW()',[tenantId]);
       const result=await client.query(
         `WITH candidates AS (
@@ -649,7 +675,8 @@ class PostgresPersistence {
     this.events = new PostgresEventRepository(this.db);
     this.idempotency = new PostgresIdempotencyRepository(this.db);
     this.checkpoints = new PostgresCheckpointRepository(this.db);
-    this.workflows = new PostgresWorkflowRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+    this.workflows = new PostgresWorkflowRepository(this.db, this.workers);
     this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
     this.approvals = new PostgresApprovalRepository(this.db);
     this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
