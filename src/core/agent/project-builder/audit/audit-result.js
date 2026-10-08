@@ -5,7 +5,9 @@ class AuditResult {
     findings = [],
     gaps = [],
     strengths = [],
-    definitionOfDone = null
+    definitionOfDone = null,
+    score = null,
+    recommendation = null
   } = {}) {
     this.status = status;
     this.projectType = projectType;
@@ -13,6 +15,8 @@ class AuditResult {
     this.gaps = gaps;
     this.strengths = strengths;
     this.definitionOfDone = definitionOfDone;
+    this.score = score;
+    this.recommendation = recommendation;
   }
 
   toJSON() {
@@ -22,7 +26,9 @@ class AuditResult {
       findings: this.findings,
       gaps: this.gaps,
       strengths: this.strengths,
-      definitionOfDone: this.definitionOfDone
+      definitionOfDone: this.definitionOfDone,
+      score: this.score,
+      recommendation: this.recommendation
     };
   }
 }

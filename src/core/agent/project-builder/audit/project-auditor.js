@@ -21,13 +21,11 @@ class ProjectAuditor {
     const gaps = [];
     const strengths = [];
 
-    const rootFiles = new Set(discovered.files);
-
-    const hasSrc = rootFiles.has('src');
-    const hasTest = rootFiles.has('test');
+    const hasSrc = await this.workspace.exists('src');
+    const hasTest = await this.workspace.exists('test');
     const hasAgentInstructions =
       discovered.instructions.includes('AGENT.md');
-    const hasGit = discovered.git.detected;
+    const hasGit = await this.workspace.exists('.git');
     const hasManifest = discovered.manifest.files.length > 0;
 
     if (hasSrc) {

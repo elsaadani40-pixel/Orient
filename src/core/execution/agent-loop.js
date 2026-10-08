@@ -451,7 +451,7 @@ class AgentLoop {
               planRevision,
               operationId,
               tool: step.tool,
-              capability: agentAuthorization?.capability || null,
+              capability: error.capability || agentAuthorization?.capability || null,
               agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
               tenantId: runtimeContext.tenantId || context.tenantId
             };
@@ -865,6 +865,8 @@ class AgentLoop {
           step.tool
         );
 
+      let idempotencyCompleted = false;
+
       try {
         const execution =
           await this.retryExecutor.execute({
@@ -887,6 +889,7 @@ class AgentLoop {
           result,
           runtimeContext.tenantId || context.tenantId
         );
+        idempotencyCompleted = true;
 
         context.record(
           'idempotency.completed',
@@ -982,6 +985,14 @@ class AgentLoop {
           };
         }
       } catch (error) {
+        // Once the idempotency record is completed, the external side effect is
+        // considered committed. A later failure (for example, checkpoint
+        // persistence) must not downgrade that operation to failed, because
+        // doing so would make a retry eligible to execute the side effect twice.
+        if (idempotencyCompleted) {
+          throw error;
+        }
+
         this.idempotencyStore.fail(
           idempotency.key,
           error,

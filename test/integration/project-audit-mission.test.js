@@ -19,11 +19,16 @@ const CapabilityMapper = require('../../src/core/agent/capability/capability-map
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
+const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
 function createRuntime(root, { secure = false, approvalService = null } = {}) {
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  if (!fs.existsSync(path.join(root, 'AGENT.md'))) fs.writeFileSync(path.join(root, 'AGENT.md'), '# mission fixture\n');
+  const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const registry = new AgentRegistry(); registerDefaultAgents(registry);
   const toolRegistry = new ToolRegistry(); for (const tool of createProjectTools({ projectRoot: root })) toolRegistry.register(tool);
   const orchestrator = new AgentOrchestrator({ planner: new PlannerService(), planValidator: new PlanValidator({ maxSteps: 5, toolRegistry }), replanner: new Replanner({ maxReplans: 1 }), decisionEngine: new DecisionEngine(), recoveryEngine: new RecoveryEngine() });
-  if (!secure) return new OrientRuntime({ toolRegistry, agentOrchestrator: orchestrator, tenantId: 'tenant-mission', agentRegistry: registry });
+  if (!secure) return new OrientRuntime({ toolRegistry, agentOrchestrator: orchestrator, persistence, tenantId: 'tenant-mission', agentRegistry: registry });
   const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission' });
   const authorizationService = new AuthorizationService({
     capabilityMapper: new CapabilityMapper({
@@ -44,6 +49,7 @@ function createRuntime(root, { secure = false, approvalService = null } = {}) {
     agentOrchestrator: orchestrator,
     authorizationService,
     approvalService: approvals,
+    persistence,
     tenantId: 'tenant-mission',
     agentRegistry: registry
   });
@@ -73,7 +79,7 @@ test('project change mission executes the proposal in the bounded workspace and 
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
 
   assert.equal(result.type, 'tool_result');
-  assert.equal(result.result.status, 'verified');
+  assert.equal(result.result.status, 'verified', JSON.stringify(result.result));
   assert.equal(result.result.modification.applied, true);
   assert.equal(result.result.verification.status, 'passed');
   assert.equal(result.result.verification.definitionOfDoneSatisfied, true);
@@ -95,7 +101,7 @@ test('verification failure rolls the project back to its pre-execution state', a
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
 
   assert.equal(result.type, 'tool_result');
-  assert.equal(result.result.status, 'failed');
+  assert.equal(result.result.status, 'failed', JSON.stringify(result.result));
   assert.equal(result.result.rollback.rolledBack, true);
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), original);
 
@@ -115,9 +121,12 @@ test('project change precondition blocks stale proposals after external mutation
 
   fs.writeFileSync(manifestPath, '{"name":"externally-modified"}\n');
 
-  await assert.rejects(
-    runtime.execute('نفذ التغيير المقترح وتحقق منه'),
-    error => error && error.code === 'CHANGE_PRECONDITION_FAILED'
+  const executeTool = runtime.toolRegistry.get('project.execute_change');
+  const staleExecution = await executeTool.execute(proposal.result);
+  assert.equal(staleExecution.status, 'failed');
+  assert.equal(
+    staleExecution.error?.code,
+    'CHANGE_PRECONDITION_FAILED'
   );
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), '{"name":"externally-modified"}\n');
 

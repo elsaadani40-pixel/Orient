@@ -200,6 +200,29 @@ class ExecutionContext {
     );
   }
 
+  resume() {
+    if (this.status === EXECUTION_STATUS.CREATED) {
+      this.status = EXECUTION_STATUS.RUNNING;
+      this.goal.transitionTo(Goal.STATUS.RUNNING);
+      this.record('goal.resumed', this.goal.snapshot());
+      this.transitionAgentTo(AgentState.LIFECYCLE.UNDERSTANDING);
+      return this;
+    }
+
+    if (this.status !== EXECUTION_STATUS.RUNNING) {
+      throw new Error(
+        `Cannot resume execution from status "${this.status}"`
+      );
+    }
+
+    if (this.goal.status === Goal.STATUS.CREATED) {
+      this.goal.transitionTo(Goal.STATUS.RUNNING);
+      this.record('goal.resumed', this.goal.snapshot());
+    }
+
+    return this;
+  }
+
   start() {
     if (
       this.status !==

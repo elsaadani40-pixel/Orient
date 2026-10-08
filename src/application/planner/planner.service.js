@@ -61,6 +61,9 @@ class PlannerService {
       }
     }
 
+    const projectChangeProposal = this.extractProjectChangeProposal(text);
+    if (projectChangeProposal) return this.normalizePlan(projectChangeProposal);
+
     const projectAudit = this.extractProjectAudit(text);
     if (projectAudit) return this.normalizePlan(projectAudit);
 
@@ -364,8 +367,8 @@ class PlannerService {
 
   extractProjectChangeProposal(text) {
     const value = String(text || '').trim();
-    if (!/(اقترح|اقتراح|حلل.*مشكلة|change proposal|propose.*change|improvement)/i.test(value) || !/(المشروع|المستودع|repository|project)/i.test(value)) return null;
-    return { intent: 'project.change', tool: 'project.propose_changes', input: null, agentId: 'PROJECT_BUILDER_AGENT', confidence: 0.99, reason: 'تم التعرف على مهمة اكتشاف مشكلة ثم تنفيذ التغيير المقترح بعد التفويض', steps: [{ step: 1, tool: 'project.propose_changes', input: null, dependsOn: null, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.read' }, { step: 2, tool: 'project.execute_change', input: '$previousResult', dependsOn: 1, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.write' }] };
+    if (!/(اقترح|اقتراح|حلل.*مشكلة|change proposal|propose.*change|improvement|التغيير المقترح|proposed change)/i.test(value) || (!/(المشروع|المستودع|repository|project|التغيير المقترح|proposed change)/i.test(value))) return null;
+    const wantsExecution = /(نفذ|apply|implement)/i.test(value); const steps = [{ step: 1, tool: 'project.propose_changes', input: null, dependsOn: null, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.read' }]; if (wantsExecution) steps.push({ step: 2, tool: 'project.execute_change', input: '$previousResult', dependsOn: 1, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.write' }); return { intent: wantsExecution ? 'project.change' : 'project.change.proposal', tool: 'project.propose_changes', input: null, agentId: 'PROJECT_BUILDER_AGENT', confidence: 0.99, reason: wantsExecution ? 'تنفيذ التغيير المقترح بعد التفويض' : 'إنتاج Change Proposal بدون تنفيذ', steps };
   }
   extractProjectAudit(text) {
     const value = String(text || '').trim();
