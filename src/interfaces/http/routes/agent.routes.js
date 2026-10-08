@@ -1,7 +1,39 @@
+const AppError = require('../../../core/errors/AppError');
+
 function createAgentRoutes(agentService) {
   return {
     async status(req, res, executionId) {
       const result = agentService.getExecutionStatus(executionId);
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+      });
+
+      res.end(JSON.stringify(result, null, 2));
+    },
+
+    async resume(req, res, executionId, body) {
+      let options = {};
+
+      if (body) {
+        try {
+          options =
+            typeof body === 'string'
+              ? JSON.parse(body)
+              : body;
+        } catch {
+          throw new AppError(
+            'Invalid JSON body',
+            400,
+            'INVALID_JSON'
+          );
+        }
+      }
+
+      const result =
+        await agentService.resumeExecution(executionId, options || {});
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
