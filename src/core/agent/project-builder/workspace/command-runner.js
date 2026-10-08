@@ -63,7 +63,7 @@ class CommandRunner {
           shell: false,
           windowsHide: true,
           detached: process.platform !== 'win32',
-          env: this.policy.environment
+          env: { ...process.env, ...this.policy.environment }
         }
       );
 
