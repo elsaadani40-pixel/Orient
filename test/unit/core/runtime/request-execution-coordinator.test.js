@@ -7,7 +7,7 @@ test('preserves plan identity validation and response classification', () => {
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {},
     agentExecutionCoordinator: {},
-    recoveryCoordinator: {},
+    recoveryCoordinator: { fail: async () => {} },
     persistence: null,
     persistenceCoordinator: {},
     quotaService: {},
