@@ -67,7 +67,7 @@ test('verification failure rolls the project back to its pre-execution state', a
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
 
   assert.equal(result.type, 'tool_result');
-  assert.equal(result.result.status, 'failed-and-rolled-back');
+  assert.equal(result.result.status, 'failed');
   assert.equal(result.result.rollback.rolledBack, true);
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), original);
 
