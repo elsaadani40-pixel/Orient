@@ -37,6 +37,10 @@ class WorkflowLeaseStore {
       if (!acquired) {
         throw new AppError('Workflow lease is already held', 409, 'WORKFLOW_LEASE_HELD');
       }
+      lease = { ...lease, ...acquired };
+      if (lease.fencingToken !== undefined) {
+        lease.metadata = { ...lease.metadata, fencingToken: lease.fencingToken };
+      }
     } else {
       const current = this.get(workflowId);
       if (current && current.expiresAt > now) {
