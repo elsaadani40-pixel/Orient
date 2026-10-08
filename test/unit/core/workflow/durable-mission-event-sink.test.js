@@ -37,7 +37,7 @@ test('canonical event sink persists event before snapshot projection', () => {
     [1, 'workflow.created'],
     [2, 'workflow.state.changed']
   ]);
-  assert.equal(workflows.findById(mission.workflowId).state, 'CREATED');
+  assert.equal(workflows.findById(mission.workflowId).state, 'QUEUED');
 
   workflows.save(mission);
   const restored = sink.reconstruct(mission.workflowId);
