@@ -99,7 +99,7 @@ function createServer({ memoryRoutes, agentRoutes }) {
       }
 
       const executionCancelMatch =
-        requestUrl.pathname.match(/^\\/executions\\/([^/]+)\\/cancel$/);
+        requestUrl.pathname.match(/^\/executions\/([^/]+)\/cancel$/);
 
       if (
         req.method === 'POST' &&
