@@ -42,7 +42,10 @@ function createRuntime(root, { approvalService = null, persistence: persisted = 
     recoveryEngine: new RecoveryEngine()
   });
 
-  const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const approvals = approvalService || new ApprovalService({
+    repository: persistence.approvals,
+    tenantId: 'tenant-mission-8'
+  });
   const authorizationService = new AuthorizationService({
     capabilityMapper: new CapabilityMapper({
       mappings: {
@@ -181,5 +184,123 @@ test('high-risk crash after side effect does not execute the side effect twice',
   assert.equal(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts.test, 'node --test');
 
   runtime.shutdown({ cancelQueued: false });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+
+test('high-risk side effect survives an actual process restart without duplicate execution', async () => {
+  const { spawnSync } = require('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-mission-9-restart-'));
+  fs.mkdirSync(path.join(root, 'test'));
+  fs.writeFileSync(
+    path.join(root, 'test', 'smoke.test.js'),
+    "const test = require('node:test'); const assert = require('node:assert/strict'); test('smoke', () => assert.equal(1, 1));\\n"
+  );
+  const manifestPath = path.join(root, 'package.json');
+  fs.writeFileSync(manifestPath, '{"name":"mission-9-restart"}\\n');
+
+  const approvals = new ApprovalService({
+    repository: new JsonPersistence({ rootDir: path.join(root, '.orient-state') }).approvals,
+    tenantId: 'tenant-mission-8'
+  });
+  const runtime = createRuntime(root, { approvalService: approvals });
+  const { challenge, approval } = await approveChallenge(runtime, approvals, root);
+
+  const childScript = `
+const path = require('node:path');
+const AgentRegistry = require('../../src/core/agent/boundary/agent-registry');
+const { registerDefaultAgents } = require('../../src/core/agent/catalog/default-agents');
+const PlannerService = require('../../src/application/planner/planner.service');
+const PlanValidator = require('../../src/core/planning/validation/plan-validator');
+const Replanner = require('../../src/core/planning/replanning/replanner');
+const DecisionEngine = require('../../src/core/agent/decision/decision-engine');
+const RecoveryEngine = require('../../src/core/agent/recovery/recovery-engine');
+const AgentOrchestrator = require('../../src/core/agent/orchestrator/agent-orchestrator');
+const ToolRegistry = require('../../src/core/tools/tool.registry');
+const OrientRuntime = require('../../src/core/runtime/orient-runtime');
+const createProjectTools = require('../../src/application/tools/project.tools');
+const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
+const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
+const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
+const ApprovalService = require('../../src/core/agent/approval/approval-service');
+const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
+
+(async () => {
+  const root = process.argv[1];
+  const executionId = process.argv[2];
+  const approval = JSON.parse(process.argv[3]);
+  const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
+  const registry = new AgentRegistry();
+  registerDefaultAgents(registry);
+  const toolRegistry = new ToolRegistry();
+  for (const tool of createProjectTools({ projectRoot: root })) toolRegistry.register(tool);
+  const orchestrator = new AgentOrchestrator({
+    planner: new PlannerService(),
+    planValidator: new PlanValidator({ maxSteps: 5, toolRegistry }),
+    replanner: new Replanner({ maxReplans: 1 }),
+    decisionEngine: new DecisionEngine(),
+    recoveryEngine: new RecoveryEngine()
+  });
+  const approvals = new ApprovalService({ repository: persistence.approvals, tenantId: 'tenant-mission-8' });
+  const authorizationService = new AuthorizationService({
+    capabilityMapper: new CapabilityMapper({
+      mappings: {
+        'project.audit': 'workspace.read',
+        'project.propose_changes': 'workspace.read',
+        'project.execute_change': 'workspace.write'
+      }
+    }),
+    capabilityPolicy: new PolicyEngine({
+      capabilities: ['workspace.read', 'workspace.write'],
+      riskByCapability: { 'workspace.read': 'low', 'workspace.write': 'high' }
+    }),
+    approvalService: approvals
+  });
+  const runtime = new OrientRuntime({
+    toolRegistry,
+    agentOrchestrator: orchestrator,
+    authorizationService,
+    approvalService: approvals,
+    persistence,
+    tenantId: 'tenant-mission-8',
+    agentRegistry: registry
+  });
+  runtime.checkpoint = async (context, mode, reason) => {
+    if (reason === 'step_completed:plan-1:step-2') process.exit(73);
+    return runtime.persistenceCoordinator.checkpoint(context, mode, reason);
+  };
+  await runtime.resume(executionId, { approval });
+})().catch(() => process.exit(74));
+`;
+
+  const child = spawnSync(process.execPath, ['-e', childScript, root, challenge.executionId, JSON.stringify(approval)], {
+    cwd: process.cwd(),
+    encoding: 'utf8'
+  });
+  assert.equal(child.status, 73, child.stderr || child.stdout);
+
+  const restartedRuntime = createRuntime(root);
+  const executionBeforeRestart = restartedRuntime.persistence.executions.findById(
+    challenge.executionId,
+    { tenantId: 'tenant-mission-8' }
+  );
+  assert.equal(executionBeforeRestart.status, 'running');
+
+  const recovered = await restartedRuntime.resume(challenge.executionId);
+  assert.equal(recovered.resumed, true);
+  assert.equal(recovered.execution.status, 'completed');
+  assert.equal(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts.test, 'node --test');
+
+  const replay = await restartedRuntime.resume(challenge.executionId, { approval });
+  assert.equal(replay.resumed, false);
+  assert.equal(replay.reason, 'execution_already_terminal');
+
+  const persistedApproval = await restartedRuntime.approvalService.repository.findById(
+    approval.approvalId,
+    { tenantId: 'tenant-mission-8' }
+  );
+  assert.equal(persistedApproval.used, true);
+
+  restartedRuntime.shutdown({ cancelQueued: false });
   fs.rmSync(root, { recursive: true, force: true });
 });
