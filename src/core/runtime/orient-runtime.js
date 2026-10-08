@@ -229,6 +229,38 @@ class OrientRuntime {
     return this.requestExecutionCoordinator.resume(executionId, options);
   }
 
+  async cancelExecution(executionId, { reason = 'Execution cancellation requested' } = {}) {
+    if (!this.persistence?.executions?.requestCancellation) {
+      throw Object.assign(new Error('Durable execution cancellation storage is required'), {
+        code: 'EXECUTION_CANCELLATION_STORAGE_REQUIRED'
+      });
+    }
+    if (!executionId) {
+      throw Object.assign(new Error('executionId is required'), { code: 'EXECUTION_ID_REQUIRED' });
+    }
+
+    const requested = this.persistence.executions.requestCancellation(
+      executionId,
+      reason,
+      { tenantId: this.tenantId }
+    );
+
+    if (!requested) {
+      throw Object.assign(new Error(`Execution not found: ${executionId}`), {
+        code: 'EXECUTION_NOT_FOUND'
+      });
+    }
+
+    return {
+      executionId: requested.executionId,
+      tenantId: requested.metadata?.tenantId || this.tenantId,
+      status: requested.status,
+      cancellationRequested: Boolean(requested.cancellationRequested),
+      cancellationReason: requested.cancellationReason || null,
+      terminal: ['completed', 'failed', 'cancelled'].includes(requested.status)
+    };
+  }
+
   async getExecutionApprovals(executionId) {
     if (!this.approvalService?.listForExecution) {
       throw Object.assign(new Error('Approval service is required for approval status'), {
