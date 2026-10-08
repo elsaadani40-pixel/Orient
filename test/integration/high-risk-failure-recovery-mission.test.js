@@ -21,9 +21,9 @@ const AuthorizationService = require('../../src/core/agent/authorization/authori
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
 
-function createRuntime(root, { approvalService = null, persistence = null } = {}) {
+function createRuntime(root, { approvalService = null, persistence: persisted = null } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
-  const persistence = persistence || new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
+  const persistence = persisted || new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const registry = new AgentRegistry();
   registerDefaultAgents(registry);
 
