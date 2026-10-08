@@ -3,6 +3,20 @@ const path = require('path');
 const crypto = require('crypto');
 
 class WorkflowRepository {
+  ensureStorage() {
+    try {
+      const fd = fs.openSync(this.filePath, 'wx', 0o600);
+      try {
+        fs.writeFileSync(fd, '[]\\n', 'utf8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
+
   constructor(filePath) {
     if (!filePath) throw new TypeError('filePath is required');
     this.filePath = path.resolve(filePath);
