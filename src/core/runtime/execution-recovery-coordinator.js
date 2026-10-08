@@ -42,6 +42,15 @@ class ExecutionRecoveryCoordinator {
     context.record('recovery.completed', recovery);
     context.fail(error);
 
+    // The durable checkpoint is the recovery commit barrier. Persist the terminal
+    // failure before secondary stores so a crash between stores can never leave
+    // a resumable checkpoint after the execution has been irreversibly failed.
+    await this.checkpoint(
+      context,
+      'update',
+      checkpointReason || 'recovery_failure_committed'
+    );
+
     await this.persistExecution(context, 'update');
     await this.persistEvents(context);
 
