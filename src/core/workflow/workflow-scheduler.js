@@ -296,6 +296,15 @@ class WorkflowScheduler {
     return null;
   }
 
+  assertCurrent(workflowId, leaseId, fencingToken) {
+    const active = this.active.get(workflowId);
+    if (!active || active.leaseId !== leaseId || Number(active.fencingToken) !== Number(fencingToken)) {
+      throw new AppError('Current workflow fencing token is invalid', 409, 'WORKFLOW_FENCING_REJECTED');
+    }
+    this.leaseStore.assertCurrent(workflowId, leaseId, fencingToken);
+    return true;
+  }
+
   renew(workflowId, leaseId) {
     const active = this.active.get(workflowId);
 
