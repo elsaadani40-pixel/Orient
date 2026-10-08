@@ -203,6 +203,49 @@ class ProjectBuilderAgent {
     definitionOfDone,
     checks = []
   } = {}) {
+    if (
+      !changeSet ||
+      !Array.isArray(changeSet.changes)
+    ) {
+      throw new TypeError(
+        'changeSet with changes is required'
+      );
+    }
+
+    const policyDecision =
+      this.policyGate.evaluate({
+        proposals: changeSet.changes
+      });
+
+    if (!policyDecision.allowed) {
+      return {
+        status: 'blocked',
+        policy: policyDecision,
+        plan,
+        changeSet
+      };
+    }
+
+    const validation =
+      await this.proposalValidator.validate({
+        proposals: changeSet.changes
+      });
+
+    if (!validation.valid) {
+      return {
+        status: 'blocked',
+        policy: {
+          allowed: false,
+          errors: validation.errors.map(error => ({
+            code: 'INVALID_PROPOSAL',
+            ...error
+          }))
+        },
+        plan,
+        changeSet
+      };
+    }
+
     return this.executionService.execute({
       plan,
       changeSet,
