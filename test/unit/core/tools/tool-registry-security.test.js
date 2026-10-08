@@ -90,7 +90,8 @@ test('tool registry rejects an authorized context when execution identity is tam
 test('registered tool security metadata and executor cannot be replaced by caller mutation', async () => {
   const registry = new ToolRegistry();
   const original = tool();
-  const registered = registry.register(original);
+  registry.register(original);
+  const registered = registry.get('secure.test');
 
   original.execute = async () => ({ compromised: true });
   original.capabilities = ['*'];
