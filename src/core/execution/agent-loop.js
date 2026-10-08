@@ -349,6 +349,38 @@ class AgentLoop {
         throw error;
       }
 
+      const resolvedInput =
+        this.resolveStepInput({
+          step,
+          stepNumber,
+          context,
+          stepResults,
+          lastResult
+        });
+
+      const resolvedInputSize =
+        typeof resolvedInput === 'string'
+          ? resolvedInput.length
+          : JSON.stringify(resolvedInput ?? null).length;
+
+      if (resolvedInputSize > this.maxToolInputChars) {
+        throw new AppError(
+          'حجم مدخلات الأداة يتجاوز الحد المسموح',
+          413,
+          'TOOL_INPUT_TOO_LARGE'
+        );
+      }
+
+      const operationId = crypto
+        .createHash('sha256')
+        .update(JSON.stringify({
+          executionId: context.executionId,
+          planRevision,
+          step: stepNumber,
+          tool: step.tool,
+          input: resolvedInput
+        }))
+        .digest('hex');
       const recoveringPersistedOperation =
         Array.isArray(context.steps) &&
         context.steps.some(
@@ -359,6 +391,113 @@ class AgentLoop {
             persistedStep.step === stepNumber &&
             persistedStep.tool === step.tool
         );
+
+      let executionAuthorization = null;
+
+      if (this.authorizationService && !recoveringPersistedOperation) {
+        let authorization;
+
+        try {
+          const approval =
+            runtimeContext.approvals?.[stepNumber] ||
+            runtimeContext.approval ||
+            null;
+
+          authorization =
+            await this.authorizationService
+              .assertAuthorized(step.tool, {
+                executionId: context.executionId,
+                step: stepNumber,
+                planRevision,
+                approval,
+                agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
+                tenantId: runtimeContext.tenantId || context.tenantId,
+                operationId,
+                scope: { planRevision }
+              });
+
+          context.record(
+            'authorization.completed',
+            {
+              step: stepNumber,
+              tool: step.tool,
+              authorized: true,
+              capability:
+                authorization.capability,
+              risk:
+                authorization.risk,
+              requiresApproval:
+                authorization.requiresApproval
+            }
+          )
+          executionAuthorization = authorization;;
+        } catch (error) {
+          context.record(
+            'authorization.failed',
+            {
+              step: stepNumber,
+              tool: step.tool,
+              code:
+                error.code ||
+                'TOOL_NOT_AUTHORIZED',
+              reason: error.message
+            }
+          );
+
+          throw error;
+        }
+
+        if (
+          authorization.requiresApproval &&
+          authorization.approval &&
+          this.authorizationService.approvalService
+        ) {
+          const consumed =
+            await this.authorizationService.approvalService.consume(
+              authorization.approval.approvalId,
+              runtimeContext.tenantId || context.tenantId
+            );
+
+          if (!consumed) {
+            throw new AppError(
+              'Approval could not be consumed safely',
+              409,
+              'APPROVAL_CONSUME_FAILED'
+            );
+          }
+
+          context.record(
+            'approval.consumed',
+            {
+              step: stepNumber,
+              tool: step.tool,
+              approvalId:
+                authorization.approval.approvalId,
+              planRevision
+            }
+          );
+        }
+      } else if (!this.authorizationService) {
+        context.record(
+          'authorization.completed',
+          {
+            step: stepNumber,
+            tool: step.tool,
+            authorized: true,
+            mode: 'legacy'
+          }
+        );
+      } else {
+        context.record(
+          'authorization.reused',
+          {
+            step: stepNumber,
+            tool: step.tool,
+            planRevision,
+            reason: 'persisted_operation_recovery'
+          }
+        );
+      }
 
       const injectedContext =
         this.buildStepContext({
