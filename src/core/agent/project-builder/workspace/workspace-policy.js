@@ -11,7 +11,8 @@ class WorkspacePolicy {
     deniedCommands = [],
     allowedCommands = [],
     maxOutput = 20000,
-    timeoutMs = 30000
+    timeoutMs = 30000,
+    environment = {}
   } = {}) {
     if (!allowedRoot || typeof allowedRoot !== 'string') {
       throw new TypeError('allowedRoot is required');
@@ -32,6 +33,14 @@ class WorkspacePolicy {
     this.timeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
       ? timeoutMs
       : 30000;
+    this.environment = Object.freeze(
+      Object.fromEntries(
+        Object.entries(environment || {}).map(([key, value]) => [
+          String(key),
+          String(value)
+        ])
+      )
+    );
   }
 
   resolve(relativePath = '.') {

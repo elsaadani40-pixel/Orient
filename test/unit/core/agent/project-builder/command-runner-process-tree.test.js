@@ -28,7 +28,7 @@ test('timeout terminates the complete child process group on POSIX', {
   const runner = new CommandRunner({ policy });
 
   await assert.rejects(
-    () => runner.run('node', {
+    () => runner.run(process.execPath, {
       cwd: '.',
       args: [
         '-e',
@@ -64,3 +64,5 @@ test('timeout terminates the complete child process group on POSIX', {
   await fs.rm(root, { recursive: true, force: true });
   assert.fail('timed-out command left a descendant process running');
 });
+
+// Regression remains intentionally POSIX-scoped.
