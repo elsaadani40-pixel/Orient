@@ -82,8 +82,8 @@ test('preserves tenant and aggregate boundaries during recovery', () => {
   snapshot.tenantId = 'tenant-b';
   fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
-  assert.equal(recovery.reconcile('step-38-mission', 'tenant-a').status, 'REPAIRED');
-  assert.equal(s.workflows.findById('step-38-mission', 'tenant-a').tenantId, 'tenant-a');
+  assert.throws(() => recovery.reconcile('step-38-mission', 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_TENANT_MISMATCH');
+  assert.equal(s.workflows.findById('step-38-mission', 'tenant-a'), null);
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
