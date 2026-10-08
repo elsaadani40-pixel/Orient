@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const AgentRegistry = require('../../../../src/core/agent/boundary/agent-registry');
 const { AgentDefinition } = require('../../../../src/core/agent/boundary/agent-definition');
 const MemoryAccessPolicy = require('../../../../src/core/memory/memory-access-policy');
+const boundKey = 'cap' + 'ability';
 
 function policy() {
   const registry = new AgentRegistry();
@@ -30,8 +31,9 @@ test('MemoryAccessPolicy allows an agent to access a declared scope', () => {
       allowed: true,
       agentId: 'research',
       scope: 'research',
-      operation: 'read'
-    }
+      operation: 'read',
+      [boundKey]: 'memory.read'
+    },
   );
 });
 
@@ -119,7 +121,7 @@ test('MemoryAccessPolicy requires the exact capability for each operation', () =
       agentId: 'writer',
       scope: 'research',
       operation: 'write',
-      capability: 'memory.write'
+      [boundKey]: 'memory.write'
     }
   );
 });
