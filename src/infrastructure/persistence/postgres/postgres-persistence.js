@@ -425,6 +425,25 @@ class PostgresWorkflowRepository {
     const result=await this.db.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3',[tenantId,workflowId,workerId]);
     return result.rowCount===1;
   }
+  async requestCancellation(workflowId, tenantId = null) {
+    const effectiveTenant = tenantOrLocal(tenantId);
+    return this.db.transaction(async client => {
+      const result = await client.query(
+        'SELECT payload,state FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [workflowId, effectiveTenant]
+      );
+      if (!result.rows.length) return false;
+      const payload = { ...result.rows[0].payload, cancelRequested: true, updatedAt: new Date().toISOString() };
+      const state = ['CREATED','QUEUED','WAITING','RECOVERING'].includes(result.rows[0].state) ? 'CANCELLED' : result.rows[0].state;
+      payload.state = state;
+      await client.query(
+        'UPDATE workflows SET state=$3,updated_at=$4,payload=$5 WHERE workflow_id=$1 AND tenant_id=$2',
+        [workflowId,effectiveTenant,state,payload.updatedAt,payload]
+      );
+      return payload;
+    });
+  }
+
   async findById(workflowId, tenantId = null) {
     const result = await this.db.query(
       tenantId ? 'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload FROM workflows WHERE workflow_id=$1 LIMIT 1',
