@@ -15,11 +15,38 @@ const AgentOrchestrator = require('../../src/core/agent/orchestrator/agent-orche
 const ToolRegistry = require('../../src/core/tools/tool.registry');
 const OrientRuntime = require('../../src/core/runtime/orient-runtime');
 const createProjectTools = require('../../src/application/tools/project.tools');
-function createRuntime(root) {
+const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
+const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
+const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
+const ApprovalService = require('../../src/core/agent/approval/approval-service');
+function createRuntime(root, { secure = false, approvalService = null } = {}) {
   const registry = new AgentRegistry(); registerDefaultAgents(registry);
   const toolRegistry = new ToolRegistry(); for (const tool of createProjectTools({ projectRoot: root })) toolRegistry.register(tool);
   const orchestrator = new AgentOrchestrator({ planner: new PlannerService(), planValidator: new PlanValidator({ maxSteps: 5, toolRegistry }), replanner: new Replanner({ maxReplans: 1 }), decisionEngine: new DecisionEngine(), recoveryEngine: new RecoveryEngine() });
-  return new OrientRuntime({ toolRegistry, agentOrchestrator: orchestrator, tenantId: 'tenant-mission', agentRegistry: registry });
+  if (!secure) return new OrientRuntime({ toolRegistry, agentOrchestrator: orchestrator, tenantId: 'tenant-mission', agentRegistry: registry });
+  const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission' });
+  const authorizationService = new AuthorizationService({
+    capabilityMapper: new CapabilityMapper({
+      mappings: {
+        'project.audit': 'workspace.read',
+        'project.propose_changes': 'workspace.read',
+        'project.execute_change': 'workspace.write'
+      }
+    }),
+    capabilityPolicy: new PolicyEngine({
+      capabilities: ['workspace.read', 'workspace.write'],
+      riskByCapability: { 'workspace.read': 'low', 'workspace.write': 'high' }
+    }),
+    approvalService: approvals
+  });
+  return new OrientRuntime({
+    toolRegistry,
+    agentOrchestrator: orchestrator,
+    authorizationService,
+    approvalService: approvals,
+    tenantId: 'tenant-mission',
+    agentRegistry: registry
+  });
 }
 test('project audit mission completes through canonical runtime without write or command access', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-mission-')); fs.mkdirSync(path.join(root, 'src')); fs.mkdirSync(path.join(root, 'test')); fs.writeFileSync(path.join(root, 'AGENT.md'), '# test'); fs.writeFileSync(path.join(root, 'package.json'), '{"name":"mission-fixture"}');
@@ -149,6 +176,59 @@ test('project change reconciliation refuses an unexpected external state', async
   assert.equal(reconciliation.status, 'conflict');
   assert.equal(reconciliation.reason, 'external_state_does_not_match_expected_post_state');
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), '{"name":"unexpected-external-change"}\n');
+
+  runtime.shutdown({ cancelQueued: false });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('high-risk project execution requires a real approval, then executes through the full canonical path', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-high-risk-e2e-'));
+  fs.mkdirSync(path.join(root, 'test'));
+  fs.writeFileSync(path.join(root, 'test', 'smoke.test.js'), "const test = require('node:test'); const assert = require('node:assert/strict'); test('smoke', () => assert.equal(1, 1));\n");
+  const manifestPath = path.join(root, 'package.json');
+  fs.writeFileSync(manifestPath, '{"name":"high-risk-fixture"}\n');
+
+  const approvals = new ApprovalService({ tenantId: 'tenant-mission' });
+  const runtime = createRuntime(root, { secure: true, approvalService: approvals });
+
+  let challenge;
+  await assert.rejects(
+    runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه'),
+    error => {
+      assert.equal(error.code, 'APPROVAL_REQUIRED');
+      challenge = error.executionContext;
+      return true;
+    }
+  );
+
+  assert.ok(challenge.executionId);
+  assert.equal(challenge.tool, 'project.execute_change');
+  assert.equal(challenge.capability, 'workspace.write');
+  assert.equal(challenge.agentId, 'PROJECT_BUILDER_AGENT');
+  assert.match(challenge.operationId, /^[a-f0-9]{64}$/);
+
+  const approval = await approvals.issue({
+    executionId: challenge.executionId,
+    step: challenge.step,
+    tool: challenge.tool,
+    capability: challenge.capability,
+    planRevision: challenge.planRevision,
+    tenantId: challenge.tenantId,
+    agentId: challenge.agentId,
+    operationId: challenge.operationId,
+    scope: { planRevision: challenge.planRevision }
+  });
+
+  const resumed = await runtime.resume(challenge.executionId, { approval });
+  assert.equal(resumed.resumed, true);
+  assert.equal(resumed.result.status, 'verified');
+  assert.equal(resumed.result.verification.status, 'passed');
+  assert.equal(resumed.result.verification.definitionOfDoneSatisfied, true);
+  assert.equal(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts.test, 'node --test');
+
+  const replay = await runtime.resume(challenge.executionId, { approval });
+  assert.equal(replay.resumed, false);
+  assert.equal(replay.reason, 'execution_already_terminal');
 
   runtime.shutdown({ cancelQueued: false });
   fs.rmSync(root, { recursive: true, force: true });

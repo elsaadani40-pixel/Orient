@@ -444,6 +444,19 @@ class AgentLoop {
             }
           );
 
+          if (error.code === 'APPROVAL_REQUIRED') {
+            error.executionContext = {
+              executionId: context.executionId,
+              step: stepNumber,
+              planRevision,
+              operationId,
+              tool: step.tool,
+              capability: agentAuthorization?.capability || null,
+              agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
+              tenantId: runtimeContext.tenantId || context.tenantId
+            };
+          }
+
           throw error;
         }
 
