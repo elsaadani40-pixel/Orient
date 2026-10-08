@@ -635,3 +635,39 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
   for (const workerId of workers) await persistence.workers.unregister(workerId, 'tenant-claim');
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
+
+
+test('PostgreSQL execution cancellation is durable and tenant-scoped', async () => {
+  const executionId = 'cancel-exec-' + Date.now();
+  await persistence.executions.insert({
+    executionId,
+    requestId: 'cancel-request',
+    status: 'running',
+    metadata: { tenantId: 'tenant-cancel' }
+  }, { tenantId: 'tenant-cancel' });
+
+  const requested = await persistence.executions.requestCancellation(
+    executionId,
+    'stop requested',
+    { tenantId: 'tenant-cancel' }
+  );
+
+  assert.equal(requested.cancellationRequested, true);
+  assert.equal(requested.cancellationReason, 'stop requested');
+
+  const persisted = await persistence.executions.findById(executionId, {
+    tenantId: 'tenant-cancel'
+  });
+  assert.equal(persisted.cancellationRequested, true);
+
+  const crossTenant = await persistence.executions.requestCancellation(
+    executionId,
+    'cross tenant',
+    { tenantId: 'tenant-other' }
+  );
+  assert.equal(crossTenant, null);
+
+  await persistence.executions.deleteById(executionId, {
+    tenantId: 'tenant-cancel'
+  });
+});
