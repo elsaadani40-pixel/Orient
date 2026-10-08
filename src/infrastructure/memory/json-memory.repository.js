@@ -5,7 +5,9 @@ const { normalizeMemory } = require('../../domain/memory/memory.entity');
 
 class JsonMemoryRepository {
   constructor(filePath) {
+    if (!filePath) throw new TypeError('filePath is required');
     this.filePath = filePath;
+    this.lockPath = `${filePath}.lock`;
     this.ensureStorage();
     this.migrateLegacyData();
   }
@@ -114,48 +116,61 @@ class JsonMemoryRepository {
   }
 
   insert(memory) {
-    const memories = this.read();
     const normalized = this.normalize(memory);
-    memories.unshift(normalized);
-    this.write(memories);
-    return normalized;
+    return this.withLock(() => {
+      const memories = this.read();
+      memories.unshift(normalized);
+      this.write(memories);
+      return normalized;
+    });
   }
 
   update(id, patch, tenantId = 'local', scope = null) {
-    const memories = this.read();
-    const index = memories.findIndex(memory =>
+    if (patch.tenantId !== undefined && String(patch.tenantId) !== String(tenantId)) {
+      throw Object.assign(new Error('Memory tenant is immutable'), { code: 'MEMORY_TENANT_IMMUTABLE' });
+    }
+    if (scope && patch.scope !== undefined && String(patch.scope) !== String(scope)) {
+      throw Object.assign(new Error('Memory scope is immutable'), { code: 'MEMORY_SCOPE_IMMUTABLE' });
+    }
+
+    return this.withLock(() => {
+      const memories = this.read();
+      const index = memories.findIndex(memory =>
       memory.id === id &&
       memory.tenantId === tenantId &&
       (!scope || memory.scope === scope)
     );
 
-    if (index === -1) return null;
+      if (index === -1) return null;
 
-    const updated = this.normalize({
+      const updated = this.normalize({
       ...memories[index],
       ...patch,
       id: memories[index].id,
       updatedAt: patch.updatedAt || new Date().toISOString()
     });
 
-    memories[index] = updated;
-    this.write(memories);
-    return updated;
+      memories[index] = updated;
+      this.write(memories);
+      return updated;
+    });
   }
 
   deleteById(id, tenantId = 'local', scope = null) {
-    const memories = this.read();
-    const index = memories.findIndex(memory =>
+    return this.withLock(() => {
+      const memories = this.read();
+      const index = memories.findIndex(memory =>
       memory.id === id &&
       memory.tenantId === tenantId &&
       (!scope || memory.scope === scope)
     );
 
-    if (index === -1) return false;
+      if (index === -1) return false;
 
-    memories.splice(index, 1);
-    this.write(memories);
-    return true;
+      memories.splice(index, 1);
+      this.write(memories);
+      return true;
+    });
   }
 }
 
