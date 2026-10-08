@@ -17,8 +17,10 @@ class EventRepository {
     const directory = path.dirname(this.filePath);
     fs.mkdirSync(directory, { recursive: true });
 
-    if (!fs.existsSync(this.filePath)) {
-      fs.writeFileSync(this.filePath, '[]\n', 'utf8');
+    try {
+      fs.writeFileSync(this.filePath, '[]\n', { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
     }
   }
 
