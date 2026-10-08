@@ -105,6 +105,66 @@ class CheckpointRepository {
     });
   }
 
+  acquireResumeLease(executionId, { tenantId = null, leaseDurationMs = 30000 } = {}) {
+    if (!executionId) throw new TypeError('executionId is required');
+    if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
+      throw new TypeError('leaseDurationMs must be a positive integer');
+    }
+
+    return this.withLock(() => {
+      const records = this.read();
+      const checkpoint = records[executionId];
+      if (!checkpoint) return null;
+
+      const snapshot = checkpoint.snapshot || {};
+      const snapshotTenantId = snapshot.tenantId || snapshot.metadata?.tenantId || (tenantId === 'local' ? 'local' : null);
+      if (tenantId && snapshotTenantId !== tenantId) return null;
+
+      const now = Date.now();
+      const existing = checkpoint.resumeLease || null;
+      if (existing && Number(existing.expiresAtMs) > now) {
+        const error = new Error('Execution resume lease is already held');
+        error.code = 'CHECKPOINT_RESUME_LEASE_HELD';
+        throw error;
+      }
+
+      const lease = {
+        leaseId: crypto.randomUUID(),
+        acquiredAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + leaseDurationMs).toISOString(),
+        expiresAtMs: now + leaseDurationMs
+      };
+
+      records[executionId] = {
+        ...checkpoint,
+        resumeLease: lease
+      };
+      this.write(records);
+
+      return JSON.parse(JSON.stringify(lease));
+    });
+  }
+
+  releaseResumeLease(executionId, leaseId, { tenantId = null } = {}) {
+    if (!executionId || !leaseId) return false;
+
+    return this.withLock(() => {
+      const records = this.read();
+      const checkpoint = records[executionId];
+      if (!checkpoint) return false;
+
+      const snapshot = checkpoint.snapshot || {};
+      const snapshotTenantId = snapshot.tenantId || snapshot.metadata?.tenantId || (tenantId === 'local' ? 'local' : null);
+      if (tenantId && snapshotTenantId !== tenantId) return false;
+      if (checkpoint.resumeLease?.leaseId !== leaseId) return false;
+
+      const { resumeLease, ...withoutLease } = checkpoint;
+      records[executionId] = withoutLease;
+      this.write(records);
+      return true;
+    });
+  }
+
   findLatest(executionId, { verify = true, tenantId = null } = {}) {
     if (!executionId) return null;
     const checkpoint = this.read()[executionId] || null;
