@@ -84,7 +84,7 @@ test('terminal replay remains terminal and rejects later mutation', () => {
   const events = stream();
   events.push(
     { id: 'e7', aggregateId: 'wf-36', sequence: 7, type: 'workflow.state.changed', timestamp: '2026-10-08T10:00:06.000Z', data: { to: 'COMPLETED' } },
-    { id: 'e8', aggregateId: 'wf-36', sequence: 8, type: 'workflow.step.running', timestamp: '2026-10-08T10:00:07.000Z', data: { stepId: 'finish' } }
+    { id: 'e8', aggregateId: 'wf-36', sequence: 8, type: 'workflow.state.changed', timestamp: '2026-10-08T10:00:07.000Z', data: { to: 'RUNNING' } }
   );
   assert.throws(
     () => new MissionEventProjection().rebuild(events),
