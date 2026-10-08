@@ -30,10 +30,11 @@ class ToolRegistry {
     if (this.tools.has(tool.name)) {
       throw new AppError(
         `الأداة "${tool.name}" مسجلة بالفعل`,
-        500,
+        409,
         'TOOL_ALREADY_REGISTERED'
       );
     }
+
 
     const registeredTool = Object.freeze({
       ...tool,
