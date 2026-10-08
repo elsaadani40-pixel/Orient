@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm install --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Verify SQLite runtime
         shell: bash
@@ -116,7 +116,7 @@ jobs:
           check-latest: true
 
       - name: Install PostgreSQL client dependency
-        run: npm install --no-save pg@^8.23.1
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Run PostgreSQL integration suite
         env:
