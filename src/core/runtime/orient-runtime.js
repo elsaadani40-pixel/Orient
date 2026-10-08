@@ -229,6 +229,44 @@ class OrientRuntime {
     return this.requestExecutionCoordinator.resume(executionId, options);
   }
 
+  getExecutionStatus(executionId) {
+    if (!this.persistence?.executions?.findById) {
+      throw Object.assign(new Error('Durable execution storage is required for status'), {
+        code: 'EXECUTION_STORAGE_REQUIRED'
+      });
+    }
+
+    if (!executionId) {
+      throw Object.assign(new Error('executionId is required'), {
+        code: 'EXECUTION_ID_REQUIRED'
+      });
+    }
+
+    const execution = this.persistence.executions.findById(executionId, {
+      tenantId: this.tenantId
+    });
+
+    if (!execution) {
+      throw Object.assign(new Error(`Execution not found: ${executionId}`), {
+        code: 'EXECUTION_NOT_FOUND'
+      });
+    }
+
+    return {
+      executionId: execution.executionId,
+      requestId: execution.requestId,
+      goalId: execution.goalId,
+      tenantId: execution.metadata?.tenantId || this.tenantId,
+      status: execution.status,
+      agentLifecycle: execution.agentLifecycle,
+      currentStep: execution.currentStep,
+      startedAt: execution.startedAt,
+      completedAt: execution.completedAt,
+      updatedAt: execution.updatedAt,
+      result: execution.result
+    };
+  }
+
 }
 
 module.exports =
