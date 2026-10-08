@@ -89,7 +89,7 @@ class PostgresTenantQuotaRepository {
       )).rows[0];
       if (!limit) return null;
       await client.query(
-        'DELETE FROM tenant_quota_reservations WHERE tenant_id=$1 AND state='QUEUED' AND expires_at IS NOT NULL AND expires_at <= NOW()',
+        "DELETE FROM tenant_quota_reservations WHERE tenant_id=$1 AND state='QUEUED' AND expires_at IS NOT NULL AND expires_at <= NOW()",
         [tenantId]
       );
       const active = (await client.query(
