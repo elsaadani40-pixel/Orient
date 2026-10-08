@@ -47,7 +47,7 @@ test('rejects snapshot ahead of durable event history', () => {
   const mission = seed(s);
   const snapshot = s.workflows.findById(mission.workflowId, 'tenant-a');
   snapshot.checkpoint.revision = 99;
-  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\\n');
+  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
   assert.throws(() => recovery.reconcile(mission.workflowId, 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_AHEAD_OF_EVENTS');
   fs.rmSync(s.dir, { recursive: true, force: true });
@@ -58,7 +58,7 @@ test('rebuilds a semantically corrupt snapshot from valid event history', () => 
   const mission = seed(s);
   const snapshot = s.workflows.findById(mission.workflowId, 'tenant-a');
   snapshot.state = 'NOT_A_STATE';
-  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\\n');
+  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
   assert.throws(() => recovery.reconcile(mission.workflowId, 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_CORRUPT');
   fs.rmSync(s.dir, { recursive: true, force: true });
@@ -69,7 +69,7 @@ test('detects missing event sequence and refuses silent repair', () => {
   seed(s);
   const all = s.events.read();
   all[1].sequence = 3;
-  fs.writeFileSync(s.events.filePath, JSON.stringify(all) + '\\n');
+  fs.writeFileSync(s.events.filePath, JSON.stringify(all) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
   assert.throws(() => recovery.reconcile('step-38-mission', 'tenant-a'), e => e.code === 'MISSION_EVENT_SEQUENCE_GAP');
   fs.rmSync(s.dir, { recursive: true, force: true });
@@ -80,7 +80,7 @@ test('preserves tenant and aggregate boundaries during recovery', () => {
   seed(s);
   const snapshot = s.workflows.findById('step-38-mission', 'tenant-a');
   snapshot.tenantId = 'tenant-b';
-  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\\n');
+  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
   assert.equal(recovery.reconcile('step-38-mission', 'tenant-a').status, 'REPAIRED');
   assert.equal(s.workflows.findById('step-38-mission', 'tenant-a').tenantId, 'tenant-a');
