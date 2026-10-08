@@ -91,7 +91,8 @@ test('registered tool security metadata and executor cannot be replaced by calle
   const registry = new ToolRegistry();
   const original = tool();
   registry.register(original);
-  const registered = registry.get('secure.test');
+  const registered = registry.executionTools.get('secure.test');
+  assert.equal(registry.get('secure.test'), original);
 
   original.execute = async () => ({ compromised: true });
   original.capabilities = ['*'];
