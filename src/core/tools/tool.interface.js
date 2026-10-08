@@ -8,7 +8,8 @@ class ToolInterface {
     retryable = false,
     capabilities = [],
     risk = null,
-    sandbox = null
+    sandbox = null,
+    reconcile = null
   }) {
     if (!name || typeof name !== 'string') {
       throw new TypeError(
@@ -19,6 +20,12 @@ class ToolInterface {
     if (typeof execute !== 'function') {
       throw new TypeError(
         `Tool "${name}" must provide an execute function`
+      );
+    }
+
+    if (reconcile !== null && typeof reconcile !== 'function') {
+      throw new TypeError(
+        `Tool "${name}" reconcile must be a function when provided`
       );
     }
 
@@ -33,6 +40,7 @@ class ToolInterface {
       description || '';
 
     this.execute = execute;
+    this.reconcile = reconcile;
 
     this.retryable =
       retryable === true;
