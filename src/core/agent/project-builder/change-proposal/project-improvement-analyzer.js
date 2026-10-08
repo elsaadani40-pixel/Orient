@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 class ProjectImprovementAnalyzer {
   constructor({ workspace, discovery } = {}) {
     if (!workspace) throw new TypeError('workspace is required');
@@ -21,7 +23,7 @@ class ProjectImprovementAnalyzer {
       if (hasTestDirectory && typeof scripts.test !== 'string') {
         const updated = { ...manifest, scripts: { ...scripts, test: 'node --test' } };
         findings.push({ id: 'missing-test-script', severity: 'warning', type: 'quality', path: 'package.json', evidence: { testDirectoryDetected: true, testScriptPresent: false }, message: 'A test directory exists but package.json does not expose a test script.' });
-        proposals.push({ action: 'update', path: 'package.json', content: JSON.stringify(updated, null, 2) + '\n', reason: 'Expose the existing test suite through the standard package command.', expectedEffect: 'npm test will invoke the Node test runner.', risk: 'low' });
+        proposals.push({ action: 'update', path: 'package.json', expectedContentSha256: crypto.createHash('sha256').update(raw).digest('hex'), content: JSON.stringify(updated, null, 2) + '\n', reason: 'Expose the existing test suite through the standard package command.', expectedEffect: 'npm test will invoke the Node test runner.', risk: 'low' });
       }
     }
     return this.result({ discovered, findings, proposals });
