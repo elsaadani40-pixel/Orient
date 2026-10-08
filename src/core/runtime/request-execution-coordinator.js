@@ -182,7 +182,6 @@ class RequestExecutionCoordinator {
     }
 
     const context = ExecutionContext.restore(checkpoint.snapshot);
-    context.resume();
     this.quotaService.assertTenant(context.tenantId || this.tenantId);
     this.quotaService.assertInputSize(context.input);
 
@@ -224,6 +223,8 @@ class RequestExecutionCoordinator {
         execution: durableExecution
       };
     }
+
+    if (context.status === 'created') context.resume();
 
     if (!context.isActive()) {
       return {
