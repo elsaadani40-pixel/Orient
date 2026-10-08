@@ -28,7 +28,7 @@ test('timeout terminates the complete child process group on POSIX', {
   const runner = new CommandRunner({ policy });
 
   await assert.rejects(
-    () => runner.run('node', {
+    () => runner.run(process.execPath, {
       cwd: '.',
       args: [
         '-e',
