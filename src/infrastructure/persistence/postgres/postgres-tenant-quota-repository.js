@@ -80,8 +80,9 @@ class PostgresTenantQuotaRepository {
     return this.toModel(result);
   }
 
-  async promoteWorkflow({tenantId,workflowId,expiresAt=null}) {
+  async promoteWorkflow({tenantId,workflowId,expiresAt=null,fencingToken=null}) {
     const normalizedExpiresAt=expiresAt==null?null:new Date(expiresAt).toISOString();
+    const normalizedFencingToken=fencingToken==null?null:Number(fencingToken);
     const result = await this.db.transaction(async client => {
       const limit = (await client.query(
         'SELECT max_concurrent FROM tenant_quota_limits WHERE tenant_id=$1 FOR UPDATE',
@@ -103,14 +104,26 @@ class PostgresTenantQuotaRepository {
       }
       const promoted = await client.query(
         `UPDATE tenant_quota_reservations
-         SET state='RUNNING',expires_at=$3
+         SET state='RUNNING',expires_at=$3,fencing_token=$4
          WHERE tenant_id=$1 AND workflow_id=$2 AND state='QUEUED'
-         RETURNING tenant_id,workflow_id,state,reserved_at,expires_at`,
-        [tenantId,workflowId,normalizedExpiresAt]
+         RETURNING tenant_id,workflow_id,state,reserved_at,expires_at,fencing_token`,
+        [tenantId,workflowId,normalizedExpiresAt,normalizedFencingToken]
       );
       return promoted.rowCount === 1 ? promoted.rows[0] : null;
     });
     return result ? this.toModel(result) : null;
+  }
+
+  async recoverWorkflow({tenantId,workflowId}) {
+    const result=await this.db.query(
+      `UPDATE tenant_quota_reservations
+       SET state='QUEUED',fencing_token=NULL
+       WHERE tenant_id=$1 AND workflow_id=$2 AND state='RUNNING'
+         AND expires_at IS NOT NULL AND expires_at <= NOW()
+       RETURNING tenant_id,workflow_id,state,reserved_at,expires_at,fencing_token`,
+      [tenantId,workflowId]
+    );
+    return result.rowCount===1 ? this.toModel(result.rows[0]) : null;
   }
 
   async queueWorkflow({tenantId,workflowId,expiresAt=null}) {
@@ -136,10 +149,13 @@ class PostgresTenantQuotaRepository {
     return result.rowCount === 1;
   }
 
-  async releaseWorkflow({tenantId,workflowId}) {
+  async releaseWorkflow({tenantId,workflowId,fencingToken=null}) {
+    const params=[tenantId,workflowId];
+    let predicate='tenant_id=$1 AND workflow_id=$2';
+    if(fencingToken!=null){params.push(Number(fencingToken));predicate+=' AND fencing_token=$3';}
     const result = await this.db.query(
-      'DELETE FROM tenant_quota_reservations WHERE tenant_id=$1 AND workflow_id=$2',
-      [tenantId,workflowId]
+      `DELETE FROM tenant_quota_reservations WHERE ${predicate}`,
+      params
     );
     return result.rowCount === 1;
   }
@@ -162,7 +178,8 @@ class PostgresTenantQuotaRepository {
       workflowId:row.workflow_id,
       state:row.state,
       reservedAt:row.reserved_at,
-      expiresAt:row.expires_at
+      expiresAt:row.expires_at,
+      fencingToken:row.fencing_token
     };
   }
 }
