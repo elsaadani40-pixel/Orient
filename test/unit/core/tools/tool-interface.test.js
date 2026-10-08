@@ -50,3 +50,20 @@ test('ToolInterface rejects malformed capability metadata', () => {
     /capabilities must be an array/
   );
 });
+
+
+test('ToolInterface security metadata is immutable', () => {
+  const tool = new ToolInterface({
+    name: 'secure',
+    execute: async () => ({ ok: true }),
+    capabilities: ['safe.read'],
+    risk: 'high',
+    sandbox: { required: true, profile: 'restricted-process' }
+  });
+
+  assert.equal(Object.isFrozen(tool), true);
+  assert.equal(Object.isFrozen(tool.capabilities), true);
+  assert.equal(tool.risk, 'high');
+  assert.throws(() => Object.defineProperty(tool, 'risk', { value: 'low' }), TypeError);
+  assert.throws(() => Object.defineProperty(tool, 'capabilities', { value: ['*'] }), TypeError);
+});
