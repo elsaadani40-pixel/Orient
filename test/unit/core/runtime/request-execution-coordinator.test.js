@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const RequestExecutionCoordinator = require('../../../../src/core/runtime/request-execution-coordinator');
+const AgentState = require('../../../../src/core/agent/state/agent-state');
 
 test('preserves plan identity validation and response classification', () => {
   const coordinator = new RequestExecutionCoordinator({
@@ -146,6 +147,7 @@ test('forwards request-local approval collection to execution without corrupting
     agentExecutionCoordinator: {
       run: async (args) => {
         received = args;
+        args.context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
         return {
           plan: args.plan,
           loopResult: { result: { ok: true }, evaluation: { success: true } },
