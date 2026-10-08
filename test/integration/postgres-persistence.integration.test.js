@@ -575,16 +575,29 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
     [workflowId, { workflowId, tenantId: 'tenant-claim', state: 'QUEUED', metadata: {} }]
   );
 
+  const workers = ['worker-a', 'worker-b', 'worker-recovery'].map(id => id + '-' + Date.now());
+  for (const workerId of workers) {
+    await persistence.workers.register({
+      workerId,
+      tenantId: 'tenant-claim',
+      status: 'READY',
+      capabilities: [],
+      heartbeatAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60000).toISOString()
+    }, 'tenant-claim');
+  }
+  const [workerA, workerB] = workers;
+
   const [a, b] = await Promise.all([
     persistence.workflows.claimQueued({
       tenantId: 'tenant-claim',
-      workerId: 'worker-a-' + Date.now(),
+      workerId: workerA,
       limit: 1,
       claimTtlMs: 60000
     }),
     persistence.workflows.claimQueued({
       tenantId: 'tenant-claim',
-      workerId: 'worker-b-' + Date.now(),
+      workerId: workerB,
       limit: 1,
       claimTtlMs: 60000
     })
@@ -597,14 +610,17 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
     [workflowId]
   );
 
+  const workerRecovery = workers[2];
+
   const recovered = await persistence.workflows.claimQueued({
     tenantId: 'tenant-claim',
-    workerId: 'worker-recovery',
+    workerId: workerRecovery,
     limit: 1,
     claimTtlMs: 60000
   });
   assert.equal(recovered.length, 1);
 
-  await persistence.workflows.releaseDispatchClaim(workflowId, 'worker-recovery', 'tenant-claim');
+  await persistence.workflows.releaseDispatchClaim(workflowId, workerRecovery, 'tenant-claim');
+  for (const workerId of workers) await persistence.workers.unregister(workerId, 'tenant-claim');
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
