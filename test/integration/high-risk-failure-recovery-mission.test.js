@@ -21,6 +21,7 @@ const AuthorizationService = require('../../src/core/agent/authorization/authori
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 
 function createRuntime(root, { approvalService = null, persistence = null } = {}) {
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
   const registry = new AgentRegistry();
   registerDefaultAgents(registry);
 
