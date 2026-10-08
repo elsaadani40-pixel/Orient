@@ -121,9 +121,12 @@ test('project change precondition blocks stale proposals after external mutation
 
   fs.writeFileSync(manifestPath, '{"name":"externally-modified"}\n');
 
-  await assert.rejects(
-    runtime.execute('نفذ التغيير المقترح وتحقق منه'),
-    error => error && error.code === 'CHANGE_PRECONDITION_FAILED'
+  const executeTool = runtime.toolRegistry.get('project.execute_change');
+  const staleExecution = await executeTool.execute(proposal.result);
+  assert.equal(staleExecution.status, 'failed');
+  assert.match(
+    staleExecution.error?.message || '',
+    /CHANGE_PRECONDITION_FAILED/
   );
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), '{"name":"externally-modified"}\n');
 
