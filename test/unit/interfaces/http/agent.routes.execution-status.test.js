@@ -66,3 +66,38 @@ test('agent resume route passes durable approval payload to service', async () =
   });
   assert.deepEqual(res.body, { resumed: true, requestId: 'req-1' });
 });
+
+
+test('agent approvals route returns only service-provided durable approval state', async () => {
+  const expected = [{
+    approvalId: 'approval-1',
+    executionId: 'exec-1',
+    step: 2,
+    tool: 'dangerous.tool',
+    capability: 'dangerous.capability'
+  }];
+
+  const routes = createAgentRoutes({
+    getExecutionStatus: () => ({ executionId: 'exec-1', status: 'running' }),
+    getExecutionApprovals: async executionId => {
+      assert.equal(executionId, 'exec-1');
+      return expected;
+    }
+  });
+
+  const res = {
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(body) {
+      this.body = JSON.parse(body);
+    }
+  };
+
+  await routes.approvals({}, res, 'exec-1');
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers['Cache-Control'], 'no-store');
+  assert.deepEqual(res.body, expected);
+});
