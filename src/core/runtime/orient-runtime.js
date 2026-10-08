@@ -320,6 +320,8 @@ class OrientRuntime {
       goalId: execution.goalId,
       tenantId: execution.metadata?.tenantId || this.tenantId,
       status: execution.status,
+      cancellationRequested: Boolean(execution.cancellationRequested),
+      cancellationReason: execution.cancellationReason || null,
       agentLifecycle: execution.agentLifecycle,
       currentStep: execution.currentStep,
       startedAt: execution.startedAt,
