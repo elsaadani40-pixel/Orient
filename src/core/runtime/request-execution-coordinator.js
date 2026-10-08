@@ -298,11 +298,13 @@ class RequestExecutionCoordinator {
         execution: context.snapshot()
       };
     } catch (error) {
-      await this.recoveryCoordinator.fail({
-        context,
-        error,
-        checkpointReason: 'resume_failed'
-      });
+      if (context.status !== 'completed') {
+        await this.recoveryCoordinator.fail({
+          context,
+          error,
+          checkpointReason: 'resume_failed'
+        });
+      }
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
         this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
       }
