@@ -99,9 +99,6 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
   }, 'tenant-fence');
 
   await persistence.workflowLeases.delete(workflowId, second.leaseId, 'tenant-fence');
-  await persistence.workers.unregister('stale-worker-a', tenantId);
-  await persistence.workers.unregister('worker', tenantId);
-  await persistence.workers.unregister('recovery-worker-b', tenantId);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
