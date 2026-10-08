@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 class ProposalValidator {
   constructor({ workspace } = {}) {
     if (!workspace) {
@@ -66,6 +68,24 @@ class ProposalValidator {
           throw new Error(
             `File does not exist: ${path}`
           );
+        }
+
+        if (action === 'update' && typeof proposal.expectedContentSha256 === 'string') {
+          const current = await this.workspace.readText(path);
+          const actualContentSha256 = crypto
+            .createHash('sha256')
+            .update(current)
+            .digest('hex');
+
+          if (actualContentSha256 !== proposal.expectedContentSha256) {
+            const error = new Error(
+              `Change precondition failed: ${path} was modified after the proposal was created`
+            );
+            error.code = 'CHANGE_PRECONDITION_FAILED';
+            error.expectedContentSha256 = proposal.expectedContentSha256;
+            error.actualContentSha256 = actualContentSha256;
+            throw error;
+          }
         }
       } catch (error) {
         errors.push({
