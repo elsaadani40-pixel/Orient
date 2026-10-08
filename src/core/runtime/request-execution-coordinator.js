@@ -144,6 +144,22 @@ class RequestExecutionCoordinator {
         execution: context.snapshot()
       };
     } catch (error) {
+      if (error?.code === 'APPROVAL_REQUIRED') {
+        context.record('approval.challenge.persisted', {
+          executionId: context.executionId,
+          step: error.executionContext?.step || null,
+          planRevision: error.executionContext?.planRevision || 1,
+          operationId: error.executionContext?.operationId || null
+        });
+        await this.persistenceCoordinator.checkpoint(
+          context,
+          'update',
+          'approval_required'
+        );
+        await this.persistenceCoordinator.persistEvents(context);
+        throw error;
+      }
+
       await this.recoveryCoordinator.fail({ context, error });
       throw error;
     }
