@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 class ProjectModifier {
   constructor({ workspace } = {}) {
     if (!workspace) {
@@ -42,15 +44,29 @@ class ProjectModifier {
     const exists =
       await this.workspace.exists(path);
 
-    if (action === 'create' && exists) {
-      throw new Error(
-        `File already exists: ${path}`
-      );
-    }
-
     if (action === 'update' && !exists) {
       throw new Error(
         `File does not exist: ${path}`
+      );
+    }
+
+    if (action === 'update' && typeof change.expectedContentSha256 === 'string') {
+      const current = await this.workspace.readText(path);
+      const actualHash = crypto.createHash('sha256').update(current).digest('hex');
+      if (actualHash !== change.expectedContentSha256) {
+        const error = new Error(
+          `Change precondition failed: ${path} was modified after the proposal was created`
+        );
+        error.code = 'CHANGE_PRECONDITION_FAILED';
+        error.expectedContentSha256 = change.expectedContentSha256;
+        error.actualContentSha256 = actualHash;
+        throw error;
+      }
+    }
+
+    if (action === 'create' && exists) {
+      throw new Error(
+        `File already exists: ${path}`
       );
     }
 
