@@ -11,7 +11,7 @@ class WorkflowLeaseRepository {
     if (!fs.existsSync(this.filePath)) {
       try {
         const fd = fs.openSync(this.filePath, 'wx', 0o600);
-        try { fs.writeFileSync(fd, '[]\\n', 'utf8'); fs.fsyncSync(fd); }
+        try { fs.writeFileSync(fd, '[]\n', 'utf8'); fs.fsyncSync(fd); }
         finally { fs.closeSync(fd); }
       } catch (error) {
         if (error.code !== 'EEXIST') throw error;
