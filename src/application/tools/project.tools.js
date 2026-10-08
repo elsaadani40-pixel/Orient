@@ -3,7 +3,6 @@ const ProjectBuilderAgent = require('../../core/agent/project-builder/project-bu
 const ProjectImprovementAnalyzer = require('../../core/agent/project-builder/change-proposal/project-improvement-analyzer');
 const CommandRunner = require('../../core/agent/project-builder/workspace/command-runner');
 const CommandVerification = require('../../core/agent/project-builder/verification/command-verification');
-const crypto = require('crypto');
 
 function createProjectTools({ projectRoot, policy = {} } = {}) {
   if (!projectRoot || typeof projectRoot !== 'string') throw new TypeError('projectRoot is required');
