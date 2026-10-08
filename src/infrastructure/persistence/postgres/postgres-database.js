@@ -1,5 +1,4 @@
-const
-t crypto = require('crypto');
+const crypto = require('crypto');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
