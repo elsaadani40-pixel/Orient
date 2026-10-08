@@ -10,7 +10,8 @@ class ApprovalService {
 
   async issue({
     executionId, step, tool, capability, planRevision = 1,
-    scope = {}, ttlMs = 300000, metadata = {}, tenantId = this.tenantId
+    scope = {}, ttlMs = 300000, metadata = {}, tenantId = this.tenantId,
+    agentId = null, operationId = null
   } = {}) {
     if (!executionId || !tool || !capability) throw new TypeError('executionId, tool and capability are required');
     if (!Number.isInteger(step) || step < 1) throw new TypeError('step must be a positive integer');
@@ -21,7 +22,12 @@ class ApprovalService {
       tool, capability, scope: { ...scope },
       issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString(),
       used: false, tenantId,
-      metadata: { ...metadata, ...(tenantId ? { tenantId } : {}) }
+      metadata: {
+        ...metadata,
+        ...(tenantId ? { tenantId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(operationId ? { operationId } : {})
+      }
     };
     if (this.repository?.save) await this.repository.save(value, { tenantId });
     this.approvals.set(value.approvalId, value);
@@ -30,7 +36,7 @@ class ApprovalService {
 
   async validate({
     approval, executionId, step, tool, capability, planRevision = 1,
-    scope = {}, tenantId = this.tenantId
+    scope = {}, tenantId = this.tenantId, agentId = null, operationId = null
   } = {}) {
     if (!approval || typeof approval !== 'object') return { allowed: false, reason: 'APPROVAL_REQUIRED' };
     const stored = this.repository?.findById
@@ -41,6 +47,8 @@ class ApprovalService {
     if (stored.used) return { allowed: false, reason: 'APPROVAL_ALREADY_USED' };
     if (this.clock() >= Date.parse(stored.expiresAt)) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
     if (stored.executionId !== String(executionId) || stored.step !== step || stored.planRevision !== planRevision || stored.tool !== tool || stored.capability !== capability) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
+    if (agentId && stored.metadata?.agentId !== agentId) return { allowed: false, reason: 'APPROVAL_AGENT_MISMATCH' };
+    if (operationId && stored.metadata?.operationId !== operationId) return { allowed: false, reason: 'APPROVAL_OPERATION_MISMATCH' };
     if (!Object.entries(stored.scope || {}).every(([key, value]) => scope[key] === value)) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     return { allowed: true, approval: { ...stored } };
   }

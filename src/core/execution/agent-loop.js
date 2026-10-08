@@ -349,6 +349,38 @@ class AgentLoop {
         throw error;
       }
 
+      const resolvedInput =
+        this.resolveStepInput({
+          step,
+          stepNumber,
+          context,
+          stepResults,
+          lastResult
+        });
+
+      const resolvedInputSize =
+        typeof resolvedInput === 'string'
+          ? resolvedInput.length
+          : JSON.stringify(resolvedInput ?? null).length;
+
+      if (resolvedInputSize > this.maxToolInputChars) {
+        throw new AppError(
+          'حجم مدخلات الأداة يتجاوز الحد المسموح',
+          413,
+          'TOOL_INPUT_TOO_LARGE'
+        );
+      }
+
+      const operationId = crypto
+        .createHash('sha256')
+        .update(JSON.stringify({
+          executionId: context.executionId,
+          planRevision,
+          step: stepNumber,
+          tool: step.tool,
+          input: resolvedInput
+        }))
+        .digest('hex');
       const recoveringPersistedOperation =
         Array.isArray(context.steps) &&
         context.steps.some(
@@ -380,6 +412,7 @@ class AgentLoop {
                 approval,
                 agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
                 tenantId: runtimeContext.tenantId || context.tenantId,
+                operationId,
                 scope: { planRevision }
               });
 
@@ -466,28 +499,6 @@ class AgentLoop {
         );
       }
 
-      const resolvedInput =
-        this.resolveStepInput({
-          step,
-          stepNumber,
-          context,
-          stepResults,
-          lastResult
-        });
-
-      const resolvedInputSize =
-        typeof resolvedInput === 'string'
-          ? resolvedInput.length
-          : JSON.stringify(resolvedInput ?? null).length;
-
-      if (resolvedInputSize > this.maxToolInputChars) {
-        throw new AppError(
-          'حجم مدخلات الأداة يتجاوز الحد المسموح',
-          413,
-          'TOOL_INPUT_TOO_LARGE'
-        );
-      }
-
       const injectedContext =
         this.buildStepContext({
           plan,
@@ -547,17 +558,6 @@ class AgentLoop {
           dependsOn: step.dependsOn
         }
       );
-
-      const operationId = crypto
-        .createHash('sha256')
-        .update(JSON.stringify({
-          executionId: context.executionId,
-          planRevision,
-          step: stepNumber,
-          tool: step.tool,
-          input: resolvedInput
-        }))
-        .digest('hex');
 
       context.record(
         'result.references.resolved',
