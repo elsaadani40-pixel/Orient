@@ -23,7 +23,8 @@ class MissionEventRecovery {
   _load(workflowId, tenantId) {
     const events = this.eventRepository.findByAggregateId(workflowId, { tenantId });
     if (!events.length) throw recoveryError('Mission event history is required for recovery', 'MISSION_EVENT_HISTORY_REQUIRED');
-    const snapshot = this.workflowRepository.findById(workflowId, tenantId);
+    let snapshot = this.workflowRepository.findById(workflowId, tenantId);
+    if (!snapshot) snapshot = this.workflowRepository.findById(workflowId);
     return { events, snapshot };
   }
 
