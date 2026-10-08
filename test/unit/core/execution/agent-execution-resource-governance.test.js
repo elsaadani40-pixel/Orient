@@ -6,7 +6,8 @@ const ExecutionContext = require('../../../../src/core/execution/execution-conte
 
 test('agent loop rejects execution after its wall-clock budget before external execution', async () => {
   let executed = false;
-  let now = 0;
+  const clockValues = [0, 100];
+  let clockIndex = 0;
 
   const loop = new AgentLoop({
     toolRegistry: {
@@ -15,14 +16,13 @@ test('agent loop rejects execution after its wall-clock budget before external e
       async execute() { executed = true; return { ok: true }; }
     },
     maxExecutionMs: 100,
-    clock: () => now
+    clock: () => clockValues[Math.min(clockIndex++, clockValues.length - 1)]
   });
 
   const context = new ExecutionContext({ requestId: 'resource-budget', input: 'test' });
   context.start();
   context.setPlan({ intent: 'test', steps: [{ step: 1, tool: 'test.tool', input: 'ok' }] });
 
-  now = 100;
 
   await assert.rejects(
     () => loop.run({ plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool', input: 'ok' }] }, context }),
