@@ -87,7 +87,7 @@ test('Postgres persistence rejects cross-tenant writes before SQL execution', as
 
 
 test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
-  const db = fakeDb([{ rows: [], rowCount: 0 }, { rows: [{ fencing_token: '7' }], rowCount: 1 }]);
+  const db = fakeDb([{ rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 }, { rows: [], rowCount: 0 }, { rows: [{ fencing_token: '7' }], rowCount: 1 }]);
   const repo = new PostgresWorkflowLeaseRepository(db);
   const lease = await repo.tryAcquire({
     workflowId: 'wf-1',
