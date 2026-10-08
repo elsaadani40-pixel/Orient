@@ -507,3 +507,66 @@ test('PostgreSQL quota admission is atomic across concurrent reservations', asyn
 });
 
 test.after(async () => { await pool.end(); });
+
+test('PostgreSQL worker lease cannot resurrect a durably cancelled workflow', async () => {
+  const workflowId = 'cancel-lease-' + Date.now();
+  await pool.query(
+    "INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,'tenant-cancel','CANCELLED',NOW(),$2)",
+    [workflowId, { workflowId, tenantId: 'tenant-cancel', state: 'CANCELLED', cancelRequested: true, metadata: {} }]
+  );
+
+  await assert.rejects(
+    () => persistence.workflowLeases.tryAcquire({
+      workflowId,
+      leaseId: 'cancel-lease-' + Date.now(),
+      workerId: 'worker-cancel',
+      acquiredAt: Date.now(),
+      expiresAt: Date.now() + 30000,
+      metadata: { tenantId: 'tenant-cancel' }
+    }, 'tenant-cancel'),
+    error => error.code === 'WORKFLOW_CANCELLATION_REQUESTED'
+  );
+
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+});
+
+test('PostgreSQL dispatch claims are exclusive across concurrent workers and expire safely', async () => {
+  const workflowId = 'claim-wf-' + Date.now();
+  await pool.query(
+    "INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,'tenant-claim','QUEUED',NOW(),$2)",
+    [workflowId, { workflowId, tenantId: 'tenant-claim', state: 'QUEUED', metadata: {} }]
+  );
+
+  const [a, b] = await Promise.all([
+    persistence.workflows.claimQueued({
+      tenantId: 'tenant-claim',
+      workerId: 'worker-a-' + Date.now(),
+      limit: 1,
+      claimTtlMs: 60000
+    }),
+    persistence.workflows.claimQueued({
+      tenantId: 'tenant-claim',
+      workerId: 'worker-b-' + Date.now(),
+      limit: 1,
+      claimTtlMs: 60000
+    })
+  ]);
+
+  assert.equal(a.length + b.length, 1);
+
+  await pool.query(
+    "UPDATE workflow_dispatch_claims SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
+    [workflowId]
+  );
+
+  const recovered = await persistence.workflows.claimQueued({
+    tenantId: 'tenant-claim',
+    workerId: 'worker-recovery',
+    limit: 1,
+    claimTtlMs: 60000
+  });
+  assert.equal(recovered.length, 1);
+
+  await persistence.workflows.releaseDispatchClaim(workflowId, 'worker-recovery', 'tenant-claim');
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+});
