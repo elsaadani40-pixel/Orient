@@ -185,3 +185,58 @@ test('AsyncWorkflowWorker stops safely when worker heartbeat fails', async () =>
   assert.equal(executions, 0, 'failed worker liveness must prevent committing the step result');
   assert.equal(released, true);
 });
+
+
+test('AsyncWorkflowWorker refuses to commit a step after fencing is lost during execution', async () => {
+  let assertCalls = 0;
+  let completed = false;
+  let released = false;
+  const step = { id: 'step-1' };
+  const instance = {
+    workflowId: 'fencing-loss-after-side-effect',
+    state: 'RUNNING',
+    cancelRequested: false,
+    deadlineAt: null,
+    definition: { steps: [step] },
+    steps: { 'step-1': { state: 'READY' } },
+    readySteps() { return completed ? [] : [step]; },
+    markStepRunning(id) { this.steps[id].state = 'RUNNING'; },
+    markStepCompleted() { completed = true; this.steps['step-1'].state = 'COMPLETED'; },
+    markStepFailed() { throw new Error('unexpected step failure'); },
+    transition(state) { this.state = state; }
+  };
+  const lease = {
+    workflowId: instance.workflowId,
+    leaseId: 'lease-fenced',
+    fencingToken: 7,
+    cancelled: false,
+    deadlineAt: null,
+    instance
+  };
+  const scheduler = {
+    leaseDurationMs: 3000,
+    async leaseAsync() { return lease; },
+    async renewAsync() { return lease; },
+    async assertCurrentAsync() {
+      assertCalls += 1;
+      if (assertCalls >= 2) throw Object.assign(new Error('stale fencing token'), { code: 'WORKFLOW_FENCING_REJECTED' });
+      return true;
+    },
+    async persistAsync() { throw new Error('must not persist stale worker state'); },
+    async releaseAsync() { released = true; return true; },
+    async retryAsync() { throw new Error('unexpected retry'); }
+  };
+
+  const worker = new AsyncWorkflowWorker({
+    scheduler,
+    workerId: 'worker-fenced',
+    executor: async () => ({ externalSideEffect: true })
+  });
+
+  const result = await worker.tick();
+
+  assert.equal(result, null);
+  assert.equal(completed, false, 'stale worker must not commit completion');
+  assert.equal(assertCalls, 2, 'fencing must be checked before and after the side effect');
+  assert.equal(released, true);
+});
