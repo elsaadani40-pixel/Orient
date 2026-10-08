@@ -362,7 +362,21 @@ class PlannerService {
     return value;
   }
 
-  extractProjectChangeProposal(text) {\n    const value = String(text || '').trim();\n    if (!/(اقترح|اقتراح|حلل.*مشكلة|change proposal|propose.*change|improvement)/i.test(value) ||\n        !/(المشروع|المستودع|repository|project)/i.test(value)) return null;\n    return {\n      intent: 'project.propose_changes',\n      tool: 'project.propose_changes',\n      input: null,\n      agentId: 'PROJECT_BUILDER_AGENT',\n      confidence: 0.99,\n      reason: 'تم التعرف على مهمة تحليل مشروع وإنتاج اقتراح تغيير قراءة فقط',\n      steps: [{ step: 1, tool: 'project.propose_changes', input: null, dependsOn: null }]\n    };\n  }\n  extractProjectAudit(text) {
+  extractProjectChangeProposal(text) {
+    const value = String(text || '').trim();
+    if (!/(اقترح|اقتراح|حلل.*مشكلة|change proposal|propose.*change|improvement)/i.test(value) ||
+        !/(المشروع|المستودع|repository|project)/i.test(value)) return null;
+    return {
+      intent: 'project.propose_changes',
+      tool: 'project.propose_changes',
+      input: null,
+      agentId: 'PROJECT_BUILDER_AGENT',
+      confidence: 0.99,
+      reason: 'تم التعرف على مهمة تحليل مشروع وإنتاج اقتراح تغيير قراءة فقط',
+      steps: [{ step: 1, tool: 'project.propose_changes', input: null, dependsOn: null }]
+    };
+  }
+  extractProjectAudit(text) {
     const value = String(text || '').trim();
     if (!/(افحص|راجع|دقق|حلل|audit|review) .*?(المشروع|المستودع|repository|project)/i.test(value)) return null;
     return {
