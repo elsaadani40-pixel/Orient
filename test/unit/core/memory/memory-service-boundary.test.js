@@ -27,10 +27,12 @@ function makeService() {
   const registry = new AgentRegistry();
   registry.register(new AgentDefinition({
     id: 'research',
+    capabilities: ['memory.read', 'memory.write'],
     allowedMemoryScopes: ['research']
   }));
   registry.register(new AgentDefinition({
     id: 'writer',
+    capabilities: ['memory.read'],
     allowedMemoryScopes: ['writing']
   }));
 

@@ -32,11 +32,24 @@ class MemoryAccessPolicy {
       );
     }
 
+    const requiredCapability = `memory.${operation}`;
+    const hasCapability =
+      typeof agent.canUseCapability === 'function' &&
+      agent.canUseCapability(requiredCapability);
+
+    if (!hasCapability) {
+      throw Object.assign(
+        new Error('Agent is not authorized for this memory operation'),
+        { code: 'MEMORY_OPERATION_FORBIDDEN' }
+      );
+    }
+
     return Object.freeze({
       allowed: true,
       agentId,
       scope,
-      operation
+      operation,
+      capability: requiredCapability
     });
   }
 }

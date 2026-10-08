@@ -17,11 +17,13 @@ function createService() {
 
   agentRegistry.register(new AgentDefinition({
     id: 'MEMORY_AGENT',
+    capabilities: ['memory.read', 'memory.write', 'memory.delete'],
     allowedMemoryScopes: ['personal', 'shared.memory']
   }));
 
   agentRegistry.register(new AgentDefinition({
     id: 'RESEARCH_AGENT',
+    capabilities: ['memory.read', 'memory.write'],
     allowedMemoryScopes: ['personal', 'shared.research']
   }));
 

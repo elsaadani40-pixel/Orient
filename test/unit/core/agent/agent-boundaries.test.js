@@ -13,7 +13,7 @@ test('agent boundaries deny undeclared capability, memory scope, and agent targe
 
   registry.register(new AgentDefinition({
     id: 'research',
-    capabilities: ['web.read'],
+    capabilities: ['web.read', 'memory.read'],
     allowedMemoryScopes: ['shared.research'],
     allowedAgentTargets: ['writer']
   }));
@@ -37,6 +37,15 @@ test('agent boundaries deny undeclared capability, memory scope, and agent targe
     agentId: 'research',
     scope: 'shared.research'
   }).allowed, true);
+
+  assert.throws(
+    () => policy.authorize({
+      agentId: 'research',
+      scope: 'shared.research',
+      operation: 'write'
+    }),
+    error => error.code === 'MEMORY_OPERATION_FORBIDDEN'
+  );
 
   assert.throws(
     () => policy.authorize({
