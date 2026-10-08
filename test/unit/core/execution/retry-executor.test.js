@@ -78,7 +78,7 @@ test('circuit breaker prevents retry storm across executions', async () => {
           throw Object.assign(new Error('down'), { code: 'SERVICE_UNAVAILABLE', status: 503 });
         }
       }),
-      /down/
+      /Retry attempts exhausted/
     );
   }
 
