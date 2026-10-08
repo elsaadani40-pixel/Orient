@@ -68,6 +68,21 @@ function createServer({ memoryRoutes, agentRoutes }) {
         return;
       }
 
+      const executionStatusMatch =
+        requestUrl.pathname.match(/^\/executions\/([^/]+)$/);
+
+      if (
+        req.method === 'GET' &&
+        executionStatusMatch
+      ) {
+        await agentRoutes.status(
+          req,
+          res,
+          decodeURIComponent(executionStatusMatch[1])
+        );
+        return;
+      }
+
       if (
         req.method === 'POST' &&
         requestUrl.pathname === '/agent'
