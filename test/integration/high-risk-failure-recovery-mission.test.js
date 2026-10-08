@@ -197,6 +197,8 @@ test('high-risk side effect survives an actual process restart without duplicate
     "const test = require('node:test'); const assert = require('node:assert/strict'); test('smoke', () => assert.equal(1, 1));\\n"
   );
   const manifestPath = path.join(root, 'package.json');
+  const executionCountPath = path.join(root, '.orient-side-effect-count');
+  fs.writeFileSync(executionCountPath, '0');
   fs.writeFileSync(manifestPath, '{"name":"mission-9-restart"}\\n');
 
   const approvals = new ApprovalService({
@@ -265,6 +267,14 @@ const JsonPersistence = require('../../src/infrastructure/persistence/json/json-
     tenantId: 'tenant-mission-8',
     agentRegistry: registry
   });
+  const originalExecute = runtime.toolRegistry.execute.bind(runtime.toolRegistry);
+  runtime.toolRegistry.execute = async (name, input, context) => {
+    if (name === 'project.execute_change') {
+      const count = Number(require('node:fs').readFileSync(${JSON.stringify('${path.join(root, '.orient-side-effect-count')}')}, 'utf8')) + 1;
+      require('node:fs').writeFileSync(${JSON.stringify('EXECUTION_COUNT_PATH_PLACEHOLDER')}, String(count));
+    }
+    return originalExecute(name, input, context);
+  };
   runtime.checkpoint = async (context, mode, reason) => {
     if (reason === 'step_completed:plan-1:step-2') process.exit(73);
     return runtime.persistenceCoordinator.checkpoint(context, mode, reason);
@@ -286,7 +296,17 @@ const JsonPersistence = require('../../src/infrastructure/persistence/json/json-
   );
   assert.equal(executionBeforeRestart.status, 'running');
 
+  const originalRestartExecute = restartedRuntime.toolRegistry.execute.bind(restartedRuntime.toolRegistry);
+  restartedRuntime.toolRegistry.execute = async (name, input, context) => {
+    if (name === 'project.execute_change') {
+      const count = Number(fs.readFileSync(executionCountPath, 'utf8')) + 1;
+      fs.writeFileSync(executionCountPath, String(count));
+    }
+    return originalRestartExecute(name, input, context);
+  };
+
   const recovered = await restartedRuntime.resume(challenge.executionId);
+  assert.equal(fs.readFileSync(executionCountPath, 'utf8'), '1');
   assert.equal(recovered.resumed, true);
   assert.equal(recovered.execution.status, 'completed');
   assert.equal(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts.test, 'node --test');
