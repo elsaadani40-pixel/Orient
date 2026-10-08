@@ -98,7 +98,9 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
     metadata: { tenantId: 'tenant-a' }
   }, 'tenant-a');
   assert.equal(lease.fencingToken, 7);
-  assert.match(db.calls[1].text, /RETURNING fencing_token/);
+  const insertCall = db.calls.find(call => call.text.includes('INSERT INTO workflow_leases'));
+  assert.ok(insertCall);
+  assert.match(insertCall.text, /RETURNING fencing_token/);
 });
 
 test('Postgres workflow writes reject stale fencing tokens', async () => {
