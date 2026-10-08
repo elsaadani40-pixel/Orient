@@ -9,6 +9,7 @@ function policy() {
   const registry = new AgentRegistry();
   registry.register(new AgentDefinition({
     id: 'research',
+    capabilities: ['memory.read'],
     allowedMemoryScopes: ['research']
   }));
   registry.register(new AgentDefinition({
