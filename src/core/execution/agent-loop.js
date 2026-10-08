@@ -461,7 +461,12 @@ class AgentLoop {
           );
 
           if (error.code === 'APPROVAL_REQUIRED') {
-            error.executionContext = {
+          // The approval checkpoint must carry the exact resolved operation
+          // input. A symbolic dependency such as $step.N.result is not
+          // sufficient across a process boundary unless its resolved value
+          // is durably captured at the authorization boundary.
+          step.resolvedInput = resolvedInput;
+          error.executionContext = {
               executionId: context.executionId,
               step: stepNumber,
               planRevision,
@@ -1088,6 +1093,14 @@ class AgentLoop {
     stepResults,
     lastResult
   }) {
+    if (
+      step &&
+      step.resolvedInput !== null &&
+      step.resolvedInput !== undefined
+    ) {
+      return step.resolvedInput;
+    }
+
     const persistedRunningStep = Array.isArray(context.steps)
       ? context.steps.find(item =>
           item &&
