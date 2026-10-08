@@ -9,6 +9,7 @@ class IdempotencyRepository {
     }
 
     this.filePath = filePath;
+    this.lockPath = filePath + '.lock';
     this.ensureStorage();
   }
 
@@ -49,7 +50,7 @@ class IdempotencyRepository {
   }
 
   write(records) {
-    const temporaryFile = `${this.filePath}.tmp`;
+    const temporaryFile = this.filePath + '.tmp.' + process.pid;
 
     try {
       fs.writeFileSync(
@@ -69,6 +70,27 @@ class IdempotencyRepository {
       throw new Error(
         `Idempotency storage write failed: ${error.message}`
       );
+    }
+  }
+
+  withLock(operation) {
+    const timeoutMs = 30000;
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      try {
+        fs.mkdirSync(this.lockPath);
+        try { return operation(); }
+        finally { try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {} }
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        let stale = false;
+        try { stale = Date.now() - fs.statSync(this.lockPath).mtimeMs > timeoutMs; }
+        catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+        if (stale) { try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {} continue; }
+        if (Date.now() >= deadline) { const e = new Error('Idempotency storage lock timeout'); e.code = 'IDEMPOTENCY_STORAGE_LOCK_TIMEOUT'; throw e; }
+        const wait = new SharedArrayBuffer(4);
+        Atomics.wait(new Int32Array(wait), 0, 0, 5);
+      }
     }
   }
 
@@ -126,6 +148,7 @@ class IdempotencyRepository {
   }
 
   begin({
+    return this.withLock(() => {
     executionId,
     step,
     tool,
@@ -178,9 +201,11 @@ class IdempotencyRepository {
       key,
       record
     };
+  
+    });
   }
-
-  complete(key, result, { tenantId = null } = {}) {
+  complete(key, result, {
+    return this.withLock(() => { tenantId = null } = {}) {
     if (!key) {
       throw new TypeError('key is required');
     }
@@ -200,9 +225,11 @@ class IdempotencyRepository {
     this.write(records);
 
     return record;
+  
+    });
   }
-
-  fail(key, error, { tenantId = null } = {}) {
+  fail(key, error, {
+    return this.withLock(() => { tenantId = null } = {}) {
     if (!key) {
       throw new TypeError('key is required');
     }
@@ -225,9 +252,11 @@ class IdempotencyRepository {
     this.write(records);
 
     return record;
+  
+    });
   }
-
-  delete(key, { tenantId = null } = {}) {
+  delete(key, {
+    return this.withLock(() => { tenantId = null } = {}) {
     if (!key) {
       return false;
     }
@@ -243,10 +272,11 @@ class IdempotencyRepository {
     this.write(records);
 
     return true;
+  
+    });
   }
-
   clear() {
-    this.write({});
+    return this.withLock(() => this.write({}));
   }
 
   count() {
