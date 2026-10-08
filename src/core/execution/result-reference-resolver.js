@@ -3,7 +3,7 @@ const AppError = require('../errors/AppError');
 class ResultReferenceResolver {
   constructor() {
     this.name = 'ORIENT_RESULT_REFERENCE_RESOLVER';
-    this.version = '0.7.4';
+    this.version = '0.7.5';
   }
 
   resolve(value, context = {}) {
@@ -95,15 +95,40 @@ class ResultReferenceResolver {
           item.step === stepNumber
       );
 
-    if (!match) {
-      throw new AppError(
-        `نتيجة الخطوة ${stepNumber} غير متاحة`,
-        500,
-        'STEP_RESULT_NOT_AVAILABLE'
-      );
+    if (match) {
+      return match.result;
     }
 
-    return match.result;
+    // Durable recovery may invoke the resolver before the in-memory
+    // stepResults projection has been reconstructed. In that window the
+    // persisted completed step is the authoritative source for an exact
+    // step reference. This keeps explicit $step.N.result references stable
+    // across process boundaries instead of silently falling back to a
+    // mutable "previous result".
+    const persistedSteps =
+      Array.isArray(context.persistedSteps)
+        ? context.persistedSteps
+        : [];
+
+    const persistedMatch =
+      persistedSteps.find(
+        (item) =>
+          item &&
+          Number(item.step) === stepNumber &&
+          item.status === 'completed' &&
+          item.result !== null &&
+          item.result !== undefined
+      );
+
+    if (persistedMatch) {
+      return persistedMatch.result;
+    }
+
+    throw new AppError(
+      `نتيجة الخطوة ${stepNumber} غير متاحة`,
+      500,
+      'STEP_RESULT_NOT_AVAILABLE'
+    );
   }
 }
 
