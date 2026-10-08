@@ -22,6 +22,8 @@ const ApprovalService = require('../../src/core/agent/approval/approval-service'
 const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
 function createRuntime(root, { secure = false, approvalService = null } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  if (!fs.existsSync(path.join(root, 'AGENT.md'))) fs.writeFileSync(path.join(root, 'AGENT.md'), '# mission fixture\n');
   const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const registry = new AgentRegistry(); registerDefaultAgents(registry);
   const toolRegistry = new ToolRegistry(); for (const tool of createProjectTools({ projectRoot: root })) toolRegistry.register(tool);
