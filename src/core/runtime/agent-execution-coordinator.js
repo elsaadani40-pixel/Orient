@@ -23,6 +23,19 @@ class AgentExecutionCoordinator {
     let fingerprint = previousFingerprint;
 
     while (true) {
+      if (!currentValidation || currentValidation.valid !== true || !Array.isArray(currentValidation.steps)) {
+        context.record('plan.validation.rejected', {
+          valid: currentValidation?.valid === true,
+          steps: Array.isArray(currentValidation?.steps) ? currentValidation.steps.length : 0,
+          planRevision: currentRevision,
+          resumed
+        });
+        throw Object.assign(
+          new Error(resumed ? 'الخطة المستعادة غير صالحة للتنفيذ' : 'الخطة غير صالحة للتنفيذ'),
+          { code: resumed ? 'INVALID_RESUME_PLAN' : 'INVALID_PLAN_VALIDATION' }
+        );
+      }
+
       if (!resumed) {
         context.record('plan.generated', {
           intent: currentPlan.intent,
