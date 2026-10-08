@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS worker_nodes (
 CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_heartbeat ON worker_nodes(tenant_id, heartbeat_at);
 CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_expiry ON worker_nodes(tenant_id, expires_at);
 CREATE TABLE IF NOT EXISTS tenant_quota_limits (tenant_id TEXT PRIMARY KEY, max_concurrent INTEGER NOT NULL, max_queued INTEGER NOT NULL, max_input_chars INTEGER NOT NULL, max_tool_input_chars INTEGER NOT NULL, max_retries INTEGER NOT NULL, updated_at TIMESTAMPTZ NOT NULL);
-CREATE TABLE IF NOT EXISTS tenant_quota_reservations (tenant_id TEXT NOT NULL, workflow_id TEXT PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('QUEUED','RUNNING')), reserved_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ, FOREIGN KEY (tenant_id) REFERENCES tenant_quota_limits(tenant_id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS tenant_quota_reservations (tenant_id TEXT NOT NULL, workflow_id TEXT PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('QUEUED','RUNNING')), reserved_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ, fencing_token BIGINT, FOREIGN KEY (tenant_id) REFERENCES tenant_quota_limits(tenant_id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS idx_quota_reservations_tenant_state ON tenant_quota_reservations(tenant_id,state);
 CREATE INDEX IF NOT EXISTS idx_quota_reservations_expiry ON tenant_quota_reservations(tenant_id,expires_at);
 `;
@@ -81,7 +81,10 @@ const MIGRATIONS = [
       ON workflow_dispatch_claims(tenant_id, expires_at);
     CREATE INDEX IF NOT EXISTS idx_workflow_dispatch_claims_worker
       ON workflow_dispatch_claims(tenant_id, worker_id, expires_at);
+  `},  {version:5,sql:`
+    ALTER TABLE tenant_quota_reservations ADD COLUMN IF NOT EXISTS fencing_token BIGINT;
   `},
+
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -100,7 +103,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4)',[1,2,3,4]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5)',[1,2,3,4,5]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
