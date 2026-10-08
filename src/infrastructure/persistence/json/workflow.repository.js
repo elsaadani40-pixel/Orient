@@ -119,6 +119,30 @@ class WorkflowRepository {
     });
   }
 
+  repair(instance, { tenantId = null, expectedRevision = 0, targetRevision } = {}) {
+    const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenantId = item.tenantId || 'local';
+    if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 || !Number.isInteger(targetRevision) || targetRevision <= expectedRevision) {
+      const error = new Error('Invalid workflow repair revision');
+      error.code = 'WORKFLOW_REPAIR_REVISION_INVALID'; error.status = 409; throw error;
+    }
+    return this.withLock(() => {
+      const items = this.read();
+      const existing = items.find(candidate => candidate.workflowId === item.workflowId) || null;
+      const currentRevision = Number(existing?.checkpoint?.revision || 0);
+      if (existing && (existing.tenantId || 'local') !== effectiveTenantId) throw new Error('Workflow tenant collision');
+      if (currentRevision !== expectedRevision) {
+        const error = new Error('Stale workflow checkpoint during repair');
+        error.code = 'WORKFLOW_CHECKPOINT_CONFLICT'; error.status = 409; throw error;
+      }
+      item.checkpoint = { revision: targetRevision, lastSavedAt: new Date().toISOString() };
+      const next = items.filter(candidate => candidate.workflowId !== item.workflowId); next.push(item); this.write(next);
+      if (typeof instance?.setCheckpointRevision === 'function') instance.setCheckpointRevision(targetRevision, item.checkpoint.lastSavedAt);
+      return item;
+    });
+  }
+
   findById(workflowId, tenantId = null) {
     return this.read().find(
       item => item.workflowId === workflowId && (!tenantId || item.tenantId === tenantId)

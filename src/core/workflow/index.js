@@ -11,3 +11,4 @@ module.exports = {
 
 module.exports.MissionEventProjection = require('./mission-event-projection');
 module.exports.DurableMissionEventSink = require('./durable-mission-event-sink');
+module.exports.MissionEventRecovery = require('./mission-event-recovery');
