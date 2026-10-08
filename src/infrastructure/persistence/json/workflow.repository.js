@@ -8,11 +8,7 @@ class WorkflowRepository {
     this.filePath = path.resolve(filePath);
     this.lockPath = this.filePath + '.lock';
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    if (!fs.existsSync(this.filePath)) {
-      this.withLock(() => {
-        if (!fs.existsSync(this.filePath)) this.write([]);
-      });
-    }
+    this.ensureStorage();
   }
 
   read() {
