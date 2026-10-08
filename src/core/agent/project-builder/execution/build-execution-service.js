@@ -35,11 +35,15 @@ class BuildExecutionService {
 
     let modification;
     let snapshots = [];
+    const supportsRollback =
+      typeof this.modifier.snapshot === 'function' &&
+      typeof this.modifier.rollback === 'function';
 
     try {
-      snapshots = [];
-      for (const change of changeSet.changes) {
-        snapshots.push(await this.modifier.snapshot(change));
+      if (supportsRollback) {
+        for (const change of changeSet.changes) {
+          snapshots.push(await this.modifier.snapshot(change));
+        }
       }
 
       modification =
@@ -52,6 +56,16 @@ class BuildExecutionService {
         });
 
       if (!verification.passed) {
+        if (!supportsRollback) {
+          return new BuildExecutionResult({
+            status: 'failed',
+            plan,
+            changeSet,
+            modification,
+            verification
+          });
+        }
+
         let rollback = { rolledBack: false };
         try {
           rollback = await this.modifier.rollback(snapshots);
