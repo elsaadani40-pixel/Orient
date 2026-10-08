@@ -61,6 +61,9 @@ class PlannerService {
       }
     }
 
+    const projectChangeProposal = this.extractProjectChangeProposal(text);
+    if (projectChangeProposal) return this.normalizePlan(projectChangeProposal);
+
     const projectAudit = this.extractProjectAudit(text);
     if (projectAudit) return this.normalizePlan(projectAudit);
 
