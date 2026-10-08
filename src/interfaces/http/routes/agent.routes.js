@@ -1,5 +1,17 @@
 function createAgentRoutes(agentService) {
   return {
+    async status(req, res, executionId) {
+      const result = agentService.getExecutionStatus(executionId);
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+      });
+
+      res.end(JSON.stringify(result, null, 2));
+    },
+
     async execute(req, res, body) {
       let input = '';
 
