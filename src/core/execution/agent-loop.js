@@ -1094,20 +1094,41 @@ class AgentLoop {
 
     if (exactStepReference) {
       const referencedStep = Number(exactStepReference[1]);
-      const durableStep =
-        Array.isArray(context.steps)
-          ? context.steps.find(
-              item =>
-                item &&
-                Number(item.step) === referencedStep &&
-                item.status === 'completed' &&
-                item.result !== null &&
-                item.result !== undefined
-            )
-          : null;
+      const candidates = [];
 
-      if (durableStep) {
-        return durableStep.result;
+      if (Array.isArray(stepResults)) {
+        const projectedStep = stepResults.find(
+          item =>
+            item &&
+            Number(item.step) === referencedStep &&
+            item.result !== null &&
+            item.result !== undefined
+        );
+        if (projectedStep) candidates.push(projectedStep.result);
+      }
+
+      if (Array.isArray(context.steps)) {
+        const durableStep = context.steps.find(
+          item =>
+            item &&
+            Number(item.step) === referencedStep &&
+            item.status === 'completed' &&
+            item.result !== null &&
+            item.result !== undefined
+        );
+        if (durableStep) candidates.push(durableStep.result);
+      }
+
+      if (candidates.length > 0) {
+        return candidates[0];
+      }
+
+      if (Number.isInteger(step.dependsOn) && step.dependsOn === referencedStep) {
+        throw new AppError(
+          'النتيجة المستديمة للخطوة التابعة غير متاحة أثناء الاستئناف',
+          409,
+          'STEP_RESULT_NOT_AVAILABLE'
+        );
       }
     }
 
