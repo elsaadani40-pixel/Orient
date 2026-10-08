@@ -224,7 +224,7 @@ class RequestExecutionCoordinator {
       };
     }
 
-    if (context.status === 'created') context.resume();
+    if (context.isActive()) context.resume();
 
     if (!context.isActive()) {
       return {
