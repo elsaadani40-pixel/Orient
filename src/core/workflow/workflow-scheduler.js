@@ -152,8 +152,9 @@ class WorkflowScheduler {
 
       const instance = WorkflowInstance.fromJSON(payload);
 
-      if (instance.state === 'RUNNING' || instance.state === 'RECOVERING') {
-        instance.state = 'RECOVERING';
+      if (instance.state === 'RUNNING') {
+        instance.recoverFromLeaseLoss('LEASE_EXPIRED', () => new Date(now));
+        this.persist(instance);
       }
 
       if (
