@@ -40,7 +40,7 @@ test('rejects a broken symlink write target', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('rejects a symlinked parent before a write can reach outside the workspace', () => {
+test('rejects a symlinked parent before a write can reach outside the workspace', async () => {
   if (process.platform === 'win32') return;
 
   const dir = fs.mkdtempSync(
