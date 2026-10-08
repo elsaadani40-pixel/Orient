@@ -485,6 +485,27 @@ class PostgresWorkflowLeaseRepository {
     const expiresAt = new Date(lease.expiresAt).toISOString();
 
     return this.db.transaction(async client => {
+      const workflow = await client.query(
+        'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [lease.workflowId, effectiveTenant]
+      );
+      if (!workflow.rows.length) {
+        const error = new Error('Workflow is not durably registered');
+        error.code = 'WORKFLOW_NOT_FOUND';
+        throw error;
+      }
+      const workflowState = workflow.rows[0].state;
+      const workflowPayload = workflow.rows[0].payload || {};
+      if (workflowPayload.cancelRequested || workflowState === 'CANCELLED') {
+        const error = new Error('Workflow cancellation was requested');
+        error.code = 'WORKFLOW_CANCELLATION_REQUESTED';
+        throw error;
+      }
+      if (['COMPLETED','FAILED'].includes(workflowState)) {
+        const error = new Error('Workflow is terminal');
+        error.code = 'WORKFLOW_TERMINAL';
+        throw error;
+      }
       await client.query(
         'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= $3',
         [lease.workflowId, effectiveTenant, acquiredAt]
