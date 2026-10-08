@@ -24,6 +24,7 @@ const JsonPersistence = require('../../src/infrastructure/persistence/json/json-
 function createRuntime(root, { approvalService = null, persistence: persisted = null } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  if (!fs.existsSync(path.join(root, 'AGENT.md'))) fs.writeFileSync(path.join(root, 'AGENT.md'), '# mission fixture\n');
   const persistence = persisted || new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const registry = new AgentRegistry();
   registerDefaultAgents(registry);
