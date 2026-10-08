@@ -66,6 +66,13 @@ class WorkflowInstance {
       ])
     );
     this.metadata = {};
+    this.compensation = {
+      state: 'NONE',
+      actions: [],
+      completed: [],
+      failed: [],
+      lastError: null
+    };
   }
 
   static fromJSON(payload) {
@@ -109,6 +116,9 @@ class WorkflowInstance {
       lastError: payload.retry?.lastError || null
     };
     instance.metadata = structuredClone(payload.metadata || {});
+    instance.compensation = structuredClone(payload.compensation || {
+      state: 'NONE', actions: [], completed: [], failed: [], lastError: null
+    });
 
     for (const step of definition.steps) {
       const persisted = payload.steps?.[step.id];
@@ -216,6 +226,38 @@ class WorkflowInstance {
     return this;
   }
 
+  beginCompensation(now = () => new Date()) {
+    if (this.compensation.state === 'COMPLETED') return this;
+    this.compensation.state = 'RUNNING';
+    this.updatedAt = now().toISOString();
+    return this;
+  }
+
+  recordCompensationAction(action, now = () => new Date()) {
+    if (!action || !action.id) throw new AppError('Compensation action required', 400, 'COMPENSATION_ACTION_REQUIRED');
+    if (!this.compensation.actions.some(item => item.id === action.id)) {
+      this.compensation.actions.push({ ...action });
+    }
+    this.updatedAt = now().toISOString();
+    return this;
+  }
+
+  markCompensationCompleted(actionId, now = () => new Date()) {
+    if (!this.compensation.completed.includes(actionId)) this.compensation.completed.push(actionId);
+    this.compensation.failed = this.compensation.failed.filter(id => id !== actionId);
+    this.updatedAt = now().toISOString();
+    if (this.compensation.actions.length && this.compensation.completed.length >= this.compensation.actions.length) this.compensation.state = 'COMPLETED';
+    return this;
+  }
+
+  markCompensationFailed(actionId, error, now = () => new Date()) {
+    if (!this.compensation.failed.includes(actionId)) this.compensation.failed.push(actionId);
+    this.compensation.lastError = { message: error?.message || String(error), code: error?.code || 'COMPENSATION_FAILED' };
+    this.compensation.state = 'FAILED';
+    this.updatedAt = now().toISOString();
+    return this;
+  }
+
   toJSON() {
     return {
       workflowId: this.workflowId,
@@ -232,6 +274,7 @@ class WorkflowInstance {
       deadlineAt: this.deadlineAt,
       cancelRequested: this.cancelRequested,
       retry: this.retry,
+      compensation: this.compensation,
       steps: this.steps,
       metadata: this.metadata
     };
