@@ -327,6 +327,7 @@ class AgentLoop {
                 step: stepNumber,
                 planRevision,
                 approval,
+                agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
                 tenantId: runtimeContext.tenantId || context.tenantId,
                 scope: { planRevision }
               });
