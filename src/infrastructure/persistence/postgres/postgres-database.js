@@ -1,4 +1,4 @@
-cons
+const
 t crypto = require('crypto');
 
 const BASE_SCHEMA = `
