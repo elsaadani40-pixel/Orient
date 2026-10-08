@@ -451,7 +451,7 @@ class AgentLoop {
               planRevision,
               operationId,
               tool: step.tool,
-              capability: agentAuthorization?.capability || null,
+              capability: error.capability || agentAuthorization?.capability || null,
               agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
               tenantId: runtimeContext.tenantId || context.tenantId
             };
