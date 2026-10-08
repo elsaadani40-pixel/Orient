@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const WorkspacePolicy = require('../../../../src/core/agent/project-builder/workspace/workspace-policy');
+const WorkspacePolicy = require('../../../../../src/core/agent/project-builder/workspace/workspace-policy');
 
 test('rejects symlink paths that resolve outside the workspace root', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-workspace-'));
