@@ -1,0 +1,73 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn } = require('child_process');
+
+const Repository = require('../../../src/infrastructure/persistence/json/idempotency.repository');
+
+test('durable JSON idempotency reservation is cross-process exclusive', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-idempotency-'));
+  const filePath = path.join(directory, 'idempotency.json');
+  const modulePath = path.resolve(__dirname, '../../../src/infrastructure/persistence/json/idempotency.repository.js');
+  const worker = `
+    const fs = require('fs');
+    const Repository = require(process.argv[1]);
+    const file = process.argv[2];
+    const ready = process.argv[3];
+    const start = process.argv[4];
+    const repository = new Repository(file);
+    fs.writeFileSync(ready, 'ready');
+    while (!fs.existsSync(start)) {}
+    const result = repository.begin({
+      executionId: 'shared-execution',
+      step: 1,
+      tool: 'state.change',
+      operationId: 'shared-operation'
+    });
+    process.stdout.write(result.created ? 'created' : 'reused');
+  `;
+
+  const workers = [];
+  try {
+    for (let index = 0; index < 6; index += 1) {
+      const ready = path.join(directory, 'ready-' + index);
+      const start = path.join(directory, 'start');
+      workers.push({
+        ready,
+        child: spawn(process.execPath, ['-e', worker, modulePath, filePath, ready, start], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        })
+      });
+    }
+
+    for (const item of workers) {
+      while (!fs.existsSync(item.ready)) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+    }
+
+    fs.writeFileSync(path.join(directory, 'start'), 'go');
+
+    const outputs = await Promise.all(workers.map(item => new Promise((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      item.child.stdout.on('data', chunk => { stdout += chunk; });
+      item.child.stderr.on('data', chunk => { stderr += chunk; });
+      item.child.on('error', reject);
+      item.child.on('exit', code => code === 0 ? resolve(stdout) : reject(new Error(stderr)));
+    })));
+
+    assert.equal(outputs.filter(value => value === 'created').length, 1);
+    assert.equal(outputs.filter(value => value === 'reused').length, 5);
+    assert.equal(new Repository(filePath).find({
+      executionId: 'shared-execution',
+      step: 1,
+      tool: 'state.change',
+      operationId: 'shared-operation'
+    }).status, 'running');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
