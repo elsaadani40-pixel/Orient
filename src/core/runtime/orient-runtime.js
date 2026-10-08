@@ -179,6 +179,7 @@ class OrientRuntime {
       persistenceCoordinator: this.persistenceCoordinator,
       quotaService: this.tenantQuotaService,
       quotaPolicy: this.tenantQuotaPolicy,
+      approvalService: this.approvalService,
       tenantId: this.tenantId,
       userId: this.userId,
       workspaceId: this.workspaceId,
