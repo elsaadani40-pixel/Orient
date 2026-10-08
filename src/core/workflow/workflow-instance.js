@@ -66,6 +66,8 @@ class WorkflowInstance {
       ])
     );
     this.metadata = {};
+    this.checkpoint = { revision: 0, lastSavedAt: null };
+    this.recovery = { count: 0, lastRecoveredAt: null, lastReason: null };
     this.compensation = {
       state: 'NONE',
       actions: [],
@@ -115,6 +117,8 @@ class WorkflowInstance {
       nextAttemptAt: payload.retry?.nextAttemptAt || null,
       lastError: payload.retry?.lastError || null
     };
+    instance.checkpoint = { revision: Number(payload.checkpoint?.revision || 0), lastSavedAt: payload.checkpoint?.lastSavedAt || null };
+    instance.recovery = { count: Number(payload.recovery?.count || 0), lastRecoveredAt: payload.recovery?.lastRecoveredAt || null, lastReason: payload.recovery?.lastReason || null };
     instance.metadata = structuredClone(payload.metadata || {});
     instance.compensation = structuredClone(payload.compensation || {
       state: 'NONE', actions: [], completed: [], failed: [], lastError: null
@@ -140,6 +144,36 @@ class WorkflowInstance {
     lifecyclePolicy.assertTransition(this.state, next);
     this.state = next;
     this.updatedAt = now().toISOString();
+    return this;
+  }
+
+  setCheckpointRevision(revision, savedAt = new Date().toISOString()) {
+    if (!Number.isInteger(revision) || revision < 0) throw new AppError('Invalid checkpoint revision', 500, 'WORKFLOW_INVALID_CHECKPOINT_REVISION');
+    this.checkpoint.revision = revision;
+    this.checkpoint.lastSavedAt = savedAt;
+    return this;
+  }
+
+  recoverFromLeaseLoss(reason = 'LEASE_EXPIRED', now = () => new Date()) {
+    if ([STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED].includes(this.state)) return this;
+    if (this.state === STATES.RUNNING) this.transition(STATES.RECOVERING, now);
+    const timestamp = now().toISOString();
+    for (const step of this.definition.steps) {
+      const runtime = this.steps[step.id];
+      if (runtime.state === STEP_STATES.RUNNING) {
+        runtime.state = STEP_STATES.PENDING;
+        runtime.error = { code: 'WORKFLOW_STEP_RECOVERED', message: 'Step returned to pending after lease loss' };
+        runtime.startedAt = null;
+      }
+    }
+    this.recovery.count += 1;
+    this.recovery.lastRecoveredAt = timestamp;
+    this.recovery.lastReason = reason;
+    if (this.metadata?.fencingToken !== undefined) {
+      this.metadata = { ...this.metadata };
+      delete this.metadata.fencingToken;
+    }
+    this.updatedAt = timestamp;
     return this;
   }
 
@@ -274,6 +308,8 @@ class WorkflowInstance {
       deadlineAt: this.deadlineAt,
       cancelRequested: this.cancelRequested,
       retry: this.retry,
+      checkpoint: this.checkpoint,
+      recovery: this.recovery,
       compensation: this.compensation,
       steps: this.steps,
       metadata: this.metadata
