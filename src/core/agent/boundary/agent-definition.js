@@ -26,6 +26,8 @@ class AgentDefinition {
     this.allowedMemoryScopes = Object.freeze([...new Set(allowedMemoryScopes.filter(Boolean))]);
     this.allowedAgentTargets = Object.freeze([...new Set(allowedAgentTargets.filter(Boolean))]);
     this.risk = risk;
+
+    Object.freeze(this);
   }
 
   canUseCapability(name) {
