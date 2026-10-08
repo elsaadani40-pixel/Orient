@@ -5,6 +5,7 @@ const IdempotencyRepository = require('./idempotency.repository');
 const CheckpointRepository = require('./checkpoint.repository');
 const WorkflowRepository = require('./workflow.repository');
 const WorkflowLeaseRepository = require('./workflow-lease.repository');
+const ApprovalRepository = require('./approval.repository');
 
 class JsonPersistence {
   constructor({ rootDir } = {}) {
@@ -16,6 +17,7 @@ class JsonPersistence {
     this.checkpoints = new CheckpointRepository(path.join(this.rootDir, 'checkpoints.json'));
     this.workflows = new WorkflowRepository(path.join(this.rootDir, 'workflows.json'));
     this.workflowLeases = new WorkflowLeaseRepository(path.join(this.rootDir, 'workflow-leases.json'));
+    this.approvals = new ApprovalRepository(path.join(this.rootDir, 'approvals.json'));
   }
 }
 module.exports = JsonPersistence;
