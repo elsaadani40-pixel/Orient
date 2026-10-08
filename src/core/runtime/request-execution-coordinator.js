@@ -182,6 +182,7 @@ class RequestExecutionCoordinator {
     }
 
     const context = ExecutionContext.restore(checkpoint.snapshot);
+    context.resume();
     this.quotaService.assertTenant(context.tenantId || this.tenantId);
     this.quotaService.assertInputSize(context.input);
 
