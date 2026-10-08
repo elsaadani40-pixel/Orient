@@ -707,6 +707,9 @@ class AgentLoop {
           // work. Reconciliation must therefore be explicit and authoritative.
           let reconciliation = null;
 
+          const toolDefinitionForRecovery =
+            this.toolRegistry.get(step.tool);
+
           if (typeof runtimeContext.reconcileOperation === 'function') {
             reconciliation = await runtimeContext.reconcileOperation({
               operationId,
@@ -717,6 +720,37 @@ class AgentLoop {
               input: resolvedInput,
               record: existing
             });
+          } else if (typeof toolDefinitionForRecovery?.reconcile === 'function') {
+            reconciliation = await toolDefinitionForRecovery.reconcile(
+              resolvedInput,
+              {
+                operationId,
+                executionId: context.executionId,
+                step: stepNumber,
+                planRevision,
+                tool: step.tool,
+                record: existing,
+                context
+              }
+            );
+          }
+
+          if (reconciliation?.status === 'conflict') {
+            const error = new AppError(
+              `العملية "${operationId}" اصطدمت بتغيير خارجي بعد التعطل ولا يمكن استئنافها تلقائيًا`,
+              409,
+              'IDEMPOTENCY_RECONCILIATION_CONFLICT'
+            );
+
+            context.record('idempotency.reconciliation_conflict', {
+              step: stepNumber,
+              tool: step.tool,
+              key: idempotency.key,
+              operationId,
+              reason: reconciliation.reason || 'external_state_conflict'
+            });
+
+            throw error;
           }
 
           if (reconciliation?.status === 'completed') {
