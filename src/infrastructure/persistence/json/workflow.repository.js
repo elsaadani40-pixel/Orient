@@ -85,12 +85,36 @@ class WorkflowRepository {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenantId = item.tenantId || 'local';
     if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
-    const existing = this.findById(item.workflowId);
-    if (existing && (existing.tenantId || 'local') !== effectiveTenantId) throw new Error('Workflow tenant collision');
+
     return this.withLock(() => {
-      const items = this.read().filter(existing => existing.workflowId !== item.workflowId);
-      items.push(item);
-      this.write(items);
+      const items = this.read();
+      const existing = items.find(candidate => candidate.workflowId === item.workflowId) || null;
+      if (existing && (existing.tenantId || 'local') !== effectiveTenantId) {
+        throw new Error('Workflow tenant collision');
+      }
+
+      const currentRevision = Number(existing?.checkpoint?.revision || 0);
+      const expectedRevision = Number(item.checkpoint?.revision || 0);
+      if (existing && expectedRevision !== currentRevision) {
+        const error = new Error('Stale workflow checkpoint');
+        error.code = 'WORKFLOW_CHECKPOINT_CONFLICT';
+        error.status = 409;
+        throw error;
+      }
+
+      const nextRevision = existing ? currentRevision + 1 : Math.max(1, expectedRevision);
+      item.checkpoint = {
+        revision: nextRevision,
+        lastSavedAt: new Date().toISOString()
+      };
+
+      const next = items.filter(candidate => candidate.workflowId !== item.workflowId);
+      next.push(item);
+      this.write(next);
+
+      if (typeof instance?.setCheckpointRevision === 'function') {
+        instance.setCheckpointRevision(nextRevision, item.checkpoint.lastSavedAt);
+      }
       return item;
     });
   }
