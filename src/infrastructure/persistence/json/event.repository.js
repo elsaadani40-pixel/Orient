@@ -9,6 +9,7 @@ class EventRepository {
     }
 
     this.filePath = filePath;
+    this.lockPath = filePath + '.lock';
     this.ensureStorage();
   }
 
@@ -63,6 +64,31 @@ class EventRepository {
     }
   }
 
+  withLock(operation) {
+    const timeoutMs = 30000;
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      try {
+        fs.mkdirSync(this.lockPath);
+        try { return operation(); }
+        finally { try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {} }
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        let stale = false;
+        try { stale = Date.now() - fs.statSync(this.lockPath).mtimeMs > timeoutMs; }
+        catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+        if (stale) { try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {} continue; }
+        if (Date.now() >= deadline) {
+          const lockError = new Error('Event storage lock timeout');
+          lockError.code = 'EVENT_STORAGE_LOCK_TIMEOUT';
+          throw lockError;
+        }
+        const wait = new SharedArrayBuffer(4);
+        Atomics.wait(new Int32Array(wait), 0, 0, 5);
+      }
+    }
+  }
+
   normalize(event) {
     if (!event || typeof event !== 'object') {
       throw new TypeError('event must be an object');
@@ -85,14 +111,14 @@ class EventRepository {
     const normalized = this.normalize(event);
     if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
     if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
-    const events = this.read();
-
-    if (!events.some(event => event.id === normalized.id)) {
-      events.push(normalized);
-      this.write(events);
-    }
-
-    return normalized;
+    return this.withLock(() => {
+      const events = this.read();
+      if (!events.some(event => event.id === normalized.id)) {
+        events.push(normalized);
+        this.write(events);
+      }
+      return normalized;
+    });
   }
 
   appendMany(events, { tenantId = null } = {}) {
@@ -111,25 +137,20 @@ class EventRepository {
       return item;
     });
 
-    const current = this.read();
-    const existingIds = new Set(
-      current.map(event => event.id)
-    );
-
-    const unique = normalized.filter(
-      event => {
+    return this.withLock(() => {
+      const current = this.read();
+      const existingIds = new Set(current.map(event => event.id));
+      const unique = normalized.filter(event => {
         if (existingIds.has(event.id)) return false;
         existingIds.add(event.id);
         return true;
+      });
+      if (unique.length) {
+        current.push(...unique);
+        this.write(current);
       }
-    );
-
-    if (unique.length) {
-      current.push(...unique);
-      this.write(current);
-    }
-
-    return unique;
+      return unique;
+    });
   }
 
   findAll({ tenantId = null } = {}) {
@@ -156,7 +177,7 @@ class EventRepository {
   }
 
   clear() {
-    this.write([]);
+    this.withLock(() => this.write([]));
   }
 }
 
