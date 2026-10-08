@@ -123,8 +123,7 @@ class RequestExecutionCoordinator {
         replans: 0,
         previousFingerprint: this.planFingerprint(orchestration.plan),
         approval,
-        approvals:
-        requestId,
+        approvals,
         input: text,
         tenantId: this.tenantId
       });
