@@ -5,6 +5,7 @@ class ToolRegistry {
   constructor() {
     this.tools = new Map();
     this.authorizationRequired = false;
+    this.sealed = false;
     this.executionAuthorizer = createToolExecutionAuthorizer();
   }
 
@@ -14,6 +15,14 @@ class ToolRegistry {
   }
 
   register(tool) {
+    if (this.sealed) {
+      throw new AppError(
+        'Tool registry is sealed and no longer accepts registrations',
+        403,
+        'TOOL_REGISTRY_SEALED'
+      );
+    }
+
     if (!tool || !tool.name || typeof tool.execute !== 'function') {
       throw new TypeError('Invalid tool');
     }
@@ -26,8 +35,27 @@ class ToolRegistry {
       );
     }
 
-    this.tools.set(tool.name, tool);
-    return tool;
+    const registeredTool = Object.freeze({
+      ...tool,
+      execute: tool.execute.bind(tool),
+      capabilities: Array.isArray(tool.capabilities)
+        ? Object.freeze([...tool.capabilities])
+        : Object.freeze([]),
+      sandbox: tool.sandbox
+        ? Object.freeze({
+            required: tool.sandbox.required === true,
+            profile: tool.sandbox.profile || null
+          })
+        : null
+    });
+
+    this.tools.set(tool.name, registeredTool);
+    return registeredTool;
+  }
+
+  seal() {
+    this.sealed = true;
+    return this;
   }
 
   get(name) {
