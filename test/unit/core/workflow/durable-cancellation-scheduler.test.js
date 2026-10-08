@@ -1,0 +1,2 @@
+const test=require('node:test');const assert=require('node:assert/strict');const WorkflowScheduler=require('../../../../src/core/workflow/workflow-scheduler');
+test('scheduler delegates cancellation to durable repository when workflow is not locally active',()=>{let called=null;const scheduler=new WorkflowScheduler({workflowRepository:{requestCancellation:(id,tenant)=>{called=[id,tenant];return {workflowId:id,cancelRequested:true,state:'RUNNING'};}}});assert.equal(scheduler.cancel('wf-x'),true);assert.deepEqual(called,['wf-x',null]);});

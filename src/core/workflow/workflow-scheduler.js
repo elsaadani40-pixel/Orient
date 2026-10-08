@@ -180,6 +180,12 @@ class WorkflowScheduler {
     );
     const active = this.active.get(workflowId);
 
+    if (!queued && !active && this.workflowRepository?.requestCancellation) {
+      const requested = this.workflowRepository.requestCancellation(workflowId, this.tenantId);
+      if (!requested) return false;
+      this.cancelled.add(workflowId);
+      return true;
+    }
     if (!queued && !active) return false;
 
     if (queued) {
@@ -194,6 +200,7 @@ class WorkflowScheduler {
     if (active) {
       active.cancelled = true;
       active.instance.requestCancel();
+      if (this.workflowRepository?.save) this.persist(active.instance);
     }
 
     this.cancelled.add(workflowId);
