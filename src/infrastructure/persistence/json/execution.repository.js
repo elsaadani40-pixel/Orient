@@ -256,6 +256,10 @@ class ExecutionRepository {
       const updated = this.normalize({
         ...current,
         ...patch,
+        ...(current.cancellationRequested ? {
+          cancellationRequested: true,
+          cancellationReason: current.cancellationReason || patch.cancellationReason || null
+        } : {}),
         id: current.id,
         executionId: current.executionId,
         updatedAt: new Date().toISOString()
