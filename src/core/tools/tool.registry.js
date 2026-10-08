@@ -4,6 +4,7 @@ const { createToolExecutionAuthorizer } = require('./tool-execution-authorizatio
 class ToolRegistry {
   constructor() {
     this.tools = new Map();
+    this.executionTools = new Map();
     this.authorizationRequired = false;
     this.executionAuthorizer = createToolExecutionAuthorizer();
   }
@@ -39,7 +40,8 @@ class ToolRegistry {
         : tool.sandbox
     });
 
-    this.tools.set(tool.name, registeredTool);
+    this.tools.set(tool.name, tool);
+    this.executionTools.set(tool.name, registeredTool);
     return tool;
   }
 
@@ -52,7 +54,7 @@ class ToolRegistry {
   }
 
   list() {
-    return Array.from(this.tools.values()).map((tool) => ({
+    return Array.from(this.executionTools.values()).map((tool) => ({
       name: tool.name,
       description: tool.description,
       capabilities: Array.isArray(tool.capabilities)
@@ -69,7 +71,7 @@ class ToolRegistry {
   }
 
   async execute(name, input, context = {}) {
-    const tool = this.get(name);
+    const tool = this.executionTools.get(name) || null;
 
     if (!tool) {
       throw new AppError(
