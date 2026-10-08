@@ -263,6 +263,9 @@ class WorkflowScheduler {
       }
 
       const previousState = instance.state;
+      if (lease.fencingToken !== undefined) {
+        instance.metadata = { ...instance.metadata, fencingToken: lease.fencingToken };
+      }
       try {
         instance.transition('RUNNING');
       } catch (error) {
@@ -278,6 +281,7 @@ class WorkflowScheduler {
         instance,
         leaseId: lease.leaseId,
         workerId: lease.workerId,
+        fencingToken: lease.fencingToken,
         issuedAt: lease.acquiredAt,
         expiresAt: lease.expiresAt,
         deadlineAt: item.deadlineAt,
@@ -290,6 +294,15 @@ class WorkflowScheduler {
     }
 
     return null;
+  }
+
+  assertCurrent(workflowId, leaseId, fencingToken) {
+    const active = this.active.get(workflowId);
+    if (!active || active.leaseId !== leaseId || (fencingToken !== undefined && Number(active.fencingToken) !== Number(fencingToken))) {
+      throw new AppError('Current workflow fencing token is invalid', 409, 'WORKFLOW_FENCING_REJECTED');
+    }
+    if (fencingToken !== undefined) this.leaseStore.assertCurrent(workflowId, leaseId, fencingToken);
+    return true;
   }
 
   renew(workflowId, leaseId) {

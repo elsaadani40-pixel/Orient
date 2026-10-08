@@ -20,7 +20,7 @@ class WorkflowLeaseStore {
   acquire(workflowId, workerId = crypto.randomUUID(), metadata = {}) {
     if (!workflowId) throw new AppError('workflowId is required', 400, 'LEASE_WORKFLOW_REQUIRED');
     const now = this.now();
-    const lease = {
+    let lease = {
       workflowId,
       leaseId: crypto.randomUUID(),
       workerId,
@@ -36,6 +36,10 @@ class WorkflowLeaseStore {
       const acquired = this.repository.tryAcquire(lease, this.tenantId);
       if (!acquired) {
         throw new AppError('Workflow lease is already held', 409, 'WORKFLOW_LEASE_HELD');
+      }
+      lease = { ...lease, ...acquired };
+      if (lease.fencingToken !== undefined) {
+        lease.metadata = { ...lease.metadata, fencingToken: lease.fencingToken };
       }
     } else {
       const current = this.get(workflowId);
@@ -78,6 +82,18 @@ class WorkflowLeaseStore {
     this.memory.set(workflowId, lease);
     this.persist(lease);
     return { ...lease };
+  }
+
+  assertCurrent(workflowId, leaseId, fencingToken) {
+    const lease = this.get(workflowId);
+    if (!lease || lease.leaseId !== leaseId || Number(lease.fencingToken) !== Number(fencingToken) || lease.expiresAt <= this.now()) {
+      throw new AppError('Workflow fencing token is no longer current', 409, 'WORKFLOW_FENCING_REJECTED');
+    }
+    if (this.repository?.assertCurrent && !this.repository.assertCurrent(workflowId, leaseId, fencingToken, this.now(), this.tenantId)) {
+      this.memory.delete(workflowId);
+      throw new AppError('Workflow fencing token is no longer current', 409, 'WORKFLOW_FENCING_REJECTED');
+    }
+    return true;
   }
 
   release(workflowId, leaseId) {
