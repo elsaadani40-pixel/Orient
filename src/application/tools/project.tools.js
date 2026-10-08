@@ -3,6 +3,7 @@ const ProjectBuilderAgent = require('../../core/agent/project-builder/project-bu
 const ProjectImprovementAnalyzer = require('../../core/agent/project-builder/change-proposal/project-improvement-analyzer');
 const CommandRunner = require('../../core/agent/project-builder/workspace/command-runner');
 const CommandVerification = require('../../core/agent/project-builder/verification/command-verification');
+const crypto = require('crypto');
 
 function createProjectTools({ projectRoot, policy = {} } = {}) {
   if (!projectRoot || typeof projectRoot !== 'string') throw new TypeError('projectRoot is required');
@@ -65,6 +66,55 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
         definitionOfDone: { allProposalsApplied: true, verificationPassed: true, rollbackOnFailure: true },
         checks
       });
+    },
+    reconcile: async (input = {}) => {
+      const proposals = Array.isArray(input.proposals) ? input.proposals : [];
+      if (proposals.length === 0) return { status: 'conflict', reason: 'no_change_proposals' };
+
+      const workspaceAgent = new ProjectBuilderAgent({
+        projectRoot,
+        policy: { ...policy, allowRead: true, allowWrite: false, allowCommands: false, allowGit: false }
+      });
+
+      const observations = [];
+      let allApplied = true;
+
+      for (const proposal of proposals) {
+        const exists = await workspaceAgent.workspace.exists(proposal.path);
+        const actual = exists ? await workspaceAgent.workspace.readText(proposal.path) : null;
+        const applied = exists && actual === proposal.content;
+        observations.push({ path: proposal.path, applied });
+        if (!applied) allApplied = false;
+      }
+
+      if (allApplied) {
+        return {
+          status: 'completed',
+          result: {
+            status: 'verified',
+            reconciled: true,
+            modification: { applied: true, reconciled: true, changes: proposals.map(({ action, path, content }) => ({ action, path, content })) },
+            verification: {
+              status: 'reconciled',
+              passed: observations.length,
+              failed: 0,
+              definitionOfDoneSatisfied: true,
+              checks: observations.map((observation, index) => ({
+                id: 'proposal-applied-' + index,
+                passed: observation.applied,
+                result: observation
+              }))
+            },
+            recovery: { operationId: null, observations }
+          }
+        };
+      }
+
+      return {
+        status: 'conflict',
+        reason: 'external_state_does_not_match_expected_post_state',
+        observations
+      };
     }
   });
 
