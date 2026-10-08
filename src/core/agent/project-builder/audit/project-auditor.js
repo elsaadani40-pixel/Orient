@@ -152,7 +152,7 @@ class ProjectAuditor {
         'Git state is understood.',
         'Audit result is internally consistent.'
       ],
-      satisfied: true
+      satisfied: gaps.length === 0
     };
 
     return new AuditResult({
