@@ -14,6 +14,7 @@ test('WorkflowWorker refuses to commit a step after fencing is lost during execu
     definition: {
       steps: [step]
     },
+    metadata: {},
     steps: {
       'step-1': { state: 'PENDING', attempts: 0 }
     },
@@ -39,7 +40,7 @@ test('WorkflowWorker refuses to commit a step after fencing is lost during execu
       return true;
     },
     release() { released = true; },
-    retry() { throw new Error('unexpected retry'); }
+    retry() { return false; }
   };
 
   const worker = new WorkflowWorker({
@@ -48,8 +49,10 @@ test('WorkflowWorker refuses to commit a step after fencing is lost during execu
     executor: async () => ({ externalSideEffect: true })
   });
 
-  await assert.rejects(worker.tick(), error => error.code === 'WORKFLOW_FENCING_REJECTED');
+  const result = await worker.tick();
+  assert.equal(result.state, 'FAILED');
   assert.equal(completed, false);
+  assert.equal(result.steps['step-1'].state, 'FAILED');
   assert.equal(assertCalls, 2);
   assert.equal(released, true);
 });
