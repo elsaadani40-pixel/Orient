@@ -39,7 +39,7 @@ class BuildExecutionResult {
       changeSet: this.changeSet,
       modification: this.modification,
       verification: this.verification,
-      rollback: this.rollback,
+      ...(this.rollback ? { rollback: this.rollback } : {}),
       error: this.error
     };
   }
