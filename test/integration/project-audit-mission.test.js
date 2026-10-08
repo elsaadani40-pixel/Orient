@@ -79,7 +79,7 @@ test('project change mission executes the proposal in the bounded workspace and 
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
 
   assert.equal(result.type, 'tool_result');
-  assert.equal(result.result.status, 'verified');
+  assert.equal(result.result.status, 'verified', JSON.stringify(result.result));
   assert.equal(result.result.modification.applied, true);
   assert.equal(result.result.verification.status, 'passed');
   assert.equal(result.result.verification.definitionOfDoneSatisfied, true);
@@ -101,7 +101,7 @@ test('verification failure rolls the project back to its pre-execution state', a
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
 
   assert.equal(result.type, 'tool_result');
-  assert.equal(result.result.status, 'failed');
+  assert.equal(result.result.status, 'failed', JSON.stringify(result.result));
   assert.equal(result.result.rollback.rolledBack, true);
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), original);
 
