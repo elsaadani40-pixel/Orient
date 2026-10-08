@@ -9,6 +9,7 @@ class ExecutionRepository {
     }
 
     this.filePath = filePath;
+    this.lockPath = `${filePath}.lock`;
     this.ensureStorage();
   }
 
@@ -86,17 +87,88 @@ class ExecutionRepository {
     };
   }
 
-  write(executions) {
-    const temporaryFile = `${this.filePath}.tmp`;
+  withLock(operation) {
+    const staleAfterMs = 30_000;
+    const deadline = Date.now() + staleAfterMs;
+
+    while (true) {
+      try {
+        fs.mkdirSync(this.lockPath);
+        break;
+      } catch (error) {
+        if (error.code !== 'EEXIST') {
+          throw error;
+        }
+
+        let stale = false;
+        try {
+          stale = Date.now() - fs.statSync(this.lockPath).mtimeMs > staleAfterMs;
+        } catch (statError) {
+          if (statError.code !== 'ENOENT') {
+            throw statError;
+          }
+        }
+
+        if (stale) {
+          try {
+            fs.rmSync(this.lockPath, { recursive: true, force: true });
+            continue;
+          } catch (removeError) {
+            if (removeError.code !== 'ENOENT') {
+              throw removeError;
+            }
+          }
+        }
+
+        if (Date.now() >= deadline) {
+          throw new Error('Execution storage lock acquisition timed out');
+        }
+
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      }
+    }
 
     try {
-      fs.writeFileSync(
-        temporaryFile,
-        JSON.stringify(executions, null, 2) + '\n',
-        'utf8'
-      );
+      return operation();
+    } finally {
+      try {
+        fs.rmSync(this.lockPath, { recursive: true, force: true });
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+  }
+
+  write(executions) {
+    const temporaryFile = `${this.filePath}.tmp.${process.pid}.${crypto.randomUUID()}`;
+
+    try {
+      const payload = JSON.stringify(executions, null, 2) + '\n';
+      const fd = fs.openSync(temporaryFile, 'w', 0o600);
+
+      try {
+        fs.writeFileSync(fd, payload, 'utf8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
 
       fs.renameSync(temporaryFile, this.filePath);
+
+      try {
+        const directoryFd = fs.openSync(path.dirname(this.filePath), 'r');
+        try {
+          fs.fsyncSync(directoryFd);
+        } finally {
+          fs.closeSync(directoryFd);
+        }
+      } catch (error) {
+        if (!['EINVAL', 'ENOTSUP', 'EPERM'].includes(error.code)) {
+          throw error;
+        }
+      }
     } catch (error) {
       try {
         if (fs.existsSync(temporaryFile)) {
@@ -107,7 +179,6 @@ class ExecutionRepository {
       throw new Error(`Execution storage write failed: ${error.message}`);
     }
   }
-
 
   findAll({ tenantId = null } = {}) {
     return this.readRaw().map(execution => this.normalize(execution))
@@ -131,24 +202,26 @@ class ExecutionRepository {
       throw new Error('Execution tenant mismatch');
     }
 
-    const executions = this.readRaw();
+    return this.withLock(() => {
+      const executions = this.readRaw();
 
-    if (
-      executions.some(
-        item =>
-          item.executionId === normalized.executionId ||
-          item.id === normalized.id
-      )
-    ) {
-      throw new Error(
-        `Execution already exists: ${normalized.executionId}`
-      );
-    }
+      if (
+        executions.some(
+          item =>
+            item.executionId === normalized.executionId ||
+            item.id === normalized.id
+        )
+      ) {
+        throw new Error(
+          `Execution already exists: ${normalized.executionId}`
+        );
+      }
 
-    executions.unshift(normalized);
-    this.write(executions);
+      executions.unshift(normalized);
+      this.write(executions);
 
-    return normalized;
+      return normalized;
+    });
   }
 
   update(executionId, patch, { tenantId = null } = {}) {
@@ -160,56 +233,60 @@ class ExecutionRepository {
       throw new TypeError('patch must be an object');
     }
 
-    const executions = this.readRaw();
+    return this.withLock(() => {
+      const executions = this.readRaw();
 
-    const index = executions.findIndex(
-      execution =>
-        execution.executionId === executionId ||
-        execution.id === executionId
-    );
+      const index = executions.findIndex(
+        execution =>
+          execution.executionId === executionId ||
+          execution.id === executionId
+      );
 
-    if (index === -1) {
-      return null;
-    }
+      if (index === -1) {
+        return null;
+      }
 
-    const current = this.normalize(executions[index]);
+      const current = this.normalize(executions[index]);
 
-    if (tenantId && current.metadata?.tenantId !== tenantId && !(tenantId === 'local' && !current.metadata?.tenantId)) return null;
-    if (tenantId && patch.metadata?.tenantId && patch.metadata.tenantId !== tenantId) throw new Error('Execution tenant mismatch');
+      if (tenantId && current.metadata?.tenantId !== tenantId && !(tenantId === 'local' && !current.metadata?.tenantId)) return null;
+      if (tenantId && patch.metadata?.tenantId && patch.metadata.tenantId !== tenantId) throw new Error('Execution tenant mismatch');
 
-    const updated = this.normalize({
-      ...current,
-      ...patch,
-      id: current.id,
-      executionId: current.executionId,
-      updatedAt: new Date().toISOString()
+      const updated = this.normalize({
+        ...current,
+        ...patch,
+        id: current.id,
+        executionId: current.executionId,
+        updatedAt: new Date().toISOString()
+      });
+
+      executions[index] = updated;
+      this.write(executions);
+
+      return updated;
     });
-
-    executions[index] = updated;
-    this.write(executions);
-
-    return updated;
   }
 
   deleteById(executionId, { tenantId = null } = {}) {
-    const executions = this.readRaw();
+    return this.withLock(() => {
+      const executions = this.readRaw();
 
-    const index = executions.findIndex(
-      execution =>
-        execution.executionId === executionId ||
-        execution.id === executionId
-    );
+      const index = executions.findIndex(
+        execution =>
+          execution.executionId === executionId ||
+          execution.id === executionId
+      );
 
-    if (index === -1) {
-      return false;
-    }
+      if (index === -1) {
+        return false;
+      }
 
-    if (tenantId && executions[index]?.metadata?.tenantId !== tenantId) return false;
+      if (tenantId && executions[index]?.metadata?.tenantId !== tenantId) return false;
 
-    executions.splice(index, 1);
-    this.write(executions);
+      executions.splice(index, 1);
+      this.write(executions);
 
-    return true;
+      return true;
+    });
   }
 
   count() {
