@@ -55,7 +55,11 @@ class BuildExecutionService {
           checks
         });
 
-      if (!verification.passed) {
+      const verificationPassed =
+        verification?.status === 'passed' &&
+        verification?.definitionOfDoneSatisfied === true;
+
+      if (!verificationPassed) {
         if (!supportsRollback) {
           return new BuildExecutionResult({
             status: 'failed',
