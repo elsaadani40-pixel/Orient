@@ -30,6 +30,10 @@ class AgentService {
   getExecutionStatus(executionId) {
     return this.runtime.getExecutionStatus(executionId);
   }
+
+  resumeExecution(executionId, options = {}) {
+    return this.runtime.resume(executionId, options);
+  }
 }
 
 module.exports = AgentService;
