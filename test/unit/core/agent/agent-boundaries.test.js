@@ -55,3 +55,31 @@ test('agent boundaries deny undeclared capability, memory scope, and agent targe
     error => error.code === 'MEMORY_SCOPE_FORBIDDEN'
   );
 });
+
+
+test('agent definitions cannot be mutated to escalate capabilities or risk', () => {
+  const agent = new AgentDefinition({
+    id: 'immutable-agent',
+    capabilities: ['safe.read'],
+    allowedMemoryScopes: ['profile'],
+    allowedAgentTargets: ['worker'],
+    risk: 'low'
+  });
+
+  assert.equal(Object.isFrozen(agent), true);
+  assert.equal(agent.canUseCapability('*'), false);
+  assert.equal(agent.canUseCapability('safe.read'), true);
+  assert.equal(agent.risk, 'low');
+
+  assert.throws(() => {
+    Object.defineProperty(agent, 'capabilities', {
+      value: ['*']
+    });
+  }, TypeError);
+
+  assert.throws(() => {
+    Object.defineProperty(agent, 'risk', {
+      value: 'critical'
+    });
+  }, TypeError);
+});
