@@ -22,10 +22,11 @@ const ApprovalService = require('../../src/core/agent/approval/approval-service'
 const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
 function createRuntime(root, { secure = false, approvalService = null } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const registry = new AgentRegistry(); registerDefaultAgents(registry);
   const toolRegistry = new ToolRegistry(); for (const tool of createProjectTools({ projectRoot: root })) toolRegistry.register(tool);
   const orchestrator = new AgentOrchestrator({ planner: new PlannerService(), planValidator: new PlanValidator({ maxSteps: 5, toolRegistry }), replanner: new Replanner({ maxReplans: 1 }), decisionEngine: new DecisionEngine(), recoveryEngine: new RecoveryEngine() });
-  if (!secure) return new OrientRuntime({ toolRegistry, agentOrchestrator: orchestrator, tenantId: 'tenant-mission', agentRegistry: registry });
+  if (!secure) return new OrientRuntime({ toolRegistry, agentOrchestrator: orchestrator, persistence, tenantId: 'tenant-mission', agentRegistry: registry });
   const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission' });
   const authorizationService = new AuthorizationService({
     capabilityMapper: new CapabilityMapper({
@@ -46,6 +47,7 @@ function createRuntime(root, { secure = false, approvalService = null } = {}) {
     agentOrchestrator: orchestrator,
     authorizationService,
     approvalService: approvals,
+    persistence,
     tenantId: 'tenant-mission',
     agentRegistry: registry
   });
