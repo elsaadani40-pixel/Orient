@@ -32,3 +32,45 @@ test('project change-proposal mission finds a real issue and never executes the 
   assert.equal(result.type, 'tool_result'); assert.equal(result.result.status, 'actionable'); assert.equal(result.result.execution.allowed, false); assert.equal(result.result.execution.performed, false); assert.equal(result.result.findings[0].id, 'missing-test-script'); assert.equal(result.result.proposals.length, 1); assert.equal(result.result.proposals[0].action, 'update'); assert.equal(result.result.proposals[0].path, 'package.json'); assert.match(result.result.proposals[0].content, /"test": "node --test"/); assert.equal(fs.readFileSync(manifestPath, 'utf8'), original);
   runtime.shutdown({ cancelQueued: false }); fs.rmSync(root, { recursive: true, force: true });
 });
+
+test('project change mission executes the proposal in the bounded workspace and verifies it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-execution-'));
+  fs.mkdirSync(path.join(root, 'test'));
+  fs.writeFileSync(path.join(root, 'test', 'smoke.test.js'), "const test = require('node:test'); const assert = require('node:assert/strict'); test('smoke', () => assert.equal(1, 1));\n");
+  const manifestPath = path.join(root, 'package.json');
+  const original = '{"name":"execution-fixture"}\n';
+  fs.writeFileSync(manifestPath, original);
+
+  const runtime = createRuntime(root);
+  const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
+
+  assert.equal(result.type, 'tool_result');
+  assert.equal(result.result.status, 'verified');
+  assert.equal(result.result.modification.applied, true);
+  assert.equal(result.result.verification.status, 'passed');
+  assert.equal(result.result.verification.definitionOfDoneSatisfied, true);
+  assert.equal(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts.test, 'node --test');
+
+  runtime.shutdown({ cancelQueued: false });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('verification failure rolls the project back to its pre-execution state', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-rollback-'));
+  fs.mkdirSync(path.join(root, 'test'));
+  fs.writeFileSync(path.join(root, 'test', 'failing.test.js'), "const test = require('node:test'); test('fails', () => { throw new Error('intentional'); });\n");
+  const manifestPath = path.join(root, 'package.json');
+  const original = '{"name":"rollback-fixture"}\n';
+  fs.writeFileSync(manifestPath, original);
+
+  const runtime = createRuntime(root);
+  const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
+
+  assert.equal(result.type, 'tool_result');
+  assert.equal(result.result.status, 'failed');
+  assert.equal(result.result.rollback.rolledBack, true);
+  assert.equal(fs.readFileSync(manifestPath, 'utf8'), original);
+
+  runtime.shutdown({ cancelQueued: false });
+  fs.rmSync(root, { recursive: true, force: true });
+});

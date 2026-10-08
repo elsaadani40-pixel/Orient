@@ -365,7 +365,7 @@ class PlannerService {
   extractProjectChangeProposal(text) {
     const value = String(text || '').trim();
     if (!/(اقترح|اقتراح|حلل.*مشكلة|change proposal|propose.*change|improvement)/i.test(value) || !/(المشروع|المستودع|repository|project)/i.test(value)) return null;
-    return { intent: 'project.propose_changes', tool: 'project.propose_changes', input: null, agentId: 'PROJECT_BUILDER_AGENT', confidence: 0.99, reason: 'تم التعرف على مهمة تحليل مشروع وإنتاج اقتراح تغيير قراءة فقط', steps: [{ step: 1, tool: 'project.propose_changes', input: null, dependsOn: null }] };
+    return { intent: 'project.change', tool: 'project.propose_changes', input: null, agentId: 'PROJECT_BUILDER_AGENT', confidence: 0.99, reason: 'تم التعرف على مهمة اكتشاف مشكلة ثم تنفيذ التغيير المقترح بعد التفويض', steps: [{ step: 1, tool: 'project.propose_changes', input: null, dependsOn: null, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.read' }, { step: 2, tool: 'project.execute_change', input: '$previousResult', dependsOn: 1, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.write' }] };
   }
   extractProjectAudit(text) {
     const value = String(text || '').trim();

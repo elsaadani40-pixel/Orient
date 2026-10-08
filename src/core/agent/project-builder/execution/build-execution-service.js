@@ -33,10 +33,21 @@ class BuildExecutionService {
       );
     }
 
-    try {
-      const modification =
-        await this.modifier.apply(changeSet);
+    let modification;
+    let snapshots = [];
+    const supportsRollback =
+      typeof this.modifier.snapshot === 'function' &&
+      typeof this.modifier.rollback === 'function';
 
+    try {
+      if (supportsRollback) {
+        for (const change of changeSet.changes) {
+          snapshots.push(await this.modifier.snapshot(change));
+        }
+      }
+
+      modification =
+        await this.modifier.apply(changeSet);
 
       const verification =
         await this.verifier.verify({
@@ -45,12 +56,41 @@ class BuildExecutionService {
         });
 
       if (!verification.passed) {
+        if (!supportsRollback) {
+          return new BuildExecutionResult({
+            status: 'failed',
+            plan,
+            changeSet,
+            modification,
+            verification
+          });
+        }
+
+        let rollback = { rolledBack: false };
+        try {
+          rollback = await this.modifier.rollback(snapshots);
+        } catch (rollbackError) {
+          return new BuildExecutionResult({
+            status: 'failed',
+            plan,
+            changeSet,
+            modification,
+            verification,
+            error: {
+              name: rollbackError.name,
+              message: rollbackError.message
+            },
+            rollback
+          });
+        }
+
         return new BuildExecutionResult({
           status: 'failed',
           plan,
           changeSet,
           modification,
-          verification
+          verification,
+          rollback
         });
       }
 
