@@ -62,7 +62,8 @@ class CommandRunner {
           cwd: workingDirectory,
           shell: false,
           windowsHide: true,
-          detached: process.platform !== 'win32'
+          detached: process.platform !== 'win32',
+          env: this.policy.environment
         }
       );
 
