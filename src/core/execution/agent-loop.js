@@ -1119,6 +1119,23 @@ class AgentLoop {
         if (durableStep) candidates.push(durableStep.result);
       }
 
+      // Durable observations are a second recovery projection of a completed
+      // tool step. They survive the same checkpoint boundary and must be
+      // considered when a legacy/partial snapshot lacks the step result.
+      if (Array.isArray(context.observations)) {
+        const durableObservation = [...context.observations]
+          .reverse()
+          .find(
+            observation =>
+              observation &&
+              Number(observation.step) === referencedStep &&
+              observation.success === true &&
+              observation.result !== null &&
+              observation.result !== undefined
+          );
+        if (durableObservation) candidates.push(durableObservation.result);
+      }
+
       if (candidates.length > 0) {
         return candidates[0];
       }
