@@ -671,3 +671,39 @@ test('PostgreSQL execution cancellation is durable and tenant-scoped', async () 
     tenantId: 'tenant-cancel'
   });
 });
+
+
+test('PostgreSQL cancellation wins terminal completion race', async () => {
+  const executionId = 'outcome-race-' + Date.now();
+  await persistence.executions.insert({
+    executionId,
+    requestId: 'outcome-race-request',
+    status: 'running',
+    metadata: { tenantId: 'tenant-outcome' },
+    result: null
+  }, { tenantId: 'tenant-outcome' });
+
+  await persistence.executions.requestCancellation(
+    executionId,
+    'stop before commit',
+    { tenantId: 'tenant-outcome' }
+  );
+
+  const attemptedCompletion = await persistence.executions.update(
+    executionId,
+    {
+      status: 'completed',
+      result: { value: 'must-not-win' },
+      completedAt: new Date().toISOString()
+    },
+    { tenantId: 'tenant-outcome' }
+  );
+
+  assert.equal(attemptedCompletion.status, 'running');
+  assert.equal(attemptedCompletion.cancellationRequested, true);
+  assert.equal(attemptedCompletion.result, null);
+
+  await persistence.executions.deleteById(executionId, {
+    tenantId: 'tenant-outcome'
+  });
+});
