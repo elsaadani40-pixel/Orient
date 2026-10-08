@@ -219,18 +219,27 @@ class PostgresIdempotencyRepository {
   async complete(key, result, { tenantId = null } = {}) {
     const record = await this.findByKey(key, { tenantId });
     if (!record) return null;
-    record.status = 'completed'; record.result = result ?? null; record.completedAt = new Date().toISOString();
-    await this.db.query('UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2',
-      [key, tenantId || record.tenantId, record, record.status, record.completedAt]);
+    if (record.status === 'completed') {
+      if (JSON.stringify(record.result) !== JSON.stringify(result ?? null)) { const error = new Error('Idempotency record is already completed with a different result'); error.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error.status=409; throw error; }
+      return record;
+    }
+    if (record.status !== 'running') { const error=new Error('Idempotency record is not running'); error.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error.status=409; throw error; }
+    record.status='completed'; record.result=result ?? null; record.completedAt=new Date().toISOString();
+    const updated=await this.db.query('UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2 AND status=$6',
+      [key, tenantId || record.tenantId, record, record.status, record.completedAt, 'running']);
+    if (updated.rowCount !== 1) { const error=new Error('Idempotency terminal transition lost a race'); error.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error.status=409; throw error; }
     return record;
   }
 
   async fail(key, error, { tenantId = null } = {}) {
     const record = await this.findByKey(key, { tenantId });
     if (!record) return null;
-    record.status = 'failed'; record.error = { code: error?.code || 'EXECUTION_FAILED', message: error?.message || String(error || '') }; record.completedAt = new Date().toISOString();
-    await this.db.query('UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2',
-      [key, tenantId || record.tenantId, record, record.status, record.completedAt]);
+    if (record.status === 'failed') return record;
+    if (record.status === 'completed') { const error2=new Error('Completed idempotency record cannot be failed'); error2.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error2.status=409; throw error2; }
+    if (record.status !== 'running') { const error2=new Error('Idempotency record is not running'); error2.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error2.status=409; throw error2; }
+    record.status='failed'; record.error={code:error?.code || 'EXECUTION_FAILED',message:error?.message || String(error || '')}; record.completedAt=new Date().toISOString();
+    const updated=await this.db.query('UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2 AND status=$6',[key,tenantId || record.tenantId,record,record.status,record.completedAt,'running']);
+    if(updated.rowCount!==1){const error2=new Error('Idempotency terminal transition lost a race');error2.code='IDEMPOTENCY_TERMINAL_CONFLICT';error2.status=409;throw error2;}
     return record;
   }
 

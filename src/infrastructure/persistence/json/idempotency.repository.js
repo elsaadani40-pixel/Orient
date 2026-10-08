@@ -13,7 +13,17 @@ class IdempotencyRepository {
   ensureStorage() {
     const directory = path.dirname(this.filePath);
     fs.mkdirSync(directory, { recursive: true });
-    if (!fs.existsSync(this.filePath)) fs.writeFileSync(this.filePath, '{}\n', 'utf8');
+    try {
+      const fd = fs.openSync(this.filePath, 'wx', 0o600);
+      try {
+        fs.writeFileSync(fd, '{}\n', 'utf8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
   }
 
   read() {
@@ -113,6 +123,21 @@ class IdempotencyRepository {
       const records = this.read();
       const record = records[key];
       if (!record || (tenantId && record.tenantId !== tenantId)) return null;
+      if (record.status === 'completed') {
+        if (JSON.stringify(record.result) !== JSON.stringify(result ?? null)) {
+          const error = new Error('Idempotency record is already completed with a different result');
+          error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT';
+          error.status = 409;
+          throw error;
+        }
+        return record;
+      }
+      if (record.status !== 'running') {
+        const error = new Error('Idempotency record is not running');
+        error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT';
+        error.status = 409;
+        throw error;
+      }
       record.status = 'completed';
       record.result = result ?? null;
       record.completedAt = new Date().toISOString();
@@ -127,6 +152,19 @@ class IdempotencyRepository {
       const records = this.read();
       const record = records[key];
       if (!record || (tenantId && record.tenantId !== tenantId)) return null;
+      if (record.status === 'failed') return record;
+      if (record.status === 'completed') {
+        const error = new Error('Completed idempotency record cannot be failed');
+        error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT';
+        error.status = 409;
+        throw error;
+      }
+      if (record.status !== 'running') {
+        const error = new Error('Idempotency record is not running');
+        error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT';
+        error.status = 409;
+        throw error;
+      }
       record.status = 'failed';
       record.error = {
         code: error?.code || 'EXECUTION_FAILED',
