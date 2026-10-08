@@ -21,3 +21,18 @@ test('AgentService exposes execution status without transforming durable state',
 
   assert.strictEqual(service.getExecutionStatus('exec-1'), expected);
 });
+
+
+test('AgentService exposes execution approvals without transforming durable state', async () => {
+  const expected = [{ approvalId: 'approval-1', executionId: 'exec-1', step: 2 }];
+
+  const service = new AgentService({
+    getExecutionStatus: () => ({ executionId: 'exec-1', status: 'running' }),
+    getExecutionApprovals: executionId => {
+      assert.equal(executionId, 'exec-1');
+      return expected;
+    }
+  });
+
+  assert.strictEqual(await service.getExecutionApprovals('exec-1'), expected);
+});
