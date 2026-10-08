@@ -82,14 +82,35 @@ class PostgresTenantQuotaRepository {
 
   async promoteWorkflow({tenantId,workflowId,expiresAt=null}) {
     const normalizedExpiresAt=expiresAt==null?null:new Date(expiresAt).toISOString();
-    const result = await this.db.query(
-      `UPDATE tenant_quota_reservations
-       SET state='RUNNING',expires_at=$3
-       WHERE tenant_id=$1 AND workflow_id=$2 AND state='QUEUED'
-       RETURNING tenant_id,workflow_id,state,reserved_at,expires_at`,
-      [tenantId,workflowId,normalizedExpiresAt]
-    );
-    return result.rowCount === 1 ? this.toModel(result.rows[0]) : null;
+    const result = await this.db.transaction(async client => {
+      const limit = (await client.query(
+        'SELECT max_concurrent FROM tenant_quota_limits WHERE tenant_id=$1 FOR UPDATE',
+        [tenantId]
+      )).rows[0];
+      if (!limit) return null;
+      await client.query(
+        'DELETE FROM tenant_quota_reservations WHERE tenant_id=$1 AND expires_at IS NOT NULL AND expires_at <= NOW()',
+        [tenantId]
+      );
+      const active = (await client.query(
+        "SELECT COUNT(*)::int AS count FROM tenant_quota_reservations WHERE tenant_id=$1 AND state='RUNNING'",
+        [tenantId]
+      )).rows[0];
+      if (Number(active.count) >= Number(limit.max_concurrent)) {
+        const error = new Error('Tenant concurrent workflow quota exceeded');
+        error.code = 'TENANT_CONCURRENT_QUOTA_EXCEEDED';
+        throw error;
+      }
+      const promoted = await client.query(
+        `UPDATE tenant_quota_reservations
+         SET state='RUNNING',expires_at=$3
+         WHERE tenant_id=$1 AND workflow_id=$2 AND state='QUEUED'
+         RETURNING tenant_id,workflow_id,state,reserved_at,expires_at`,
+        [tenantId,workflowId,normalizedExpiresAt]
+      );
+      return promoted.rowCount === 1 ? promoted.rows[0] : null;
+    });
+    return result ? this.toModel(result) : null;
   }
 
   async queueWorkflow({tenantId,workflowId,expiresAt=null}) {
