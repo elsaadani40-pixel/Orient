@@ -17,8 +17,6 @@ const RetryExecutor =
 const IdempotencyStore =
   require('./idempotency/idempotency-store');
 
-const { authorizeContext } =
-  require('../tools/tool-execution-authorization');
 
 class AgentLoop {
   constructor({
@@ -461,8 +459,20 @@ class AgentLoop {
       injectedContext.resolvedInput =
         resolvedInput;
 
+      injectedContext.planRevision = planRevision;
+
       if (executionAuthorization) {
-        authorizeContext(injectedContext, executionAuthorization);
+        this.toolRegistry.authorizeExecutionContext(
+          injectedContext,
+          executionAuthorization,
+          {
+            tool: step.tool,
+            agentId: injectedContext.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
+            executionId: context.executionId,
+            step: stepNumber,
+            planRevision
+          }
+        );
       }
 
       context.record(
