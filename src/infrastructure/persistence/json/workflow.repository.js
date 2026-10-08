@@ -143,6 +143,17 @@ class WorkflowRepository {
     });
   }
 
+  requestCancellation(workflowId, tenantId = null) {
+    return this.withLock(() => {
+      const items = this.read();
+      const index = items.findIndex(item => item.workflowId === workflowId && (!tenantId || (item.tenantId || 'local') === tenantId));
+      if (index < 0) return false;
+      const item = { ...items[index], cancelRequested: true, updatedAt: new Date().toISOString() };
+      if (['CREATED', 'QUEUED', 'WAITING', 'RECOVERING'].includes(item.state)) item.state = 'CANCELLED';
+      const next = [...items]; next[index] = item; this.write(next); return item;
+    });
+  }
+
   findById(workflowId, tenantId = null) {
     return this.read().find(
       item => item.workflowId === workflowId && (!tenantId || item.tenantId === tenantId)
