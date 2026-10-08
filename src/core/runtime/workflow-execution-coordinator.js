@@ -2,6 +2,7 @@ const crypto = require('crypto');
 
 const { WorkflowDefinition, WorkflowInstance, WorkflowWorker } = require('../workflow');
 const AsyncWorkflowWorker = require('../workflow/async-workflow-worker');
+const DurableMissionEventSink = require('../workflow/durable-mission-event-sink');
 
 class WorkflowExecutionCoordinator {
   constructor({
@@ -25,6 +26,9 @@ class WorkflowExecutionCoordinator {
     this.userId = userId || 'local';
     this.workspaceId = workspaceId || 'local';
     this.executeRequest = executeRequest;
+    this.missionEventSink = this.persistence?.events?.appendMissionEvent
+      ? new DurableMissionEventSink({ eventRepository: this.persistence.events, workflowRepository: this.workflowRepository, tenantId: this.tenantId })
+      : null;
   }
 
   async execute(input, {
@@ -67,12 +71,17 @@ class WorkflowExecutionCoordinator {
 
     instance.metadata.priority = priority;
 
+    if (this.missionEventSink) this.missionEventSink.recordCreated(instance);
+
     if (this.scheduler.async) {
+      const from = instance.state;
       await this.scheduler.enqueueDurable(instance, { priority, deadlineAt });
+      if (this.missionEventSink && from !== instance.state) this.missionEventSink.recordState(instance, from, instance.state);
     } else {
       if (this.workflowRepository?.save) this.workflowRepository.save(instance);
       this.scheduler.enqueue(instance, { priority, deadlineAt });
       if (this.workflowRepository?.save) this.workflowRepository.save(instance);
+      if (this.missionEventSink) this.missionEventSink.recordState(instance, 'CREATED', 'QUEUED');
     }
 
     const WorkerClass = this.scheduler.async
@@ -82,21 +91,19 @@ class WorkflowExecutionCoordinator {
     const worker = new WorkerClass({
       scheduler: this.scheduler,
       eventSink: (event) => {
-        if (this.workflowRepository?.save) {
-          const persisted = this.workflowRepository.save(instance);
-          if (persisted?.then) persisted.catch(() => {});
+        if (this.missionEventSink) {
+          this.missionEventSink.recordWorkerEvent(instance, event);
+          return;
         }
 
+        if (this.workflowRepository?.save) this.workflowRepository.save(instance);
         if (this.persistence?.events?.append) {
           this.persistence.events.append({
             id: event.eventId || crypto.randomUUID(),
             type: event.type,
             executionId: instance.workflowId,
             timestamp: event.timestamp || new Date().toISOString(),
-            data: {
-              ...(event.payload || event),
-              tenantId: this.tenantId
-            }
+            data: { ...(event.payload || event), tenantId: this.tenantId }
           });
         }
       },

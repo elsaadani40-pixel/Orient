@@ -10,3 +10,4 @@ module.exports = {
 };
 
 module.exports.MissionEventProjection = require('./mission-event-projection');
+module.exports.DurableMissionEventSink = require('./durable-mission-event-sink');

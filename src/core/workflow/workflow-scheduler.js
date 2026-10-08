@@ -262,6 +262,7 @@ class WorkflowScheduler {
         throw error;
       }
 
+      const previousState = instance.state;
       try {
         instance.transition('RUNNING');
       } catch (error) {
@@ -280,7 +281,8 @@ class WorkflowScheduler {
         issuedAt: lease.acquiredAt,
         expiresAt: lease.expiresAt,
         deadlineAt: item.deadlineAt,
-        cancelled: false
+        cancelled: false,
+        previousState
       };
 
       this.active.set(record.workflowId, record);
