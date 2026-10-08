@@ -1,4 +1,7 @@
-const crypto = require('crypto');
+cons  {version:5,sql:`
+    ALTER TABLE tenant_quota_reservations ADD COLUMN IF NOT EXISTS fencing_token BIGINT;
+  `},
+t crypto = require('crypto');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -67,9 +70,6 @@ const MIGRATIONS = [
     );
     CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_heartbeat ON worker_nodes(tenant_id, heartbeat_at);
     CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_expiry ON worker_nodes(tenant_id, expires_at);
-  `},
-  {version:5,sql:`
-    ALTER TABLE tenant_quota_reservations ADD COLUMN IF NOT EXISTS fencing_token BIGINT;
   `},
   {version:4,sql:`
     CREATE TABLE IF NOT EXISTS workflow_dispatch_claims (
