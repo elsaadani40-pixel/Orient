@@ -1,20 +1,3 @@
-const crypto = require('crypto');
-const { PostgresDatabase } = require('./postgres-database');
-const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repository');
-const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-repository');
-
-function tenantOrLocal(value) {
-  return value || 'local';
-}
-
-function assertTenant(actual, expected, label) {
-  if (expected && actual !== expected) {
-    const error = new Error(`${label} tenant mismatch`);
-    error.code = 'TENANT_PERSISTENCE_MISMATCH';
-    throw error;
-  }
-}
-
 class PostgresExecutionRepository {
   constructor(db) { this.db = db; }
 
@@ -102,36 +85,3 @@ class PostgresExecutionRepository {
       cancellationReason: String(reason || 'Execution cancellation requested'),
       updatedAt: new Date().toISOString()
     };
-
-    await this.db.query(
-      'UPDATE executions SET payload=$3,updated_at=$4 WHERE execution_id=$1 AND tenant_id=$2',
-      [executionId, effectiveTenant, updated, updated.updatedAt]
-    );
-    return updated;
-  }
-
-  async deleteById(executionId, { tenantId = null } = {}) {
-    const result = await this.db.query(
-      tenantId
-        ? 'DELETE FROM executions WHERE execution_id=$1 AND tenant_id=$2'
-        : 'DELETE FROM executions WHERE execution_id=$1',
-      tenantId ? [executionId, tenantId] : [executionId]
-    );
-    return result.rowCount === 1;
-  }
-
-  async count({ tenantId = null } = {}) {
-    const result = tenantId
-      ? await this.db.query('SELECT COUNT(*)::int AS count FROM executions WHERE tenant_id=$1', [tenantId])
-      : await this.db.query('SELECT COUNT(*)::int AS count FROM executions');
-    return Number(result.rows[0].count);
-  }
-}
-
-class PostgresEventRepository {
-  constructor(db) { this.db = db; }
-
-  normalize(event, tenantId) {
-    const effectiveTenant = tenantOrLocal(event.data?.tenantId || tenantId);
-    assertTenant(effectiveTenant, tenantId, 'Event');
-    return {
