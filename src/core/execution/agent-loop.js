@@ -1548,6 +1548,14 @@ class AgentLoop {
               ? null
               : step.input,
 
+          // Preserve a durably captured operation input across process restart.
+          // Normalization must not discard recovery-critical resolved input from
+          // the canonical persisted plan.
+          resolvedInput:
+            step.resolvedInput === undefined
+              ? null
+              : step.resolvedInput,
+
           dependsOn:
             step.dependsOn === undefined
               ? null
