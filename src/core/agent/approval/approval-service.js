@@ -69,6 +69,32 @@ class ApprovalService {
     return null;
   }
 
+  async listForExecution({ executionId, tenantId = this.tenantId } = {}) {
+    if (!executionId) return [];
+
+    const candidates = this.repository?.findByExecution
+      ? await this.repository.findByExecution({ executionId, tenantId })
+      : Array.from(this.approvals.values())
+        .filter(record => record.executionId === String(executionId))
+        .sort((a, b) => Date.parse(b.issuedAt || 0) - Date.parse(a.issuedAt || 0));
+
+    return candidates
+      .filter(record => record && (!tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId))
+      .filter(record => !record.used)
+      .filter(record => !record.expiresAt || this.clock() < Date.parse(record.expiresAt))
+      .map(record => ({
+        approvalId: record.approvalId,
+        executionId: record.executionId,
+        step: record.step,
+        tool: record.tool,
+        capability: record.capability,
+        scope: { ...(record.scope || {}) },
+        issuedAt: record.issuedAt,
+        expiresAt: record.expiresAt,
+        tenantId: record.tenantId
+      }));
+  }
+
   async consume(approvalId, tenantId = this.tenantId) {
     const stored = this.repository?.findById
       ? await this.repository.findById(approvalId, { tenantId })
