@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { performance } = require('perf_hooks');
 
 const AppError = require('../errors/AppError');
 
@@ -27,6 +28,9 @@ class AgentLoop {
     authorizationService = null,
     idempotencyRepository = null,
     maxToolInputChars = 50000,
+    maxSteps = 5,
+    maxExecutionMs = 300000,
+    clock = () => performance.now(),
     agentRegistry = null,
     agentInvocationService = null,
     capabilityGovernance = null,
@@ -48,7 +52,23 @@ class AgentLoop {
     }
     this.authorizationService =
       authorizationService;
+
+    if (!Number.isInteger(maxSteps) || maxSteps < 1) {
+      throw new TypeError('maxSteps must be a positive integer');
+    }
+
+    if (!Number.isInteger(maxExecutionMs) || maxExecutionMs < 1) {
+      throw new TypeError('maxExecutionMs must be a positive integer');
+    }
+
+    if (typeof clock !== 'function') {
+      throw new TypeError('clock must be a function');
+    }
+
     this.maxToolInputChars = maxToolInputChars;
+    this.maxSteps = maxSteps;
+    this.maxExecutionMs = maxExecutionMs;
+    this.clock = clock;
     this.agentRegistry = agentRegistry;
     this.agentInvocationService = agentInvocationService;
     this.capabilityGovernance = capabilityGovernance;
@@ -57,8 +77,6 @@ class AgentLoop {
 
     this.name = 'ORIENT_AGENT_LOOP';
     this.version = '0.8.2';
-
-    this.maxSteps = 5;
 
     this.resultReferenceResolver =
       new ResultReferenceResolver();
@@ -100,6 +118,8 @@ class AgentLoop {
 
     const planRevision =
       Number(runtimeContext.planRevision || 1);
+
+    const executionStartedAt = this.clock();
 
     if (!Number.isInteger(planRevision) || planRevision < 1) {
       throw new AppError(
@@ -176,6 +196,27 @@ class AgentLoop {
         );
 
         continue;
+      }
+
+      const elapsedMs = this.clock() - executionStartedAt;
+
+      if (elapsedMs >= this.maxExecutionMs) {
+        const error = new AppError(
+          'تم تجاوز الحد الأقصى لزمن تنفيذ المهمة',
+          408,
+          'MAX_EXECUTION_TIME_EXCEEDED'
+        );
+
+        context.record(
+          'execution.stopped',
+          {
+            reason: 'max_execution_time',
+            maxExecutionMs: this.maxExecutionMs,
+            elapsedMs
+          }
+        );
+
+        throw error;
       }
 
       if (stepNumber > this.maxSteps) {
