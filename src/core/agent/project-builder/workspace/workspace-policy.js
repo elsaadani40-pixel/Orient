@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 
 class WorkspacePolicy {
   constructor({
@@ -17,6 +18,8 @@ class WorkspacePolicy {
     }
 
     this.allowedRoot = path.resolve(allowedRoot);
+    fs.mkdirSync(this.allowedRoot, { recursive: true });
+    this.realAllowedRoot = fs.realpathSync.native(this.allowedRoot);
     this.allowRead = allowRead === true;
     this.allowWrite = allowWrite === true;
     this.allowCommands = allowCommands === true;
@@ -43,9 +46,22 @@ class WorkspacePolicy {
       resolved !== this.allowedRoot &&
       !resolved.startsWith(`${this.allowedRoot}${path.sep}`)
     ) {
-      throw new Error(
-        'Workspace path escapes allowed root'
-      );
+      throw new Error('Workspace path escapes allowed root');
+    }
+
+    let probe = resolved;
+    while (!fs.existsSync(probe)) {
+      const parent = path.dirname(probe);
+      if (parent === probe) break;
+      probe = parent;
+    }
+
+    const realProbe = fs.realpathSync.native(probe);
+    if (
+      realProbe !== this.realAllowedRoot &&
+      !realProbe.startsWith(`${this.realAllowedRoot}${path.sep}`)
+    ) {
+      throw new Error('Workspace path escapes allowed root');
     }
 
     return resolved;
