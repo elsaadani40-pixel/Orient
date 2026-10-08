@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
+const ApprovalService = require('../../../../../src/core/agent/approval/approval-service');
 
 test('ApprovalService lists only active approvals for the execution tenant', async () => {
   let now = Date.parse('2026-10-09T00:00:00.000Z');
