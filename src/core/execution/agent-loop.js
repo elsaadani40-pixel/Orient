@@ -1087,6 +1087,30 @@ class AgentLoop {
     stepResults,
     lastResult
   }) {
+    const exactStepReference =
+      typeof step.input === 'string'
+        ? step.input.trim().match(/^\$step\.(\d+)\.result$/)
+        : null;
+
+    if (exactStepReference) {
+      const referencedStep = Number(exactStepReference[1]);
+      const durableStep =
+        Array.isArray(context.steps)
+          ? context.steps.find(
+              item =>
+                item &&
+                Number(item.step) === referencedStep &&
+                item.status === 'completed' &&
+                item.result !== null &&
+                item.result !== undefined
+            )
+          : null;
+
+      if (durableStep) {
+        return durableStep.result;
+      }
+    }
+
     return this.resultReferenceResolver.resolve(
       step.input,
       {
