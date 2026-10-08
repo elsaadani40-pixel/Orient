@@ -83,7 +83,9 @@ class ExecutionRepository {
       events: Array.isArray(execution.events)
         ? [...execution.events]
         : [],
-      updatedAt: execution.updatedAt || now
+      updatedAt: execution.updatedAt || now,
+      cancellationRequested: Boolean(execution.cancellationRequested),
+      cancellationReason: execution.cancellationReason || null
     };
   }
 
@@ -262,6 +264,33 @@ class ExecutionRepository {
       executions[index] = updated;
       this.write(executions);
 
+      return updated;
+    });
+  }
+
+  requestCancellation(executionId, reason = 'Execution cancellation requested', { tenantId = null } = {}) {
+    if (!executionId) throw new TypeError('executionId is required');
+
+    return this.withLock(() => {
+      const executions = this.readRaw();
+      const index = executions.findIndex(item => item.executionId === executionId || item.id === executionId);
+      if (index === -1) return null;
+
+      const current = this.normalize(executions[index]);
+      if (tenantId && current.metadata?.tenantId !== tenantId && !(tenantId === 'local' && !current.metadata?.tenantId)) return null;
+
+      if (['completed', 'failed', 'cancelled'].includes(current.status)) {
+        return current;
+      }
+
+      const updated = this.normalize({
+        ...current,
+        cancellationRequested: true,
+        cancellationReason: String(reason || 'Execution cancellation requested'),
+        updatedAt: new Date().toISOString()
+      });
+      executions[index] = updated;
+      this.write(executions);
       return updated;
     });
   }
