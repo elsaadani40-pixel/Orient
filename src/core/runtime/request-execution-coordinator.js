@@ -261,6 +261,10 @@ class RequestExecutionCoordinator {
       context.metadata?.replans || Math.max(0, planRevision - 1)
     );
 
+    const approvalReference = durableApproval?.approvalId
+      ? { approvalId: durableApproval.approvalId }
+      : null;
+
     try {
       context.record('execution.resume.started', {
         checkpointId: checkpoint.checkpointId,
@@ -307,7 +311,7 @@ class RequestExecutionCoordinator {
         planRevision,
         replans,
         previousFingerprint: this.planFingerprint(plan),
-        approval: durableApproval,
+        approval: approvalReference,
         approvals,
         requestId: context.requestId,
         input: context.input,
