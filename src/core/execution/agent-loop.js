@@ -158,7 +158,11 @@ class AgentLoop {
     const completedSteps = new Set();
     const stepResults = [];
 
-    let lastResult = null;
+    // Durable resume may restore the latest completed tool result even when
+    // the in-memory step result list was not reconstructed before the crash.
+    // Use the persisted execution result as the recovery baseline; completed
+    // step restoration below remains authoritative when it has a newer result.
+    let lastResult = context.result ?? null;
     let lastEvaluation = null;
 
     this.restoreLoopState({
