@@ -134,7 +134,7 @@ test('application and HTTP layers cannot bypass the canonical runtime', () => {
     const source = fs.readFileSync(file, 'utf8');
     for (const pattern of forbiddenImports) {
       assert.equal(
-        pattern.test(source),
+        source.includes(pattern),
         false,
         `Canonical runtime bypass detected in ${path.relative(repositoryRoot, file)}: ${pattern}`
       );
