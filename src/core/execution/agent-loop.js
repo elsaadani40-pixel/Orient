@@ -1123,6 +1123,18 @@ class AgentLoop {
         return candidates[0];
       }
 
+      // The execution-level result is a durable projection of the most
+      // recently completed step. It is a valid dependency source when the
+      // checkpoint was written before the per-step projection was materialized.
+      if (
+        Number.isInteger(step.dependsOn) &&
+        step.dependsOn === referencedStep &&
+        lastResult !== null &&
+        lastResult !== undefined
+      ) {
+        return lastResult;
+      }
+
       if (Number.isInteger(step.dependsOn) && step.dependsOn === referencedStep) {
         throw new AppError(
           'النتيجة المستديمة للخطوة التابعة غير متاحة أثناء الاستئناف',
