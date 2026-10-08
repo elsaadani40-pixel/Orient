@@ -232,6 +232,20 @@ class ProjectBuilderAgent {
       });
 
     if (!validation.valid) {
+      const preconditionFailure =
+        validation.errors.find(
+          error => error.code === 'CHANGE_PRECONDITION_FAILED'
+        );
+
+      if (preconditionFailure) {
+        return {
+          status: 'failed',
+          plan,
+          changeSet,
+          error: preconditionFailure
+        };
+      }
+
       return {
         status: 'blocked',
         policy: {
