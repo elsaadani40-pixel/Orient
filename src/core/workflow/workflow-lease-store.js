@@ -84,6 +84,18 @@ class WorkflowLeaseStore {
     return { ...lease };
   }
 
+  assertCurrent(workflowId, leaseId, fencingToken) {
+    const lease = this.get(workflowId);
+    if (!lease || lease.leaseId !== leaseId || Number(lease.fencingToken) !== Number(fencingToken) || lease.expiresAt <= this.now()) {
+      throw new AppError('Workflow fencing token is no longer current', 409, 'WORKFLOW_FENCING_REJECTED');
+    }
+    if (this.repository?.assertCurrent && !this.repository.assertCurrent(workflowId, leaseId, fencingToken, this.now(), this.tenantId)) {
+      this.memory.delete(workflowId);
+      throw new AppError('Workflow fencing token is no longer current', 409, 'WORKFLOW_FENCING_REJECTED');
+    }
+    return true;
+  }
+
   release(workflowId, leaseId) {
     const lease = this.require(workflowId, leaseId);
     this.memory.delete(workflowId);
