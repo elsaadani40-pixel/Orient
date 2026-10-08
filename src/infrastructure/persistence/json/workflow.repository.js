@@ -58,10 +58,12 @@ class WorkflowRepository {
     if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
     const existing = this.findById(item.workflowId);
     if (existing && (existing.tenantId || 'local') !== effectiveTenantId) throw new Error('Workflow tenant collision');
-    const items = this.read().filter(existing => existing.workflowId !== item.workflowId);
-    items.push(item);
-    this.write(items);
-    return item;
+    return this.withLock(() => {
+      const items = this.read().filter(existing => existing.workflowId !== item.workflowId);
+      items.push(item);
+      this.write(items);
+      return item;
+    });
   }
 
   findById(workflowId, tenantId = null) {
@@ -75,12 +77,14 @@ class WorkflowRepository {
   }
 
   delete(workflowId, tenantId = null) {
-    const items = this.read();
-    const next = items.filter(
-      item => !(item.workflowId === workflowId && (!tenantId || item.tenantId === tenantId))
-    );
-    if (next.length !== items.length) this.write(next);
-    return next.length !== items.length;
+    return this.withLock(() => {
+      const items = this.read();
+      const next = items.filter(
+        item => !(item.workflowId === workflowId && (!tenantId || item.tenantId === tenantId))
+      );
+      if (next.length !== items.length) this.write(next);
+      return next.length !== items.length;
+    });
   }
 }
 
