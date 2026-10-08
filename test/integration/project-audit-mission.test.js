@@ -20,6 +20,7 @@ const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 function createRuntime(root, { secure = false, approvalService = null } = {}) {
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
   const registry = new AgentRegistry(); registerDefaultAgents(registry);
   const toolRegistry = new ToolRegistry(); for (const tool of createProjectTools({ projectRoot: root })) toolRegistry.register(tool);
   const orchestrator = new AgentOrchestrator({ planner: new PlannerService(), planValidator: new PlanValidator({ maxSteps: 5, toolRegistry }), replanner: new Replanner({ maxReplans: 1 }), decisionEngine: new DecisionEngine(), recoveryEngine: new RecoveryEngine() });
