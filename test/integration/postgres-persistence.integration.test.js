@@ -345,6 +345,8 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   await persistence.workflows.save(instance, tenantId);
   await persistence.tenantQuotas.ensureTenant(tenantId, policy);
 
+  await persistence.workers.register({ workerId: 'worker', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+
   const schedulerA = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
     leaseRepository: persistence.workflowLeases,
