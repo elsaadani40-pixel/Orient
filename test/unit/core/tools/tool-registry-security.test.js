@@ -49,7 +49,7 @@ test('tool registry accepts only an internal authorized execution context', asyn
 
   const result = await registry.execute('secure.test', { value: 2 }, context);
   assert.deepEqual(result, { input: { value: 2 }, executed: true });
-  assert.equal(Object.keys(context).length, 0);
+  assert.deepEqual(Object.keys(context), ['agentId', 'executionId', 'step', 'planRevision']);
 });
 
 
