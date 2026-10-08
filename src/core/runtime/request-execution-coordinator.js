@@ -115,10 +115,6 @@ class RequestExecutionCoordinator {
     try {
       context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
       const orchestration = await this.agentOrchestrator.plan(text, context);
-      const approvalReference = durableApproval?.approvalId
-        ? { approvalId: durableApproval.approvalId }
-        : null;
-
       const executionResult = await this.agentExecutionCoordinator.run({
         context,
         plan: orchestration.plan,
@@ -303,6 +299,10 @@ class RequestExecutionCoordinator {
           }
         }
       }
+
+      const approvalReference = durableApproval?.approvalId
+        ? { approvalId: durableApproval.approvalId }
+        : null;
 
       const executionResult = await this.agentExecutionCoordinator.run({
         context,
