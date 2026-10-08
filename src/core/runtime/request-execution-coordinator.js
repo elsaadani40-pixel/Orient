@@ -81,6 +81,12 @@ class RequestExecutionCoordinator {
       : 'tool_result';
   }
 
+  isCancellationRequested(executionId) {
+    if (!executionId || typeof this.persistence?.executions?.findById !== 'function') return false;
+    const execution = this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
+    return Boolean(execution?.cancellationRequested);
+  }
+
   async execute(input, { approval = null, approvals = {} } = {}) {
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
@@ -126,7 +132,9 @@ class RequestExecutionCoordinator {
         approvals,
         requestId,
         input: text,
-        tenantId: this.tenantId
+        tenantId: this.tenantId,
+        isCancellationRequested: () => this.isCancellationRequested(context.executionId),
+        cancellationReason: 'Execution cancellation requested'
       });
 
       const { plan, loopResult, replanningDecision } = executionResult;
@@ -146,6 +154,13 @@ class RequestExecutionCoordinator {
         execution: context.snapshot()
       };
     } catch (error) {
+      if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
+        if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
+        await this.persistenceCoordinator.persistEvents(context);
+        return { requestId, type: 'execution_cancelled', execution: context.snapshot() };
+      }
+
       if (error?.code === 'APPROVAL_REQUIRED') {
         context.record('approval.challenge.persisted', {
           executionId: context.executionId,
@@ -209,6 +224,10 @@ class RequestExecutionCoordinator {
     const durableExecution = typeof this.persistence?.executions?.findById === 'function'
       ? this.persistence.executions.findById(executionId, { tenantId: this.tenantId })
       : null;
+
+    if (durableExecution?.cancellationRequested && context.isActive()) {
+      context.requestCancellation(durableExecution.cancellationReason || 'Execution cancellation requested');
+    }
 
     if (durableExecution && ['completed', 'failed', 'cancelled'].includes(durableExecution.status)) {
       if (typeof this.persistence.checkpoints.save === 'function') {
@@ -317,7 +336,9 @@ class RequestExecutionCoordinator {
         input: context.input,
         tenantId: this.tenantId,
         agentId: context.metadata?.agentId || 'ORIENT_RUNTIME',
-        resumed: true
+        resumed: true,
+        isCancellationRequested: () => this.isCancellationRequested(context.executionId),
+        cancellationReason: context.cancellationReason || 'Execution cancellation requested'
       });
 
       const { loopResult, replanningDecision } = executionResult;
@@ -338,6 +359,16 @@ class RequestExecutionCoordinator {
         execution: context.snapshot()
       };
     } catch (error) {
+      if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
+        if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
+        await this.persistenceCoordinator.persistEvents(context);
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
+        return { resumed: false, reason: 'execution_cancelled', execution: context.snapshot() };
+      }
+
       if (context.status !== 'completed') {
         await this.recoveryCoordinator.fail({
           context,
