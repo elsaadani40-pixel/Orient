@@ -56,7 +56,7 @@ class AuthorizationService {
 
   async assertAuthorized(tool, context = {}) {
     const decision = await this.authorize(tool, context);
-    if (!decision.allowed) throw new AppError('الأداة "' + tool + '" غير مصرح بها: ' + decision.reason, 403, decision.reason === 'APPROVAL_REQUIRED' ? 'APPROVAL_REQUIRED' : decision.reason);
+    if (!decision.allowed) { const error = new AppError('الأداة "' + tool + '" غير مصرح بها: ' + decision.reason, 403, decision.reason === 'APPROVAL_REQUIRED' ? 'APPROVAL_REQUIRED' : decision.reason); error.capability = decision.capability || null; error.risk = decision.risk || null; throw error; }
     return decision;
   }
 }
