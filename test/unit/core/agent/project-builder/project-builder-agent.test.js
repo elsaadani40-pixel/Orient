@@ -2307,3 +2307,50 @@ test('project builder execution profile controls workspace command allowlist', a
     /not allowed/
   );
 });
+
+test('project builder blocks execution when write policy is disabled', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-builder-policy-'));
+  const agent = new ProjectBuilderAgent({ projectRoot: root });
+
+  const result = await agent.execute({
+    changeSet: {
+      changes: [{
+        action: 'create',
+        path: 'blocked.txt',
+        content: 'must not execute'
+      }]
+    }
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.policy.allowed, false);
+  assert.equal(result.policy.errors[0].code, 'WRITE_NOT_ALLOWED');
+  assert.equal(fsSync.existsSync(path.join(root, 'blocked.txt')), false);
+
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test('project builder validates the execution change set before modifying files', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-builder-validation-'));
+  const agent = new ProjectBuilderAgent({
+    projectRoot: root,
+    policy: { allowWrite: true }
+  });
+
+  const result = await agent.execute({
+    changeSet: {
+      changes: [{
+        action: 'update',
+        path: 'missing-update.txt',
+        content: 'must not execute'
+      }]
+    }
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.policy.allowed, false);
+  assert.equal(result.policy.errors[0].code, 'INVALID_PROPOSAL');
+  assert.equal(fsSync.existsSync(path.join(root, 'missing-update.txt')), false);
+
+  await fs.rm(root, { recursive: true, force: true });
+});
