@@ -69,7 +69,7 @@ test('rejects a symlinked parent before a write can reach outside the workspace'
       'linked/target.txt',
       'pwned'
     ),
-    /symbolic link and is denied/
+    /Workspace path escapes allowed root|symbolic link and is denied/
   );
 
   assert.equal(
