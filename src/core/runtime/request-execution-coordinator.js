@@ -122,7 +122,7 @@ class RequestExecutionCoordinator {
         planRevision: 1,
         replans: 0,
         previousFingerprint: this.planFingerprint(orchestration.plan),
-        approval: durableApproval,
+        approval,
         approvals:
         requestId,
         input: text,
@@ -307,7 +307,7 @@ class RequestExecutionCoordinator {
         planRevision,
         replans,
         previousFingerprint: this.planFingerprint(plan),
-        approval,
+        approval: durableApproval,
         approvals,
         requestId: context.requestId,
         input: context.input,
