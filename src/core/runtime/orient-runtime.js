@@ -229,6 +229,36 @@ class OrientRuntime {
     return this.requestExecutionCoordinator.resume(executionId, options);
   }
 
+  async getExecutionApprovals(executionId) {
+    if (!this.approvalService?.listForExecution) {
+      throw Object.assign(new Error('Approval service is required for approval status'), {
+        code: 'APPROVAL_SERVICE_REQUIRED'
+      });
+    }
+
+    if (!executionId) {
+      throw Object.assign(new Error('executionId is required'), {
+        code: 'EXECUTION_ID_REQUIRED'
+      });
+    }
+
+    if (this.persistence?.executions?.findById) {
+      const execution = this.persistence.executions.findById(executionId, {
+        tenantId: this.tenantId
+      });
+      if (!execution) {
+        throw Object.assign(new Error(`Execution not found: ${executionId}`), {
+          code: 'EXECUTION_NOT_FOUND'
+        });
+      }
+    }
+
+    return this.approvalService.listForExecution({
+      executionId,
+      tenantId: this.tenantId
+    });
+  }
+
   getExecutionStatus(executionId) {
     if (!this.persistence?.executions?.findById) {
       throw Object.assign(new Error('Durable execution storage is required for status'), {
