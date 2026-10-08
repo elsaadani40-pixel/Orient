@@ -40,7 +40,7 @@ class ToolRegistry {
     });
 
     this.tools.set(tool.name, registeredTool);
-    return registeredTool;
+    return tool;
   }
 
   get(name) {
