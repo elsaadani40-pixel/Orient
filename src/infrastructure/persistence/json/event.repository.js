@@ -99,6 +99,8 @@ class EventRepository {
       type: event.type,
       executionId: event.executionId || null,
       goalId: event.goalId || null,
+      aggregateId: event.aggregateId || event.workflowId || null,
+      sequence: event.sequence == null ? null : Number(event.sequence),
       timestamp: event.timestamp || new Date().toISOString(),
       data:
         event.data && typeof event.data === 'object'
@@ -165,6 +167,36 @@ class EventRepository {
   findByGoalId(goalId, { tenantId = null } = {}) {
     if (!goalId) return [];
     return this.findAll({ tenantId }).filter(event => event.goalId === goalId);
+  }
+
+  appendMissionEvent(event, { tenantId = null } = {}) {
+    if (!event?.aggregateId) throw new TypeError('aggregateId is required');
+    return this.withLock(() => {
+      const current = this.read();
+      const existing = current.find(item => item.id === event.id);
+      if (existing) return existing;
+      const normalized = this.normalize({ ...event });
+      if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
+      if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
+      const aggregateEvents = current.filter(item => item.aggregateId === normalized.aggregateId);
+      const expected = aggregateEvents.length ? Math.max(...aggregateEvents.map(item => Number(item.sequence) || 0)) + 1 : 1;
+      if (normalized.sequence != null && normalized.sequence !== expected) {
+        const error = new Error('Mission event sequence conflict');
+        error.code = 'MISSION_EVENT_SEQUENCE_CONFLICT';
+        throw error;
+      }
+      normalized.sequence = expected;
+      current.push(normalized);
+      this.write(current);
+      return normalized;
+    });
+  }
+
+  findByAggregateId(aggregateId, { tenantId = null } = {}) {
+    if (!aggregateId) return [];
+    return this.findAll({ tenantId })
+      .filter(event => event.aggregateId === aggregateId)
+      .sort((a, b) => Number(a.sequence) - Number(b.sequence));
   }
 
   findByType(type, { tenantId = null } = {}) {
