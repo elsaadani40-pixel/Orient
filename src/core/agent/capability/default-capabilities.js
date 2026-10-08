@@ -20,11 +20,9 @@ function registerDefaultCapabilities(registry) {
       risk: 'medium'
     }),
 
-    new Capability({
-      name: 'memory.delete',
-      description: 'حذف معلومات من ذاكرة ORIENT ONE',
-      risk: 'high'
-    })
+    new Capability({ name: 'memory.delete', description: 'حذف معلومات من ذاكرة ORIENT ONE', risk: 'high' }),
+
+    new Capability({ name: 'workspace.read', description: 'قراءة وتحليل مساحة عمل مسموحة دون تعديل', risk: 'low' })
   ];
 
   for (const capability of capabilities) {
