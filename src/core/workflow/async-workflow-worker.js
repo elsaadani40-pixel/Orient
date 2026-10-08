@@ -30,7 +30,7 @@ class AsyncWorkflowWorker{
      const heartbeatMs=Math.max(1000,Math.floor(this.scheduler.leaseDurationMs/3));let heartbeatError=null;
      const heartbeat=setInterval(()=>{this.scheduler.renewAsync(instance.workflowId,lease.leaseId).catch(error=>{heartbeatError=error;});},heartbeatMs);
      let result;
-     try{result=await this.executor({instance,step,lease});if(heartbeatError)throw heartbeatError;}finally{clearInterval(heartbeat);}
+     try{result=await this.executor({instance,step,lease});if(heartbeatError)throw heartbeatError;if(lease.fencingToken!==undefined&&typeof this.scheduler.assertCurrentAsync==='function')await this.scheduler.assertCurrentAsync(instance.workflowId,lease.leaseId,lease.fencingToken);}finally{clearInterval(heartbeat);}
      if(workerHeartbeatError){leaseLost=true;break;}
      if(instance.cancelRequested){const from=instance.state;instance.cancelStep(step.id);instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
      instance.markStepCompleted(step.id,result);this.emit('workflow.step.completed',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id});
