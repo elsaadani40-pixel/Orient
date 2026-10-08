@@ -31,6 +31,10 @@ class AgentService {
     return this.runtime.getExecutionStatus(executionId);
   }
 
+  getExecutionApprovals(executionId) {
+    return this.runtime.getExecutionApprovals(executionId);
+  }
+
   resumeExecution(executionId, options = {}) {
     return this.runtime.resume(executionId, options);
   }
