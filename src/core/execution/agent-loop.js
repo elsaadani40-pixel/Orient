@@ -165,6 +165,18 @@ class AgentLoop {
     let lastResult = context.result ?? null;
     let lastEvaluation = null;
 
+    // A durable checkpoint must remain resumable even when the execution-level
+    // result projection is unavailable. The completed step record is the
+    // canonical durable source for dependency results in that recovery window.
+    if (lastResult === null && Array.isArray(context.steps)) {
+      const persistedCompletedSteps = context.steps
+        .filter(step => step && step.status === 'completed' && step.result !== null && step.result !== undefined)
+        .sort((a, b) => Number(a.step) - Number(b.step));
+      if (persistedCompletedSteps.length > 0) {
+        lastResult = persistedCompletedSteps[persistedCompletedSteps.length - 1].result;
+      }
+    }
+
     this.restoreLoopState({
       steps,
       context,
