@@ -37,6 +37,7 @@ class AgentLoop {
     }
 
     this.toolRegistry = toolRegistry;
+    this.executionAuthorizer = createToolExecutionAuthorizer();
     this.authorizationService =
       authorizationService;
     this.maxToolInputChars = maxToolInputChars;
