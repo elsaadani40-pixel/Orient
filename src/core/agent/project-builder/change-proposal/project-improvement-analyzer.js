@@ -1,1 +1,33 @@
-class ProjectImprovementAnalyzer {\n  constructor({ workspace, discovery } = {}) {\n    if (!workspace) throw new TypeError('workspace is required');\n    if (!discovery) throw new TypeError('discovery is required');\n    this.workspace = workspace;\n    this.discovery = discovery;\n  }\n\n  async analyze() {\n    const discovered = await this.discovery.discover();\n    const findings = [];\n    const proposals = [];\n\n    const hasTestDirectory =\n      discovered.files.includes('test') ||\n      await this.workspace.exists('test');\n\n    if (discovered.manifest.files.includes('package.json')) {\n      const raw = await this.workspace.readText('package.json');\n      let manifest;\n\n      try {\n        manifest = JSON.parse(raw);\n      } catch {\n        findings.push({\n          id: 'invalid-package-json',\n          severity: 'critical',\n          type: 'manifest',\n          path: 'package.json',\n          message: 'package.json exists but is not valid JSON.'\n        });\n        return this.result({ discovered, findings, proposals });\n      }\n\n      const scripts =\n        manifest.scripts && typeof manifest.scripts === 'object'\n          ? manifest.scripts\n          : {};\n\n      if (hasTestDirectory && typeof scripts.test !== 'string') {\n        const updated = {\n          ...manifest,\n          scripts: { ...scripts, test: 'node --test' }\n        };\n\n        findings.push({\n          id: 'missing-test-script',\n          severity: 'warning',\n          type: 'quality',\n          path: 'package.json',\n          evidence: { testDirectoryDetected: true, testScriptPresent: false },\n          message: 'A test directory exists but package.json does not expose a test script.'\n        });\n\n        proposals.push({\n          action: 'update',\n          path: 'package.json',\n          content: JSON.stringify(updated, null, 2) + '\n',\n          reason: 'Expose the existing test suite through the standard package command.',\n          expectedEffect: 'npm test will invoke the Node test runner.',\n          risk: 'low'\n        });\n      }\n    }\n\n    return this.result({ discovered, findings, proposals });\n  }\n\n  result({ discovered, findings, proposals }) {\n    return {\n      status: findings.some(f => f.severity === 'critical')\n        ? 'blocked'\n        : findings.length > 0 ? 'actionable' : 'no-change-needed',\n      findings,\n      proposals,\n      execution: { allowed: false, performed: false },\n      evidence: {\n        projectRoot: discovered.projectRoot,\n        manifest: discovered.manifest.files,\n        detectedStack: discovered.detectedStack,\n        files: discovered.files\n      }\n    };\n  }\n}\n\nmodule.exports = ProjectImprovementAnalyzer;\n
+class ProjectImprovementAnalyzer {
+  constructor({ workspace, discovery } = {}) {
+    if (!workspace) throw new TypeError('workspace is required');
+    if (!discovery) throw new TypeError('discovery is required');
+    this.workspace = workspace;
+    this.discovery = discovery;
+  }
+  async analyze() {
+    const discovered = await this.discovery.discover();
+    const findings = [];
+    const proposals = [];
+    const hasTestDirectory = discovered.files.includes('test') || await this.workspace.exists('test');
+    if (discovered.manifest.files.includes('package.json')) {
+      const raw = await this.workspace.readText('package.json');
+      let manifest;
+      try { manifest = JSON.parse(raw); } catch {
+        findings.push({ id: 'invalid-package-json', severity: 'critical', type: 'manifest', path: 'package.json', message: 'package.json exists but is not valid JSON.' });
+        return this.result({ discovered, findings, proposals });
+      }
+      const scripts = manifest.scripts && typeof manifest.scripts === 'object' ? manifest.scripts : {};
+      if (hasTestDirectory && typeof scripts.test !== 'string') {
+        const updated = { ...manifest, scripts: { ...scripts, test: 'node --test' } };
+        findings.push({ id: 'missing-test-script', severity: 'warning', type: 'quality', path: 'package.json', evidence: { testDirectoryDetected: true, testScriptPresent: false }, message: 'A test directory exists but package.json does not expose a test script.' });
+        proposals.push({ action: 'update', path: 'package.json', content: JSON.stringify(updated, null, 2) + '\n', reason: 'Expose the existing test suite through the standard package command.', expectedEffect: 'npm test will invoke the Node test runner.', risk: 'low' });
+      }
+    }
+    return this.result({ discovered, findings, proposals });
+  }
+  result({ discovered, findings, proposals }) {
+    return { status: findings.some(f => f.severity === 'critical') ? 'blocked' : findings.length > 0 ? 'actionable' : 'no-change-needed', findings, proposals, execution: { allowed: false, performed: false }, evidence: { projectRoot: discovered.projectRoot, manifest: discovered.manifest.files, detectedStack: discovered.detectedStack, files: discovered.files } };
+  }
+}
+module.exports = ProjectImprovementAnalyzer;
