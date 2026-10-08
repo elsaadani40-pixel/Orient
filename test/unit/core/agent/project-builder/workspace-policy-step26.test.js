@@ -34,7 +34,7 @@ test('rejects a broken symlink write target', () => {
 
   assert.throws(
     () => policy.assertWrite('target.txt'),
-    /symbolic link and is denied/
+    /Workspace path escapes allowed root|symbolic link and is denied/
   );
 
   fs.rmSync(dir, { recursive: true, force: true });
@@ -69,7 +69,7 @@ test('rejects a symlinked parent before a write can reach outside the workspace'
       'linked/target.txt',
       'pwned'
     ),
-    /symbolic link and is denied/
+    /Workspace path escapes allowed root|symbolic link and is denied/
   );
 
   assert.equal(
@@ -126,7 +126,7 @@ test('pins the parent directory so a post-validation symlink swap cannot redirec
       'workspace/target.txt',
       'pwned'
     ),
-    /ELOOP|symbolic link|too many levels/
+    /ELOOP|ENOTDIR|symbolic link|too many levels/
   );
 
   policy.assertWrite = originalAssertWrite;

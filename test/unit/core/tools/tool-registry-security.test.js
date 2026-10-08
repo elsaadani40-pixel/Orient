@@ -85,3 +85,31 @@ test('tool registry rejects an authorized context when execution identity is tam
     error => error.code === 'TOOL_EXECUTION_AUTHORIZATION_REQUIRED'
   );
 });
+
+
+test('agent loop enables the registry authorization boundary when an authorization service is configured', async () => {
+  const registry = new ToolRegistry();
+  registry.register(tool());
+
+  const authorizationService = {
+    async assertAuthorized() {
+      return {
+        allowed: true,
+        capability: 'test.execute',
+        risk: 'low',
+        requiresApproval: false
+      };
+    }
+  };
+
+  const AgentLoop = require('../../../../src/core/execution/agent-loop');
+  new AgentLoop({
+    toolRegistry: registry,
+    authorizationService
+  });
+
+  await assert.rejects(
+    () => registry.execute('secure.test', { value: 4 }, {}),
+    error => error.code === 'TOOL_EXECUTION_AUTHORIZATION_REQUIRED'
+  );
+});

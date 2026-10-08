@@ -38,6 +38,14 @@ class AgentLoop {
 
     this.toolRegistry = toolRegistry;
     this.executionAuthorizer = createToolExecutionAuthorizer();
+
+    // Once an AuthorizationService is present, every tool execution must carry
+    // the non-forgeable authorization binding. Recovery/reconciliation paths are
+    // deliberately subject to the same registry boundary and cannot fall back to
+    // an unauthenticated direct tool call.
+    if (authorizationService && typeof this.toolRegistry.requireAuthorization === 'function') {
+      this.toolRegistry.requireAuthorization();
+    }
     this.authorizationService =
       authorizationService;
     this.maxToolInputChars = maxToolInputChars;
