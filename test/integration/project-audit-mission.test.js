@@ -39,6 +39,9 @@ test('project audit mission completes through canonical runtime without write or
   const result = await runtime.execute('افحص المشروع');
   assert.equal(result.type, 'tool_result');
   assert.equal(result.result.status, 'healthy');
+  assert.equal(result.result.score, 100);
+  assert.equal(result.result.recommendation, 'safe-to-proceed');
+  assert.equal(result.result.definitionOfDone.satisfied, true);
   assert.equal(result.result.audit.modificationAllowed, false);
   assert.equal(result.result.audit.commandExecutionAllowed, false);
   assert.equal(result.result.projectRoot, root);
