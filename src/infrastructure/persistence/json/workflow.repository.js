@@ -4,19 +4,27 @@ const crypto = require('crypto');
 
 class WorkflowRepository {
   ensureStorage() {
-    try {
-      const fd = fs.openSync(this.filePath, 'wx', 0o600);
+    return this.withLock(() => {
+      if (fs.existsSync(this.filePath)) return;
+
+      const temp = this.filePath + '.init.' + process.pid + '.' + crypto.randomUUID();
+      let fd = null;
       try {
+        fd = fs.openSync(temp, 'wx', 0o600);
         fs.writeFileSync(fd, '[]\n', 'utf8');
         fs.fsyncSync(fd);
-      } finally {
         fs.closeSync(fd);
-      }
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-    }
-  }
+        fd = null;
+        fs.renameSync(temp, this.filePath);
 
+        const directoryFd = fs.openSync(path.dirname(this.filePath), 'r');
+        try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+      } finally {
+        if (fd !== null) fs.closeSync(fd);
+        try { if (fs.existsSync(temp)) fs.unlinkSync(temp); } catch {}
+      }
+    });
+  }
   constructor(filePath) {
     if (!filePath) throw new TypeError('filePath is required');
     this.filePath = path.resolve(filePath);
