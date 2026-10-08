@@ -59,3 +59,45 @@ test('high risk capability requires matching single use approval', async () => {
   assert.equal(replay.allowed, false);
   assert.equal(replay.reason, 'APPROVAL_ALREADY_USED');
 });
+
+
+test('authorization cannot mint tool execution authority without the agent boundary', async () => {
+  const CapabilityRegistry = require('../../../../src/core/agent/capability/capability-registry');
+  const Capability = require('../../../../src/core/agent/capability/capability');
+  const CapabilityGovernance = require('../../../../src/core/agent/capability/capability-governance');
+  const AgentRegistry = require('../../../../src/core/agent/boundary/agent-registry');
+  const { AgentDefinition } = require('../../../../src/core/agent/boundary/agent-definition');
+
+  const registry = new CapabilityRegistry();
+  registry.register(new Capability({ name: 'external.write', description: 'write', risk: 'high' }));
+
+  const mapper = new CapabilityMapper({ mappings: { 'danger.write': 'external.write' } });
+  const agents = new AgentRegistry();
+  agents.register(new AgentDefinition({ id: 'safe', capabilities: ['tool:danger.write'] }));
+  agents.register(new AgentDefinition({ id: 'reader', capabilities: [] }));
+
+  const governance = new CapabilityGovernance({
+    capabilityMapper: mapper,
+    capabilityRegistry: registry,
+    agentRegistry: agents
+  });
+
+  const policy = new PolicyEngine({
+    capabilities: ['external.write'],
+    riskByCapability: { 'external.write': 'high' }
+  });
+
+  const auth = new AuthorizationService({
+    capabilityMapper: mapper,
+    capabilityPolicy: policy,
+    capabilityGovernance: governance
+  });
+
+  const denied = await auth.authorize('danger.write', { agentId: 'reader' });
+  assert.equal(denied.allowed, false);
+  assert.equal(denied.reason, 'AGENT_TOOL_CAPABILITY_FORBIDDEN');
+
+  const missingIdentity = await auth.authorize('danger.write');
+  assert.equal(missingIdentity.allowed, false);
+  assert.equal(missingIdentity.reason, 'AGENT_ID_REQUIRED');
+});

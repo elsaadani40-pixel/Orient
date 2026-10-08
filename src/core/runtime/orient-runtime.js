@@ -79,6 +79,10 @@ class OrientRuntime {
       this.authorizationService.approvalService = this.approvalService;
     }
 
+    if (this.authorizationService && capabilityGovernance) {
+      this.authorizationService.capabilityGovernance = capabilityGovernance;
+    }
+
     this.persistence =
       persistence;
 

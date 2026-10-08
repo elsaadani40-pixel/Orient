@@ -1,16 +1,47 @@
 const AppError = require('../../errors/AppError');
 
 class AuthorizationService {
-  constructor({ capabilityMapper, capabilityPolicy, approvalService = null } = {}) {
+  constructor({ capabilityMapper, capabilityPolicy, approvalService = null, capabilityGovernance = null } = {}) {
     if (!capabilityMapper) throw new TypeError('capabilityMapper is required');
     if (!capabilityPolicy) throw new TypeError('capabilityPolicy is required');
     this.capabilityMapper = capabilityMapper;
     this.capabilityPolicy = capabilityPolicy;
     this.approvalService = approvalService;
+    this.capabilityGovernance = capabilityGovernance;
   }
 
-  async authorize(tool, { executionId = null, step = null, planRevision = 1, approval = null, scope = {}, tenantId = null } = {}) {
+  async authorize(tool, { executionId = null, step = null, planRevision = 1, approval = null, scope = {}, tenantId = null, agentId = null } = {}) {
     if (!tool || typeof tool !== 'string') throw new AppError('اسم الأداة مطلوب للتفويض', 500, 'AUTHORIZATION_TOOL_REQUIRED');
+    if (this.capabilityGovernance) {
+      if (!agentId) {
+        return {
+          allowed: false,
+          tool,
+          capability: null,
+          requiresApproval: false,
+          reason: 'AGENT_ID_REQUIRED'
+        };
+      }
+
+      try {
+        const governed = this.capabilityGovernance.authorizeTool({
+          agentId,
+          tool
+        });
+        if (governed.capability) {
+          // Governance is authoritative for the agent/tool boundary.
+        }
+      } catch (error) {
+        return {
+          allowed: false,
+          tool,
+          capability: this.capabilityMapper.get(tool),
+          requiresApproval: false,
+          reason: error.code || 'AGENT_TOOL_CAPABILITY_FORBIDDEN'
+        };
+      }
+    }
+
     const capability = this.capabilityMapper.get(tool);
     if (!capability) return { allowed: false, tool, capability: null, reason: 'لا توجد Capability مرتبطة بالأداة' };
     const decision = this.capabilityPolicy.authorize(capability);
