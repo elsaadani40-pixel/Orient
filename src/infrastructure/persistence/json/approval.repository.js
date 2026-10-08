@@ -107,6 +107,18 @@ class ApprovalRepository {
     });
   }
 
+  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null } = {}) {
+    if (!executionId) return [];
+    return Object.values(this.read())
+      .filter(record => record && record.executionId === String(executionId))
+      .filter(record => tenantId ? (record.tenantId === tenantId || record.metadata?.tenantId === tenantId) : true)
+      .filter(record => step === null || Number(record.step) === Number(step))
+      .filter(record => tool === null || record.tool === tool)
+      .filter(record => planRevision === null || Number(record.planRevision || 1) === Number(planRevision))
+      .sort((a, b) => Date.parse(b.issuedAt || 0) - Date.parse(a.issuedAt || 0))
+      .map(record => JSON.parse(JSON.stringify(record)));
+  }
+
   async findById(approvalId, { tenantId = null } = {}) {
     if (!approvalId) return null;
     const record = this.read()[approvalId] || null;
