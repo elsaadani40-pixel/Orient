@@ -251,8 +251,8 @@ class ProjectBuilderAgent {
         policy: {
           allowed: false,
           errors: validation.errors.map(error => ({
-            code: 'INVALID_PROPOSAL',
-            ...error
+            ...error,
+            code: 'INVALID_PROPOSAL'
           }))
         },
         plan,
