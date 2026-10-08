@@ -472,6 +472,21 @@ class AgentLoop {
               [String(stepNumber)]: resolvedInput
             }
           };
+
+          // Persist the exact resolved operation input on the canonical plan
+          // stored in ExecutionContext. The normalized `step` object is a
+          // runtime projection and mutating it alone is not durable.
+          if (
+            context.plan &&
+            Array.isArray(context.plan.steps) &&
+            context.plan.steps[stepNumber - 1]
+          ) {
+            context.plan.steps[stepNumber - 1] = {
+              ...context.plan.steps[stepNumber - 1],
+              resolvedInput
+            };
+          }
+
           error.executionContext = {
               executionId: context.executionId,
               step: stepNumber,
