@@ -16,6 +16,7 @@ permissions:
   contents: read
 
 jobs:
+  # Mission 8 integration proofs are part of the strict gate.
   unit:
     name: Unit + Architecture Tests (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
