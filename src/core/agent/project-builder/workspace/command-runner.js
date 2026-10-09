@@ -137,7 +137,12 @@ class CommandRunner {
           ? this.isolator.inspect(child)
           : Promise.resolve(null);
 
-        Promise.resolve(inspect).catch(() => null).then(executionStatus => {
+        Promise.resolve(inspect).catch(() => null).then(async executionStatus => {
+          if (settled) return;
+
+          if (typeof this.isolator.cleanup === 'function') {
+            await Promise.resolve(this.isolator.cleanup(child)).catch(() => false);
+          }
           if (settled) return;
           settled = true;
 
@@ -150,6 +155,8 @@ class CommandRunner {
             failureCode = 'CPU_LIMIT_EXCEEDED';
           } else if (executionStatus?.result === 'resources') {
             failureCode = 'RESOURCE_LIMITS_UNAVAILABLE';
+          } else if (signal === 'SIGKILL' || Number(code) === 137) {
+            failureCode = 'RESOURCE_LIMIT_EXCEEDED_OR_KILLED';
           }
 
           resolve({
