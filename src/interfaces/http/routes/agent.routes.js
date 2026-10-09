@@ -34,7 +34,7 @@ function createAgentRoutes(agentService) {
           executionId: String(event?.executionId || executionId).slice(0, 200),
           goalId: event?.goalId ? String(event.goalId).slice(0, 200) : null,
           timestamp: typeof event?.timestamp === 'string' ? event.timestamp.slice(0, 40) : null,
-          sequence: Number.isFinite(Number(event?.sequence)) ? Number(event.sequence) : null,
+          sequence: event?.sequence != null && Number.isFinite(Number(event.sequence)) ? Number(event.sequence) : null,
           details: Object.fromEntries(['step', 'stepId', 'tool', 'status', 'errorCode'].map(key => [key, pick(key)]).filter(([, value]) => value !== undefined))
         };
       };
