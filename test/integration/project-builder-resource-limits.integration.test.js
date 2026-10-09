@@ -127,7 +127,7 @@ test('cgroup task ceiling blocks process-fork exhaustion', async t => {
   const result = await runLimitedCommand(t, {
     timeoutMs: 5000,
     resourceLimits: { maxProcesses: 16 },
-    script: 'const { spawn } = require("node:child_process");\\nconst children = [];\\nlet hit = false;\\nfor (let i = 0; i < 80; i += 1) {\\n  const child = spawn("/bin/sleep", ["5"]);\\n  children.push(child);\\n  child.on("error", error => {\\n    if (error.code === "EAGAIN" && !hit) {\\n      hit = true;\\n      console.error("PROCESS_LIMIT_EAGAIN");\\n      for (const running of children) { try { running.kill("SIGKILL"); } catch {} }\\n      setTimeout(() => process.exit(77), 50);\\n    }\\n  });\\n}\\nsetTimeout(() => {\\n  for (const running of children) { try { running.kill("SIGKILL"); } catch {} }\\n  if (!hit) process.exit(0);\\n}, 1000);'
+    script: 'const { spawn } = require("node:child_process");\nconst children = [];\nlet hit = false;\nfor (let i = 0; i < 80; i += 1) {\n  const child = spawn("/bin/sleep", ["5"]);\n  children.push(child);\n  child.on("error", error => {\n    if (error.code === "EAGAIN" && !hit) {\n      hit = true;\n      console.error("PROCESS_LIMIT_EAGAIN");\n      for (const running of children) { try { running.kill("SIGKILL"); } catch {} }\n      setTimeout(() => process.exit(77), 50);\n    }\n  });\n}\nsetTimeout(() => {\n  for (const running of children) { try { running.kill("SIGKILL"); } catch {} }\n  if (!hit) process.exit(0);\n}, 1000);'
   });
   if (!result) return;
   assert.equal(result.failureCode, 'PROCESS_LIMIT_EXCEEDED', JSON.stringify(result));
@@ -137,7 +137,7 @@ test('per-process file descriptor limit blocks descriptor exhaustion', async t =
   const result = await runLimitedCommand(t, {
     timeoutMs: 5000,
     resourceLimits: { maxOpenFiles: 32 },
-    script: 'const fs = require("node:fs");\\nconst descriptors = [];\\nlet failure = null;\\ntry {\\n  for (let i = 0; i < 200; i += 1) descriptors.push(fs.openSync("/dev/null", "r"));\\n} catch (error) {\\n  failure = error;\\n  console.error(error.code);\\n} finally {\\n  for (const descriptor of descriptors) { try { fs.closeSync(descriptor); } catch {} }\\n}\\nprocess.exitCode = failure && failure.code === "EMFILE" ? 77 : 0;'
+    script: 'const fs = require("node:fs");\nconst descriptors = [];\nlet failure = null;\ntry {\n  for (let i = 0; i < 200; i += 1) descriptors.push(fs.openSync("/dev/null", "r"));\n} catch (error) {\n  failure = error;\n  console.error(error.code);\n} finally {\n  for (const descriptor of descriptors) { try { fs.closeSync(descriptor); } catch {} }\n}\nprocess.exitCode = failure && failure.code === "EMFILE" ? 77 : 0;'
   });
   if (!result) return;
   assert.equal(result.failureCode, 'OPEN_FILE_LIMIT_EXCEEDED', JSON.stringify(result));
@@ -147,7 +147,7 @@ test('per-process file-size limit blocks oversized regular-file writes', async t
   const result = await runLimitedCommand(t, {
     timeoutMs: 5000,
     resourceLimits: { maxFileSizeBytes: 1024 * 1024 },
-    script: 'const fs = require("node:fs");\\nconst descriptor = fs.openSync("oversized.bin", "w");\\nconst chunk = Buffer.alloc(65536, 0x41);\\ntry {\\n  while (true) fs.writeSync(descriptor, chunk);\\n} catch (error) {\\n  console.error(error.code);\\n  process.exitCode = error.code === "EFBIG" ? 77 : 78;\\n} finally {\\n  try { fs.closeSync(descriptor); } catch {}\\n}'
+    script: 'const fs = require("node:fs");\nconst descriptor = fs.openSync("oversized.bin", "w");\nconst chunk = Buffer.alloc(65536, 0x41);\ntry {\n  while (true) fs.writeSync(descriptor, chunk);\n} catch (error) {\n  console.error(error.code);\n  process.exitCode = error.code === "EFBIG" ? 77 : 78;\n} finally {\n  try { fs.closeSync(descriptor); } catch {}\n}'
   });
   if (!result) return;
   assert.notEqual(result.code, 0, JSON.stringify(result));
