@@ -1,0 +1,120 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
+const BubblewrapIsolator = require('../../../../../src/core/agent/project-builder/workspace/bubblewrap-isolator');
+
+test('resource supervisor fails closed when cgroup v2 lacks a required controller', () => {
+  let spawned = false;
+  const isolator = new BubblewrapIsolator({
+    platform: 'linux',
+    readFileSync(file) {
+      if (file === '/proc/self/cgroup') return '0::/user.slice/user-1000.slice/user@1000.service\n';
+      if (file === '/sys/fs/cgroup/cgroup.controllers') return 'cpu memory';
+      throw new Error('unexpected file');
+    },
+    spawnProcess() {
+      spawned = true;
+      throw new Error('must not start without pids controller');
+    }
+  });
+
+  assert.throws(() => isolator.spawn({
+    executable: '/usr/bin/node',
+    args: ['-e', 'process.exit(0)'],
+    workspaceRoot: '/tmp',
+    cwd: '/tmp',
+    timeoutMs: 1000
+  }), error => error.code === 'RESOURCE_LIMITS_UNAVAILABLE');
+  assert.equal(spawned, false);
+});
+
+test('resource supervisor fails closed when the host is not using unified cgroup v2', () => {
+  const isolator = new BubblewrapIsolator({
+    platform: 'linux',
+    readFileSync(file) {
+      if (file === '/proc/self/cgroup') return '2:cpu:/user.slice\n';
+      if (file === '/sys/fs/cgroup/cgroup.controllers') return 'cpu memory pids';
+      throw new Error('unexpected file');
+    },
+    spawnProcess() {
+      throw new Error('must not spawn without unified cgroup v2');
+    }
+  });
+
+  assert.throws(() => isolator.spawn({
+    executable: '/usr/bin/node',
+    args: [],
+    workspaceRoot: '/tmp',
+    cwd: '/tmp',
+    timeoutMs: 1000
+  }), error => error.code === 'RESOURCE_LIMITS_UNAVAILABLE');
+});
+
+test('resource supervisor termination serializes kill, stop, and failed-unit cleanup', async () => {
+  const calls = [];
+  const isolator = new BubblewrapIsolator({
+    platform: 'linux',
+    spawnProcess(command, args) {
+      calls.push({ command, args });
+      const child = new EventEmitter();
+      child.kill = () => true;
+      setImmediate(() => child.emit('close', 0));
+      return child;
+    }
+  });
+  const child = {
+    orientResourceUnitName: 'orient-pb-01234567-89ab-cdef-0123-456789abcdef.service',
+    orientSystemdEnvironment: {},
+    kill: () => true
+  };
+
+  await isolator.terminate(child);
+  assert.deepEqual(calls.map(call => call.args[1]), ['kill', 'stop', 'reset-failed']);
+});
+
+test('resource supervisor parses named systemd properties even when Result is empty for an active unit', async () => {
+  const output = [
+    'Result=',
+    'ActiveState=active',
+    'ExecMainCode=0',
+    'ExecMainStatus=0',
+    'MemoryMax=134217728',
+    'CPUQuotaPerSecUSec=750000',
+    'TasksMax=24',
+    'LimitNOFILE=128',
+    'LimitFSIZE=1048576',
+    'RuntimeMaxUSec=2000000000',
+    'LimitCPU=2:3',
+    'MemorySwapMax=0',
+    ''
+  ].join('\n');
+
+  const isolator = new BubblewrapIsolator({
+    platform: 'linux',
+    spawnProcess(command, args) {
+      assert.equal(command, 'systemctl');
+      assert.ok(args.includes('--property=MemoryMax'));
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      setImmediate(() => {
+        child.stdout.write(output);
+        child.stdout.end();
+        child.emit('close', 0);
+      });
+      return child;
+    }
+  });
+  const child = {
+    orientResourceUnitName: 'orient-pb-01234567-89ab-cdef-0123-456789abcdef.service',
+    orientSystemdEnvironment: {}
+  };
+
+  const status = await isolator.inspect(child);
+  assert.equal(status.result, 'running');
+  assert.equal(status.enforcedProperties.memoryMax, '134217728');
+  assert.equal(status.enforcedProperties.tasksMax, '24');
+  assert.equal(status.enforcedProperties.memorySwapMax, '0');
+});
