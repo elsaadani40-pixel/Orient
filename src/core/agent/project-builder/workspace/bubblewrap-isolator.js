@@ -119,7 +119,7 @@ class BubblewrapIsolator {
       cgroupMembership = fs.readFileSync('/proc/self/cgroup', 'utf8');
       controllers = fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8')
         .trim()
-        .split(/\\s+/)
+        .split(/\s+/)
         .filter(Boolean);
     } catch (error) {
       const failure = new Error('Required cgroup v2 resource enforcement is unavailable; refusing command execution');
@@ -169,6 +169,8 @@ class BubblewrapIsolator {
     if (this.platform !== 'linux') {
       throw new Error('OS-isolated command execution is supported only on Linux; refusing unsafe fallback');
     }
+
+    this._assertCgroupV2();
 
     const bwrap = process.env.ORIENT_BWRAP_PATH || 'bwrap';
     const sandboxArgs = this.buildArgs({
@@ -264,6 +266,12 @@ class BubblewrapIsolator {
           '--property=Result',
           '--property=ExecMainCode',
           '--property=ExecMainStatus',
+          '--property=MemoryMax',
+          '--property=CPUQuotaPerSecUSec',
+          '--property=TasksMax',
+          '--property=LimitNOFILE',
+          '--property=LimitFSIZE',
+          '--property=RuntimeMaxUSec',
           '--value',
           unitName
         ], {
@@ -289,11 +297,29 @@ class BubblewrapIsolator {
           resolve(null);
           return;
         }
-        const [result, mainCode, mainStatus] = output.trim().split(/\r?\n/);
+        const [
+          result,
+          mainCode,
+          mainStatus,
+          memoryMax,
+          cpuQuotaPerSecUSec,
+          tasksMax,
+          limitNoFile,
+          limitFSize,
+          runtimeMaxUSec
+        ] = output.trim().split(/\r?\n/);
         resolve({
           result: result || 'unknown',
           mainCode: mainCode || 'unknown',
-          mainStatus: mainStatus || 'unknown'
+          mainStatus: mainStatus || 'unknown',
+          enforcedProperties: {
+            memoryMax: memoryMax || 'unknown',
+            cpuQuotaPerSecUSec: cpuQuotaPerSecUSec || 'unknown',
+            tasksMax: tasksMax || 'unknown',
+            limitNoFile: limitNoFile || 'unknown',
+            limitFSize: limitFSize || 'unknown',
+            runtimeMaxUSec: runtimeMaxUSec || 'unknown'
+          }
         });
       });
     });
