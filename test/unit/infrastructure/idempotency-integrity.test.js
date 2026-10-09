@@ -45,3 +45,32 @@ test('legacy unscoped idempotency records remain recoverable only through local 
   assert.equal(s.repo.findByKey(reservation.key, { tenantId: 'local' }).result.ok, true);
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
+
+test('terminal updates accept the canonical tenant string used by AgentLoop', () => {
+  const s = make();
+  const reservation = s.repo.begin({
+    executionId: 'canonical-string-tenant',
+    step: 1,
+    tool: 'external.write',
+    tenantId: 'tenant-a'
+  });
+  assert.equal(s.repo.complete(reservation.key, { ok: true }, 'tenant-a').status, 'completed');
+  assert.equal(s.repo.findByKey(reservation.key, 'tenant-a').status, 'completed');
+  assert.equal(s.repo.delete(reservation.key, 'tenant-a'), true);
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
+
+test('lock held by a live process is not reclaimed based on directory age', () => {
+  const s = make();
+  fs.mkdirSync(s.repo.lockPath);
+  fs.writeFileSync(path.join(s.repo.lockPath, 'owner.json'), JSON.stringify({
+    token: 'live-owner',
+    pid: process.pid,
+    hostname: require('os').hostname(),
+    acquiredAt: new Date(0).toISOString()
+  }));
+  const deadline = Date.now() + 40;
+  while (Date.now() < deadline) {}
+  assert.throws(() => s.repo.withLock(() => true), error => error.code === 'IDEMPOTENCY_STORAGE_LOCK_TIMEOUT');
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
