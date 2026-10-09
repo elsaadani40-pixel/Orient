@@ -89,3 +89,29 @@ test('memory repository recovers a lock whose local owner process is dead', () =
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('memory lock publishes ownership metadata atomically and preserves operation errors', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-lock-publish-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file);
+  const expected = new Error('protected operation failed');
+
+  try {
+    assert.throws(() => repo.withLock(() => {
+      const owner = JSON.parse(fs.readFileSync(path.join(repo.lockPath, 'owner.json'), 'utf8'));
+      assert.equal(owner.pid, process.pid);
+      assert.equal(typeof owner.token, 'string');
+      assert.ok(owner.token.length > 0);
+      throw expected;
+    }), error => error === expected);
+
+    assert.equal(fs.existsSync(repo.lockPath), false);
+    assert.deepEqual(
+      fs.readdirSync(dir).filter(name => name.startsWith('memories.json.lock.candidate.')),
+      []
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
