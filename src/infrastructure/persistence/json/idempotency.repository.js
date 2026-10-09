@@ -86,10 +86,19 @@ class IdempotencyRepository {
     return operationId || executionId + ':plan-' + planRevision + ':step-' + step + ':' + tool;
   }
 
+  tenantMatches(record, tenantId = null) {
+    const recordTenantId = record?.tenantId || null;
+    const requestedTenantId = tenantId || null;
+    // Before canonical local-tenant persistence, local operations were stored
+    // without tenantId. Keep those records recoverable only through local scope.
+    return recordTenantId === requestedTenantId ||
+      (requestedTenantId === 'local' && recordTenantId === null);
+  }
+
   findByKey(key, { tenantId = null } = {}) {
     if (!key) return null;
     const record = this.read()[key] || null;
-    return record && (record.tenantId || null) === (tenantId || null)
+    return record && this.tenantMatches(record, tenantId)
       ? record : null;
   }
 
@@ -103,7 +112,7 @@ class IdempotencyRepository {
     return this.withLock(() => {
       const records = this.read();
       if (records[key]) {
-        if ((records[key].tenantId || null) !== (tenantId || null)) {
+        if (!this.tenantMatches(records[key], tenantId)) {
           const error = new Error('Idempotency tenant mismatch');
           error.code = 'IDEMPOTENCY_TENANT_MISMATCH';
           error.status = 403;
@@ -127,7 +136,7 @@ class IdempotencyRepository {
     return this.withLock(() => {
       const records = this.read();
       const record = records[key];
-      if (!record || (record.tenantId || null) !== (tenantId || null)) return null;
+      if (!record || !this.tenantMatches(record, tenantId)) return null;
       if (record.status === 'completed') {
         if (JSON.stringify(record.result) !== JSON.stringify(result ?? null)) {
           const error = new Error('Idempotency record is already completed with a different result');
@@ -156,7 +165,7 @@ class IdempotencyRepository {
     return this.withLock(() => {
       const records = this.read();
       const record = records[key];
-      if (!record || (record.tenantId || null) !== (tenantId || null)) return null;
+      if (!record || !this.tenantMatches(record, tenantId)) return null;
       if (record.status === 'failed') return record;
       if (record.status === 'completed') {
         const error = new Error('Completed idempotency record cannot be failed');
@@ -185,7 +194,7 @@ class IdempotencyRepository {
     if (!key) return false;
     return this.withLock(() => {
       const records = this.read();
-      if (!records[key] || (records[key].tenantId || null) !== (tenantId || null)) return false;
+      if (!records[key] || !this.tenantMatches(records[key], tenantId)) return false;
       delete records[key];
       this.write(records);
       return true;

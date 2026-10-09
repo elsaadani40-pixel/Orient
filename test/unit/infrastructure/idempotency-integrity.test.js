@@ -30,3 +30,18 @@ test('tenant-owned idempotency records cannot be read or mutated without the mat
   assert.equal(s.repo.findByKey(reservation.key, { tenantId: 'tenant-a' }).status, 'running');
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
+
+test('legacy unscoped idempotency records remain recoverable only through local tenant scope', () => {
+  const s = make();
+  const reservation = s.repo.begin({
+    executionId: 'legacy-local',
+    step: 1,
+    tool: 'external.write',
+    operationId: 'legacy-local-operation'
+  });
+
+  assert.equal(s.repo.findByKey(reservation.key, { tenantId: 'local' }).status, 'running');
+  assert.equal(s.repo.complete(reservation.key, { ok: true }, { tenantId: 'local' }).status, 'completed');
+  assert.equal(s.repo.findByKey(reservation.key, { tenantId: 'local' }).result.ok, true);
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
