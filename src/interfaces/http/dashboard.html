@@ -265,7 +265,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
      const cancel = document.createElement('button');
      cancel.className = 'btn secondary'; cancel.type = 'button'; cancel.textContent = 'طلب إلغاء التنفيذ';
      cancel.addEventListener('click', async () => {
-      const accepted = window.confirm('سيتم تسجيل طلب إلغاء دائم لهذا التنفيذ. هذا طلب إلغاء تعاوني، وليس قتلًا فوريًا للعملية.\\n\\nExecution ID: ' + item.executionId + '\\nStatus: ' + item.status + '\\n\\nهل تريد المتابعة؟');
+      const accepted = window.confirm('سيتم تسجيل طلب إلغاء دائم لهذا التنفيذ. هذا طلب إلغاء تعاوني، وليس قتلًا فوريًا للعملية.\n\nExecution ID: ' + item.executionId + '\nStatus: ' + item.status + '\n\nهل تريد المتابعة؟');
       if (!accepted) return;
       cancel.disabled = true;
       state.textContent = 'جارٍ إرسال طلب الإلغاء إلى الـ Runtime…';
