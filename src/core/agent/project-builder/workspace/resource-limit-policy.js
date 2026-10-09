@@ -63,6 +63,8 @@ function buildSystemdRunArgs({ unitName, timeoutMs, limits, executable, args = [
     '--user',
     '--quiet',
     '--wait',
+    // Unload the transient unit after it exits; reset-failed alone does not collect it.
+    '--collect',
     '--pipe',
     '--service-type=exec',
     `--unit=${unitName}`,
