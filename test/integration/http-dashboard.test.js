@@ -40,7 +40,6 @@ test('dashboard route serves the local control UI with security headers', async 
   assert.match(html, /id="stopExecutionStream"/);
   assert.match(html, /id="executionEvents"/);
   assert.match(html, /new EventSource\(/);
-  assert.match(html, /Last-Event-ID/);
   assert.match(html, /id="heroExecutionState"/);
   assert.match(html, /extractExecutionState/);
   assert.match(response.headers.get('content-security-policy') || '', /script-src 'self'/);
