@@ -408,3 +408,63 @@ test('durable cancellation takes precedence over a concurrent tool failure', asy
   assert.equal(persistedEvents.some(event => event.type === 'execution.failed'), false);
   assert.equal(persistedEvents.some(event => event.type === 'execution.cancelled'), true);
 });
+
+
+test('resume refuses to execute when durable lease acquisition fails', async () => {
+  const ExecutionContext = require('../../../../src/core/execution/execution-context');
+  const context = new ExecutionContext({
+    requestId: 'request-no-lease',
+    input: 'must not run without lease',
+    executionId: 'execution-no-lease',
+    tenantId: 'tenant-a'
+  });
+  context.start();
+  context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
+  context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+  context.setPlan({
+    intent: 'test.no-lease',
+    steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }]
+  });
+  context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+
+  let executionAttempts = 0;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {
+      run: async () => {
+        executionAttempts += 1;
+        return {
+          loopResult: { result: { ok: true }, evaluation: { success: true } },
+          replanningDecision: { toJSON: () => ({ outcome: 'done' }) }
+        };
+      }
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: {
+      executions: { findById: async () => null },
+      checkpoints: {
+        findLatest: async () => ({
+          checkpointId: 'checkpoint-no-lease',
+          sequence: 1,
+          snapshot: context.snapshot(),
+          snapshotSha256: null
+        }),
+        acquireResumeLease: async () => null
+      }
+    },
+    persistenceCoordinator: {},
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  await assert.rejects(
+    coordinator.resume('execution-no-lease'),
+    error => error.code === 'CHECKPOINT_RESUME_LEASE_UNAVAILABLE'
+  );
+  assert.equal(executionAttempts, 0);
+});
