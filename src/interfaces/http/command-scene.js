@@ -146,11 +146,12 @@
   window.ORIENTScene = Object.freeze({
     setExecutionState(value) {
       const state = String(value || '').trim().slice(0, 64);
-      const normalized = state.toLowerCase();
-      if (/fail|error|reject|denied|cancel/.test(normalized)) activeTint = [0.98, 0.25, 0.39];
-      else if (/success|succeed|complete|finished|done/.test(normalized)) activeTint = [0.25, 0.88, 0.51];
-      else if (/approv|pending|wait|review|queued|pause/.test(normalized)) activeTint = [0.98, 0.72, 0.25];
-      else if (/run|active|process|execut/.test(normalized)) activeTint = [0.24, 0.78, 0.98];
+      const normalized = state.toLowerCase().replace(/[\\s-]+/g, '_');
+      const tokens = normalized.split(/[^a-z0-9_]+/).filter(Boolean);
+      if (tokens.some(token => ['failed', 'failure', 'error', 'rejected', 'denied', 'cancelled', 'canceled'].includes(token))) activeTint = [0.98, 0.25, 0.39];
+      else if (tokens.some(token => ['success', 'succeeded', 'complete', 'completed', 'finished', 'done'].includes(token))) activeTint = [0.25, 0.88, 0.51];
+      else if (tokens.some(token => ['approval', 'approvals', 'pending', 'waiting', 'awaiting_approval', 'review', 'queued', 'paused'].includes(token))) activeTint = [0.98, 0.72, 0.25];
+      else if (tokens.some(token => ['running', 'active', 'processing', 'executing', 'started', 'in_progress'].includes(token))) activeTint = [0.24, 0.78, 0.98];
       else activeTint = [0.48, 0.58, 0.76];
     }
   });
