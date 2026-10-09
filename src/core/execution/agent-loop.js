@@ -613,7 +613,8 @@ class AgentLoop {
         step: stepNumber,
         tool: step.tool,
         planRevision,
-        operationId
+        operationId,
+        resolvedInput
       });
 
       const idempotency =
