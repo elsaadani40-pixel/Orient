@@ -36,11 +36,12 @@ class ToolRegistry {
     }
 
 
+    const execute = tool.execute.bind(tool);
     const registeredTool = Object.freeze({
       ...tool,
       execute: (input, context = {}) => {
         this.assertExecutionAuthorized(tool.name, context);
-        return tool.execute.call(tool, input, context);
+        return execute(input, context);
       },
       capabilities: Array.isArray(tool.capabilities)
         ? Object.freeze([...tool.capabilities])
