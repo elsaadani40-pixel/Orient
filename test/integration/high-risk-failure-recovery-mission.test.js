@@ -248,3 +248,67 @@ test('high-risk crash after side effect does not execute the side effect twice',
   runtime.shutdown({ cancelQueued: false });
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+
+test('concurrent resume attempts are serialized by the durable lease', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-mission-8-concurrent-resume-'));
+  if (await skipIfOsSandboxUnavailable(t, root)) {
+    fs.rmSync(root, { recursive: true, force: true });
+    return;
+  }
+  fs.mkdirSync(path.join(root, 'test'));
+  fs.writeFileSync(
+    path.join(root, 'test', 'smoke.test.js'),
+    "const test = require('node:test'); const assert = require('node:assert/strict'); test('smoke', () => assert.equal(1, 1));\n"
+  );
+  const manifestPath = path.join(root, 'package.json');
+  fs.writeFileSync(manifestPath, '{"name":"mission-8-concurrent-resume"}\n');
+
+  const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
+  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const runtimeA = createRuntime(root, { approvalService: approvals, persistence });
+  const { challenge, approval } = await approveChallenge(runtimeA, approvals, root);
+  const runtimeB = createRuntime(root, { approvalService: approvals, persistence });
+
+  let signalEntered;
+  const entered = new Promise(resolve => { signalEntered = resolve; });
+  let releaseRun;
+  const runGate = new Promise(resolve => { releaseRun = resolve; });
+  let sideEffectCount = 0;
+  const originalExecute = runtimeA.toolRegistry.execute.bind(runtimeA.toolRegistry);
+  runtimeA.toolRegistry.execute = async (name, input, context) => {
+    if (name === 'project.execute_change') {
+      signalEntered();
+      await runGate;
+      sideEffectCount += 1;
+    }
+    return originalExecute(name, input, context);
+  };
+
+  try {
+    const firstResume = runtimeA.resume(challenge.executionId, { approval });
+    await entered;
+
+    await assert.rejects(
+      runtimeB.resume(challenge.executionId, { approval }),
+      error => error?.code === 'CHECKPOINT_RESUME_LEASE_HELD'
+    );
+    assert.equal(sideEffectCount, 0, 'the blocked concurrent attempt must not reach tool execution');
+
+    releaseRun();
+    const firstResult = await firstResume;
+    assert.equal(firstResult.resumed, true);
+    assert.equal(firstResult.execution.status, 'completed');
+    assert.equal(sideEffectCount, 1, 'only the lease owner may execute the approved side effect');
+
+    const replay = await runtimeB.resume(challenge.executionId, { approval });
+    assert.equal(replay.resumed, false);
+    assert.equal(replay.reason, 'execution_already_terminal');
+    assert.equal(sideEffectCount, 1);
+  } finally {
+    releaseRun();
+    runtimeA.shutdown({ cancelQueued: false });
+    runtimeB.shutdown({ cancelQueued: false });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
