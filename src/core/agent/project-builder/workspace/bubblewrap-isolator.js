@@ -41,6 +41,18 @@ const show = () => {
  return Object.fromEntries(r.stdout.split(/\r?\n/).flatMap(s => { const i=s.indexOf('='); return i>0 ? [[s.slice(0,i),s.slice(i+1)]] : []; }));
 };
 const one = (v, xs) => xs.includes(v);
+const durationMatches = (value, seconds) => {
+ const text = String(value || '');
+ const re = /(\\d+)(us|µs|ms|s|min|h|d|w)/g;
+ let total = 0, end = 0, match;
+ const factor = { us: 1, 'µs': 1, ms: 1000, s: 1000000, min: 60000000, h: 3600000000, d: 86400000000, w: 604800000000 };
+ while ((match = re.exec(text)) !== null) {
+   if (text.slice(end, match.index).trim()) return false;
+   total += Number(match[1]) * factor[match[2]];
+   end = re.lastIndex;
+ }
+ return end > 0 && !text.slice(end).trim() && total === seconds * 1000000;
+};
 const paired = (v, n) => one(v,[String(n),String(n)+':'+String(n)]);
 const cpu = (v, soft, hard) => one(v,[String(hard),String(hard)+'s',String(hard*1000000),String(hard*1000000)+'us',String(soft)+'s:'+String(hard)+'s',String(soft)+':'+String(hard)]);
 const quota=l.cpuQuotaPercent*10000;
@@ -52,7 +64,7 @@ while(Date.now()<=deadline){
  one(p.CPUQuotaPerSecUSec,[String(quota),String(quota/1000000)+'s',String(quota/1000)+'ms',String(quota)+'us']) &&
  p.TasksMax===String(l.maxProcesses) && paired(p.LimitNOFILE,l.maxOpenFiles) &&
  paired(p.LimitFSIZE,l.maxFileSizeBytes) &&
- one(p.RuntimeMaxUSec,[String(seconds)+'s',String(seconds*1000000),String(seconds*1000000)+'us']) &&
+ durationMatches(p.RuntimeMaxUSec, seconds) &&
  cpu(p.LimitCPU,l.maxCpuTimeSeconds,l.maxCpuTimeSeconds+1) &&
  one(p.LimitCPUSoft,[String(l.maxCpuTimeSeconds),String(l.maxCpuTimeSeconds)+'s',String(l.maxCpuTimeSeconds*1000000),String(l.maxCpuTimeSeconds*1000000)+'us']) &&
  p.MemorySwapMax==='0'){ok=true;break;}
