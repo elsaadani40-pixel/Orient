@@ -72,7 +72,7 @@ test('memory repository does not reclaim an old lock owned by a live process', (
   }
 });
 
-test('memory repository recovers a lock whose local owner process is dead', () => {
+test('memory repository fails closed on a stale lock directory without moving it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-dead-lock-'));
   const file = path.join(dir, 'memories.json');
   const repo = new JsonMemoryRepository(file, { lockTimeoutMs: 100 });
@@ -83,8 +83,13 @@ test('memory repository recovers a lock whose local owner process is dead', () =
     }));
     const old = new Date(Date.now() - 60000);
     fs.utimesSync(repo.lockPath, old, old);
-    assert.equal(repo.withLock(() => 'acquired'), 'acquired');
-    assert.equal(fs.existsSync(repo.lockPath), false);
+    assert.throws(() => repo.withLock(() => 'must not run'), error => {
+      assert.equal(error.code, 'MEMORY_STORAGE_STALE_LOCK');
+      assert.equal(error.details.token, 'dead-owner');
+      return true;
+    });
+    assert.equal(fs.existsSync(repo.lockPath), true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(repo.lockPath, 'owner.json'), 'utf8')).token, 'dead-owner');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -117,6 +122,36 @@ test('memory lock publishes ownership metadata atomically and preserves operatio
 });
 
 
+test('memory lock release failures are surfaced after a successful protected operation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-lock-release-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file);
+  const originalRename = fs.renameSync;
+  let operationRan = false;
+
+  try {
+    fs.renameSync = function(source, destination) {
+      if (source === repo.lockPath) {
+        const error = new Error('injected lock release failure');
+        error.code = 'EACCES';
+        throw error;
+      }
+      return originalRename.call(fs, source, destination);
+    };
+
+    assert.throws(() => repo.withLock(() => {
+      operationRan = true;
+      return 'completed';
+    }), error => error.code === 'MEMORY_STORAGE_LOCK_RELEASE_FAILED');
+
+    assert.equal(operationRan, true);
+    assert.equal(fs.existsSync(repo.lockPath), true, 'failed release must remain observable');
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('memory repository conservatively times out on an ownerless legacy lock directory', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-ownerless-lock-'));
   const file = path.join(dir, 'memories.json');
@@ -131,7 +166,7 @@ test('memory repository conservatively times out on an ownerless legacy lock dir
   }
 });
 
-test('memory repository reclaims a dead owner in the new file-lock format', () => {
+test('memory repository fails closed on a stale file lock without moving it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-dead-file-lock-'));
   const file = path.join(dir, 'memories.json');
   const repo = new JsonMemoryRepository(file, { lockTimeoutMs: 100 });
@@ -139,8 +174,26 @@ test('memory repository reclaims a dead owner in the new file-lock format', () =
     fs.writeFileSync(repo.lockPath, JSON.stringify({
       token: 'dead-file-owner', pid: 2147483647, hostname: os.hostname(), acquiredAt: new Date(0).toISOString()
     }));
-    assert.equal(repo.withLock(() => 'acquired'), 'acquired');
-    assert.equal(fs.existsSync(repo.lockPath), false);
+    assert.throws(() => repo.withLock(() => 'must not run'), error => {
+      assert.equal(error.code, 'MEMORY_STORAGE_STALE_LOCK');
+      assert.equal(error.details.token, 'dead-file-owner');
+      return true;
+    });
+    assert.equal(fs.existsSync(repo.lockPath), true);
+    assert.equal(JSON.parse(fs.readFileSync(repo.lockPath, 'utf8')).token, 'dead-file-owner');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('atomic memory store initialization keeps the published file private', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-private-store-'));
+  const file = path.join(dir, 'memories.json');
+  try {
+    new JsonMemoryRepository(file);
+    const mode = fs.statSync(file).mode & 0o777;
+    assert.equal(mode & 0o077, 0, 'memory store must not grant group/other access');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

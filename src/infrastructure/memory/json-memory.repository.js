@@ -19,9 +19,55 @@ class JsonMemoryRepository {
   ensureStorage() {
     const directory = path.dirname(this.filePath);
     fs.mkdirSync(directory, { recursive: true });
-    if (!fs.existsSync(this.filePath)) fs.writeFileSync(this.filePath, '[]\n', 'utf8');
-  }
 
+    // Publish a fully-written store atomically. Creating the final path with
+    // "wx" and then writing it would expose an empty/partial file to peers.
+    const temporaryFile = this.filePath + '.init.' + process.pid + '.' + crypto.randomUUID();
+    let fd = null;
+    try {
+      fd = fs.openSync(temporaryFile, 'wx', 0o600);
+      fs.writeFileSync(fd, '[]\n', 'utf8');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = null;
+
+      try {
+        // link(2) is atomic and no-clobber: EEXIST means another process won.
+        fs.linkSync(temporaryFile, this.filePath);
+      } catch (error) {
+        if (error.code === 'EEXIST') return;
+        throw error;
+      }
+    } catch (error) {
+      throw new Error('Memory storage initialization failed: ' + error.message);
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      try {
+        fs.unlinkSync(temporaryFile);
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          throw new Error('Memory storage initialization cleanup failed: ' + error.message);
+        }
+      }
+    }
+
+    // Persist the directory entry where supported. Unexpected I/O errors are
+    // surfaced rather than silently claiming durable initialization.
+    try {
+      const directoryFd = fs.openSync(directory, 'r');
+      try {
+        fs.fsyncSync(directoryFd);
+      } finally {
+        fs.closeSync(directoryFd);
+      }
+    } catch (error) {
+      if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(error.code)) {
+        throw new Error('Memory storage directory sync failed: ' + error.message);
+      }
+    }
+  }
   readRaw() {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8');
@@ -40,15 +86,20 @@ class JsonMemoryRepository {
   }
 
   migrateLegacyData() {
-    const current = this.readRaw();
-    if (!current.length) return;
-    const migrated = current.map(memory => this.normalize(memory));
-    const changed = migrated.some((memory, index) =>
-      JSON.stringify(memory) !== JSON.stringify(current[index])
-    );
-    if (changed) this.write(migrated);
-  }
+    // Avoid lock overhead for the normal empty/new store. If legacy records
+    // exist, re-read under the lock so migration cannot overwrite concurrent writes.
+    if (!this.readRaw().length) return;
 
+    return this.withLock(() => {
+      const current = this.readRaw();
+      if (!current.length) return;
+      const migrated = current.map(memory => this.normalize(memory));
+      const changed = migrated.some((memory, index) =>
+        JSON.stringify(memory) !== JSON.stringify(current[index])
+      );
+      if (changed) this.write(migrated);
+    });
+  }
   read() {
     return this.readRaw().map(memory => this.normalize(memory));
   }
@@ -117,25 +168,39 @@ class JsonMemoryRepository {
       }
 
       if (acquired) {
+        let operationResult;
+        let operationError;
         try {
-          return operation();
-        } finally {
-          const quarantinePath = `${this.lockPath}.release.${token}`;
-          try {
-            fs.renameSync(this.lockPath, quarantinePath);
-            const releasedOwner = readOwner(quarantinePath);
-            if (releasedOwner && releasedOwner.token === token) {
-              fs.unlinkSync(quarantinePath);
-            } else {
-              restoreQuarantine(quarantinePath);
-            }
-          } catch (releaseError) {
-            if (releaseError.code !== 'ENOENT') {
-              // Do not mask the protected operation's exception with cleanup
-              // trouble; preserve the quarantined lock for conservative recovery.
-            }
-          }
+          operationResult = operation();
+        } catch (error) {
+          operationError = error;
         }
+
+        let releaseError = null;
+        const quarantinePath = `${this.lockPath}.release.${token}`;
+        try {
+          fs.renameSync(this.lockPath, quarantinePath);
+          const releasedOwner = readOwner(quarantinePath);
+          if (releasedOwner && releasedOwner.token === token) {
+            fs.unlinkSync(quarantinePath);
+          } else {
+            restoreQuarantine(quarantinePath);
+          }
+        } catch (error) {
+          if (error.code !== 'ENOENT') releaseError = error;
+        }
+
+        // The protected operation's error is authoritative. If it succeeded,
+        // however, report a failed release instead of silently leaving a lock
+        // that can block later operations in this still-live process.
+        if (operationError) throw operationError;
+        if (releaseError) {
+          const error = new Error('Memory storage lock release failed: ' + releaseError.message);
+          error.code = 'MEMORY_STORAGE_LOCK_RELEASE_FAILED';
+          error.cause = releaseError;
+          throw error;
+        }
+        return operationResult;
       }
 
       const existingOwner = readOwner(this.lockPath);
@@ -151,23 +216,20 @@ class JsonMemoryRepository {
       }
 
       if (stale) {
-        const quarantinePath = `${this.lockPath}.stale.${crypto.randomUUID()}`;
-        try {
-          fs.renameSync(this.lockPath, quarantinePath);
-          const movedOwner = readOwner(quarantinePath);
-          if (movedOwner && movedOwner.token === existingOwner.token &&
-              movedOwner.pid === existingOwner.pid && movedOwner.hostname === existingOwner.hostname) {
-            const stat = fs.lstatSync(quarantinePath);
-            if (stat.isDirectory()) fs.rmSync(quarantinePath, { recursive: true, force: true });
-            else fs.unlinkSync(quarantinePath);
-          } else {
-            restoreQuarantine(quarantinePath);
-          }
-          continue;
-        } catch (reclaimError) {
-          if (reclaimError.code !== 'ENOENT' && reclaimError.code !== 'EEXIST' &&
-              reclaimError.code !== 'ENOTEMPTY') throw reclaimError;
-        }
+        // Reclaiming by rename is not ownership-safe: the lock path may be
+        // replaced after readOwner() and before renameSync(). The rename could
+        // therefore move a different, live owner's lock. Fail closed instead;
+        // recovery must be an explicit operator action while contenders are stopped.
+        const staleLockError = new Error(
+          'Memory storage lock appears stale; explicit recovery is required'
+        );
+        staleLockError.code = 'MEMORY_STORAGE_STALE_LOCK';
+        staleLockError.details = {
+          pid: existingOwner.pid,
+          hostname: existingOwner.hostname,
+          token: existingOwner.token
+        };
+        throw staleLockError;
       }
 
       if (Date.now() >= deadline) {
