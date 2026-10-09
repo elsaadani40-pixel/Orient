@@ -53,26 +53,57 @@ test('resource supervisor fails closed when the host is not using unified cgroup
   }), error => error.code === 'RESOURCE_LIMITS_UNAVAILABLE');
 });
 
-test('resource supervisor termination serializes kill, stop, and failed-unit cleanup', async () => {
+function makeTerminationScenario({ failAt = null, activeState = 'inactive' } = {}) {
   const calls = [];
   const isolator = new BubblewrapIsolator({
     platform: 'linux',
     spawnProcess(command, args) {
-      calls.push({ command, args });
+      const action = args[1];
+      calls.push(action === 'show' ? 'show' : action);
       const child = new EventEmitter();
       child.kill = () => true;
-      setImmediate(() => child.emit('close', 0));
+      if (action === 'show') {
+        child.stdout = new PassThrough();
+      }
+      setImmediate(() => {
+        const shouldFail = action === failAt;
+        if (action === 'show' && !shouldFail) {
+          child.stdout.write(`${activeState}\\n`);
+          child.stdout.end();
+        }
+        child.emit('close', shouldFail ? 1 : 0);
+      });
       return child;
     }
   });
   const child = {
     orientResourceUnitName: 'orient-pb-01234567-89ab-cdef-0123-456789abcdef.service',
+    orientResourceEnvironment: {},
     orientSystemdEnvironment: {},
     kill: () => true
   };
+  return { isolator, child, calls };
+}
 
-  await isolator.terminate(child);
-  assert.deepEqual(calls.map(call => call.args[1]), ['kill', 'stop', 'reset-failed']);
+test('resource supervisor termination verifies inactive unit before resetting failure state', async () => {
+  const { isolator, child, calls } = makeTerminationScenario();
+  assert.equal(await isolator.terminate(child), true);
+  assert.deepEqual(calls, ['kill', 'stop', 'show', 'reset-failed']);
+});
+
+for (const failedAction of ['kill', 'stop', 'reset-failed']) {
+  test(`resource supervisor termination reports failure when systemctl ${failedAction} fails`, async () => {
+    const { isolator, child, calls } = makeTerminationScenario({ failAt: failedAction });
+    assert.equal(await isolator.terminate(child), false);
+    assert.ok(calls.includes(failedAction));
+    assert.ok(!calls.includes('reset-failed') || failedAction === 'reset-failed');
+  });
+}
+
+test('resource supervisor termination reports failure when the unit remains active', async () => {
+  const { isolator, child, calls } = makeTerminationScenario({ activeState: 'active' });
+  assert.equal(await isolator.terminate(child), false);
+  assert.deepEqual(calls, ['kill', 'stop', 'show']);
 });
 
 test('resource supervisor parses named systemd properties even when Result is empty for an active unit', async () => {
