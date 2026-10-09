@@ -56,6 +56,7 @@ test('systemd runner args set cgroup-wide limits, file descriptor/file size limi
   assert.ok(args.includes('--property=OOMPolicy=kill'));
   assert.ok(args.includes('--user'));
   assert.ok(args.includes('--wait'));
+  assert.ok(!args.includes('--collect'), 'retain terminal systemd status until CommandRunner inspects it');
   assert.ok(args.includes('--pipe'));
   assert.equal(args.at(-1), 'process.exit(0)');
 });
