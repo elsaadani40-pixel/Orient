@@ -185,3 +185,16 @@ test('memory repository fails closed on a stale file lock without moving it', ()
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('atomic memory store initialization keeps the published file private', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-private-store-'));
+  const file = path.join(dir, 'memories.json');
+  try {
+    new JsonMemoryRepository(file);
+    const mode = fs.statSync(file).mode & 0o777;
+    assert.equal(mode & 0o077, 0, 'memory store must not grant group/other access');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
