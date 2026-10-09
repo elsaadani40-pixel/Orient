@@ -77,6 +77,16 @@ test('PostgreSQL resume leases are atomic, tenant-scoped, and releasable only by
   assert.ok(second?.leaseId);
   assert.notEqual(second.leaseId, first.leaseId);
 
+  const renewed = await persistence.checkpoints.renewResumeLease(executionId, second.leaseId, {
+    tenantId,
+    leaseDurationMs: 60000
+  });
+  assert.ok(renewed?.expiresAtMs > second.expiresAtMs);
+  assert.equal(await persistence.checkpoints.renewResumeLease(executionId, first.leaseId, {
+    tenantId,
+    leaseDurationMs: 30000
+  }), null);
+
   assert.equal(
     await persistence.checkpoints.releaseResumeLease(executionId, first.leaseId, { tenantId }),
     false
