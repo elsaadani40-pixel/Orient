@@ -138,7 +138,9 @@ class CommandRunner {
         clearTimeout(timer);
 
         const initialInspection = child.orientInitialInspection || Promise.resolve(null);
-        const finalInspection = typeof this.isolator.inspect === 'function' && (code !== 0 || signal)
+        // Capture the terminal systemd result before cleanup can reset failure state.
+        // Successful exits need inspection too; the initial snapshot may have been "running".
+        const finalInspection = typeof this.isolator.inspect === 'function'
           ? Promise.resolve().then(() => this.isolator.inspect(child)).catch(() => null)
           : Promise.resolve(null);
 
