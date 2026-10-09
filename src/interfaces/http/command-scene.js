@@ -143,18 +143,38 @@
   }
   let frame = 0, started = performance.now(), lastTime = 0, destroyed = false;
   let activeTint = [0.20, 0.69, 0.93];
+  const eventNodes = [];
+  function statusTint(value) {
+    const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const tokens = normalized.split(/[^a-z0-9_]+/).filter(Boolean);
+    if (tokens.some(token => ['failed', 'failure', 'error', 'rejected', 'denied', 'cancelled', 'canceled'].includes(token))) return [0.98, 0.25, 0.39];
+    if (tokens.some(token => ['success', 'succeeded', 'complete', 'completed', 'finished', 'done'].includes(token))) return [0.25, 0.88, 0.51];
+    if (tokens.some(token => ['approval', 'approvals', 'pending', 'waiting', 'awaiting_approval', 'review', 'queued', 'paused'].includes(token))) return [0.98, 0.72, 0.25];
+    if (tokens.some(token => ['running', 'active', 'processing', 'executing', 'started', 'in_progress'].includes(token))) return [0.24, 0.78, 0.98];
+    return [0.48, 0.58, 0.76];
+  }
   window.ORIENTScene = Object.freeze({
     setExecutionState(value) {
-      const state = String(value || '').trim().slice(0, 64);
-      const normalized = state.toLowerCase().replace(/[\\s-]+/g, '_');
-      const tokens = normalized.split(/[^a-z0-9_]+/).filter(Boolean);
-      if (tokens.some(token => ['failed', 'failure', 'error', 'rejected', 'denied', 'cancelled', 'canceled'].includes(token))) activeTint = [0.98, 0.25, 0.39];
-      else if (tokens.some(token => ['success', 'succeeded', 'complete', 'completed', 'finished', 'done'].includes(token))) activeTint = [0.25, 0.88, 0.51];
-      else if (tokens.some(token => ['approval', 'approvals', 'pending', 'waiting', 'awaiting_approval', 'review', 'queued', 'paused'].includes(token))) activeTint = [0.98, 0.72, 0.25];
-      else if (tokens.some(token => ['running', 'active', 'processing', 'executing', 'started', 'in_progress'].includes(token))) activeTint = [0.24, 0.78, 0.98];
-      else activeTint = [0.48, 0.58, 0.76];
+      activeTint = statusTint(String(value || '').slice(0, 64));
+    },
+    addExecutionEvent(event) {
+      if (!event || typeof event !== 'object' || !event.id || !event.type) return;
+      const id = String(event.id).slice(0, 200);
+      const existing = eventNodes.findIndex(node => node.id === id);
+      if (existing >= 0) eventNodes.splice(existing, 1);
+      eventNodes.push({ id, type: String(event.type).slice(0, 100), sequence: Number.isFinite(Number(event.sequence)) ? Number(event.sequence) : null });
+      if (eventNodes.length > 6) eventNodes.splice(0, eventNodes.length - 6);
+    },
+    clearExecutionEvents() {
+      eventNodes.length = 0;
+    },
+    getExecutionEventNodeCount() {
+      return eventNodes.length;
     }
   });
+  function eventTint(type) {
+    return statusTint(type);
+  }
   function resize() {
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -187,6 +207,14 @@
     satellites.forEach(s => {
       const point = multiply(multiply(multiply(camera, rotateY(t*0.35)), rotateZ(0.72)), multiply(translate(Math.cos(s.a)*s.r,s.y,Math.sin(s.a)*s.r),scale(0.085,0.085,0.085)));
       drawSphere(point,s.c,projection,mesh.count);
+    });
+    const eventOrbit = multiply(multiply(camera, rotateY(t*0.35)), rotateZ(0.72));
+    eventNodes.forEach((node, index) => {
+      const angle = t * 0.45 + index * (Math.PI * 2 / Math.max(eventNodes.length, 1));
+      const radius = 1.18 + (index % 3) * 0.22;
+      const height = ((index % 3) - 1) * 0.32;
+      const point = multiply(eventOrbit, multiply(translate(Math.cos(angle) * radius, height, Math.sin(angle) * radius), scale(0.06, 0.06, 0.06)));
+      drawSphere(point, eventTint(node.type), projection, mesh.count);
     });
     if (!reducedMotion.matches) frame = requestAnimationFrame(render);
     else frame = 0;

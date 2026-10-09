@@ -190,6 +190,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
  function appendExecutionEvent(event) {
   let item;
   try { item = JSON.parse(event.data); } catch { return; }
+  if (window.ORIENTScene && typeof window.ORIENTScene.addExecutionEvent === 'function') window.ORIENTScene.addExecutionEvent(item);
   const list = $('executionEvents');
   const row = document.createElement('li');
   row.className = 'event';
@@ -211,6 +212,8 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
   const id = $('executionId').value.trim();
   if (!id) { $('eventStreamState').textContent = 'أدخل معرّف تنفيذ أولًا.'; return; }
   stopExecutionStream('إعادة إنشاء اتصال الأحداث…');
+  $('executionEvents').replaceChildren();
+  if (window.ORIENTScene && typeof window.ORIENTScene.clearExecutionEvents === 'function') window.ORIENTScene.clearExecutionEvents();
   const source = new EventSource('/executions/' + encodeURIComponent(id) + '/events');
   executionEventSource = source;
   $('startExecutionStream').disabled = true;
