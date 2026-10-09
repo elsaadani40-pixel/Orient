@@ -311,7 +311,7 @@ class BubblewrapIsolator {
     });
   }
 
-  inspect(child, { waitMs = 0 } = {}) {
+  inspect(child, { waitMs = 0, waitForActive = false } = {}) {
     if (!child || !child.orientResourceUnitName) return Promise.resolve(null);
 
     const unitName = child.orientResourceUnitName;
@@ -320,7 +320,10 @@ class BubblewrapIsolator {
 
     return new Promise(resolve => {
       const retryOrResolve = value => {
-        if (value !== null) {
+        // The unit can briefly exist in an inactive/default state before systemd
+        // applies the transient service properties. Initial snapshots must wait
+        // for the active unit; terminal inspections intentionally accept inactive.
+        if (value !== null && (!waitForActive || value.activeState === 'active')) {
           resolve(value);
           return;
         }
