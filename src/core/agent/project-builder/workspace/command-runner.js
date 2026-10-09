@@ -33,6 +33,22 @@ function commandError(code, message, details = {}) {
   return error;
 }
 
+function systemdDurationMatches(value, timeoutMs) {
+  const text = String(value || '');
+  const re = /(\\d+)(us|µs|ms|s|min|h|d|w)/g;
+  const factor = { us: 1, 'µs': 1, ms: 1000, s: 1000000, min: 60000000, h: 3600000000, d: 86400000000, w: 604800000000 };
+  let total = 0;
+  let end = 0;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    if (text.slice(end, match.index).trim()) return false;
+    total += Number(match[1]) * factor[match[2]];
+    end = re.lastIndex;
+  }
+  return end > 0 && !text.slice(end).trim() &&
+    total === Math.max(1, Math.ceil(timeoutMs / 1000)) * 1000000;
+}
+
 class CommandRunner {
   constructor({ policy, isolator = new BubblewrapIsolator() }) {
     if (!policy) throw new TypeError('policy is required');
@@ -196,7 +212,7 @@ class CommandRunner {
             observedLimits.tasksMax === String(expectedLimits.maxProcesses) &&
             observedLimits.limitNoFile === String(expectedLimits.maxOpenFiles) &&
             observedLimits.limitFSize === String(expectedLimits.maxFileSizeBytes) &&
-            observedLimits.runtimeMaxUSec === expectedRuntime &&
+            systemdDurationMatches(observedLimits.runtimeMaxUSec, this.policy.timeoutMs) &&
             cpuTimeLimitMatches(observedLimits.limitCPU, expectedLimits.maxCpuTimeSeconds + 1) &&
             cpuTimeLimitMatches(observedLimits.limitCPUSoft, expectedLimits.maxCpuTimeSeconds) &&
             observedLimits.memorySwapMax === '0')
