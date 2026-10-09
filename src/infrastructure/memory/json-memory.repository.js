@@ -168,25 +168,39 @@ class JsonMemoryRepository {
       }
 
       if (acquired) {
+        let operationResult;
+        let operationError;
         try {
-          return operation();
-        } finally {
-          const quarantinePath = `${this.lockPath}.release.${token}`;
-          try {
-            fs.renameSync(this.lockPath, quarantinePath);
-            const releasedOwner = readOwner(quarantinePath);
-            if (releasedOwner && releasedOwner.token === token) {
-              fs.unlinkSync(quarantinePath);
-            } else {
-              restoreQuarantine(quarantinePath);
-            }
-          } catch (releaseError) {
-            if (releaseError.code !== 'ENOENT') {
-              // Do not mask the protected operation's exception with cleanup
-              // trouble; preserve the quarantined lock for conservative recovery.
-            }
-          }
+          operationResult = operation();
+        } catch (error) {
+          operationError = error;
         }
+
+        let releaseError = null;
+        const quarantinePath = `${this.lockPath}.release.${token}`;
+        try {
+          fs.renameSync(this.lockPath, quarantinePath);
+          const releasedOwner = readOwner(quarantinePath);
+          if (releasedOwner && releasedOwner.token === token) {
+            fs.unlinkSync(quarantinePath);
+          } else {
+            restoreQuarantine(quarantinePath);
+          }
+        } catch (error) {
+          if (error.code !== 'ENOENT') releaseError = error;
+        }
+
+        // The protected operation's error is authoritative. If it succeeded,
+        // however, report a failed release instead of silently leaving a lock
+        // that can block later operations in this still-live process.
+        if (operationError) throw operationError;
+        if (releaseError) {
+          const error = new Error('Memory storage lock release failed: ' + releaseError.message);
+          error.code = 'MEMORY_STORAGE_LOCK_RELEASE_FAILED';
+          error.cause = releaseError;
+          throw error;
+        }
+        return operationResult;
       }
 
       const existingOwner = readOwner(this.lockPath);
