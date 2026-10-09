@@ -86,7 +86,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
  </section>
  <section id="view-agent" class="section hidden"><article class="card"><div class="section-head"><h2>تشغيل الوكيل</h2><span class="pill">CANONICAL RUNTIME</span></div><form id="taskForm2"><label for="taskInput2" class="metric-label">المهمة</label><textarea class="input" id="taskInput2" maxlength="20000" required placeholder="اكتب المهمة المطلوب تنفيذها…"></textarea><div class="formrow"><button class="btn" type="submit">تشغيل</button></div></form><div class="output" id="taskOutput2" role="status" aria-live="polite">في انتظار المهمة.</div></article></section>
  <section id="view-memory" class="section hidden"><article class="card"><div class="section-head"><h2>الذاكرة الدائمة</h2><span class="pill">EXISTING UI</span></div><p class="muted">تُدار إضافة الذاكرة والبحث والحذف عبر الواجهة الحالية للخادم.</p><a class="btn" href="/" style="display:inline-block;text-decoration:none">فتح واجهة الذاكرة ←</a><div class="warning">لم يتم تضمين API جديد للذاكرة داخل لوحة القيادة؛ هذا يحافظ على مسار الذاكرة والصلاحيات القائمين دون تكرار منطق الأعمال في الواجهة.</div></article></section>
- <section id="view-security" class="section hidden"><div class="grid"><article class="card"><div class="metric-label">نمط الاتصال</div><div class="metric">Local-first</div><div class="metric-foot">تعتمد اللوحة على نفس الأصل ولا تتصل بخدمات خارجية.</div></article><article class="card"><div class="metric-label">التفويض</div><div class="metric">الخادم</div><div class="metric-foot">كل طلب تنفيذ يمر عبر /agent ومسار التشغيل الحالي.</div></article></div><article class="card section"><div class="section-head"><h2>مراقبة تنفيذ محدد</h2><span class="pill">READ-ONLY API</span></div><p class="muted">أدخل معرّف تنفيذ موجودًا لقراءة الحالة أو الموافقات من واجهات الخادم الفعلية. لا تُعرض قائمة شاملة أو بيانات مصطنعة.</p><label for="executionId" class="metric-label">معرّف التنفيذ</label><input class="input" id="executionId" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Execution ID"><div class="formrow"><button class="btn" type="button" id="loadExecutionStatus">قراءة الحالة</button><button class="btn secondary" type="button" id="loadExecutionApprovals">قراءة الموافقات</button></div><div class="output" id="executionOutput" role="status" aria-live="polite">لم يتم طلب حالة تنفيذ بعد.</div></article>
+ <section id="view-security" class="section hidden"><div class="grid"><article class="card"><div class="metric-label">نمط الاتصال</div><div class="metric">Local-first</div><div class="metric-foot">تعتمد اللوحة على نفس الأصل ولا تتصل بخدمات خارجية.</div></article><article class="card"><div class="metric-label">التفويض</div><div class="metric">الخادم</div><div class="metric-foot">كل طلب تنفيذ يمر عبر /agent ومسار التشغيل الحالي.</div></article></div><article class="card section"><div class="section-head"><h2>مراقبة تنفيذ محدد</h2><span class="pill">READ-ONLY API</span></div><p class="muted">أدخل معرّف تنفيذ موجودًا لقراءة الحالة أو الموافقات من واجهات الخادم الفعلية. لا تُعرض قائمة شاملة أو بيانات مصطنعة.</p><label for="executionId" class="metric-label">معرّف التنفيذ</label><input class="input" id="executionId" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Execution ID"><div class="formrow"><button class="btn" type="button" id="loadExecutionStatus">قراءة الحالة</button><button class="btn secondary" type="button" id="loadExecutionApprovals">قراءة الموافقات</button></div><div class="output" id="executionOutput" role="status" aria-live="polite">لم يتم طلب حالة تنفيذ بعد.</div><div class="formrow"><button class="btn" type="button" id="startExecutionStream">بدء متابعة الأحداث الحية</button><button class="btn secondary" type="button" id="stopExecutionStream" disabled>إيقاف المتابعة</button></div><p class="muted" id="eventStreamState" role="status" aria-live="polite">بث الأحداث غير متصل.</p><ol id="executionEvents" class="timeline" aria-label="أحداث التنفيذ الحقيقية"></ol></article>
  <article class="card section"><h2>حدود الأمان</h2><div class="timeline"><div class="event"><div class="event-icon">1</div><div><strong>لا أسرار في المتصفح</strong><small>لا مفاتيح API ولا كلمات مرور مخزنة في ملفات الواجهة.</small></div></div><div class="event"><div class="event-icon">2</div><div><strong>لا صلاحيات إضافية</strong><small>الواجهة لا تنفذ أدوات مباشرة ولا تتجاوز سياسة التفويض.</small></div></div><div class="event"><div class="event-icon">3</div><div><strong>الحالة غير المتاحة تظل غير متاحة</strong><small>عند فشل الاتصال، تظهر حالة تعذر الاتصال بدل نتائج افتراضية.</small></div></div></div></article></section>
  <div class="footer">ORIENT ONE · Dashboard foundation · لا تُعد هذه الواجهة شهادة أمنية أو بديلًا عن اختبار التكامل.</div>
 </main>
@@ -177,6 +177,58 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
    output.textContent = 'تعذر قراءة ' + (resource === 'approvals' ? 'الموافقات' : 'حالة التنفيذ') + ': ' + error.message;
   } finally { statusButton.disabled = false; approvalsButton.disabled = false; }
  }
+ let executionEventSource = null;
+ function stopExecutionStream(message = 'تم إيقاف متابعة الأحداث.') {
+  if (executionEventSource) executionEventSource.close();
+  executionEventSource = null;
+  $('startExecutionStream').disabled = false;
+  $('stopExecutionStream').disabled = true;
+  $('eventStreamState').textContent = message;
+ }
+ function appendExecutionEvent(event) {
+  let item;
+  try { item = JSON.parse(event.data); } catch { return; }
+  const list = $('executionEvents');
+  const row = document.createElement('li');
+  row.className = 'event';
+  const icon = document.createElement('div');
+  icon.className = 'event-icon';
+  icon.textContent = '•';
+  const content = document.createElement('div');
+  const title = document.createElement('strong');
+  title.textContent = String(item.type || 'unknown event');
+  const detail = document.createElement('small');
+  const parts = [item.timestamp, item.details && item.details.step != null ? 'Step ' + item.details.step : null, item.details && item.details.tool ? 'Tool: ' + item.details.tool : null].filter(Boolean);
+  detail.textContent = parts.join(' · ') || 'حدث مسجل دون تفاصيل إضافية.';
+  content.append(title, detail);
+  row.append(icon, content);
+  list.prepend(row);
+  while (list.children.length > 50) list.lastElementChild.remove();
+ }
+ function startExecutionStream() {
+  const id = $('executionId').value.trim();
+  if (!id) { $('eventStreamState').textContent = 'أدخل معرّف تنفيذ أولًا.'; return; }
+  stopExecutionStream('إعادة إنشاء اتصال الأحداث…');
+  const source = new EventSource('/executions/' + encodeURIComponent(id) + '/events');
+  executionEventSource = source;
+  $('startExecutionStream').disabled = true;
+  $('stopExecutionStream').disabled = false;
+  $('eventStreamState').textContent = 'جارٍ الاتصال ببث الأحداث الدائم…';
+  source.onopen = () => { if (executionEventSource === source) $('eventStreamState').textContent = 'متصل — تُعرض الأحداث المسجلة لهذا التنفيذ فقط.'; };
+  source.addEventListener('execution', appendExecutionEvent);
+  source.addEventListener('reset', event => {
+   let info = {};
+   try { info = JSON.parse(event.data); } catch {}
+   $('eventStreamState').textContent = 'استُعيد الاتصال؛ يتم عرض أحدث الأحداث المتاحة (' + Number(info.replayingLatest || 0) + ').';
+  });
+  source.addEventListener('stream-error', () => stopExecutionStream('توقف بث الأحداث بسبب خطأ بالخادم. أعد المحاولة.'));
+  source.onerror = () => {
+   if (executionEventSource === source && source.readyState !== EventSource.CLOSED) $('eventStreamState').textContent = 'انقطع الاتصال مؤقتًا؛ المتصفح يحاول إعادة الاتصال تلقائيًا.';
+   else if (executionEventSource === source) stopExecutionStream('انتهى اتصال الأحداث.');
+  };
+ }
+ $('startExecutionStream').addEventListener('click', startExecutionStream);
+ $('stopExecutionStream').addEventListener('click', () => stopExecutionStream());
  $('loadExecutionStatus').addEventListener('click', () => loadExecutionResource('status'));
  $('loadExecutionApprovals').addEventListener('click', () => loadExecutionResource('approvals'));
  checkServer();
