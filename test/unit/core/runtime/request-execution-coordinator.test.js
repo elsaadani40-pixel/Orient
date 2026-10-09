@@ -183,3 +183,91 @@ test('forwards request-local approval collection to execution without corrupting
   assert.equal(received.input, 'run approved tool');
   assert.equal(received.tenantId, 'tenant-a');
 });
+
+
+test('resume returns durable cancellation when cancellation wins terminal completion commit', async () => {
+  const ExecutionContext = require('../../../../src/core/execution/execution-context');
+  const context = new ExecutionContext({
+    requestId: 'request-resume-race',
+    input: 'resume task',
+    executionId: 'execution-resume-race',
+    tenantId: 'tenant-a'
+  });
+  context.start();
+  context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
+  context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+  context.setPlan({
+    intent: 'test.resume-race',
+    steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }]
+  });
+  context.metadata.planRevision = 1;
+  context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+
+  const snapshot = context.snapshot();
+  const writes = [];
+  let releaseCount = 0;
+  const durableCancelled = {
+    ...snapshot,
+    status: 'cancelled',
+    cancellationRequested: true,
+    cancellationReason: 'operator requested cancellation'
+  };
+
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {
+      run: async () => ({
+        loopResult: { result: { ok: true }, evaluation: { success: true } },
+        replanningDecision: { toJSON: () => ({ outcome: 'done' }) }
+      })
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: {
+      executions: {
+        findById: () => ({
+          ...snapshot,
+          status: 'running',
+          cancellationRequested: false
+        }),
+        update: async (id, patch) => {
+          writes.push(patch);
+          return { ...durableCancelled, ...patch, status: 'cancelled' };
+        }
+      },
+      checkpoints: {
+        findLatest: () => ({ checkpointId: 'checkpoint-race', sequence: 1, snapshot }),
+        acquireResumeLease: () => ({ leaseId: 'lease-race' }),
+        releaseResumeLease: () => { releaseCount += 1; },
+        save: () => ({ checkpointId: 'checkpoint-cancelled' })
+      },
+      events: { appendMany: async () => [] }
+    },
+    persistenceCoordinator: {
+      persistExecution: async (ctx) => ({
+        ...ctx.snapshot(),
+        status: 'running',
+        cancellationRequested: true,
+        cancellationReason: 'operator requested cancellation'
+      }),
+      persistEvents: async () => [],
+      checkpoint: async () => ({})
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  const result = await coordinator.resume('execution-resume-race');
+
+  assert.equal(result.resumed, false);
+  assert.equal(result.reason, 'execution_cancelled');
+  assert.equal(result.execution.status, 'cancelled');
+  assert.equal(result.execution.cancellationRequested, true);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].status, 'cancelled');
+  assert.equal(releaseCount, 1);
+});
