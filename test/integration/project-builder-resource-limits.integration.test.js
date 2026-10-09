@@ -63,6 +63,7 @@ test('Project Builder command runs in a systemd cgroup with configured OS-enforc
     assert.notEqual(properties.limitFSize, 'unknown');
     assert.notEqual(properties.runtimeMaxUSec, 'unknown');
     assert.notEqual(properties.limitCPU, 'unknown');
+    assert.notEqual(properties.limitCPUSoft, 'unknown');
     assert.equal(properties.memorySwapMax, '0');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
