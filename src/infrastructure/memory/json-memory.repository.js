@@ -97,7 +97,7 @@ class JsonMemoryRepository {
       try {
         const fd = fs.openSync(candidatePath, 'wx', 0o600);
         try {
-          fs.writeFileSync(fd, JSON.stringify(owner) + '\\n', 'utf8');
+          fs.writeFileSync(fd, JSON.stringify(owner) + '\n', 'utf8');
           fs.fsyncSync(fd);
         } finally {
           fs.closeSync(fd);
