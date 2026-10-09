@@ -117,6 +117,36 @@ test('memory lock publishes ownership metadata atomically and preserves operatio
 });
 
 
+test('memory lock release failures are surfaced after a successful protected operation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-lock-release-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file);
+  const originalRename = fs.renameSync;
+  let operationRan = false;
+
+  try {
+    fs.renameSync = function(source, destination) {
+      if (source === repo.lockPath) {
+        const error = new Error('injected lock release failure');
+        error.code = 'EACCES';
+        throw error;
+      }
+      return originalRename.call(fs, source, destination);
+    };
+
+    assert.throws(() => repo.withLock(() => {
+      operationRan = true;
+      return 'completed';
+    }), error => error.code === 'MEMORY_STORAGE_LOCK_RELEASE_FAILED');
+
+    assert.equal(operationRan, true);
+    assert.equal(fs.existsSync(repo.lockPath), true, 'failed release must remain observable');
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('memory repository conservatively times out on an ownerless legacy lock directory', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-ownerless-lock-'));
   const file = path.join(dir, 'memories.json');
