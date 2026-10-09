@@ -45,11 +45,26 @@ class ExecutionRecoveryCoordinator {
     // The durable checkpoint is the recovery commit barrier. Persist the terminal
     // failure before secondary stores so a crash between stores can never leave
     // a resumable checkpoint after the execution has been irreversibly failed.
-    await this.checkpoint(
+    const committedCheckpoint = await this.checkpoint(
       context,
       'update',
       checkpointReason || 'recovery_failure_committed'
     );
+
+    // A repository-level cancellation guard can reject the failed terminal
+    // write and return the still-active durable cancellation request. Do not
+    // publish failure events in that case; the request coordinator will restore
+    // the pre-failure context and commit the cancellation outcome.
+    if (
+      committedCheckpoint?.snapshot?.cancellationRequested &&
+      committedCheckpoint.snapshot.status !== 'failed'
+    ) {
+      return {
+        ...recovery,
+        outcome: 'execution_cancelled',
+        cancellationRequested: true
+      };
+    }
 
     await this.persistExecution(context, 'update');
     await this.persistEvents(context);
