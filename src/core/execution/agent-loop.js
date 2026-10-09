@@ -549,6 +549,17 @@ class AgentLoop {
         resolvedInput;
 
       injectedContext.planRevision = planRevision;
+      // Expose the durable logical operation identity to tool adapters so they
+      // can forward it as a provider idempotency key. The value is stable across
+      // retries/resume for the same execution, plan revision, step, tool, input.
+      injectedContext.operationId = operationId;
+      injectedContext.idempotencyKey = crypto
+        .createHash('sha256')
+        .update(JSON.stringify({
+          tenantId: runtimeContext.tenantId || context.tenantId || 'local',
+          operationId
+        }))
+        .digest('hex');
 
       if (executionAuthorization) {
         const binding = {
