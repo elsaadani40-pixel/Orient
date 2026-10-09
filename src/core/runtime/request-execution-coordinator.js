@@ -87,6 +87,48 @@ class RequestExecutionCoordinator {
     return Boolean(execution?.cancellationRequested);
   }
 
+  async reconcileCancellationAfterFailure(context, executionId, activeSnapshot = null) {
+    const durableExecution = typeof this.persistence?.executions?.findById === 'function'
+      ? await this.persistence.executions.findById(executionId, { tenantId: this.tenantId })
+      : null;
+
+    if (!durableExecution?.cancellationRequested && durableExecution?.status !== 'cancelled') {
+      return null;
+    }
+
+    const cancellationReason = durableExecution.cancellationReason || 'Execution cancellation requested';
+    const reconciledContext = activeSnapshot
+      ? ExecutionContext.restore(activeSnapshot)
+      : context;
+
+    if (reconciledContext.isActive()) {
+      reconciledContext.requestCancellation(cancellationReason);
+      reconciledContext.cancel(cancellationReason);
+    }
+
+    const persisted = await this.persistenceCoordinator.persistExecution(reconciledContext, 'update');
+    await this.persistenceCoordinator.persistEvents(reconciledContext);
+    await this.persistenceCoordinator.checkpoint(reconciledContext, 'update', 'execution_cancelled');
+
+    return {
+      context: reconciledContext,
+      execution: persisted || durableExecution || reconciledContext.snapshot()
+    };
+  }
+
+  snapshotActiveContext(context) {
+    if (!context?.isActive()) return null;
+    return {
+      ...context.snapshot(),
+      // snapshot() retains the live events array; isolate it before recovery
+      // can append terminal failure events.
+      events: context.events.map(event => ({
+        ...event,
+        data: { ...(event.data || {}) }
+      }))
+    };
+  }
+
   async execute(input, { approval = null, approvals = {} } = {}) {
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
@@ -211,7 +253,37 @@ class RequestExecutionCoordinator {
         throw error;
       }
 
+      const activeSnapshot = this.snapshotActiveContext(context);
+      const cancellationBeforeRecovery = await this.reconcileCancellationAfterFailure(
+        context,
+        context.executionId,
+        activeSnapshot
+      );
+      if (cancellationBeforeRecovery) {
+        return {
+          requestId,
+          type: 'execution_cancelled',
+          execution: cancellationBeforeRecovery.execution
+        };
+      }
+
       await this.recoveryCoordinator.fail({ context, error });
+
+      // If cancellation arrived while recovery was committing a failure, the
+      // repository refuses that terminal write. Reconcile the durable intent
+      // before returning the original tool error to the caller.
+      const cancellationAfterRecovery = await this.reconcileCancellationAfterFailure(
+        context,
+        context.executionId,
+        activeSnapshot
+      );
+      if (cancellationAfterRecovery) {
+        return {
+          requestId,
+          type: 'execution_cancelled',
+          execution: cancellationAfterRecovery.execution
+        };
+      }
       throw error;
     }
   }
@@ -438,6 +510,23 @@ class RequestExecutionCoordinator {
         return { resumed: false, reason: 'execution_cancelled', execution: context.snapshot() };
       }
 
+      const activeSnapshot = this.snapshotActiveContext(context);
+      const cancellationBeforeRecovery = await this.reconcileCancellationAfterFailure(
+        context,
+        executionId,
+        activeSnapshot
+      );
+      if (cancellationBeforeRecovery) {
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
+        return {
+          resumed: false,
+          reason: 'execution_cancelled',
+          execution: cancellationBeforeRecovery.execution
+        };
+      }
+
       if (context.status !== 'completed') {
         await this.recoveryCoordinator.fail({
           context,
@@ -445,6 +534,23 @@ class RequestExecutionCoordinator {
           checkpointReason: 'resume_failed'
         });
       }
+
+      const cancellationAfterRecovery = await this.reconcileCancellationAfterFailure(
+        context,
+        executionId,
+        activeSnapshot
+      );
+      if (cancellationAfterRecovery) {
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
+        return {
+          resumed: false,
+          reason: 'execution_cancelled',
+          execution: cancellationAfterRecovery.execution
+        };
+      }
+
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
         this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
       }
