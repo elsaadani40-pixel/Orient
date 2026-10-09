@@ -56,6 +56,29 @@ test('SQLite persistence survives repository recreation and preserves execution 
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test('SQLite execution pages and event replay are bounded and tenant-scoped', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-pages-'));
+  const filePath = path.join(directory, 'orient.db');
+  try {
+    const persistence = new SqlitePersistence({ filePath });
+    persistence.executions.insert({ executionId: 'exec-a1', status: 'completed', updatedAt: '2026-10-10T10:00:00.000Z', metadata: { tenantId: 'tenant-a' } }, { tenantId: 'tenant-a' });
+    persistence.executions.insert({ executionId: 'exec-a2', status: 'running', updatedAt: '2026-10-10T11:00:00.000Z', metadata: { tenantId: 'tenant-a' } }, { tenantId: 'tenant-a' });
+    persistence.executions.insert({ executionId: 'exec-b1', status: 'failed', updatedAt: '2026-10-10T12:00:00.000Z', metadata: { tenantId: 'tenant-b' } }, { tenantId: 'tenant-b' });
+    const page = persistence.executions.findPage({ tenantId: 'tenant-a', limit: 1, offset: 1 });
+    assert.equal(page.total, 2);
+    assert.deepEqual(page.executions.map(item => item.executionId), ['exec-a1']);
+
+    persistence.events.append({ id: 'a1', executionId: 'exec-a1', type: 'step', timestamp: '2026-10-10T10:00:00.000Z', data: { tenantId: 'tenant-a' } }, { tenantId: 'tenant-a' });
+    persistence.events.append({ id: 'a2', executionId: 'exec-a1', type: 'step', timestamp: '2026-10-10T10:00:01.000Z', data: { tenantId: 'tenant-a' } }, { tenantId: 'tenant-a' });
+    persistence.events.append({ id: 'a3', executionId: 'exec-a1', type: 'step', timestamp: '2026-10-10T10:00:02.000Z', data: { tenantId: 'tenant-a' } }, { tenantId: 'tenant-a' });
+    persistence.events.append({ id: 'b4', executionId: 'exec-a1', type: 'foreign', timestamp: '2026-10-10T10:00:03.000Z', data: { tenantId: 'tenant-b' } }, { tenantId: 'tenant-b' });
+    const events = persistence.events.findByExecutionId('exec-a1', { tenantId: 'tenant-a', limit: 2 });
+    assert.deepEqual(events.map(event => event.id), ['a2', 'a3']);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('SQLite approval storage survives restart and remains single-use', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-approval-'));
   const filePath = path.join(directory, 'orient.db');
