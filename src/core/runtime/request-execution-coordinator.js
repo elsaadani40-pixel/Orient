@@ -148,6 +148,7 @@ class RequestExecutionCoordinator {
       if (persistedExecution?.cancellationRequested || persistedExecution?.status === 'cancelled') {
         const cancellationReason = persistedExecution.cancellationReason || 'Execution cancellation requested';
         context = ExecutionContext.restore(activeContextSnapshot);
+        context.requestCancellation(cancellationReason);
         context.cancel(cancellationReason);
         const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
         await this.persistenceCoordinator.persistEvents(context);
@@ -379,6 +380,7 @@ class RequestExecutionCoordinator {
       if (persistedExecution?.cancellationRequested || persistedExecution?.status === 'cancelled') {
         const cancellationReason = persistedExecution.cancellationReason || 'Execution cancellation requested';
         context = ExecutionContext.restore(activeContextSnapshot);
+        context.requestCancellation(cancellationReason);
         context.cancel(cancellationReason);
         const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
         await this.persistenceCoordinator.persistEvents(context);
