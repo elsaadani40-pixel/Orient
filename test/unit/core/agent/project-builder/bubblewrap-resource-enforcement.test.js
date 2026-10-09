@@ -106,6 +106,69 @@ test('resource supervisor termination reports failure when the unit remains acti
   assert.deepEqual(calls, ['kill', 'stop', 'show']);
 });
 
+
+test('resource supervisor cleanup verifies that a transient unit is unloaded after reset-failed', async () => {
+  const calls = [];
+  let loadStateChecks = 0;
+  const isolator = new BubblewrapIsolator({
+    platform: 'linux',
+    spawnProcess(command, args, options) {
+      assert.equal(command, 'systemctl');
+      const action = args[1];
+      calls.push(action);
+      const child = new EventEmitter();
+      child.kill = () => true;
+      if (options.stdio && Array.isArray(options.stdio) && options.stdio[1] === 'pipe') {
+        child.stdout = new PassThrough();
+      }
+      setImmediate(() => {
+        if (action === 'show') {
+          loadStateChecks += 1;
+          child.stdout.write(loadStateChecks === 1 ? 'loaded\\n' : 'not-found\\n');
+          child.stdout.end();
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    }
+  });
+  const child = {
+    orientResourceUnitName: 'orient-pb-01234567-89ab-cdef-0123-456789abcdef.service',
+    orientSystemdEnvironment: {}
+  };
+
+  assert.equal(await isolator.cleanup(child), true);
+  assert.deepEqual(calls, ['reset-failed', 'show', 'show']);
+  assert.equal(loadStateChecks, 2);
+});
+
+test('resource supervisor cleanup fails if systemd still reports the transient unit loaded', async () => {
+  const isolator = new BubblewrapIsolator({
+    platform: 'linux',
+    spawnProcess(command, args, options) {
+      const child = new EventEmitter();
+      child.kill = () => true;
+      if (options.stdio && Array.isArray(options.stdio) && options.stdio[1] === 'pipe') {
+        child.stdout = new PassThrough();
+      }
+      setImmediate(() => {
+        if (args[1] === 'show') {
+          child.stdout.write('loaded\\n');
+          child.stdout.end();
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    }
+  });
+  const child = {
+    orientResourceUnitName: 'orient-pb-01234567-89ab-cdef-0123-456789abcdef.service',
+    orientSystemdEnvironment: {}
+  };
+
+  assert.equal(await isolator.cleanup(child), false);
+});
+
 test('resource supervisor parses named systemd properties even when Result is empty for an active unit', async () => {
   const output = [
     'Result=',
