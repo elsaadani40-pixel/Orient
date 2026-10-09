@@ -12,9 +12,9 @@ function createAgentRoutes(agentService) {
         'X-Accel-Buffering': 'no'
       });
       res.flushHeaders?.();
-      res.write('retry: 3000\\n: ORIENT execution event stream\\n\\n');
+      res.write('retry: 3000\n: ORIENT execution event stream\n\n');
 
-      let lastEventId = String(req.headers?.['last-event-id'] || '').replace(/[\\r\\n\\0]/g, '').slice(0, 200) || null;
+      let lastEventId = String(req.headers?.['last-event-id'] || '').replace(/[\r\n\0]/g, '').slice(0, 200) || null;
       let initialized = false;
       let closed = false;
       let polling = false;
@@ -24,12 +24,12 @@ function createAgentRoutes(agentService) {
         const rawData = event?.data && typeof event.data === 'object' ? event.data : {};
         const pick = (key, max = 80) => {
           const value = rawData[key];
-          if (typeof value === 'string') return value.replace(/[\\r\\n\\0]/g, '').slice(0, max);
+          if (typeof value === 'string') return value.replace(/[\r\n\0]/g, '').slice(0, max);
           if (typeof value === 'number' && Number.isFinite(value)) return value;
           return undefined;
         };
         return {
-          id: String(event?.id || '').replace(/[\\r\\n\\0]/g, '').slice(0, 200),
+          id: String(event?.id || '').replace(/[\r\n\0]/g, '').slice(0, 200),
           type: String(event?.type || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 100) || 'unknown',
           executionId: String(event?.executionId || executionId).slice(0, 200),
           goalId: event?.goalId ? String(event.goalId).slice(0, 200) : null,
@@ -42,7 +42,7 @@ function createAgentRoutes(agentService) {
       const writeEvent = (event) => {
         const safe = safeEvent(event);
         if (!safe.id) return;
-        res.write(`id: ${safe.id}\\nevent: execution\\ndata: ${JSON.stringify(safe)}\\n\\n`);
+        res.write(`id: ${safe.id}\nevent: execution\ndata: ${JSON.stringify(safe)}\n\n`);
         lastEventId = safe.id;
       };
 
@@ -58,7 +58,7 @@ function createAgentRoutes(agentService) {
               const cursor = events.findIndex(event => String(event.id) === lastEventId);
               if (cursor >= 0) startIndex = cursor + 1;
               else {
-                res.write(`event: reset\\ndata: ${JSON.stringify({ reason: 'cursor_not_found', replayingLatest: Math.min(50, events.length) })}\\n\\n`);
+                res.write(`event: reset\ndata: ${JSON.stringify({ reason: 'cursor_not_found', replayingLatest: Math.min(50, events.length) })}\n\n`);
                 startIndex = Math.max(0, events.length - 50);
               }
             } else {
@@ -69,7 +69,7 @@ function createAgentRoutes(agentService) {
             const cursor = events.findIndex(event => String(event.id) === lastEventId);
             if (cursor >= 0) startIndex = cursor + 1;
             else if (events.length && String(events[events.length - 1].id) !== lastEventId) {
-              res.write(`event: reset\\ndata: ${JSON.stringify({ reason: 'cursor_not_found', replayingLatest: Math.min(50, events.length) })}\\n\\n`);
+              res.write(`event: reset\ndata: ${JSON.stringify({ reason: 'cursor_not_found', replayingLatest: Math.min(50, events.length) })}\n\n`);
               startIndex = Math.max(0, events.length - 50);
             } else startIndex = events.length;
           }
@@ -78,12 +78,12 @@ function createAgentRoutes(agentService) {
             writeEvent(event);
           }
           if (Date.now() - lastHeartbeatAt >= 15000) {
-            res.write(': keep-alive\\n\\n');
+            res.write(': keep-alive\n\n');
             lastHeartbeatAt = Date.now();
           }
         } catch {
           if (!closed) {
-            res.write(`event: stream-error\\ndata: ${JSON.stringify({ error: 'Execution event stream temporarily unavailable' })}\\n\\n`);
+            res.write(`event: stream-error\ndata: ${JSON.stringify({ error: 'Execution event stream temporarily unavailable' })}\n\n`);
             cleanup();
             res.end();
           }
@@ -101,7 +101,7 @@ function createAgentRoutes(agentService) {
       const pollTimer = setInterval(() => { void poll(); }, 1000);
       const heartbeatTimer = setInterval(() => {
         if (!closed && Date.now() - lastHeartbeatAt >= 15000) {
-          res.write(': keep-alive\\n\\n');
+          res.write(': keep-alive\n\n');
           lastHeartbeatAt = Date.now();
         }
       }, 5000);
