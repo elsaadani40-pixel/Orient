@@ -14,7 +14,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6]);
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -36,6 +36,57 @@ test('PostgreSQL checkpoints preserve ordered history on a real server', async (
   assert.equal(latest.snapshot.step, 2);
 });
 
+
+test('PostgreSQL resume leases are atomic, tenant-scoped, and releasable only by the owner', async () => {
+  const executionId = 'resume-lease-' + Date.now();
+  const tenantId = 'tenant-resume-lease';
+  await persistence.checkpoints.save({
+    executionId,
+    tenantId,
+    metadata: { tenantId },
+    status: 'running'
+  }, { tenantId });
+
+  const first = await persistence.checkpoints.acquireResumeLease(executionId, {
+    tenantId,
+    leaseDurationMs: 30000
+  });
+  assert.ok(first?.leaseId);
+
+  await assert.rejects(
+    () => persistence.checkpoints.acquireResumeLease(executionId, {
+      tenantId,
+      leaseDurationMs: 30000
+    }),
+    error => error.code === 'CHECKPOINT_RESUME_LEASE_HELD'
+  );
+
+  assert.equal(
+    await persistence.checkpoints.releaseResumeLease(executionId, 'not-the-owner', { tenantId }),
+    false
+  );
+
+  await pool.query(
+    "UPDATE execution_resume_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE execution_id=$1 AND tenant_id=$2",
+    [executionId, tenantId]
+  );
+  const second = await persistence.checkpoints.acquireResumeLease(executionId, {
+    tenantId,
+    leaseDurationMs: 30000
+  });
+  assert.ok(second?.leaseId);
+  assert.notEqual(second.leaseId, first.leaseId);
+
+  assert.equal(
+    await persistence.checkpoints.releaseResumeLease(executionId, first.leaseId, { tenantId }),
+    false
+  );
+  assert.equal(
+    await persistence.checkpoints.releaseResumeLease(executionId, second.leaseId, { tenantId }),
+    true
+  );
+  await pool.query('DELETE FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
+});
 
 test('PostgreSQL fencing rejects stale writes after a lease takeover', async () => {
   const workflowId = 'fence-wf-' + Date.now();
