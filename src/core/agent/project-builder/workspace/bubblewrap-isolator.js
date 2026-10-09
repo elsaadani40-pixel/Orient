@@ -234,11 +234,17 @@ class BubblewrapIsolator {
       }
 
       let done = false;
+      let timer;
       const finish = value => {
         if (done) return;
         done = true;
+        clearTimeout(timer);
         resolve(value);
       };
+      timer = setTimeout(() => {
+        try { command.kill('SIGKILL'); } catch {}
+        finish(false);
+      }, 1000);
       command.once('error', () => finish(false));
       command.once('close', code => finish(code === 0));
     });
@@ -268,8 +274,20 @@ class BubblewrapIsolator {
         resolve(false);
         return;
       }
-      cleanup.once('error', () => resolve(false));
-      cleanup.once('close', code => resolve(code === 0));
+      let done = false;
+      let timer;
+      const finish = value => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      timer = setTimeout(() => {
+        try { cleanup.kill('SIGKILL'); } catch {}
+        finish(false);
+      }, 1000);
+      cleanup.once('error', () => finish(false));
+      cleanup.once('close', code => finish(code === 0));
     });
   }
 
@@ -325,11 +343,17 @@ class BubblewrapIsolator {
 
         let output = '';
         let finished = false;
+        let probeTimer;
         const finish = value => {
           if (finished) return;
           finished = true;
+          clearTimeout(probeTimer);
           retryOrResolve(value);
         };
+        probeTimer = setTimeout(() => {
+          try { probe.kill('SIGKILL'); } catch {}
+          finish(null);
+        }, 500);
 
         if (probe.stdout) {
           probe.stdout.on('data', chunk => {
