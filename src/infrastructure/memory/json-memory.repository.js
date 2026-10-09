@@ -19,9 +19,41 @@ class JsonMemoryRepository {
   ensureStorage() {
     const directory = path.dirname(this.filePath);
     fs.mkdirSync(directory, { recursive: true });
-    if (!fs.existsSync(this.filePath)) fs.writeFileSync(this.filePath, '[]\n', 'utf8');
-  }
 
+    // Atomic no-clobber creation: never open an existing store with truncation
+    // semantics after another process may already have inserted records.
+    let fd;
+    try {
+      fd = fs.openSync(this.filePath, 'wx', 0o600);
+    } catch (error) {
+      if (error.code === 'EEXIST') return;
+      throw new Error(\`Memory storage initialization failed: \${error.message}\`);
+    }
+
+    try {
+      fs.writeFileSync(fd, '[]\n', 'utf8');
+      fs.fsyncSync(fd);
+    } catch (error) {
+      throw new Error(\`Memory storage initialization failed: \${error.message}\`);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    // Persist the directory entry where supported. Unexpected I/O errors are
+    // surfaced rather than silently claiming durable initialization.
+    try {
+      const directoryFd = fs.openSync(directory, 'r');
+      try {
+        fs.fsyncSync(directoryFd);
+      } finally {
+        fs.closeSync(directoryFd);
+      }
+    } catch (error) {
+      if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(error.code)) {
+        throw new Error(\`Memory storage directory sync failed: \${error.message}\`);
+      }
+    }
+  }
   readRaw() {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8');
@@ -40,15 +72,18 @@ class JsonMemoryRepository {
   }
 
   migrateLegacyData() {
-    const current = this.readRaw();
-    if (!current.length) return;
-    const migrated = current.map(memory => this.normalize(memory));
-    const changed = migrated.some((memory, index) =>
-      JSON.stringify(memory) !== JSON.stringify(current[index])
-    );
-    if (changed) this.write(migrated);
+    // Migration is a read-modify-write operation and must serialize with inserts
+    // and updates; otherwise a stale snapshot can replace concurrent writes.
+    return this.withLock(() => {
+      const current = this.readRaw();
+      if (!current.length) return;
+      const migrated = current.map(memory => this.normalize(memory));
+      const changed = migrated.some((memory, index) =>
+        JSON.stringify(memory) !== JSON.stringify(current[index])
+      );
+      if (changed) this.write(migrated);
+    });
   }
-
   read() {
     return this.readRaw().map(memory => this.normalize(memory));
   }
