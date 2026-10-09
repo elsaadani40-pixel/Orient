@@ -237,8 +237,8 @@ test('resume returns durable cancellation when cancellation wins terminal comple
       },
       checkpoints: {
         findLatest: () => ({ checkpointId: 'checkpoint-race', sequence: 1, snapshot }),
-        acquireResumeLease: () => ({ leaseId: 'lease-race' }),
-        releaseResumeLease: () => { releaseCount += 1; },
+        acquireResumeLease: async () => ({ leaseId: 'lease-race' }),
+        releaseResumeLease: async () => { releaseCount += 1; },
         save: () => ({ checkpointId: 'checkpoint-cancelled' })
       },
       events: { appendMany: async () => [] }
