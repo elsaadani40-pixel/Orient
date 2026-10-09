@@ -89,7 +89,7 @@ class IdempotencyRepository {
   findByKey(key, { tenantId = null } = {}) {
     if (!key) return null;
     const record = this.read()[key] || null;
-    return record && (!tenantId || record.tenantId === tenantId || (tenantId === 'local' && !record.tenantId))
+    return record && (record.tenantId || null) === (tenantId || null)
       ? record : null;
   }
 
@@ -103,7 +103,12 @@ class IdempotencyRepository {
     return this.withLock(() => {
       const records = this.read();
       if (records[key]) {
-        if (tenantId && records[key].tenantId !== tenantId) throw new Error('Idempotency tenant mismatch');
+        if ((records[key].tenantId || null) !== (tenantId || null)) {
+          const error = new Error('Idempotency tenant mismatch');
+          error.code = 'IDEMPOTENCY_TENANT_MISMATCH';
+          error.status = 403;
+          throw error;
+        }
         return { created: false, key, record: records[key] };
       }
       const record = {
@@ -122,7 +127,7 @@ class IdempotencyRepository {
     return this.withLock(() => {
       const records = this.read();
       const record = records[key];
-      if (!record || (tenantId && record.tenantId !== tenantId)) return null;
+      if (!record || (record.tenantId || null) !== (tenantId || null)) return null;
       if (record.status === 'completed') {
         if (JSON.stringify(record.result) !== JSON.stringify(result ?? null)) {
           const error = new Error('Idempotency record is already completed with a different result');
@@ -151,7 +156,7 @@ class IdempotencyRepository {
     return this.withLock(() => {
       const records = this.read();
       const record = records[key];
-      if (!record || (tenantId && record.tenantId !== tenantId)) return null;
+      if (!record || (record.tenantId || null) !== (tenantId || null)) return null;
       if (record.status === 'failed') return record;
       if (record.status === 'completed') {
         const error = new Error('Completed idempotency record cannot be failed');
@@ -180,7 +185,7 @@ class IdempotencyRepository {
     if (!key) return false;
     return this.withLock(() => {
       const records = this.read();
-      if (!records[key] || (tenantId && records[key].tenantId !== tenantId)) return false;
+      if (!records[key] || (records[key].tenantId || null) !== (tenantId || null)) return false;
       delete records[key];
       this.write(records);
       return true;
