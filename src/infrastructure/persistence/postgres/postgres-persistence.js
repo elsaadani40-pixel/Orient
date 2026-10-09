@@ -774,7 +774,13 @@ class PostgresApprovalRepository {
   constructor(db) { this.db = db; }
 
   mapRow(row) {
-    return this.mapRow(row);
+    return {
+      approvalId: row.approval_id, executionId: row.execution_id, step: Number(row.step),
+      planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
+      scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
+      used: Boolean(row.used), usedAt: row.used_at || undefined,
+      metadata: row.metadata, tenantId: row.tenant_id
+    };
   }
 
   async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null } = {}) {
@@ -816,13 +822,7 @@ class PostgresApprovalRepository {
     );
     if (!result.rows.length) return null;
     const row = result.rows[0];
-    return {
-      approvalId: row.approval_id, executionId: row.execution_id, step: Number(row.step),
-      planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
-      scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
-      used: Boolean(row.used), usedAt: row.used_at || undefined,
-      metadata: row.metadata, tenantId: row.tenant_id
-    };
+    return this.mapRow(row);
   }
 
   async consume(approvalId, usedAt, tenantId = null) {
