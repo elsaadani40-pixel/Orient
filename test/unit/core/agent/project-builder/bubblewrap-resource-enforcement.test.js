@@ -68,7 +68,7 @@ function makeTerminationScenario({ failAt = null, activeState = 'inactive' } = {
       setImmediate(() => {
         const shouldFail = action === failAt;
         if (action === 'show' && !shouldFail) {
-          child.stdout.write(`${activeState}\\n`);
+          child.stdout.write(`${activeState}\n`);
           child.stdout.end();
         }
         child.emit('close', shouldFail ? 1 : 0);
