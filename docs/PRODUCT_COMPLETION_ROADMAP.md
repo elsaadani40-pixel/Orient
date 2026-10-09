@@ -21,7 +21,7 @@
 - The code contains a canonical `OrientRuntime`, request/workflow/agent/recovery coordinators, authorization and approval services, tool execution authorization, and a Project Builder path with OS-level sandbox/resource enforcement.
 - The HTTP server exposes memory routes and agent execution/status/approval/cancel/resume endpoints. PR #130 fixed async PostgreSQL status/approval reads; PR #132 added a real HTTP-to-runtime read-only mission; PR #133 closes direct calls through a registered tool returned by `ToolRegistry.get()` when authorization is enabled; PR #136 proves a local memory save/display/restart/retrieval path with tenant isolation.
 - Configuration defaults to JSON persistence and localhost binding; the model provider defaults to `none`, with an Ollama URL/model configured as an option.
-- The repository currently has no open issues or open pull requests at the time this baseline was queried.
+- Open issue and pull-request counts are time-sensitive; query GitHub live rather than treating a historical count as a current baseline.
 - Version metadata drift was resolved in PR #128: `package.json` is now the source of truth (`0.12.0`), and both application config and `OrientRuntime.version` read the shared `src/core/version.js` value. `test/unit/core/version-consistency.test.js` guards package/config consistency.
 - The recent Strict CI success (6/6 jobs, 476 passing and 0 failing in the reported full-suite logs) validates that run, not every security property or every future product requirement.
 
