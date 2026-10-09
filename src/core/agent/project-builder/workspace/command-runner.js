@@ -63,8 +63,14 @@ class CommandRunner {
           shell: false,
           windowsHide: true,
           detached: process.platform !== 'win32',
-          // Child processes receive only explicitly approved variables. Never inherit host secrets.
-          env: { ...this.policy.environment }
+          // Keep only non-secret runtime essentials from the host; all other variables are explicit policy allowlist entries.
+          env: {
+            PATH: process.env.PATH || '',
+            ...(process.platform === 'win32' && process.env.SystemRoot
+              ? { SystemRoot: process.env.SystemRoot }
+              : {}),
+            ...this.policy.environment
+          }
         }
       );
 
