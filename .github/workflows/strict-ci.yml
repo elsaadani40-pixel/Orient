@@ -102,10 +102,12 @@ jobs:
           set -euo pipefail
           test ! -e ORIENT-ONE-AUDIT-PACKAGE.md
           test ! -e ORIENT-ONE-AUDIT-PACKAGE-SAFE.md
-          ! git ls-files | grep -E '(^|/)(\\.env|.*\\.pem|.*\\.key)$' || {
-            echo "Sensitive file tracked"
+          git check-ignore --no-index -q .env
+          ! git check-ignore --no-index -q .env.example
+          if git ls-files | grep -E '(^|/)[.]env([.]|$)|[.](pem|key|p12|pfx|sqlite|db)$|(^|/)data/|ORIENT-ONE-AUDIT-PACKAGE.*[.]md' | grep -vE '^[.]env[.]example$'; then
+            echo "Potentially sensitive or generated file is tracked"
             exit 1
-          }
+          fi
 
       - name: Run strict Node test suite
         shell: bash
@@ -136,6 +138,12 @@ jobs:
           while IFS= read -r file; do
             node --check "$file"
           done < <(find src test -type f -name '*.js' -print | sort)
+
+      - name: Verify shell script syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n rebuild-audit-package.sh
 
       - name: Reject obvious secret patterns
         shell: bash
