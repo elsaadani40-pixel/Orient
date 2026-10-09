@@ -9,7 +9,7 @@ The resource supervisor uses a transient **systemd user service** so the kernel/
 - `MemoryMax`: aggregate memory ceiling for the unit cgroup; `MemorySwapMax=0` prevents additional swap-backed memory for the unit.
 - `CPUQuota`: aggregate CPU-rate ceiling, paired with per-process `LimitCPUSoft`/`LimitCPU` soft-hard CPU-time limits and unit-level `RuntimeMaxSec`. CPUQuota itself is a rate limit, not a total CPU-time budget.
 - `TasksMax`: aggregate task/process ceiling.
-- `LimitNOFILE`: per-process open-file descriptor ceiling.
+- `LimitNOFILE`: a supervisor-level descriptor floor that keeps the trusted preflight helper functional. After the cgroup properties are verified, `prlimit` applies the configured per-process descriptor ceiling to Bubblewrap and its untrusted command before that command starts.
 - `LimitFSIZE`: per-process maximum regular-file size.
 - `RuntimeMaxSec`: service runtime ceiling and a second line of defense alongside the caller timeout.
 - `KillMode=control-group` and `OOMPolicy=kill`: terminate the unit's process tree on service stop or cgroup OOM.
@@ -18,7 +18,7 @@ The command's captured output also needs a separate byte ceiling enforced by the
 
 ## Fail-closed requirements
 
-A usable systemd user manager and working cgroup controllers are prerequisites. Missing `systemd-run`, an unavailable user bus, unsupported controllers, or rejected unit properties must fail execution. There is no unsandboxed, direct-spawn, RLIMIT-only, or host-network fallback.
+A usable systemd user manager and working cgroup controllers are prerequisites. Missing `systemd-run`, an unavailable user bus, unsupported controllers, missing `prlimit`, or rejected unit properties must fail execution. The in-unit preflight verifies the effective cgroup properties before Bubblewrap starts; the requested per-process descriptor limit is then applied with `prlimit`. There is no unsandboxed, direct-spawn, RLIMIT-only, or host-network fallback.
 
 Resource limits apply per command, not as an aggregate per-tenant budget. Multiple commands can each consume their configured maximum unless a separate tenant-level scheduler/quota is implemented.
 
