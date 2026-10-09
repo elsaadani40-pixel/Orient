@@ -82,7 +82,7 @@ A future scale stage should add indexed cursor pagination and retention policies
 
 ## Security boundary
 
-The default host is \`127.0.0.1\`. The current HTTP interface does not provide a complete remote-user authentication/session layer. **Do not set \`HOST=0.0.0.0\` or expose these routes to a LAN, reverse proxy, or public network without first adding and testing an authentication boundary and transport protection.** Same-origin requests and CSP headers are not substitutes for authentication.
+The HTTP bind policy accepts only \`127.0.0.1\`, \`::1\`, or \`localhost\`. Startup fails closed for wildcard or remote \`HOST\` values because the current HTTP interface does not provide a complete remote-user authentication/session layer. Remote binding remains unsupported until an authentication boundary and transport protection are implemented and tested. Same-origin requests and CSP headers are not substitutes for authentication.
 
 Approval and cancellation controls are consequential operations. Keep runtime policy checks in place, review the tool/capability details, and never infer that a successful HTTP response proves a downstream side effect has completed.
 

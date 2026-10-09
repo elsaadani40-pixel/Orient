@@ -31,6 +31,7 @@ Use environment variables or an approved secret manager. Keep privileges and acc
 ## Safe use
 
 - Run ORIENT ONE with test data until its security boundaries have been independently reviewed for your use case.
+- The current HTTP interface is local-only: configuration rejects wildcard and remote bind addresses until a complete authentication/session boundary and transport protection are implemented and tested.
 - Keep network-facing services bound to localhost unless a reviewed deployment configuration explicitly requires otherwise.
 - Use least-privilege database credentials and separate test/development data from production data.
 - Treat tool inputs, project files, model output, and external content as untrusted.
