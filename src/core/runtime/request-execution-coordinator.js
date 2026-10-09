@@ -288,6 +288,49 @@ class RequestExecutionCoordinator {
     }
   }
 
+
+  createResumeLeaseHeartbeat(renewLease, intervalMs) {
+    if (typeof renewLease !== 'function') throw new TypeError('renewLease is required');
+    if (!Number.isInteger(intervalMs) || intervalMs <= 0) {
+      throw new TypeError('intervalMs must be a positive integer');
+    }
+
+    let stopped = false;
+    let renewalError = null;
+    let inFlight = null;
+
+    const renewOnce = () => {
+      if (renewalError) return Promise.reject(renewalError);
+      if (inFlight) return inFlight;
+      inFlight = Promise.resolve()
+        .then(renewLease)
+        .catch(error => {
+          renewalError = error;
+          throw error;
+        })
+        .finally(() => { inFlight = null; });
+      return inFlight;
+    };
+
+    const timer = setInterval(() => {
+      if (stopped || renewalError || inFlight) return;
+      // The stored error is surfaced at the next checkpoint or when the
+      // execution settles; never create an unhandled timer rejection.
+      renewOnce().catch(() => {});
+    }, intervalMs);
+    if (typeof timer.unref === 'function') timer.unref();
+
+    return {
+      renew: renewOnce,
+      async stop() {
+        stopped = true;
+        clearInterval(timer);
+        if (inFlight) await inFlight.catch(() => {});
+        if (renewalError) throw renewalError;
+      }
+    };
+  }
+
   async resume(executionId, { approval = null, approvals = {} } = {}) {
     if (!this.persistence?.checkpoints?.findLatest) {
       throw Object.assign(new Error('Durable checkpoint storage is required for resume'), {
@@ -438,7 +481,34 @@ class RequestExecutionCoordinator {
         ? { approvalId: durableApproval.approvalId }
         : null;
 
-      const executionResult = await this.agentExecutionCoordinator.run({
+      if (resumeLease?.leaseId && typeof this.persistence.checkpoints.renewResumeLease !== 'function') {
+        if (typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
+        throw Object.assign(new Error('Durable resume lease renewal is required for safe execution'), {
+          code: 'CHECKPOINT_RESUME_LEASE_RENEWAL_UNSUPPORTED'
+        });
+      }
+
+      const renewResumeLease = resumeLease?.leaseId
+        ? async () => {
+            const renewedLease = await this.persistence.checkpoints.renewResumeLease(executionId, resumeLease.leaseId, {
+              tenantId: this.tenantId,
+              leaseDurationMs: this.resumeLeaseDurationMs
+            });
+            if (!renewedLease) {
+              throw Object.assign(new Error('Execution resume lease was lost before checkpoint commit'), {
+                code: 'CHECKPOINT_RESUME_LEASE_LOST'
+              });
+            }
+          }
+        : null;
+      const heartbeat = renewResumeLease
+        ? this.createResumeLeaseHeartbeat(renewResumeLease, Math.max(1, Math.floor(this.resumeLeaseDurationMs / 3)))
+        : null;
+      let executionResult;
+      try {
+        executionResult = await this.agentExecutionCoordinator.run({
         context,
         plan,
         validation: { valid: true, steps: plan.steps },
@@ -452,22 +522,13 @@ class RequestExecutionCoordinator {
         tenantId: this.tenantId,
         agentId: context.metadata?.agentId || 'ORIENT_RUNTIME',
         resumed: true,
-        renewResumeLease: resumeLease?.leaseId && typeof this.persistence.checkpoints.renewResumeLease === 'function'
-          ? async () => {
-              const renewedLease = await this.persistence.checkpoints.renewResumeLease(executionId, resumeLease.leaseId, {
-                tenantId: this.tenantId,
-                leaseDurationMs: this.resumeLeaseDurationMs
-              });
-              if (!renewedLease) {
-                throw Object.assign(new Error('Execution resume lease was lost before checkpoint commit'), {
-                  code: 'CHECKPOINT_RESUME_LEASE_LOST'
-                });
-              }
-            }
-          : null,
+        renewResumeLease: heartbeat ? heartbeat.renew : null,
         isCancellationRequested: () => this.isCancellationRequested(context.executionId),
         cancellationReason: context.cancellationReason || 'Execution cancellation requested'
-      });
+        });
+      } finally {
+        if (heartbeat) await heartbeat.stop();
+      }
 
       const { loopResult, replanningDecision } = executionResult;
       const activeContextSnapshot = {
