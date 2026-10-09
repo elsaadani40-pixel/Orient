@@ -27,14 +27,14 @@ class JsonMemoryRepository {
       fd = fs.openSync(this.filePath, 'wx', 0o600);
     } catch (error) {
       if (error.code === 'EEXIST') return;
-      throw new Error(`Memory storage initialization failed: \${error.message}`);
+      throw new Error(`Memory storage initialization failed: ${error.message}`);
     }
 
     try {
       fs.writeFileSync(fd, '[]\n', 'utf8');
       fs.fsyncSync(fd);
     } catch (error) {
-      throw new Error(`Memory storage initialization failed: \${error.message}`);
+      throw new Error(`Memory storage initialization failed: ${error.message}`);
     } finally {
       fs.closeSync(fd);
     }
@@ -50,7 +50,7 @@ class JsonMemoryRepository {
       }
     } catch (error) {
       if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(error.code)) {
-        throw new Error(`Memory storage directory sync failed: \${error.message}`);
+        throw new Error(`Memory storage directory sync failed: ${error.message}`);
       }
     }
   }
