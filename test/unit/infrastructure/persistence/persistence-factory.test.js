@@ -28,7 +28,7 @@ test('persistence factory defaults to JSON when mode is omitted', () => {
 });
 
 test('persistence factory rejects unknown modes instead of silently falling back to JSON', () => {
-  for (const persistenceMode of ['sqlite', 'postgress', 'unexpected', 'JSON']) {
+  for (const persistenceMode of ['sqlite', 'postgress', 'unexpected', 'JSON', 'POSTGRES']) {
     assert.throws(
       () => createPersistence({ ...baseConfig, persistenceMode }),
       error => error.code === 'PERSISTENCE_MODE_UNSUPPORTED',
