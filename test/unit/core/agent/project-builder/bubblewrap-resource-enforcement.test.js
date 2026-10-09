@@ -124,7 +124,8 @@ test('resource supervisor cleanup verifies that a transient unit is unloaded aft
       setImmediate(() => {
         if (action === 'show') {
           loadStateChecks += 1;
-          child.stdout.write(loadStateChecks === 1 ? 'loaded\\n' : 'not-found\\n');
+          const state = loadStateChecks <= 2 ? 'loaded\\n' : 'not-found\\n';
+          child.stdout.write(state);
           child.stdout.end();
         }
         child.emit('close', 0);
@@ -138,8 +139,8 @@ test('resource supervisor cleanup verifies that a transient unit is unloaded aft
   };
 
   assert.equal(await isolator.cleanup(child), true);
-  assert.deepEqual(calls, ['reset-failed', 'show', 'show']);
-  assert.equal(loadStateChecks, 2);
+  assert.deepEqual(calls, ['show', 'reset-failed', 'show', 'show']);
+  assert.equal(loadStateChecks, 3);
 });
 
 test('resource supervisor cleanup fails if systemd still reports the transient unit loaded', async () => {
