@@ -38,7 +38,7 @@ function normalizeResourceLimits(overrides = {}) {
     maxProcesses: positiveInteger(limits.maxProcesses, 'maxProcesses', { min: 1, max: 4096 }),
     maxOpenFiles: positiveInteger(limits.maxOpenFiles, 'maxOpenFiles', { min: 16, max: 65536 }),
     maxFileSizeBytes: positiveInteger(limits.maxFileSizeBytes, 'maxFileSizeBytes', { min: 1024 }),
-    maxOutputBytes: positiveInteger(limits.maxOutputBytes, 'maxOutputBytes', { min: 1024 })
+    maxOutputBytes: positiveInteger(limits.maxOutputBytes, 'maxOutputBytes', { min: 1 })
   });
 }
 
