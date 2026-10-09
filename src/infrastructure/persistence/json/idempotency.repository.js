@@ -41,11 +41,31 @@ class IdempotencyRepository {
   }
 
   write(records) {
-    const temporaryFile = this.filePath + '.tmp.' + process.pid;
+    const directory = path.dirname(this.filePath);
+    const temporaryFile = this.filePath + '.tmp.' + process.pid + '.' + crypto.randomUUID();
+    let fileDescriptor = null;
     try {
-      fs.writeFileSync(temporaryFile, JSON.stringify(records, null, 2) + '\n', 'utf8');
+      fileDescriptor = fs.openSync(temporaryFile, 'wx', 0o600);
+      fs.writeFileSync(fileDescriptor, JSON.stringify(records, null, 2) + '\n', 'utf8');
+      // Persist the new contents before making the atomic rename visible.
+      fs.fsyncSync(fileDescriptor);
+      fs.closeSync(fileDescriptor);
+      fileDescriptor = null;
+
       fs.renameSync(temporaryFile, this.filePath);
+
+      // Persist the directory entry update as well, so the rename survives a
+      // sudden process/host crash on filesystems that support directory fsync.
+      const directoryDescriptor = fs.openSync(directory, 'r');
+      try {
+        fs.fsyncSync(directoryDescriptor);
+      } finally {
+        fs.closeSync(directoryDescriptor);
+      }
     } catch (error) {
+      if (fileDescriptor !== null) {
+        try { fs.closeSync(fileDescriptor); } catch {}
+      }
       try { if (fs.existsSync(temporaryFile)) fs.unlinkSync(temporaryFile); } catch {}
       throw new Error('Idempotency storage write failed: ' + error.message);
     }
