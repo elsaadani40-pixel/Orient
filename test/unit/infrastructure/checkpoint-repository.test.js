@@ -91,6 +91,36 @@ test('checkpoint repository rejects tampered snapshots', () => {
   });
 });
 
+test('resume lease renewal extends only the current unexpired owner lease', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-checkpoint-renew-'));
+  const repository = new CheckpointRepository(path.join(directory, 'checkpoints.json'));
+  repository.save({
+    executionId: 'exec-renew',
+    tenantId: 'tenant-a',
+    metadata: { tenantId: 'tenant-a' },
+    status: 'running'
+  }, { tenantId: 'tenant-a' });
+  const lease = repository.acquireResumeLease('exec-renew', {
+    tenantId: 'tenant-a',
+    leaseDurationMs: 30000
+  });
+  const renewed = repository.renewResumeLease('exec-renew', lease.leaseId, {
+    tenantId: 'tenant-a',
+    leaseDurationMs: 60000
+  });
+  assert.ok(renewed);
+  assert.ok(renewed.expiresAtMs > lease.expiresAtMs);
+  assert.equal(repository.renewResumeLease('exec-renew', 'not-owner', {
+    tenantId: 'tenant-a',
+    leaseDurationMs: 30000
+  }), null);
+  assert.equal(repository.renewResumeLease('exec-renew', lease.leaseId, {
+    tenantId: 'tenant-b',
+    leaseDurationMs: 30000
+  }), null);
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
 test('checkpoint saves preserve an active resume lease until its owner releases it', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-checkpoint-resume-lease-'));
   const repository = new CheckpointRepository(path.join(directory, 'checkpoints.json'));
