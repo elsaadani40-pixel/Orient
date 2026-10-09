@@ -238,6 +238,7 @@ test('resume returns durable cancellation when cancellation wins terminal comple
       checkpoints: {
         findLatest: () => ({ checkpointId: 'checkpoint-race', sequence: 1, snapshot }),
         acquireResumeLease: async () => ({ leaseId: 'lease-race' }),
+        renewResumeLease: async () => ({ leaseId: 'lease-race' }),
         releaseResumeLease: async () => { releaseCount += 1; },
         save: () => ({ checkpointId: 'checkpoint-cancelled' })
       },
@@ -467,4 +468,84 @@ test('resume refuses to execute when durable lease acquisition fails', async () 
     error => error.code === 'CHECKPOINT_RESUME_LEASE_UNAVAILABLE'
   );
   assert.equal(executionAttempts, 0);
+});
+
+
+test('resume lease heartbeat renews during long-running execution and stops cleanly', async () => {
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: {},
+    persistence: null,
+    persistenceCoordinator: {},
+    quotaService: {},
+    quotaPolicy: { toJSON: () => ({}) },
+    maxInputChars: 100
+  });
+  let renewals = 0;
+  const heartbeat = coordinator.createResumeLeaseHeartbeat(async () => {
+    renewals += 1;
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }, 5);
+
+  await new Promise(resolve => setTimeout(resolve, 28));
+  await heartbeat.stop();
+  const stoppedCount = renewals;
+  await new Promise(resolve => setTimeout(resolve, 15));
+
+  assert.ok(stoppedCount >= 1, 'heartbeat should renew before a long tool call returns');
+  assert.equal(renewals, stoppedCount, 'heartbeat must not renew after stop');
+});
+
+test('resume fails closed and releases a lease when renewal is unsupported', async () => {
+  const ExecutionContext = require('../../../../src/core/execution/execution-context');
+  const context = new ExecutionContext({
+    requestId: 'request-no-renewal',
+    input: 'must not run without renewable lease',
+    executionId: 'execution-no-renewal',
+    tenantId: 'tenant-a'
+  });
+  context.start();
+  context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
+  context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+  context.setPlan({
+    intent: 'test.no-renewal',
+    steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }]
+  });
+  context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+
+  let executionAttempts = 0;
+  let releaseCount = 0;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {
+      run: async () => { executionAttempts += 1; }
+    },
+    recoveryCoordinator: {},
+    persistence: {
+      executions: { findById: async () => null },
+      checkpoints: {
+        findLatest: async () => ({
+          checkpointId: 'checkpoint-no-renewal',
+          sequence: 1,
+          snapshot: context.snapshot(),
+          snapshotSha256: null
+        }),
+        acquireResumeLease: async () => ({ leaseId: 'lease-no-renewal' }),
+        releaseResumeLease: async () => { releaseCount += 1; }
+      }
+    },
+    persistenceCoordinator: {},
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  await assert.rejects(
+    coordinator.resume('execution-no-renewal'),
+    error => error.code === 'CHECKPOINT_RESUME_LEASE_RENEWAL_UNSUPPORTED'
+  );
+  assert.equal(executionAttempts, 0);
+  assert.equal(releaseCount, 1);
 });
