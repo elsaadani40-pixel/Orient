@@ -79,10 +79,14 @@ class CommandRunner {
         clearTimeout(timer);
 
         if (terminate) {
-          if (typeof this.isolator.terminate === 'function') {
-            Promise.resolve(this.isolator.terminate(child)).catch(() => {});
-          } else {
-            terminateProcessTree(child);
+          try {
+            if (typeof this.isolator.terminate === 'function') {
+              Promise.resolve().then(() => this.isolator.terminate(child)).catch(() => {});
+            } else {
+              terminateProcessTree(child);
+            }
+          } catch {
+            // The rejection remains authoritative; the OS runtime cap is the fallback kill boundary.
           }
         }
         reject(error);
@@ -153,7 +157,7 @@ class CommandRunner {
             : initialStatus;
 
           if (typeof this.isolator.cleanup === 'function') {
-            await Promise.resolve(this.isolator.cleanup(child)).catch(() => false);
+            await Promise.resolve().then(() => this.isolator.cleanup(child)).catch(() => false);
           }
           if (settled) return;
           settled = true;
