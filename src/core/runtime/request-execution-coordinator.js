@@ -382,7 +382,7 @@ class RequestExecutionCoordinator {
     // Validate the checkpoint before acquiring a lease so malformed durable
     // state cannot strand a resume lease.
     const resumeLease = typeof this.persistence.checkpoints.acquireResumeLease === 'function'
-      ? this.persistence.checkpoints.acquireResumeLease(executionId, {
+      ? await this.persistence.checkpoints.acquireResumeLease(executionId, {
           tenantId: this.tenantId,
           leaseDurationMs: this.resumeLeaseDurationMs
         })
@@ -474,7 +474,7 @@ class RequestExecutionCoordinator {
         await this.persistenceCoordinator.persistEvents(context);
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }
         return { resumed: false, reason: 'execution_cancelled', execution: durableCancellation || context.snapshot() };
       }
@@ -488,7 +488,7 @@ class RequestExecutionCoordinator {
       await this.persistenceCoordinator.persistEvents(context);
       await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_completed');
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-        this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
       }
 
       return {
@@ -505,7 +505,7 @@ class RequestExecutionCoordinator {
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
         await this.persistenceCoordinator.persistEvents(context);
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }
         return { resumed: false, reason: 'execution_cancelled', execution: context.snapshot() };
       }
@@ -518,7 +518,7 @@ class RequestExecutionCoordinator {
       );
       if (cancellationBeforeRecovery) {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }
         return {
           resumed: false,
@@ -542,7 +542,7 @@ class RequestExecutionCoordinator {
       );
       if (cancellationAfterRecovery) {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }
         return {
           resumed: false,
@@ -552,7 +552,7 @@ class RequestExecutionCoordinator {
       }
 
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-        this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
       }
       throw error;
     }
