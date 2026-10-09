@@ -382,9 +382,11 @@ class AgentLoop {
         );
       }
 
+      const operationTenantId = runtimeContext.tenantId || context.tenantId || 'local';
       const operationId = crypto
         .createHash('sha256')
         .update(JSON.stringify({
+          tenantId: operationTenantId,
           executionId: context.executionId,
           planRevision,
           step: stepNumber,
@@ -641,6 +643,21 @@ class AgentLoop {
           planRevision,
           reason: 'step_started'
         });
+
+        // Cancellation observed after persisting the step-start checkpoint is
+        // still before the tool boundary. Release the reservation so a safe
+        // retry does not mistake a never-started side effect for an unknown one.
+        try {
+          await throwIfCancellationRequested();
+        } catch (error) {
+          if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
+            await this.idempotencyStore.delete(
+              idempotency.key,
+              { tenantId: operationTenantId }
+            );
+          }
+          throw error;
+        }
       }
 
       if (!idempotency.created) {
