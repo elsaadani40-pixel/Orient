@@ -63,7 +63,7 @@ while(Date.now()<=deadline){
  const p=show();
  if(p && p.ActiveState==='active' && p.MemoryMax===String(l.memoryMaxBytes) &&
  one(p.CPUQuotaPerSecUSec,[String(quota),String(quota/1000000)+'s',String(quota/1000)+'ms',String(quota)+'us']) &&
- p.TasksMax===String(l.maxProcesses) && paired(p.LimitNOFILE,l.maxOpenFiles) &&
+ p.TasksMax===String(l.maxProcesses) && paired(p.LimitNOFILE,Math.max(l.maxOpenFiles,256)) &&
  paired(p.LimitFSIZE,l.maxFileSizeBytes) &&
  durationMatches(p.RuntimeMaxUSec, seconds) &&
  cpu(p.LimitCPU,l.maxCpuTimeSeconds,l.maxCpuTimeSeconds+1) &&
@@ -73,7 +73,7 @@ while(Date.now()<=deadline){
 }
 if(!ok){process.stderr.write('ORIENT resource quota preflight failed; refusing to start sandbox: '+JSON.stringify({limits:l,timeoutMs,observed:show()})+'\\n');process.exit(125);}
 process.stderr.write('__ORIENT_RESOURCE_LIMITS_VERIFIED__\n');
-const result=spawnSync(executable,args,{stdio:'inherit',env:clientEnvironment});
+const result=spawnSync('prlimit',['--nofile='+l.maxOpenFiles+':'+l.maxOpenFiles,executable,...args],{stdio:'inherit',env:clientEnvironment});
 if(result.error){process.stderr.write('ORIENT sandbox launch failed: '+result.error.message+'\n');process.exit(126);}
 process.exit(Number.isInteger(result.status)?result.status:1);
 `;
@@ -235,10 +235,14 @@ class BubblewrapIsolator {
     });
     const limits = normalizeResourceLimits(resourceLimits);
     const unitName = `orient-pb-${crypto.randomUUID()}.service`;
+    // Keep the trusted preflight helper able to open its systemd bus sockets;
+    // apply the requested per-process NOFILE limit to bubblewrap and its child
+    // through prlimit only after the cgroup quota preflight succeeds.
+    const supervisorLimits = { ...limits, maxOpenFiles: Math.max(limits.maxOpenFiles, 256) };
     const supervisorArgs = buildSystemdRunArgs({
       unitName,
       timeoutMs,
-      limits,
+      limits: supervisorLimits,
       executable: process.execPath,
       args: ['-e', SYSTEMD_LIMIT_GATE_SCRIPT, unitName, this.systemctlPath, JSON.stringify(limits), String(timeoutMs), JSON.stringify(this._systemdClientEnvironment()), bwrap, ...sandboxArgs]
     });
