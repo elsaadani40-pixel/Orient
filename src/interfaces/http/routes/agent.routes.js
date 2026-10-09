@@ -105,7 +105,7 @@ function createAgentRoutes(agentService) {
           lastHeartbeatAt = Date.now();
         }
       }, 5000);
-      req.on('close', cleanup);
+      req.on('aborted', cleanup);
       res.on('close', cleanup);
       void poll(initialEvents);
     },
