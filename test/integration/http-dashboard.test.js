@@ -39,6 +39,8 @@ test('dashboard route serves the local control UI with security headers', async 
   assert.match(html, /id="startExecutionStream"/);
   assert.match(html, /id="stopExecutionStream"/);
   assert.match(html, /id="executionEvents"/);
+  assert.match(html, /window\.ORIENTScene.addExecutionEvent/);
+  assert.match(html, /window\.ORIENTScene.clearExecutionEvents/);
   assert.match(html, /new EventSource\(/);
   assert.match(html, /id="heroExecutionState"/);
   assert.match(html, /extractExecutionState/);
@@ -64,6 +66,9 @@ test('WebGL command scene is served locally with a JavaScript content type', asy
   assert.match(source, /getContext\('webgl'/);
   assert.match(source, /CSS FALLBACK/);
   assert.match(source, /window\.ORIENTScene/);
+  assert.match(source, /addExecutionEvent\(event\)/);
+  assert.match(source, /eventNodes\.forEach/);
+  assert.match(source, /eventNodes.length > 6/);
   assert.match(source, /drawSphere\(core, activeTint/);
 });
 
