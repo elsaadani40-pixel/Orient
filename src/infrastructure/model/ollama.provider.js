@@ -70,6 +70,7 @@ class OllamaProvider {
         `${this.baseUrl}/api/chat`,
         {
           method: 'POST',
+          redirect: 'error',
           headers: {
             'content-type': 'application/json'
           },
