@@ -67,7 +67,7 @@ function buildSystemdRunArgs({ unitName, timeoutMs, limits, executable, args = [
     '--service-type=exec',
     `--unit=${unitName}`,
     `--property=CPUQuota=${normalized.cpuQuotaPercent}%`,
-    `--property=LimitCPU=${normalized.maxCpuTimeSeconds}`,
+    `--property=LimitCPU=${normalized.maxCpuTimeSeconds}:${normalized.maxCpuTimeSeconds + 1}`,
     `--property=MemoryMax=${normalized.memoryMaxBytes}`,
     '--property=MemorySwapMax=0',
     `--property=TasksMax=${normalized.maxProcesses}`,
