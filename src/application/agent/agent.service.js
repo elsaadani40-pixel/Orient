@@ -27,6 +27,10 @@ class AgentService {
     return this.runtime.execute(clean);
   }
 
+  getExecutionEvents(executionId, options = {}) {
+    return this.runtime.getExecutionEvents(executionId, options);
+  }
+
   getExecutionStatus(executionId) {
     return this.runtime.getExecutionStatus(executionId);
   }
