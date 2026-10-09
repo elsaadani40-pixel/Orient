@@ -381,12 +381,19 @@ class RequestExecutionCoordinator {
 
     // Validate the checkpoint before acquiring a lease so malformed durable
     // state cannot strand a resume lease.
-    const resumeLease = typeof this.persistence.checkpoints.acquireResumeLease === 'function'
+    const hasResumeLeaseStore = typeof this.persistence.checkpoints.acquireResumeLease === 'function';
+    const resumeLease = hasResumeLeaseStore
       ? await this.persistence.checkpoints.acquireResumeLease(executionId, {
           tenantId: this.tenantId,
           leaseDurationMs: this.resumeLeaseDurationMs
         })
       : null;
+
+    if (hasResumeLeaseStore && !resumeLease) {
+      throw Object.assign(new Error('Unable to acquire a durable resume lease'), {
+        code: 'CHECKPOINT_RESUME_LEASE_UNAVAILABLE'
+      });
+    }
 
     try {
       context.record('execution.resume.started', {
