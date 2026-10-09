@@ -51,3 +51,41 @@ test('prevents memory tenant and scoped identity escalation on update', () => {
   assert.equal(stored.tenantId, 'tenant-a');
   assert.equal(stored.scope, 'personal');
 });
+
+
+test('memory repository does not reclaim an old lock owned by a live process', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-live-lock-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file, { lockTimeoutMs: 20 });
+  try {
+    fs.mkdirSync(repo.lockPath);
+    fs.writeFileSync(path.join(repo.lockPath, 'owner.json'), JSON.stringify({
+      token: 'live-owner', pid: process.pid, hostname: os.hostname(), acquiredAt: new Date(0).toISOString()
+    }));
+    const old = new Date(Date.now() - 60000);
+    fs.utimesSync(repo.lockPath, old, old);
+    assert.throws(() => repo.withLock(() => 'must not run'),
+      error => error.code === 'MEMORY_STORAGE_LOCK_TIMEOUT');
+    assert.equal(fs.existsSync(repo.lockPath), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('memory repository recovers a lock whose local owner process is dead', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-dead-lock-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file, { lockTimeoutMs: 100 });
+  try {
+    fs.mkdirSync(repo.lockPath);
+    fs.writeFileSync(path.join(repo.lockPath, 'owner.json'), JSON.stringify({
+      token: 'dead-owner', pid: 2147483647, hostname: os.hostname(), acquiredAt: new Date(0).toISOString()
+    }));
+    const old = new Date(Date.now() - 60000);
+    fs.utimesSync(repo.lockPath, old, old);
+    assert.equal(repo.withLock(() => 'acquired'), 'acquired');
+    assert.equal(fs.existsSync(repo.lockPath), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
