@@ -257,21 +257,22 @@ class BubblewrapIsolator {
       command.once('close', code => finish({ ok: code === 0, output }));
     });
 
-    const runRequired = async args => {
-      const result = await runSystemctl(args);
-      return result.ok;
-    };
-
     return (async () => {
-      // Do not continue or report success when any requested cleanup command fails.
-      if (!await runRequired(['--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unitName])) return false;
-      if (!await runRequired(['--user', 'stop', unitName])) return false;
+      // Attempt both kill and stop: a failed kill must not prevent the authoritative stop.
+      const killResult = await runSystemctl([
+        '--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unitName
+      ]);
+      const stopResult = await runSystemctl(['--user', 'stop', unitName]);
 
       // A successful "stop" command is not proof that the unit is no longer active.
-      const status = await runSystemctl(['--user', 'show', '--property=ActiveState', '--value', unitName]);
-      if (!status.ok || !['inactive', 'failed'].includes(status.output.trim())) return false;
+      const status = await runSystemctl([
+        '--user', 'show', '--property=ActiveState', '--value', unitName
+      ]);
+      const inactive = status.ok && ['inactive', 'failed'].includes(status.output.trim());
+      if (!inactive) return false;
 
-      return runRequired(['--user', 'reset-failed', unitName]);
+      const resetResult = await runSystemctl(['--user', 'reset-failed', unitName]);
+      return killResult.ok && stopResult.ok && resetResult.ok;
     })().catch(() => false);
   }
   cleanup(child) {
