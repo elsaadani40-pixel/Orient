@@ -257,8 +257,33 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
      $('loadExecutionStatus').click();
      document.querySelector('[data-view="security"]').click();
      $('executionId').value = String(item.executionId || '');
+     startExecutionStream();
     });
-    content.append(title, detail, select); row.append(icon, content); list.append(row);
+    content.append(title, detail, select);
+    const terminal = ['completed', 'failed', 'cancelled'].includes(String(item.status || '').toLowerCase());
+    if (!terminal && !item.cancellationRequested && item.executionId) {
+     const cancel = document.createElement('button');
+     cancel.className = 'btn secondary'; cancel.type = 'button'; cancel.textContent = 'طلب إلغاء التنفيذ';
+     cancel.addEventListener('click', async () => {
+      const accepted = window.confirm('سيتم تسجيل طلب إلغاء دائم لهذا التنفيذ. هذا طلب إلغاء تعاوني، وليس قتلًا فوريًا للعملية.\n\nExecution ID: ' + item.executionId + '\nStatus: ' + item.status + '\n\nهل تريد المتابعة؟');
+      if (!accepted) return;
+      cancel.disabled = true;
+      state.textContent = 'جارٍ إرسال طلب الإلغاء إلى الـ Runtime…';
+      try {
+       const response = await fetch('/executions/' + encodeURIComponent(item.executionId) + '/cancel', {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({reason:'Cancellation requested from ORIENT dashboard'})});
+       const body = await response.text();
+       let parsed; try { parsed = JSON.parse(body); } catch { parsed = body; }
+       if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed));
+       await loadExecutionHistory();
+       state.textContent = 'تم تسجيل طلب الإلغاء: ' + JSON.stringify(parsed);
+      } catch (error) {
+       state.textContent = 'تعذر تسجيل طلب الإلغاء: ' + error.message;
+       cancel.disabled = false;
+      }
+     });
+     content.append(cancel);
+    }
+    row.append(icon, content); list.append(row);
    }
    state.textContent = 'تم تحميل ' + data.executions.length + ' من ' + data.total + ' تنفيذ مسجل.';
    if (!data.executions.length) state.textContent = 'لا توجد تنفيذات مسجلة في مساحة المستأجر الحالية.';

@@ -39,6 +39,11 @@ test('dashboard route serves the local control UI with security headers', async 
   assert.match(html, /id="startExecutionStream"/);
   assert.match(html, /id="stopExecutionStream"/);
   assert.match(html, /id="executionEvents"/);
+  assert.match(html, /id="executionHistory"/);
+  assert.match(html, /id="pendingApprovals"/);
+  assert.match(html, /\/cancel/);
+  assert.match(html, /window\.confirm/);
+  assert.match(html, /Cancellation requested from ORIENT dashboard/);
   assert.match(html, /window\.ORIENTScene.addExecutionEvent/);
   assert.match(html, /window\.ORIENTScene.clearExecutionEvents/);
   assert.match(html, /new EventSource\(/);
