@@ -145,14 +145,24 @@ class RequestExecutionCoordinator {
       // Enforce divergence checks whenever durable state is available; absence
       // of a persistence adapter is not itself an outcome conflict.
       if (persistedExecution?.cancellationRequested || persistedExecution?.status === 'cancelled') {
-        if (context.isActive()) {
-          context.cancel(persistedExecution.cancellationReason || 'Execution cancellation requested');
-        }
+        const cancellationReason = persistedExecution.cancellationReason || 'Execution cancellation requested';
+        const cancellationSnapshot = {
+          ...context.snapshot(),
+          status: 'cancelled',
+          cancellationRequested: true,
+          cancellationReason,
+          completedAt: context.snapshot().completedAt || new Date().toISOString()
+        };
+        const durableCancellation = await this.persistence.executions.update(
+          context.executionId,
+          cancellationSnapshot,
+          { tenantId: this.tenantId }
+        );
         await this.persistenceCoordinator.persistEvents(context);
         return {
           requestId,
           type: 'execution_cancelled',
-          execution: persistedExecution
+          execution: durableCancellation || cancellationSnapshot
         };
       }
 
@@ -373,15 +383,25 @@ class RequestExecutionCoordinator {
       // exactly as it does on first execution. Never report success when the
       // repository rejected the terminal completion write.
       if (persistedExecution?.cancellationRequested || persistedExecution?.status === 'cancelled') {
-        if (context.isActive()) {
-          context.cancel(persistedExecution.cancellationReason || 'Execution cancellation requested');
-        }
+        const cancellationReason = persistedExecution.cancellationReason || 'Execution cancellation requested';
+        const cancellationSnapshot = {
+          ...context.snapshot(),
+          status: 'cancelled',
+          cancellationRequested: true,
+          cancellationReason,
+          completedAt: context.snapshot().completedAt || new Date().toISOString()
+        };
+        const durableCancellation = await this.persistence.executions.update(
+          executionId,
+          cancellationSnapshot,
+          { tenantId: this.tenantId }
+        );
         await this.persistenceCoordinator.persistEvents(context);
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
           this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }
-        return { resumed: false, reason: 'execution_cancelled', execution: persistedExecution };
+        return { resumed: false, reason: 'execution_cancelled', execution: durableCancellation || cancellationSnapshot };
       }
 
       if (persistedExecution && persistedExecution.status !== context.status) {
