@@ -293,7 +293,8 @@ class ExecutionContext {
     step,
     tool,
     planRevision = 1,
-    operationId = null
+    operationId = null,
+    resolvedInput = null
   }) {
     if (!this.isActive()) {
       throw new Error(
@@ -330,6 +331,7 @@ class ExecutionContext {
       planRevision,
       operationId,
       tool,
+      resolvedInput,
       status: 'running',
       startedAt:
         new Date().toISOString(),
