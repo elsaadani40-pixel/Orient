@@ -351,3 +351,60 @@ test('execute returns durable cancellation when cancellation wins terminal compl
   assert.equal(persistedEvents.some(event => event.type === 'execution.cancelled'), true);
   assert.equal(writes.length, 1);
 });
+
+
+test('durable cancellation takes precedence over a concurrent tool failure', async () => {
+  let recoveryCalls = 0;
+  let persistedEvents = [];
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test.cancel-error-race', steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async ({ context }) => {
+        context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+        context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+        context.transitionAgentTo(AgentState.LIFECYCLE.OBSERVING);
+        context.transitionAgentTo(AgentState.LIFECYCLE.EVALUATING);
+        throw Object.assign(new Error('tool failed after cancellation'), { code: 'TOOL_FAILED' });
+      }
+    },
+    recoveryCoordinator: { fail: async () => { recoveryCalls += 1; } },
+    persistence: {
+      executions: {
+        findById: () => ({
+          status: 'running',
+          cancellationRequested: true,
+          cancellationReason: 'operator requested cancellation'
+        })
+      }
+    },
+    persistenceCoordinator: {
+      persistExecution: async (context, mode) => context.snapshot(),
+      persistEvents: async (context) => {
+        persistedEvents = context.events.slice();
+        return persistedEvents;
+      },
+      checkpoint: async () => ({})
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  const result = await coordinator.execute('run the task');
+
+  assert.equal(result.type, 'execution_cancelled');
+  assert.equal(result.execution.status, 'cancelled');
+  assert.equal(result.execution.cancellationRequested, true);
+  assert.equal(recoveryCalls, 0);
+  assert.equal(persistedEvents.some(event => event.type === 'execution.failed'), false);
+  assert.equal(persistedEvents.some(event => event.type === 'execution.cancelled'), true);
+});
