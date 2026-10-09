@@ -31,12 +31,13 @@ const RESOURCE_LIMITS_VERIFIED_MARKER = '__ORIENT_RESOURCE_LIMITS_VERIFIED__';
 const SYSTEMD_LIMIT_GATE_SCRIPT = String.raw`
 'use strict';
 const { spawnSync } = require('node:child_process');
-const [unitName, systemctlPath, limitsJson, timeoutMs, executable, ...args] = process.argv.slice(1);
+const [unitName, systemctlPath, limitsJson, timeoutMs, clientEnvironmentJson, executable, ...args] = process.argv.slice(1);
+const clientEnvironment = { ...process.env, ...JSON.parse(clientEnvironmentJson) };
 const l = JSON.parse(limitsJson);
 const deadline = Date.now() + 1500;
 const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const show = () => {
- const r = spawnSync(systemctlPath, ['--user','show','--property=ActiveState','--property=MemoryMax','--property=CPUQuotaPerSecUSec','--property=TasksMax','--property=LimitNOFILE','--property=LimitFSIZE','--property=RuntimeMaxUSec','--property=LimitCPU','--property=LimitCPUSoft','--property=MemorySwapMax',unitName], {encoding:'utf8',env:process.env,timeout:500});
+ const r = spawnSync(systemctlPath, ['--user','show','--property=ActiveState','--property=MemoryMax','--property=CPUQuotaPerSecUSec','--property=TasksMax','--property=LimitNOFILE','--property=LimitFSIZE','--property=RuntimeMaxUSec','--property=LimitCPU','--property=LimitCPUSoft','--property=MemorySwapMax',unitName], {encoding:'utf8',env:clientEnvironment,timeout:500});
  if (r.status !== 0 || !r.stdout) return null;
  return Object.fromEntries(r.stdout.split(/\r?\n/).flatMap(s => { const i=s.indexOf('='); return i>0 ? [[s.slice(0,i),s.slice(i+1)]] : []; }));
 };
@@ -72,7 +73,7 @@ while(Date.now()<=deadline){
 }
 if(!ok){process.stderr.write('ORIENT resource quota preflight failed; refusing to start sandbox: '+JSON.stringify({limits:l,timeoutMs,observed:show()})+'\\n');process.exit(125);}
 process.stderr.write('__ORIENT_RESOURCE_LIMITS_VERIFIED__\n');
-const result=spawnSync(executable,args,{stdio:'inherit',env:process.env});
+const result=spawnSync(executable,args,{stdio:'inherit',env:clientEnvironment});
 if(result.error){process.stderr.write('ORIENT sandbox launch failed: '+result.error.message+'\n');process.exit(126);}
 process.exit(Number.isInteger(result.status)?result.status:1);
 `;
@@ -239,7 +240,7 @@ class BubblewrapIsolator {
       timeoutMs,
       limits,
       executable: process.execPath,
-      args: ['-e', SYSTEMD_LIMIT_GATE_SCRIPT, unitName, this.systemctlPath, JSON.stringify(limits), String(timeoutMs), bwrap, ...sandboxArgs]
+      args: ['-e', SYSTEMD_LIMIT_GATE_SCRIPT, unitName, this.systemctlPath, JSON.stringify(limits), String(timeoutMs), JSON.stringify(this._systemdClientEnvironment()), bwrap, ...sandboxArgs]
     });
 
     const child = this.spawnProcess(this.systemdRunPath, supervisorArgs, {
