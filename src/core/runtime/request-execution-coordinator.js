@@ -138,7 +138,15 @@ class RequestExecutionCoordinator {
       });
 
       const { plan, loopResult, replanningDecision } = executionResult;
-      const activeContextSnapshot = context.snapshot();
+      const activeContextSnapshot = {
+        ...context.snapshot(),
+        // snapshot() retains the live events array; copy it before the
+        // speculative completion mutates the context.
+        events: context.events.map(event => ({
+          ...event,
+          data: { ...(event.data || {}) }
+        }))
+      };
       context.complete();
       const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
 
@@ -370,7 +378,15 @@ class RequestExecutionCoordinator {
       });
 
       const { loopResult, replanningDecision } = executionResult;
-      const activeContextSnapshot = context.snapshot();
+      const activeContextSnapshot = {
+        ...context.snapshot(),
+        // snapshot() retains the live events array; copy it before the
+        // speculative completion mutates the context.
+        events: context.events.map(event => ({
+          ...event,
+          data: { ...(event.data || {}) }
+        }))
+      };
       context.complete();
       const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
 
