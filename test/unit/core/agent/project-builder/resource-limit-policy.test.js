@@ -22,6 +22,7 @@ test('resource limit policy rejects unknown and unsafe values instead of silentl
   assert.throws(() => normalizeResourceLimits({ memoryMaxBytes: 0 }), /memoryMaxBytes/);
   assert.throws(() => normalizeResourceLimits({ maxProcesses: 1.5 }), /maxProcesses/);
   assert.throws(() => normalizeResourceLimits({ cpuQuotaPercent: 1001 }), /cpuQuotaPercent/);
+  assert.throws(() => normalizeResourceLimits({ maxCpuTimeSeconds: 0 }), /maxCpuTimeSeconds/);
   assert.throws(() => normalizeResourceLimits({ memroyMaxBytes: 10 }), /Unknown project-builder resource limit/);
   assert.throws(() => normalizeResourceLimits(null), /resourceLimits must be an object/);
 });
@@ -33,6 +34,7 @@ test('systemd runner args set cgroup-wide limits, file descriptor/file size limi
     limits: {
       memoryMaxBytes: 134217728,
       cpuQuotaPercent: 75,
+      maxCpuTimeSeconds: 2,
       maxProcesses: 24,
       maxOpenFiles: 128,
       maxFileSizeBytes: 1048576
