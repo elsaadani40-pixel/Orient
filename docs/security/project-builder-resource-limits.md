@@ -7,7 +7,7 @@ Project Builder commands are untrusted workloads even when the executable is all
 The resource supervisor uses a transient **systemd user service** so the kernel/systemd cgroup applies limits to the complete command process tree before the command starts. The service is configured with:
 
 - `MemoryMax`: aggregate memory ceiling for the unit cgroup; `MemorySwapMax=0` prevents additional swap-backed memory for the unit.
-- `CPUQuota`: aggregate CPU-rate ceiling, paired with per-process `LimitCPU` and unit-level `RuntimeMaxSec`. CPUQuota itself is a rate limit, not a total CPU-time budget.
+- `CPUQuota`: aggregate CPU-rate ceiling, paired with per-process `LimitCPUSoft`/`LimitCPU` soft-hard CPU-time limits and unit-level `RuntimeMaxSec`. CPUQuota itself is a rate limit, not a total CPU-time budget.
 - `TasksMax`: aggregate task/process ceiling.
 - `LimitNOFILE`: per-process open-file descriptor ceiling.
 - `LimitFSIZE`: per-process maximum regular-file size.
