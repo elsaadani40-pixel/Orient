@@ -31,20 +31,20 @@ const RESOURCE_LIMITS_VERIFIED_MARKER = '__ORIENT_RESOURCE_LIMITS_VERIFIED__';
 const SYSTEMD_LIMIT_GATE_SCRIPT = String.raw`
 'use strict';
 const { spawnSync } = require('node:child_process');
-const [unitName, systemctlPath, limitsJson, executable, ...args] = process.argv.slice(1);
+const [unitName, systemctlPath, limitsJson, timeoutMs, executable, ...args] = process.argv.slice(1);
 const l = JSON.parse(limitsJson);
 const deadline = Date.now() + 1500;
 const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const show = () => {
  const r = spawnSync(systemctlPath, ['--user','show','--property=ActiveState','--property=MemoryMax','--property=CPUQuotaPerSecUSec','--property=TasksMax','--property=LimitNOFILE','--property=LimitFSIZE','--property=RuntimeMaxUSec','--property=LimitCPU','--property=LimitCPUSoft','--property=MemorySwapMax',unitName], {encoding:'utf8',env:process.env,timeout:500});
  if (r.status !== 0 || !r.stdout) return null;
- return Object.fromEntries(r.stdout.split(/\\r?\\n/).flatMap(s => { const i=s.indexOf('='); return i>0 ? [[s.slice(0,i),s.slice(i+1)]] : []; }));
+ return Object.fromEntries(r.stdout.split(/\r?\n/).flatMap(s => { const i=s.indexOf('='); return i>0 ? [[s.slice(0,i),s.slice(i+1)]] : []; }));
 };
 const one = (v, xs) => xs.includes(v);
 const paired = (v, n) => one(v,[String(n),String(n)+':'+String(n)]);
 const cpu = (v, soft, hard) => one(v,[String(hard),String(hard)+'s',String(hard*1000000),String(hard*1000000)+'us',String(soft)+'s:'+String(hard)+'s',String(soft)+':'+String(hard)]);
 const quota=l.cpuQuotaPercent*10000;
-const seconds=Math.max(1,Math.ceil(Number(process.env.ORIENT_PROJECT_BUILDER_TIMEOUT_MS||10000)/1000));
+const seconds=Math.max(1,Math.ceil(Number(timeoutMs)/1000));
 let ok=false;
 while(Date.now()<=deadline){
  const p=show();
@@ -58,10 +58,10 @@ while(Date.now()<=deadline){
  p.MemorySwapMax==='0'){ok=true;break;}
  sleep(25);
 }
-if(!ok){process.stderr.write('ORIENT resource quota preflight failed; refusing to start sandbox\\n');process.exit(125);}
-process.stderr.write('__ORIENT_RESOURCE_LIMITS_VERIFIED__\\n');
+if(!ok){process.stderr.write('ORIENT resource quota preflight failed; refusing to start sandbox\n');process.exit(125);}
+process.stderr.write('__ORIENT_RESOURCE_LIMITS_VERIFIED__\n');
 const result=spawnSync(executable,args,{stdio:'inherit',env:process.env});
-if(result.error){process.stderr.write('ORIENT sandbox launch failed: '+result.error.message+'\\n');process.exit(126);}
+if(result.error){process.stderr.write('ORIENT sandbox launch failed: '+result.error.message+'\n');process.exit(126);}
 process.exit(Number.isInteger(result.status)?result.status:1);
 `;
 
@@ -227,7 +227,7 @@ class BubblewrapIsolator {
       timeoutMs,
       limits,
       executable: process.execPath,
-      args: ['-e', SYSTEMD_LIMIT_GATE_SCRIPT, unitName, this.systemctlPath, JSON.stringify(limits), bwrap, ...sandboxArgs]
+      args: ['-e', SYSTEMD_LIMIT_GATE_SCRIPT, unitName, this.systemctlPath, JSON.stringify(limits), String(timeoutMs), bwrap, ...sandboxArgs]
     });
 
     const child = this.spawnProcess(this.systemdRunPath, supervisorArgs, {
