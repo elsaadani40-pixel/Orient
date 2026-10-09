@@ -99,7 +99,7 @@ test('memory lock publishes ownership metadata atomically and preserves operatio
 
   try {
     assert.throws(() => repo.withLock(() => {
-      const owner = JSON.parse(fs.readFileSync(path.join(repo.lockPath, 'owner.json'), 'utf8'));
+      const owner = JSON.parse(fs.readFileSync(repo.lockPath, 'utf8'));
       assert.equal(owner.pid, process.pid);
       assert.equal(typeof owner.token, 'string');
       assert.ok(owner.token.length > 0);
