@@ -187,6 +187,31 @@ test('command runner captures terminal systemd status after a successful command
 });
 
 
+test('command runner accepts the in-unit quota gate for a short-lived command', async () => {
+  const child = fakeChild();
+  child.orientResourceUnitName = 'orient-pb-0123456789abcdef.service';
+  child.orientResourceLimitsGateMarker = '__ORIENT_RESOURCE_LIMITS_VERIFIED__';
+  child.orientInitialInspection = Promise.resolve(null);
+  const runner = new CommandRunner({
+    policy: createPolicy({ timeoutMs: 10000 }),
+    isolator: {
+      spawn: () => child,
+      inspect: async () => ({ result: 'success', activeState: 'inactive', mainStatus: '0',
+        enforcedProperties: { memoryMax: 'infinity', cpuQuotaPerSecUSec: 'infinity', tasksMax: '19138',
+          limitNoFile: '65536', limitFSize: 'infinity', runtimeMaxUSec: 'infinity',
+          limitCPU: 'infinity', limitCPUSoft: 'infinity', memorySwapMax: 'infinity' } }),
+      cleanup: async () => true
+    }
+  });
+  const execution = runner.run('node');
+  child.stderr.emit('data', Buffer.from('__ORIENT_RESOURCE_LIMITS_VERIFIED__\\n'));
+  child.emit('close', 0, null);
+  const result = await execution;
+  assert.equal(result.resourceLimitsVerified, true);
+  assert.equal(result.failureCode, null);
+  assert.equal(result.stderr, '');
+});
+
 test('command runner fails closed when a systemd command has no verified initial quota snapshot', async () => {
   const child = fakeChild();
   child.orientResourceUnitName = 'orient-pb-0123456789abcdef.service';
