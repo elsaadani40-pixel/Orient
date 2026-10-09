@@ -198,3 +198,40 @@ test('atomic memory store initialization keeps the published file private', () =
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('memory repository fails closed on empty or non-array persisted state', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-corrupt-state-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file);
+
+  try {
+    for (const invalidContent of ['', '   \n\t', '{"memories":[]}', 'null', '"not-an-array"']) {
+      fs.writeFileSync(file, invalidContent, 'utf8');
+      assert.throws(
+        () => repo.readRaw(),
+        error => error.message.startsWith('Memory storage read failed:'),
+        'invalid persisted state must be surfaced instead of silently appearing as an empty memory store'
+      );
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('memory repository reports malformed JSON instead of returning an empty store', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-malformed-state-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file);
+
+  try {
+    fs.writeFileSync(file, '[{"id":', 'utf8');
+    assert.throws(
+      () => repo.findAll('tenant-a', 'personal'),
+      error => error.message.startsWith('Memory storage read failed:'),
+      'malformed JSON must not be interpreted as an empty memory store'
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
