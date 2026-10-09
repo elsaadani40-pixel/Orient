@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { normalizeResourceLimits } = require('./resource-limit-policy');
 
 class WorkspacePolicy {
   constructor({
@@ -12,7 +13,8 @@ class WorkspacePolicy {
     allowedCommands = [],
     maxOutput = 20000,
     timeoutMs = 30000,
-    environment = {}
+    environment = {},
+    resourceLimits = {}
   } = {}) {
     if (!allowedRoot || typeof allowedRoot !== 'string') {
       throw new TypeError('allowedRoot is required');
@@ -33,6 +35,7 @@ class WorkspacePolicy {
     this.timeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
       ? timeoutMs
       : 30000;
+    this.resourceLimits = normalizeResourceLimits(resourceLimits);
     this.environment = Object.freeze(
       Object.fromEntries(
         Object.entries(environment || {}).map(([key, value]) => [
