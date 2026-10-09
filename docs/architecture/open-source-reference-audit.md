@@ -152,11 +152,12 @@ The README describes it as a **Beta Research Preview**; its security page curren
 
 ## Recommended execution sequence
 
-1. **Completed:** PR #114 merged after the resource-limit preflight was verified inside the systemd unit and Strict CI passed on the final PR head.
-2. Complete independent review of PR #117's atomic initialization, migration, lock ownership, private file permissions, and filesystem-error handling; merge only after its updated-base CI passes.
-3. Publish a small memory-evaluation RFC based on Letta/Mem0, with no dependency initially.
-4. Write the adapter contract and threat model from ZeroClaw/OpenClaw patterns.
-5. Only then run a bounded SRT network-policy experiment if a real use case requires outbound network access.
+1. **Completed:** PR #114 merged after in-unit resource-limit verification and a fully green Strict CI run.
+2. **Completed:** PR #117 merged after atomic JSON initialization, migration-locking, private-file-permissions tests, and a fully green Strict CI run.
+3. **Completed:** PR #118 merged after local-only Ollama URL validation, rejection of ambiguous numeric hosts, and a fully green Strict CI run.
+4. Publish a small memory-evaluation RFC based on Letta/Mem0, with no dependency initially.
+5. Write the adapter contract and threat model from ZeroClaw/OpenClaw patterns.
+6. Only then run a bounded SRT network-policy experiment if a real use case requires outbound network access.
 
 ## Evidence and limitations
 
