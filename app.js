@@ -142,6 +142,10 @@ for (const tool of memoryTools) {
   toolRegistry.register(tool);
 }
 
+// Tool registration is a startup-only operation. Seal the production registry
+// before the runtime is constructed so later code cannot add executable tools.
+toolRegistry.seal();
+
 const observationBus =
   new ObservationBus();
 
