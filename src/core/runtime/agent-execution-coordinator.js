@@ -76,7 +76,7 @@ class AgentExecutionCoordinator {
         }
       });
 
-      if (typeof isCancellationRequested === 'function' && isCancellationRequested()) {
+      if (typeof isCancellationRequested === 'function' && await isCancellationRequested()) {
         const reason = cancellationReason || 'Execution cancellation requested';
         context.requestCancellation(reason);
         throw Object.assign(new Error('Execution cancellation requested'), { code: 'EXECUTION_CANCELLATION_REQUESTED' });
