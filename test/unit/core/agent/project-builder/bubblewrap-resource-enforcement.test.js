@@ -124,7 +124,7 @@ test('resource supervisor cleanup verifies that a transient unit is unloaded aft
       setImmediate(() => {
         if (action === 'show') {
           loadStateChecks += 1;
-          const state = loadStateChecks <= 2 ? 'loaded\\n' : 'not-found\\n';
+          const state = loadStateChecks <= 2 ? 'loaded\n' : 'not-found\n';
           child.stdout.write(state);
           child.stdout.end();
         }
@@ -154,7 +154,7 @@ test('resource supervisor cleanup fails if systemd still reports the transient u
       }
       setImmediate(() => {
         if (args[1] === 'show') {
-          child.stdout.write('loaded\\n');
+          child.stdout.write('loaded\n');
           child.stdout.end();
         }
         child.emit('close', 0);
