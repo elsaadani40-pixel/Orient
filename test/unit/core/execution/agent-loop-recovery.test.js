@@ -254,3 +254,34 @@ test('reconciliation completes a persisted operation without replaying the exter
     'completed'
   );
 });
+
+
+test('logical operation identity is isolated across tenants even when execution IDs collide', async () => {
+  const counter = { count: 0 };
+  const loop = new AgentLoop({ toolRegistry: toolRegistry(counter) });
+  const operationIds = [];
+
+  for (const tenantId of ['tenant-a', 'tenant-b']) {
+    const context = new ExecutionContext({
+      requestId: 'shared-request',
+      input: 'execute once per tenant',
+      executionId: 'shared-execution-id',
+      tenantId
+    });
+    context.start();
+    context.setPlan(plan());
+
+    const result = await loop.run({
+      plan: plan(),
+      context,
+      runtimeContext: { tenantId, planRevision: 1 }
+    });
+
+    assert.equal(result.status, 'done');
+    operationIds.push(counter.contexts.at(-1).operationId);
+    assert.equal(counter.contexts.at(-1).tenantId, tenantId);
+  }
+
+  assert.equal(counter.count, 2);
+  assert.notEqual(operationIds[0], operationIds[1]);
+});
