@@ -272,13 +272,6 @@ class RequestExecutionCoordinator {
       };
     }
 
-    const resumeLease = typeof this.persistence.checkpoints.acquireResumeLease === 'function'
-      ? this.persistence.checkpoints.acquireResumeLease(executionId, {
-          tenantId: this.tenantId,
-          leaseDurationMs: this.resumeLeaseDurationMs
-        })
-      : null;
-
     const plan = context.plan;
     if (!plan || !Array.isArray(plan.steps)) {
       throw Object.assign(new Error('Checkpoint does not contain a resumable plan'), {
@@ -296,6 +289,15 @@ class RequestExecutionCoordinator {
     const replans = Number(
       context.metadata?.replans || Math.max(0, planRevision - 1)
     );
+
+    // Validate the checkpoint before acquiring a lease so malformed durable
+    // state cannot strand a resume lease.
+    const resumeLease = typeof this.persistence.checkpoints.acquireResumeLease === 'function'
+      ? this.persistence.checkpoints.acquireResumeLease(executionId, {
+          tenantId: this.tenantId,
+          leaseDurationMs: this.resumeLeaseDurationMs
+        })
+      : null;
 
     try {
       context.record('execution.resume.started', {
@@ -360,7 +362,23 @@ class RequestExecutionCoordinator {
 
       const { loopResult, replanningDecision } = executionResult;
       context.complete();
-      await this.persistenceCoordinator.persistExecution(context, 'update');
+      const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
+
+      // A concurrent durable cancellation must remain authoritative on resume,
+      // exactly as it does on first execution. Never report success when the
+      // repository rejected the terminal completion write.
+      if (persistedExecution && persistedExecution.status !== context.status) {
+        if (persistedExecution.status === 'cancelled') {
+          if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+            this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          }
+          return { resumed: false, reason: 'execution_cancelled', execution: persistedExecution };
+        }
+        throw Object.assign(new Error('Execution outcome persistence diverged from runtime state'), {
+          code: 'EXECUTION_OUTCOME_DIVERGENCE'
+        });
+      }
+
       await this.persistenceCoordinator.persistEvents(context);
       await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_completed');
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
