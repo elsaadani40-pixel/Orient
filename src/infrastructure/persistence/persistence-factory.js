@@ -5,7 +5,7 @@ const JsonPersistence = require('./json-persistence');
 function createPersistence(config) {
   const mode = config.persistenceMode || 'json';
 
-  if (mode !== 'postgres') {
+  if (mode === 'json') {
     return {
       adapter: new JsonPersistence({
         dataDirectory: config.agentDataDirectory
@@ -14,9 +14,19 @@ function createPersistence(config) {
     };
   }
 
+  if (mode !== 'postgres') {
+    throw Object.assign(
+      new Error(`Unsupported persistence mode "${mode}". Supported modes: json, postgres`),
+      { code: 'PERSISTENCE_MODE_UNSUPPORTED' }
+    );
+  }
+
   if (!config.databaseUrl) {
-    throw new Error(
-      'ORIENT_PERSISTENCE=postgres requires ORIENT_DATABASE_URL'
+    throw Object.assign(
+      new Error(
+        'ORIENT_PERSISTENCE=postgres requires ORIENT_DATABASE_URL'
+      ),
+      { code: 'PERSISTENCE_DATABASE_URL_REQUIRED' }
     );
   }
 
