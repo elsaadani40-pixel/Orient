@@ -52,6 +52,7 @@ class BubblewrapIsolator {
     }
 
     argsForSandbox.push(
+      '--dir', '/workspace',
       '--proc', '/proc',
       '--dev', '/dev',
       '--tmpfs', '/tmp',
