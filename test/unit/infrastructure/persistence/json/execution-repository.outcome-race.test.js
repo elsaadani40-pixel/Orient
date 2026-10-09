@@ -38,4 +38,14 @@ test('durable cancellation wins a terminal completion race', () => {
   assert.equal(durable.status, 'running');
   assert.equal(durable.cancellationRequested, true);
   assert.equal(durable.result, null);
+
+  const attemptedFailure = repository.update('exec-race', {
+    status: 'failed',
+    error: { code: 'TOOL_FAILED' },
+    completedAt: new Date().toISOString()
+  }, { tenantId: 'tenant-a' });
+
+  assert.equal(attemptedFailure.status, 'running');
+  assert.equal(attemptedFailure.cancellationRequested, true);
+  assert.equal(attemptedFailure.result, null);
 });
