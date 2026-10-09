@@ -300,6 +300,7 @@ class BubblewrapIsolator {
             '--user',
             'show',
             '--property=Result',
+            '--property=ActiveState',
             '--property=ExecMainCode',
             '--property=ExecMainStatus',
             '--property=MemoryMax',
@@ -310,7 +311,6 @@ class BubblewrapIsolator {
             '--property=RuntimeMaxUSec',
             '--property=LimitCPU',
             '--property=MemorySwapMax',
-            '--value',
             unitName
           ], {
             shell: false,
@@ -343,32 +343,29 @@ class BubblewrapIsolator {
             return;
           }
 
-          const [
-            result,
-            mainCode,
-            mainStatus,
-            memoryMax,
-            cpuQuotaPerSecUSec,
-            tasksMax,
-            limitNoFile,
-            limitFSize,
-            runtimeMaxUSec,
-            limitCPU,
-            memorySwapMax
-          ] = output.trim().split(/\r?\n/);
+          const properties = {};
+          for (const line of output.split(/\r?\n/)) {
+            const separator = line.indexOf('=');
+            if (separator < 1) continue;
+            properties[line.slice(0, separator)] = line.slice(separator + 1);
+          }
+
+          const activeState = properties.ActiveState || 'unknown';
+          const result = properties.Result || (activeState === 'active' ? 'running' : 'unknown');
           finish({
-            result: result || 'unknown',
-            mainCode: mainCode || 'unknown',
-            mainStatus: mainStatus || 'unknown',
+            result,
+            activeState,
+            mainCode: properties.ExecMainCode || 'unknown',
+            mainStatus: properties.ExecMainStatus || 'unknown',
             enforcedProperties: {
-              memoryMax: memoryMax || 'unknown',
-              cpuQuotaPerSecUSec: cpuQuotaPerSecUSec || 'unknown',
-              tasksMax: tasksMax || 'unknown',
-              limitNoFile: limitNoFile || 'unknown',
-              limitFSize: limitFSize || 'unknown',
-              runtimeMaxUSec: runtimeMaxUSec || 'unknown',
-              limitCPU: limitCPU || 'unknown',
-              memorySwapMax: memorySwapMax || 'unknown'
+              memoryMax: properties.MemoryMax || 'unknown',
+              cpuQuotaPerSecUSec: properties.CPUQuotaPerSecUSec || 'unknown',
+              tasksMax: properties.TasksMax || 'unknown',
+              limitNoFile: properties.LimitNOFILE || 'unknown',
+              limitFSize: properties.LimitFSIZE || 'unknown',
+              runtimeMaxUSec: properties.RuntimeMaxUSec || 'unknown',
+              limitCPU: properties.LimitCPU || 'unknown',
+              memorySwapMax: properties.MemorySwapMax || 'unknown'
             }
           });
         });
