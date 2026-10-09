@@ -104,6 +104,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
   try {
    const response = await fetch('/', {method:'GET',cache:'no-store',headers:{'Accept':'text/html'}});
    if (!response.ok) throw new Error('HTTP ' + response.status);
+   if (coreState) coreState.textContent = 'CONNECTED';
    $('serverMetric').textContent = 'متصل';
    $('healthText').textContent = 'الخادم يستجيب';
    $('apiState').textContent = 'الخادم يستجيب لطلب GET /. لم يتم استنتاج صحة بقية الخدمات.';
@@ -113,6 +114,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
    $('healthText').textContent = 'تعذر الاتصال بالخادم';
    $('apiState').textContent = 'تعذر الاتصال. شغّل الخادم المحلي ثم أعد تحميل الصفحة.';
    $('healthDot').style.background = 'var(--red)';
+   if (coreState) coreState.textContent = 'OFFLINE';
   }
  }
  async function submitTask(event, inputId, outputId, button) {
@@ -131,7 +133,6 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
    output.textContent = typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2);
    sent += 1; $('runMetric').textContent = String(sent);
    $('lastMetric').textContent = new Date().toLocaleTimeString('ar-EG');
-  if (coreState) coreState.textContent = 'OFFLINE';
   } catch (error) {
    output.textContent = 'فشل إرسال المهمة: ' + error.message + '\nلم يتم تسجيل نتيجة ناجحة.';
   } finally { if (submit) submit.disabled = false; }
