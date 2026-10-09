@@ -2,13 +2,16 @@
   'use strict';
   const canvas = document.getElementById('orientScene');
   const status = document.getElementById('sceneRenderer');
+  const stage = document.querySelector('.orbit-stage');
   if (!canvas) return;
+  function useFallback() {
+    if (status) status.textContent = 'CSS FALLBACK';
+    canvas.hidden = true;
+    if (stage) stage.hidden = false;
+  }
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const gl = canvas.getContext('webgl', { alpha: true, antialias: true, powerPreference: 'low-power' });
-  if (!gl) {
-    if (status) status.textContent = 'CSS FALLBACK';
-    return;
-  }
+  if (!gl) { useFallback(); return; }
 
   const vertexSource = `
     attribute vec3 aPosition;
@@ -48,10 +51,7 @@
     gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'WebGL link failed');
-  } catch (_) {
-    if (status) status.textContent = 'CSS FALLBACK';
-    return;
-  }
+  } catch (_) { useFallback(); return; }
   const loc = {
     position: gl.getAttribLocation(program, 'aPosition'),
     normal: gl.getAttribLocation(program, 'aNormal'),
@@ -179,12 +179,11 @@
     else frame = 0;
   }
   function start() { if (!destroyed && !document.hidden && !frame) frame=requestAnimationFrame(render); }
-  canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); destroyed=true; if (frame) cancelAnimationFrame(frame); if (status) status.textContent='CSS FALLBACK'; });
+  canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); destroyed=true; if (frame) cancelAnimationFrame(frame); useFallback(); });
   document.addEventListener('visibilitychange', start);
   reducedMotion.addEventListener?.('change', () => { lastTime=0; start(); });
   window.addEventListener('resize', resize, { passive:true });
   if (status) status.textContent = 'WEBGL ACTIVE';
-  const stage = document.querySelector('.orbit-stage');
   if (stage) stage.hidden = true;
   start();
 })();
