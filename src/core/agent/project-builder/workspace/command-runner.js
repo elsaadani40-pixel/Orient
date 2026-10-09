@@ -135,7 +135,7 @@ class CommandRunner {
 
         const initialInspection = child.orientInitialInspection || Promise.resolve(null);
         const finalInspection = typeof this.isolator.inspect === 'function' && (code !== 0 || signal)
-          ? Promise.resolve(this.isolator.inspect(child)).catch(() => null)
+          ? Promise.resolve().then(() => this.isolator.inspect(child)).catch(() => null)
           : Promise.resolve(null);
 
         Promise.all([
