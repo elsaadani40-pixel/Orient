@@ -219,7 +219,7 @@ test('high-risk crash after side effect does not execute the side effect twice',
   assert.ok(persistedCheckpoint?.resumeLease, 'crash should leave the old resume lease durable');
   persistedCheckpoint.resumeLease.expiresAtMs = Date.now() - 1;
   persistedCheckpoint.resumeLease.expiresAt = new Date(Date.now() - 1).toISOString();
-  fs.writeFileSync(checkpointPath, JSON.stringify(checkpointRecords, null, 2) + '\\n');
+  fs.writeFileSync(checkpointPath, JSON.stringify(checkpointRecords, null, 2) + '\n');
 
   const restartedPersistence = new JsonPersistence({ rootDir: persistenceRoot });
   runtime = createRuntime(root, { persistence: restartedPersistence });
