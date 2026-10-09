@@ -303,6 +303,8 @@ class BubblewrapIsolator {
           '--property=LimitNOFILE',
           '--property=LimitFSIZE',
           '--property=RuntimeMaxUSec',
+          '--property=LimitCPU',
+          '--property=MemorySwapMax',
           '--value',
           unitName
         ], {
@@ -337,7 +339,9 @@ class BubblewrapIsolator {
           tasksMax,
           limitNoFile,
           limitFSize,
-          runtimeMaxUSec
+          runtimeMaxUSec,
+          limitCPU,
+          memorySwapMax
         ] = output.trim().split(/\r?\n/);
         resolve({
           result: result || 'unknown',
