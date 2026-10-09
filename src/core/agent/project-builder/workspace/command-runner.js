@@ -63,7 +63,14 @@ class CommandRunner {
           shell: false,
           windowsHide: true,
           detached: process.platform !== 'win32',
-          env: (() => { const env = { ...process.env, ...this.policy.environment }; delete env.NODE_TEST_CONTEXT; return env; })()
+          // Keep only non-secret runtime essentials from the host; all other variables are explicit policy allowlist entries.
+          env: {
+            PATH: process.env.PATH || '',
+            ...(process.platform === 'win32' && process.env.SystemRoot
+              ? { SystemRoot: process.env.SystemRoot }
+              : {}),
+            ...this.policy.environment
+          }
         }
       );
 
