@@ -176,6 +176,11 @@ class CommandRunner {
             observedCpuQuota === String(expectedCpuQuota / 1000000) + 's' ||
             observedCpuQuota === String(expectedCpuQuota / 1000) + 'ms' ||
             observedCpuQuota === String(expectedCpuQuota) + 'us';
+          const cpuTimeLimitMatches = (observed, seconds) =>
+            observed === String(seconds) ||
+            observed === String(seconds) + 's' ||
+            observed === String(seconds * 1000000) ||
+            observed === String(seconds * 1000000) + 'us';
           // Do not require the asynchronous initial probe to catch the unit in
           // "active" state: short, successful commands may finish before that
           // probe runs. Accept only an exact snapshot of every configured limit;
@@ -188,8 +193,8 @@ class CommandRunner {
             observedLimits.limitNoFile === String(expectedLimits.maxOpenFiles) &&
             observedLimits.limitFSize === String(expectedLimits.maxFileSizeBytes) &&
             observedLimits.runtimeMaxUSec === expectedRuntime &&
-            observedLimits.limitCPU === String(expectedLimits.maxCpuTimeSeconds + 1) &&
-            observedLimits.limitCPUSoft === String(expectedLimits.maxCpuTimeSeconds) &&
+            cpuTimeLimitMatches(observedLimits.limitCPU, expectedLimits.maxCpuTimeSeconds + 1) &&
+            cpuTimeLimitMatches(observedLimits.limitCPUSoft, expectedLimits.maxCpuTimeSeconds) &&
             observedLimits.memorySwapMax === '0'
           );
           const systemdUnavailable = /failed to connect to bus|no medium found|failed to start transient|failed to create transient|unknown assignment|not supported|failed to set unit properties/.test(lowerStderr);
