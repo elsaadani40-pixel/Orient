@@ -94,25 +94,16 @@ test('execution event stream replays after Last-Event-ID and excludes unapproved
     { id: 'event-1', type: 'execution.step.started', executionId: 'exec one', timestamp: '2026-10-10T10:00:00.000Z', sequence: 1, data: { step: 1, tool: 'memory.read', secret: 'must-not-leak' } },
     { id: 'event-2', type: 'execution.step.completed', executionId: 'exec one', timestamp: '2026-10-10T10:00:01.000Z', sequence: 2, data: { step: 2, tool: 'memory.write', secret: 'must-not-leak' } }
   ];
+  const createAgentRoutes = require('../../src/interfaces/http/routes/agent.routes');
   const server = createServer({
     memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('memory'); }, add() {}, delete() {} },
-    agentRoutes: {
-      async events(req, res, executionId) {
+    agentRoutes: createAgentRoutes({
+      async getExecutionEvents(executionId, options) {
         assert.equal(executionId, 'exec one');
-        const initialEvents = events;
-        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-store' });
-        res.flushHeaders?.();
-        res.write('retry: 3000\\n\\n');
-        const lastId = req.headers['last-event-id'];
-        const cursor = initialEvents.findIndex(event => event.id === lastId);
-        for (const event of initialEvents.slice(cursor >= 0 ? cursor + 1 : 0)) {
-          const safe = { id: event.id, type: event.type, executionId, timestamp: event.timestamp, sequence: event.sequence, details: { step: event.data.step, tool: event.data.tool } };
-          res.write(`id: ${safe.id}\\nevent: execution\\ndata: ${JSON.stringify(safe)}\\n\\n`);
-        }
-        req.on('aborted', () => res.end());
-        res.on('close', () => {});
+        assert.equal(options.limit, 200);
+        return events;
       }
-    }
+    })
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve, reject) => {
@@ -120,19 +111,23 @@ test('execution event stream replays after Last-Event-ID and excludes unapproved
   }));
   const controller = new AbortController();
   const address = server.address();
-  const response = await fetch(`http://127.0.0.1:${address.port}/executions/exec%20one/events`, {
+  const response = await fetch('http://127.0.0.1:' + address.port + '/executions/exec%20one/events', {
     headers: { 'Last-Event-ID': 'event-1' },
     signal: controller.signal
   });
   assert.equal(response.status, 200);
-  assert.match(response.headers.get('content-type') || '', /text\\/event-stream/);
+  assert.match(response.headers.get('content-type') || '', /text\/event-stream/);
   const reader = response.body.getReader();
-  const first = await reader.read();
-  const chunk = new TextDecoder().decode(first.value);
+  let chunk = '';
+  while (!chunk.includes('id: event-2')) {
+    const part = await reader.read();
+    if (part.done) break;
+    chunk += new TextDecoder().decode(part.value);
+  }
   controller.abort();
   await reader.cancel().catch(() => {});
   assert.match(chunk, /id: event-2/);
-  assert.match(chunk, /execution\\.step\\.completed/);
+  assert.match(chunk, /execution\.step\.completed/);
   assert.doesNotMatch(chunk, /event-1/);
   assert.doesNotMatch(chunk, /must-not-leak/);
 });
