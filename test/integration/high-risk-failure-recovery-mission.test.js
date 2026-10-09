@@ -259,10 +259,10 @@ test('concurrent resume attempts are serialized by the durable lease', async t =
   fs.mkdirSync(path.join(root, 'test'));
   fs.writeFileSync(
     path.join(root, 'test', 'smoke.test.js'),
-    "const test = require('node:test'); const assert = require('node:assert/strict'); test('smoke', () => assert.equal(1, 1));\\n"
+    "const test = require('node:test'); const assert = require('node:assert/strict'); test('smoke', () => assert.equal(1, 1));\n"
   );
   const manifestPath = path.join(root, 'package.json');
-  fs.writeFileSync(manifestPath, '{"name":"mission-8-concurrent-resume"}\\n');
+  fs.writeFileSync(manifestPath, '{"name":"mission-8-concurrent-resume"}\n');
 
   const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
