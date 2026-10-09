@@ -551,6 +551,8 @@ class AgentLoop {
         resolvedInput;
 
       injectedContext.planRevision = planRevision;
+      // Carry the canonical tenant identity into every tool adapter context.
+      injectedContext.tenantId = operationTenantId;
       // Expose the durable logical operation identity to tool adapters so they
       // can forward it as a provider idempotency key. The value is stable across
       // retries/resume for the same execution, plan revision, step, tool, input.
