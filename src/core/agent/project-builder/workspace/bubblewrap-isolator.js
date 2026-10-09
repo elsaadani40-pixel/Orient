@@ -227,35 +227,52 @@ class BubblewrapIsolator {
         command = this.spawnProcess(this.systemctlPath, args, {
           shell: false,
           windowsHide: true,
-          stdio: 'ignore',
+          stdio: args.includes('--value') ? ['ignore', 'pipe', 'ignore'] : 'ignore',
           env: environment
         });
       } catch {
-        resolve(false);
+        resolve({ ok: false, output: '' });
         return;
       }
 
       let done = false;
+      let output = '';
       let timer;
-      const finish = value => {
+      const finish = result => {
         if (done) return;
         done = true;
         clearTimeout(timer);
-        resolve(value);
+        resolve(result);
       };
+      if (command.stdout) {
+        command.stdout.on('data', chunk => {
+          if (output.length < 4096) output += chunk.toString();
+        });
+      }
       timer = setTimeout(() => {
         try { command.kill('SIGKILL'); } catch {}
-        finish(false);
+        finish({ ok: false, output });
       }, 1000);
-      command.once('error', () => finish(false));
-      command.once('close', code => finish(code === 0));
+      command.once('error', () => finish({ ok: false, output }));
+      command.once('close', code => finish({ ok: code === 0, output }));
     });
 
-    return runSystemctl(['--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unitName])
-      .then(() => runSystemctl(['--user', 'stop', unitName]))
-      .then(() => runSystemctl(['--user', 'reset-failed', unitName]))
-      .then(() => true)
-      .catch(() => false);
+    const runRequired = async args => {
+      const result = await runSystemctl(args);
+      return result.ok;
+    };
+
+    return (async () => {
+      // Do not continue or report success when any requested cleanup command fails.
+      if (!await runRequired(['--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unitName])) return false;
+      if (!await runRequired(['--user', 'stop', unitName])) return false;
+
+      // A successful "stop" command is not proof that the unit is no longer active.
+      const status = await runSystemctl(['--user', 'show', '--property=ActiveState', '--value', unitName]);
+      if (!status.ok || !['inactive', 'failed'].includes(status.output.trim())) return false;
+
+      return runRequired(['--user', 'reset-failed', unitName]);
+    })().catch(() => false);
   }
   cleanup(child) {
     if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
