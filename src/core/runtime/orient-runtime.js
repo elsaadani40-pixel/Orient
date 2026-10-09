@@ -301,15 +301,29 @@ class OrientRuntime {
     }
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
     const boundedOffset = Number.isInteger(offset) ? Math.max(0, Math.min(offset, 10000)) : 0;
-    const executions = await this.persistence.executions.findAll({ tenantId: this.tenantId });
-    const ordered = executions.sort((a, b) =>
-      Date.parse(b.updatedAt || b.startedAt || 0) - Date.parse(a.updatedAt || a.startedAt || 0)
-    );
+    let total;
+    let page;
+    if (typeof this.persistence.executions.findPage === 'function') {
+      const result = await this.persistence.executions.findPage({
+        tenantId: this.tenantId,
+        limit: boundedLimit,
+        offset: boundedOffset
+      });
+      total = result.total;
+      page = result.executions;
+    } else {
+      const executions = await this.persistence.executions.findAll({ tenantId: this.tenantId });
+      const ordered = executions.sort((a, b) =>
+        Date.parse(b.updatedAt || b.startedAt || 0) - Date.parse(a.updatedAt || a.startedAt || 0)
+      );
+      total = ordered.length;
+      page = ordered.slice(boundedOffset, boundedOffset + boundedLimit);
+    }
     return {
-      total: ordered.length,
+      total,
       limit: boundedLimit,
       offset: boundedOffset,
-      executions: ordered.slice(boundedOffset, boundedOffset + boundedLimit).map(execution => ({
+      executions: page.map(execution => ({
         executionId: execution.executionId,
         requestId: execution.requestId,
         goalId: execution.goalId,
@@ -355,7 +369,8 @@ class OrientRuntime {
     }
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 200)) : 200;
     const events = await this.persistence.events.findByExecutionId(executionId, {
-      tenantId: this.tenantId
+      tenantId: this.tenantId,
+      limit: boundedLimit
     });
     return events.slice(-boundedLimit);
   }

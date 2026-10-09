@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const {
   PostgresPersistence,
   PostgresEventRepository,
+  PostgresExecutionRepository,
+  PostgresApprovalRepository,
   PostgresIdempotencyRepository,
   PostgresWorkflowLeaseRepository,
   PostgresWorkflowRepository,
@@ -184,3 +186,52 @@ test('Postgres tenant quota reservation is atomically admission-controlled', asy
   assert.equal(reservation.workflowId, 'wf-2');
   assert.match(db.calls[6].text, /ON CONFLICT\(workflow_id\) DO NOTHING/);
 })
+
+test('Postgres execution history uses a tenant-scoped indexed page and count', async () => {
+  const db = fakeDb([
+    { rows: [{ total: 101 }], rowCount: 1 },
+    { rows: [{ payload: { executionId: 'exec-51', status: 'running' } }], rowCount: 1 }
+  ]);
+  const repo = new PostgresExecutionRepository(db);
+  const result = await repo.findPage({ tenantId: 'tenant-a', limit: 50, offset: 50 });
+  assert.equal(result.total, 101);
+  assert.equal(result.limit, 50);
+  assert.equal(result.offset, 50);
+  assert.deepEqual(result.executions, [{ executionId: 'exec-51', status: 'running' }]);
+  assert.match(db.calls[0].text, /COUNT\(\*\).*WHERE tenant_id=\$1/);
+  assert.match(db.calls[1].text, /WHERE tenant_id=\$1 ORDER BY updated_at DESC, execution_id DESC LIMIT \$2 OFFSET \$3/);
+  assert.deepEqual(db.calls[1].values, ['tenant-a', 50, 50]);
+});
+
+test('Postgres execution event replay queries only the latest bounded tenant-scoped window', async () => {
+  const db = fakeDb([{ rows: [{ payload: { id: 'event-200', executionId: 'exec-1' } }], rowCount: 1 }]);
+  const repo = new PostgresEventRepository(db);
+  const result = await repo.findByExecutionId('exec-1', { tenantId: 'tenant-a', limit: 999 });
+  assert.deepEqual(result, [{ id: 'event-200', executionId: 'exec-1' }]);
+  assert.match(db.calls[0].text, /WHERE tenant_id=\$1 AND execution_id=\$2 ORDER BY timestamp DESC,event_id DESC LIMIT \$3/);
+  assert.match(db.calls[0].text, /ORDER BY timestamp ASC,event_id ASC/);
+  assert.deepEqual(db.calls[0].values, ['tenant-a', 'exec-1', 200]);
+});
+
+test('Postgres approval repository supports durable tenant-scoped execution and pending queries', async () => {
+  const row = {
+    approval_id: 'approval-1', execution_id: 'exec-1', step: 2, plan_revision: 1,
+    tool: 'files.write', capability: 'filesystem.write', scope: {}, issued_at: '2026-10-10T09:00:00.000Z',
+    expires_at: '2026-10-10T11:00:00.000Z', used: false, used_at: null, metadata: { tenantId: 'tenant-a' }, tenant_id: 'tenant-a'
+  };
+  const db = fakeDb([
+    { rows: [row], rowCount: 1 },
+    { rows: [row], rowCount: 1 }
+  ]);
+  const repo = new PostgresApprovalRepository(db);
+  const byExecution = await repo.findByExecution({ executionId: 'exec-1', step: 2, tool: 'files.write', planRevision: 1, tenantId: 'tenant-a' });
+  assert.equal(byExecution[0].approvalId, 'approval-1');
+  assert.equal(byExecution[0].tenantId, 'tenant-a');
+  assert.match(db.calls[0].text, /execution_id=\$1 AND tenant_id=\$2 AND step=\$3 AND tool=\$4 AND plan_revision=\$5/);
+  assert.deepEqual(db.calls[0].values, ['exec-1', 'tenant-a', 2, 'files.write', 1]);
+
+  const pending = await repo.findPending({ tenantId: 'tenant-a', limit: 10, now: Date.parse('2026-10-10T10:00:00.000Z') });
+  assert.equal(pending[0].approvalId, 'approval-1');
+  assert.match(db.calls[1].text, /tenant_id=\$1 AND used=FALSE AND expires_at>\$2.*LIMIT \$3/);
+  assert.deepEqual(db.calls[1].values, ['tenant-a', '2026-10-10T10:00:00.000Z', 10]);
+});
