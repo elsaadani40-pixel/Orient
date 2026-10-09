@@ -205,19 +205,22 @@ class CommandRunner {
           // "active" state: short, successful commands may finish before that
           // probe runs. Accept only an exact snapshot of every configured limit;
           // missing/reset/default ("infinity") properties still fail closed.
+          const hasInUnitGate = typeof child.orientResourceLimitsGateMarker === 'string';
           const limitsVerified = isSystemdUnit && Boolean(
-            verifiedByInUnitGate || (observedLimits &&
-            observedLimits.memoryMax === String(expectedLimits.memoryMaxBytes) &&
-            cpuQuotaMatches &&
-            observedLimits.tasksMax === String(expectedLimits.maxProcesses) &&
-            observedLimits.limitNoFile === String(expectedLimits.maxOpenFiles) &&
-            observedLimits.limitFSize === String(expectedLimits.maxFileSizeBytes) &&
-            systemdDurationMatches(observedLimits.runtimeMaxUSec, this.policy.timeoutMs) &&
-            cpuTimeLimitMatches(observedLimits.limitCPU, expectedLimits.maxCpuTimeSeconds + 1) &&
-            cpuTimeLimitMatches(observedLimits.limitCPUSoft, expectedLimits.maxCpuTimeSeconds) &&
-            observedLimits.memorySwapMax === '0')
+            hasInUnitGate
+              ? verifiedByInUnitGate
+              : (observedLimits &&
+                observedLimits.memoryMax === String(expectedLimits.memoryMaxBytes) &&
+                cpuQuotaMatches &&
+                observedLimits.tasksMax === String(expectedLimits.maxProcesses) &&
+                observedLimits.limitNoFile === String(expectedLimits.maxOpenFiles) &&
+                observedLimits.limitFSize === String(expectedLimits.maxFileSizeBytes) &&
+                systemdDurationMatches(observedLimits.runtimeMaxUSec, this.policy.timeoutMs) &&
+                cpuTimeLimitMatches(observedLimits.limitCPU, expectedLimits.maxCpuTimeSeconds + 1) &&
+                cpuTimeLimitMatches(observedLimits.limitCPUSoft, expectedLimits.maxCpuTimeSeconds) &&
+                observedLimits.memorySwapMax === '0')
           );
-          const systemdUnavailable = /failed to connect to bus|no medium found|failed to start transient|failed to create transient|unknown assignment|not supported|failed to set unit properties/.test(lowerStderr);
+          const systemdUnavailable = /failed to connect to bus|no medium found|failed to start transient|failed to create transient|unknown assignment|not supported|failed to set unit properties|resource quota preflight failed/.test(lowerStderr);
 
           if (executionStatus?.result === 'oom-kill' || /out of memory|cannot allocate memory/.test(lowerStderr)) {
             failureCode = 'MEMORY_LIMIT_EXCEEDED';
