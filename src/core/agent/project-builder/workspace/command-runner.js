@@ -218,6 +218,21 @@ class CommandRunner {
             failureCode = 'RESOURCE_LIMITS_UNAVAILABLE';
           }
 
+          if (isSystemdUnit && !limitsVerified) {
+            reject(commandError(
+              'RESOURCE_LIMITS_UNAVAILABLE',
+              'Command completed without verifiable systemd resource limits; refusing to report execution as successful',
+              {
+                command: [executable, ...args.map(String)].join(' '),
+                exitCode: code,
+                signal,
+                resourceLimitStatus: executionStatus,
+                resourceLimitsVerified: false
+              }
+            ));
+            return;
+          }
+
           resolve({
             command: [executable, ...args.map(String)].join(' '),
             cwd: workingDirectory,
