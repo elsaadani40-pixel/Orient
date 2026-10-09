@@ -27,6 +27,44 @@ const SYSTEMD_ENV_KEYS = [
   'SYSTEMD_BUS_ADDRESS'
 ];
 
+const RESOURCE_LIMITS_VERIFIED_MARKER = '__ORIENT_RESOURCE_LIMITS_VERIFIED__';
+const SYSTEMD_LIMIT_GATE_SCRIPT = String.raw`
+'use strict';
+const { spawnSync } = require('node:child_process');
+const [unitName, systemctlPath, limitsJson, executable, ...args] = process.argv.slice(1);
+const l = JSON.parse(limitsJson);
+const deadline = Date.now() + 1500;
+const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const show = () => {
+ const r = spawnSync(systemctlPath, ['--user','show','--property=ActiveState','--property=MemoryMax','--property=CPUQuotaPerSecUSec','--property=TasksMax','--property=LimitNOFILE','--property=LimitFSIZE','--property=RuntimeMaxUSec','--property=LimitCPU','--property=LimitCPUSoft','--property=MemorySwapMax',unitName], {encoding:'utf8',env:process.env,timeout:500});
+ if (r.status !== 0 || !r.stdout) return null;
+ return Object.fromEntries(r.stdout.split(/\\r?\\n/).flatMap(s => { const i=s.indexOf('='); return i>0 ? [[s.slice(0,i),s.slice(i+1)]] : []; }));
+};
+const one = (v, xs) => xs.includes(v);
+const paired = (v, n) => one(v,[String(n),String(n)+':'+String(n)]);
+const cpu = (v, soft, hard) => one(v,[String(hard),String(hard)+'s',String(hard*1000000),String(hard*1000000)+'us',String(soft)+'s:'+String(hard)+'s',String(soft)+':'+String(hard)]);
+const quota=l.cpuQuotaPercent*10000;
+const seconds=Math.max(1,Math.ceil(Number(process.env.ORIENT_PROJECT_BUILDER_TIMEOUT_MS||10000)/1000));
+let ok=false;
+while(Date.now()<=deadline){
+ const p=show();
+ if(p && p.ActiveState==='active' && p.MemoryMax===String(l.memoryMaxBytes) &&
+ one(p.CPUQuotaPerSecUSec,[String(quota),String(quota/1000000)+'s',String(quota/1000)+'ms',String(quota)+'us']) &&
+ p.TasksMax===String(l.maxProcesses) && paired(p.LimitNOFILE,l.maxOpenFiles) &&
+ paired(p.LimitFSIZE,l.maxFileSizeBytes) &&
+ one(p.RuntimeMaxUSec,[String(seconds)+'s',String(seconds*1000000),String(seconds*1000000)+'us']) &&
+ cpu(p.LimitCPU,l.maxCpuTimeSeconds,l.maxCpuTimeSeconds+1) &&
+ one(p.LimitCPUSoft,[String(l.maxCpuTimeSeconds),String(l.maxCpuTimeSeconds)+'s',String(l.maxCpuTimeSeconds*1000000),String(l.maxCpuTimeSeconds*1000000)+'us']) &&
+ p.MemorySwapMax==='0'){ok=true;break;}
+ sleep(25);
+}
+if(!ok){process.stderr.write('ORIENT resource quota preflight failed; refusing to start sandbox\\n');process.exit(125);}
+process.stderr.write('__ORIENT_RESOURCE_LIMITS_VERIFIED__\\n');
+const result=spawnSync(executable,args,{stdio:'inherit',env:process.env});
+if(result.error){process.stderr.write('ORIENT sandbox launch failed: '+result.error.message+'\\n');process.exit(126);}
+process.exit(Number.isInteger(result.status)?result.status:1);
+`;
+
 /**
  * Linux-only isolation for untrusted Project Builder commands.
  *
@@ -188,8 +226,8 @@ class BubblewrapIsolator {
       unitName,
       timeoutMs,
       limits,
-      executable: bwrap,
-      args: sandboxArgs
+      executable: process.execPath,
+      args: ['-e', SYSTEMD_LIMIT_GATE_SCRIPT, unitName, this.systemctlPath, JSON.stringify(limits), bwrap, ...sandboxArgs]
     });
 
     const child = this.spawnProcess(this.systemdRunPath, supervisorArgs, {
@@ -203,6 +241,7 @@ class BubblewrapIsolator {
     // These fields are private coordination metadata consumed by terminate()
     // and inspect(); they are never derived from command/user input.
     child.orientResourceUnitName = unitName;
+    child.orientResourceLimitsGateMarker = RESOURCE_LIMITS_VERIFIED_MARKER;
     child.orientResourceLimits = limits;
     child.orientSystemdEnvironment = this._systemdClientEnvironment();
     child.orientInitialInspection = this.inspect(child, { waitMs: 1500, waitForActive: true });
