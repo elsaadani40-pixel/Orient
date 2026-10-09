@@ -63,7 +63,8 @@ class CommandRunner {
           shell: false,
           windowsHide: true,
           detached: process.platform !== 'win32',
-          env: (() => { const env = { ...process.env, ...this.policy.environment }; delete env.NODE_TEST_CONTEXT; return env; })()
+          // Child processes receive only explicitly approved variables. Never inherit host secrets.
+          env: { ...this.policy.environment }
         }
       );
 
