@@ -3,6 +3,7 @@
 const DEFAULT_RESOURCE_LIMITS = Object.freeze({
   memoryMaxBytes: 256 * 1024 * 1024,
   cpuQuotaPercent: 100,
+  maxCpuTimeSeconds: 10,
   maxProcesses: 64,
   maxOpenFiles: 256,
   maxFileSizeBytes: 64 * 1024 * 1024,
@@ -33,6 +34,7 @@ function normalizeResourceLimits(overrides = {}) {
   return Object.freeze({
     memoryMaxBytes: positiveInteger(limits.memoryMaxBytes, 'memoryMaxBytes', { min: 16 * 1024 * 1024 }),
     cpuQuotaPercent: positiveInteger(limits.cpuQuotaPercent, 'cpuQuotaPercent', { min: 1, max: 1000 }),
+    maxCpuTimeSeconds: positiveInteger(limits.maxCpuTimeSeconds, 'maxCpuTimeSeconds', { min: 1, max: 3600 }),
     maxProcesses: positiveInteger(limits.maxProcesses, 'maxProcesses', { min: 1, max: 4096 }),
     maxOpenFiles: positiveInteger(limits.maxOpenFiles, 'maxOpenFiles', { min: 16, max: 65536 }),
     maxFileSizeBytes: positiveInteger(limits.maxFileSizeBytes, 'maxFileSizeBytes', { min: 1024 }),
@@ -65,7 +67,7 @@ function buildSystemdRunArgs({ unitName, timeoutMs, limits, executable, args = [
     '--service-type=exec',
     `--unit=${unitName}`,
     `--property=CPUQuota=${normalized.cpuQuotaPercent}%`,
-    `--property=LimitCPU=${runtimeSeconds}`,
+    `--property=LimitCPU=${normalized.maxCpuTimeSeconds}`,
     `--property=MemoryMax=${normalized.memoryMaxBytes}`,
     '--property=MemorySwapMax=0',
     `--property=TasksMax=${normalized.maxProcesses}`,
