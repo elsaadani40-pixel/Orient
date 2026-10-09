@@ -44,6 +44,20 @@ function createServer({ memoryRoutes, agentRoutes }) {
     try {
       if (
         req.method === 'GET' &&
+        requestUrl.pathname === '/dashboard'
+      ) {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+          'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
+          'Referrer-Policy': 'no-referrer'
+        });
+        res.end(require('fs').readFileSync(require('path').join(__dirname, 'dashboard.html'), 'utf8'));
+        return;
+      }
+      if (
+        req.method === 'GET' &&
         requestUrl.pathname === '/'
       ) {
         memoryRoutes.home(req, res, requestUrl);
