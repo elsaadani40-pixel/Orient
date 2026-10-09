@@ -333,38 +333,63 @@ class BubblewrapIsolator {
   }
   cleanup(child) {
     if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
-    return new Promise(resolve => {
-      let cleanup;
+
+    const unitName = child.orientResourceUnitName;
+    const environment = child.orientSystemdEnvironment || this._systemdClientEnvironment();
+    const runSystemctl = (args, captureOutput = false) => new Promise(resolve => {
+      let command;
       try {
-        cleanup = this.spawnProcess(this.systemctlPath, [
-          '--user',
-          'reset-failed',
-          child.orientResourceUnitName
-        ], {
+        command = this.spawnProcess(this.systemctlPath, args, {
           shell: false,
           windowsHide: true,
-          stdio: 'ignore',
-          env: child.orientSystemdEnvironment || this._systemdClientEnvironment()
+          stdio: captureOutput ? ['ignore', 'pipe', 'ignore'] : 'ignore',
+          env: environment
         });
       } catch {
-        resolve(false);
+        resolve({ ok: false, output: '' });
         return;
       }
+
       let done = false;
+      let output = '';
       let timer;
-      const finish = value => {
+      const finish = result => {
         if (done) return;
         done = true;
         clearTimeout(timer);
-        resolve(value);
+        resolve(result);
       };
+      if (command.stdout) {
+        command.stdout.on('data', chunk => {
+          if (output.length < 4096) output += chunk.toString();
+        });
+      }
       timer = setTimeout(() => {
-        try { cleanup.kill('SIGKILL'); } catch {}
-        finish(false);
+        try { command.kill('SIGKILL'); } catch {}
+        finish({ ok: false, output });
       }, 1000);
-      cleanup.once('error', () => finish(false));
-      cleanup.once('close', code => finish(code === 0));
+      command.once('error', () => finish({ ok: false, output }));
+      command.once('close', code => finish({ ok: code === 0, output }));
     });
+
+    return (async () => {
+      const reset = await runSystemctl(['--user', 'reset-failed', unitName]);
+      if (!reset.ok) return false;
+
+      // reset-failed is only a request; verify the unit has actually been unloaded.
+      // Do not use systemd-run --collect because CommandRunner needs terminal
+      // cgroup status first to classify OOM/timeout/resource-limit failures.
+      const deadline = Date.now() + 1000;
+      while (Date.now() <= deadline) {
+        const status = await runSystemctl([
+          '--user', 'show', '--property=LoadState', '--value', unitName
+        ], true);
+        if (!status.ok) return false;
+        if (status.output.trim() === 'not-found') return true;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      return false;
+    })().catch(() => false);
   }
 
   inspect(child, { waitMs = 0, waitForActive = false } = {}) {
