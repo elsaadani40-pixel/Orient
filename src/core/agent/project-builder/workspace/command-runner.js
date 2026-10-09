@@ -35,7 +35,7 @@ function commandError(code, message, details = {}) {
 
 function systemdDurationMatches(value, timeoutMs) {
   const text = String(value || '');
-  const re = /(\\d+)(us|µs|ms|s|min|h|d|w)/g;
+  const re = /(\d+)(us|µs|ms|s|min|h|d|w)/g;
   const factor = { us: 1, 'µs': 1, ms: 1000, s: 1000000, min: 60000000, h: 3600000000, d: 86400000000, w: 604800000000 };
   let total = 0;
   let end = 0;
