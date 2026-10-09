@@ -189,6 +189,15 @@ test('high-risk crash after side effect does not execute the side effect twice',
     return originalCheckpoint(context, mode, reason);
   };
 
+  // A real process death cannot run the normal recovery handler. Make the
+  // injected crash escape that handler so the durable state remains at the
+  // last committed checkpoint, exactly as it would after abrupt termination.
+  runtime.executionRecoveryCoordinator.fail = async () => {
+    throw Object.assign(new Error('simulated process terminated before recovery'), {
+      code: 'SIMULATED_PROCESS_CRASH'
+    });
+  };
+
   await assert.rejects(
     runtime.resume(challenge.executionId, { approval }),
     error => error && error.code === 'SIMULATED_PROCESS_CRASH'
