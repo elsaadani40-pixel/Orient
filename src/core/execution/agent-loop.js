@@ -883,7 +883,7 @@ class AgentLoop {
         throw error;
       }
 
-      throwIfCancellationRequested();
+      await throwIfCancellationRequested();
 
       const toolDefinition =
         this.toolRegistry.get(
