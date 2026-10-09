@@ -1,11 +1,35 @@
+# Dependencies and build/test output
 node_modules/
-data/agent/
-*.log
-*.tmp
+coverage/
+dist/
+build/
+
+# Local configuration and secrets
 .env
 .env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
 
+# Local runtime state and user data
+data/
 memories.json
 orient-one/
+*.sqlite
+*.sqlite-*
+*.db
 
+# Logs and temporary files
+*.log
+*.tmp
+.DS_Store
+
+# Local backups and generated review bundles
+*.backup*
+*.pre-*
+*.old
 ORIENT-ONE-AUDIT-PACKAGE*.md
