@@ -35,7 +35,10 @@ class WorkspacePolicy {
     this.timeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
       ? timeoutMs
       : 30000;
-    this.resourceLimits = normalizeResourceLimits(resourceLimits);
+    this.resourceLimits = normalizeResourceLimits({
+      maxOutputBytes: Math.max(1024, Math.floor(this.maxOutput)),
+      ...resourceLimits
+    });
     this.environment = Object.freeze(
       Object.fromEntries(
         Object.entries(environment || {}).map(([key, value]) => [
