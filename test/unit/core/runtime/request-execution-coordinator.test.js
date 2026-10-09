@@ -279,3 +279,75 @@ test('resume returns durable cancellation when cancellation wins terminal comple
   assert.equal(writes[0].status, 'cancelled');
   assert.equal(releaseCount, 1);
 });
+
+
+test('execute returns durable cancellation when cancellation wins terminal completion commit', async () => {
+  const writes = [];
+  let persistedEvents = [];
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test.execute-race', steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async ({ context }) => {
+        context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+        context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+        context.transitionAgentTo(AgentState.LIFECYCLE.OBSERVING);
+        context.transitionAgentTo(AgentState.LIFECYCLE.EVALUATING);
+        return {
+          plan: { intent: 'test.execute-race', steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] },
+          loopResult: { result: { ok: true }, evaluation: { success: true } },
+          replanningDecision: { toJSON: () => ({ outcome: 'done' }) }
+        };
+      }
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: {
+      executions: {
+        findById: () => ({ cancellationRequested: false }),
+        update: async (id, patch) => ({ ...patch, status: patch.status })
+      }
+    },
+    persistenceCoordinator: {
+      persistExecution: async (context, mode) => {
+        const snapshot = context.snapshot();
+        if (mode === 'insert') return snapshot;
+        if (snapshot.status === 'cancelled') {
+          writes.push(snapshot);
+          return snapshot;
+        }
+        return {
+          ...snapshot,
+          status: 'running',
+          cancellationRequested: true,
+          cancellationReason: 'operator requested cancellation'
+        };
+      },
+      persistEvents: async (context) => {
+        persistedEvents = context.events.slice();
+        return persistedEvents;
+      },
+      checkpoint: async () => ({})
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  const result = await coordinator.execute('run the task');
+
+  assert.equal(result.type, 'execution_cancelled');
+  assert.equal(result.execution.status, 'cancelled');
+  assert.equal(result.execution.cancellationRequested, true);
+  assert.equal(result.execution.agentLifecycle, AgentState.LIFECYCLE.CANCELLED);
+  assert.equal(persistedEvents.some(event => event.type === 'execution.completed'), false);
+  assert.equal(persistedEvents.some(event => event.type === 'execution.cancelled'), true);
+  assert.equal(writes.length, 1);
+});
