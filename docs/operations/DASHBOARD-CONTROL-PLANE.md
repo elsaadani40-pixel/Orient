@@ -11,7 +11,7 @@ The dashboard currently provides:
 - Tenant-scoped execution history with summary-only fields.
 - Read-only status and pending-approval queries.
 - A durable per-execution Server-Sent Events (SSE) stream.
-- A WebGL scene with at most six nodes derived from actual streamed events.
+- A WebGL scene with at most six nodes derived from actual streamed events, each connected to the runtime core by a rendered edge.
 - Explicit human confirmation before a pending approval is sent to the canonical resume endpoint.
 - Explicit confirmation before a durable cancellation request is submitted.
 - A CSS visual fallback if WebGL is unavailable; the event timeline remains usable.
