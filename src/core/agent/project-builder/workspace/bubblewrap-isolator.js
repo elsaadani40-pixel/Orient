@@ -1,8 +1,13 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const {
+  normalizeResourceLimits,
+  buildSystemdRunArgs
+} = require('./resource-limit-policy');
 
 const SYSTEM_MOUNTS = [
   '/usr',
@@ -13,15 +18,34 @@ const SYSTEM_MOUNTS = [
   '/etc'
 ];
 
+const SYSTEMD_ENV_KEYS = [
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'XDG_RUNTIME_DIR',
+  'DBUS_SESSION_BUS_ADDRESS',
+  'SYSTEMD_BUS_ADDRESS'
+];
+
 /**
- * Linux-only OS isolation for untrusted project-builder commands.
- * There is deliberately no direct-execution fallback: missing bubblewrap or
- * unavailable namespaces means execution is denied.
+ * Linux-only isolation for untrusted Project Builder commands.
+ *
+ * Bubblewrap remains the mandatory filesystem/network boundary. A transient
+ * systemd user service places bwrap and all descendants into a cgroup before
+ * the untrusted executable starts. There is deliberately no direct-spawn,
+ * non-cgroup, or unsandboxed fallback.
  */
 class BubblewrapIsolator {
-  constructor({ spawnProcess = spawn, platform = process.platform } = {}) {
+  constructor({
+    spawnProcess = spawn,
+    platform = process.platform,
+    systemdRunPath = process.env.ORIENT_SYSTEMD_RUN_PATH || 'systemd-run',
+    systemctlPath = process.env.ORIENT_SYSTEMCTL_PATH || 'systemctl'
+  } = {}) {
     this.spawnProcess = spawnProcess;
     this.platform = platform;
+    this.systemdRunPath = systemdRunPath;
+    this.systemctlPath = systemctlPath;
   }
 
   buildArgs({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
@@ -87,7 +111,33 @@ class BubblewrapIsolator {
     return argsForSandbox;
   }
 
-  spawn({ executable, args = [], workspaceRoot, cwd, environment = {}, timeoutMs }) {
+  _systemdClientEnvironment() {
+    const environment = {
+      PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin'
+    };
+
+    for (const key of SYSTEMD_ENV_KEYS) {
+      if (typeof process.env[key] === 'string' && process.env[key].length > 0) {
+        environment[key] = process.env[key];
+      }
+    }
+
+    return environment;
+  }
+
+  spawn({
+    executable,
+    args = [],
+    workspaceRoot,
+    cwd,
+    environment = {},
+    timeoutMs,
+    resourceLimits = {}
+  }) {
+    if (this.platform !== 'linux') {
+      throw new Error('OS-isolated command execution is supported only on Linux; refusing unsafe fallback');
+    }
+
     const bwrap = process.env.ORIENT_BWRAP_PATH || 'bwrap';
     const sandboxArgs = this.buildArgs({
       executable,
@@ -96,14 +146,124 @@ class BubblewrapIsolator {
       cwd,
       environment
     });
+    const limits = normalizeResourceLimits(resourceLimits);
+    const unitName = `orient-pb-${crypto.randomUUID()}.service`;
+    const supervisorArgs = buildSystemdRunArgs({
+      unitName,
+      timeoutMs,
+      limits,
+      executable: bwrap,
+      args: sandboxArgs
+    });
 
-    return this.spawnProcess(bwrap, sandboxArgs, {
+    const child = this.spawnProcess(this.systemdRunPath, supervisorArgs, {
       cwd: workspaceRoot,
       shell: false,
       windowsHide: true,
       detached: true,
-      env: { PATH: process.env.PATH || '' },
-      timeoutMs
+      env: this._systemdClientEnvironment()
+    });
+
+    // These fields are private coordination metadata consumed by terminate()
+    // and inspect(); they are never derived from command/user input.
+    child.orientResourceUnitName = unitName;
+    child.orientResourceLimits = limits;
+    child.orientSystemdEnvironment = this._systemdClientEnvironment();
+    return child;
+  }
+
+  terminate(child) {
+    if (!child || !child.orientResourceUnitName) {
+      return Promise.resolve(false);
+    }
+
+    const unitName = child.orientResourceUnitName;
+    const environment = child.orientSystemdEnvironment || this._systemdClientEnvironment();
+
+    return new Promise(resolve => {
+      let completed = 0;
+      const finish = () => {
+        completed += 1;
+        if (completed >= 2) resolve(true);
+      };
+
+      for (const args of [
+        ['--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unitName],
+        ['--user', 'stop', unitName]
+      ]) {
+        let cleanup;
+        try {
+          cleanup = this.spawnProcess(this.systemctlPath, args, {
+            shell: false,
+            windowsHide: true,
+            stdio: 'ignore',
+            env: environment
+          });
+        } catch {
+          finish();
+          continue;
+        }
+        cleanup.once('error', finish);
+        cleanup.once('close', finish);
+      }
+
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // The unit stop is the authoritative process-tree cleanup mechanism.
+      }
+    });
+  }
+
+  inspect(child) {
+    if (!child || !child.orientResourceUnitName) {
+      return Promise.resolve(null);
+    }
+
+    const unitName = child.orientResourceUnitName;
+    const environment = child.orientSystemdEnvironment || this._systemdClientEnvironment();
+
+    return new Promise(resolve => {
+      let probe;
+      try {
+        probe = this.spawnProcess(this.systemctlPath, [
+          '--user',
+          'show',
+          '--property=Result',
+          '--property=ExecMainCode',
+          '--property=ExecMainStatus',
+          '--value',
+          unitName
+        ], {
+          shell: false,
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          env: environment
+        });
+      } catch {
+        resolve(null);
+        return;
+      }
+
+      let output = '';
+      if (probe.stdout) {
+        probe.stdout.on('data', chunk => {
+          if (output.length < 4096) output += chunk.toString();
+        });
+      }
+      probe.once('error', () => resolve(null));
+      probe.once('close', code => {
+        if (code !== 0) {
+          resolve(null);
+          return;
+        }
+        const [result, mainCode, mainStatus] = output.trim().split(/\r?\n/);
+        resolve({
+          result: result || 'unknown',
+          mainCode: mainCode || 'unknown',
+          mainStatus: mainStatus || 'unknown'
+        });
+      });
     });
   }
 }
