@@ -210,6 +210,17 @@ test('high-risk crash after side effect does not execute the side effect twice',
   // Simulate a real process restart: discard the runtime, reopen every JSON
   // repository from disk, and resume without passing the original approval.
   runtime.shutdown({ cancelQueued: false });
+
+  // Abrupt process death leaves its lease behind until TTL expiry. Advance the
+  // persisted lease clock in the fixture instead of sleeping for 30 seconds.
+  const checkpointPath = path.join(persistenceRoot, 'checkpoints.json');
+  const checkpointRecords = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
+  const persistedCheckpoint = checkpointRecords[challenge.executionId];
+  assert.ok(persistedCheckpoint?.resumeLease, 'crash should leave the old resume lease durable');
+  persistedCheckpoint.resumeLease.expiresAtMs = Date.now() - 1;
+  persistedCheckpoint.resumeLease.expiresAt = new Date(Date.now() - 1).toISOString();
+  fs.writeFileSync(checkpointPath, JSON.stringify(checkpointRecords, null, 2) + '\\n');
+
   const restartedPersistence = new JsonPersistence({ rootDir: persistenceRoot });
   runtime = createRuntime(root, { persistence: restartedPersistence });
 
