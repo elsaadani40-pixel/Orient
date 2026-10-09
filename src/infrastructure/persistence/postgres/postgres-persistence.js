@@ -787,10 +787,10 @@ class PostgresApprovalRepository {
     if (!executionId) return [];
     const clauses = ['execution_id=$1'];
     const values = [String(executionId)];
-    if (tenantId) { values.push(tenantId); clauses.push(`tenant_id=${values.length}`); }
-    if (step !== null) { values.push(Number(step)); clauses.push(`step=${values.length}`); }
-    if (tool !== null) { values.push(tool); clauses.push(`tool=${values.length}`); }
-    if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=${values.length}`); }
+    if (tenantId) { values.push(tenantId); clauses.push(`tenant_id=$${values.length}`); }
+    if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
+    if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
+    if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
     const result = await this.db.query(`SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`, values);
     return result.rows.map(row => this.mapRow(row));
   }
