@@ -20,23 +20,37 @@ class JsonMemoryRepository {
     const directory = path.dirname(this.filePath);
     fs.mkdirSync(directory, { recursive: true });
 
-    // Atomic no-clobber creation: never open an existing store with truncation
-    // semantics after another process may already have inserted records.
-    let fd;
+    // Publish a fully-written store atomically. Creating the final path with
+    // "wx" and then writing it would expose an empty/partial file to peers.
+    const temporaryFile = this.filePath + '.init.' + process.pid + '.' + crypto.randomUUID();
+    let fd = null;
     try {
-      fd = fs.openSync(this.filePath, 'wx', 0o600);
-    } catch (error) {
-      if (error.code === 'EEXIST') return;
-      throw new Error(`Memory storage initialization failed: ${error.message}`);
-    }
-
-    try {
+      fd = fs.openSync(temporaryFile, 'wx', 0o600);
       fs.writeFileSync(fd, '[]\n', 'utf8');
       fs.fsyncSync(fd);
-    } catch (error) {
-      throw new Error(`Memory storage initialization failed: ${error.message}`);
-    } finally {
       fs.closeSync(fd);
+      fd = null;
+
+      try {
+        // link(2) is atomic and no-clobber: EEXIST means another process won.
+        fs.linkSync(temporaryFile, this.filePath);
+      } catch (error) {
+        if (error.code === 'EEXIST') return;
+        throw error;
+      }
+    } catch (error) {
+      throw new Error('Memory storage initialization failed: ' + error.message);
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      try {
+        fs.unlinkSync(temporaryFile);
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          throw new Error('Memory storage initialization cleanup failed: ' + error.message);
+        }
+      }
     }
 
     // Persist the directory entry where supported. Unexpected I/O errors are
@@ -50,11 +64,10 @@ class JsonMemoryRepository {
       }
     } catch (error) {
       if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(error.code)) {
-        throw new Error(`Memory storage directory sync failed: ${error.message}`);
+        throw new Error('Memory storage directory sync failed: ' + error.message);
       }
     }
   }
-
   readRaw() {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8');
