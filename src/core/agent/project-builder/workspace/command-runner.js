@@ -167,7 +167,7 @@ class CommandRunner {
           } else if (executionStatus?.result === 'timeout') {
             failureCode = 'COMMAND_TIMEOUT';
           } else if (
-            (executionStatus?.result === 'signal' && [24, 152].includes(Number(executionStatus.mainStatus)) ||
+            [24, 152].includes(Number(executionStatus?.mainStatus)) ||
             signal === 'SIGXCPU'
           ) {
             failureCode = 'CPU_LIMIT_EXCEEDED';
