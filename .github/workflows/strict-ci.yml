@@ -79,7 +79,9 @@ jobs:
           systemd-run --user --wait --collect --pipe --service-type=exec \
             --unit="orient-pb-ci-smoke-${uid}.service" \
             --property=CPUQuota=100% \
+            --property=LimitCPU=5 \
             --property=MemoryMax=268435456 \
+            --property=MemorySwapMax=0 \
             --property=TasksMax=64 \
             --property=LimitNOFILE=256 \
             --property=LimitFSIZE=67108864 \
