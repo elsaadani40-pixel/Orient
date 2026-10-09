@@ -3,11 +3,15 @@ const path = require('path');
 const crypto = require('crypto');
 
 class ExecutionRepository {
-  constructor(filePath) {
+  constructor(filePath, { lockTimeoutMs = 30_000 } = {}) {
     if (!filePath) {
       throw new TypeError('filePath is required');
     }
+    if (!Number.isInteger(lockTimeoutMs) || lockTimeoutMs < 1) {
+      throw new TypeError('lockTimeoutMs must be a positive integer');
+    }
 
+    this.lockTimeoutMs = lockTimeoutMs;
     this.filePath = filePath;
     this.lockPath = `${filePath}.lock`;
     this.ensureStorage();
@@ -90,56 +94,105 @@ class ExecutionRepository {
   }
 
   withLock(operation) {
-    const staleAfterMs = 30_000;
-    const deadline = Date.now() + staleAfterMs;
+    const timeoutMs = this.lockTimeoutMs;
+    const deadline = Date.now() + timeoutMs;
+    const hostname = require('os').hostname();
 
     while (true) {
+      const token = crypto.randomUUID();
       try {
         fs.mkdirSync(this.lockPath);
-        break;
-      } catch (error) {
-        if (error.code !== 'EEXIST') {
-          throw error;
-        }
+        const owner = {
+          token,
+          pid: process.pid,
+          hostname,
+          acquiredAt: new Date().toISOString()
+        };
 
-        let stale = false;
         try {
-          stale = Date.now() - fs.statSync(this.lockPath).mtimeMs > staleAfterMs;
-        } catch (statError) {
-          if (statError.code !== 'ENOENT') {
-            throw statError;
-          }
-        }
-
-        if (stale) {
-          try {
-            fs.rmSync(this.lockPath, { recursive: true, force: true });
-            continue;
-          } catch (removeError) {
-            if (removeError.code !== 'ENOENT') {
-              throw removeError;
-            }
-          }
-        }
-
-        if (Date.now() >= deadline) {
-          throw new Error('Execution storage lock acquisition timed out');
-        }
-
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-      }
-    }
-
-    try {
-      return operation();
-    } finally {
-      try {
-        fs.rmSync(this.lockPath, { recursive: true, force: true });
-      } catch (error) {
-        if (error.code !== 'ENOENT') {
+          fs.writeFileSync(
+            path.join(this.lockPath, 'owner.json'),
+            JSON.stringify(owner) + '\n',
+            { encoding: 'utf8', flag: 'wx', mode: 0o600 }
+          );
+        } catch (error) {
+          // We created this directory, and without owner metadata nobody can
+          // safely reclaim it. Remove our incomplete acquisition immediately.
+          try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {}
           throw error;
         }
+
+        try {
+          return operation();
+        } finally {
+          try {
+            const currentOwner = JSON.parse(
+              fs.readFileSync(path.join(this.lockPath, 'owner.json'), 'utf8')
+            );
+            if (currentOwner.token === token) {
+              fs.rmSync(this.lockPath, { recursive: true, force: true });
+            }
+          } catch (cleanupError) {
+            // Preserve locks when ownership cannot be verified.
+          }
+        }
+      } catch (error) {
+        // Only mkdir contention is handled as a lock conflict. Errors thrown
+        // by the protected operation must propagate, not masquerade as EEXIST.
+        if (error.code !== 'EEXIST') throw error;
       }
+
+      let owner = null;
+      try {
+        owner = JSON.parse(
+          fs.readFileSync(path.join(this.lockPath, 'owner.json'), 'utf8')
+        );
+      } catch (ownerError) {
+        if (ownerError.code !== 'ENOENT' && !(ownerError instanceof SyntaxError)) {
+          throw ownerError;
+        }
+      }
+
+      let stale = false;
+      if (owner && owner.hostname === hostname && Number.isInteger(owner.pid) && owner.pid > 0) {
+        try {
+          process.kill(owner.pid, 0);
+        } catch (processError) {
+          stale = processError.code === 'ESRCH';
+          if (processError.code !== 'ESRCH' && processError.code !== 'EPERM') {
+            throw processError;
+          }
+        }
+      }
+
+      if (stale) {
+        const quarantinePath = this.lockPath + '.stale.' + crypto.randomUUID();
+        try {
+          fs.renameSync(this.lockPath, quarantinePath);
+          let movedOwner = null;
+          try {
+            movedOwner = JSON.parse(fs.readFileSync(path.join(quarantinePath, 'owner.json'), 'utf8'));
+          } catch {}
+          if (movedOwner && movedOwner.token === owner.token &&
+              movedOwner.pid === owner.pid && movedOwner.hostname === owner.hostname) {
+            fs.rmSync(quarantinePath, { recursive: true, force: true });
+          } else {
+            try { fs.renameSync(quarantinePath, this.lockPath); } catch {}
+          }
+          continue;
+        } catch (reclaimError) {
+          if (reclaimError.code !== 'ENOENT' && reclaimError.code !== 'EEXIST') {
+            throw reclaimError;
+          }
+        }
+      }
+
+      if (Date.now() >= deadline) {
+        const error = new Error('Execution storage lock acquisition timed out');
+        error.code = 'EXECUTION_STORAGE_LOCK_TIMEOUT';
+        throw error;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
   }
 
