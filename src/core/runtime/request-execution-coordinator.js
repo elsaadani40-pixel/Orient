@@ -144,14 +144,19 @@ class RequestExecutionCoordinator {
       // Some lightweight runtimes intentionally omit an execution repository.
       // Enforce divergence checks whenever durable state is available; absence
       // of a persistence adapter is not itself an outcome conflict.
-      if (persistedExecution && persistedExecution.status !== context.status) {
-        if (persistedExecution?.status === 'cancelled') {
-          return {
-            requestId,
-            type: 'execution_cancelled',
-            execution: persistedExecution
-          };
+      if (persistedExecution?.cancellationRequested || persistedExecution?.status === 'cancelled') {
+        if (context.isActive()) {
+          context.cancel(persistedExecution.cancellationReason || 'Execution cancellation requested');
         }
+        await this.persistenceCoordinator.persistEvents(context);
+        return {
+          requestId,
+          type: 'execution_cancelled',
+          execution: persistedExecution
+        };
+      }
+
+      if (persistedExecution && persistedExecution.status !== context.status) {
         throw Object.assign(new Error('Execution outcome persistence diverged from runtime state'), {
           code: 'EXECUTION_OUTCOME_DIVERGENCE'
         });
@@ -367,13 +372,19 @@ class RequestExecutionCoordinator {
       // A concurrent durable cancellation must remain authoritative on resume,
       // exactly as it does on first execution. Never report success when the
       // repository rejected the terminal completion write.
-      if (persistedExecution && persistedExecution.status !== context.status) {
-        if (persistedExecution.status === 'cancelled') {
-          if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-            this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
-          }
-          return { resumed: false, reason: 'execution_cancelled', execution: persistedExecution };
+      if (persistedExecution?.cancellationRequested || persistedExecution?.status === 'cancelled') {
+        if (context.isActive()) {
+          context.cancel(persistedExecution.cancellationReason || 'Execution cancellation requested');
         }
+        await this.persistenceCoordinator.persistEvents(context);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
+        return { resumed: false, reason: 'execution_cancelled', execution: persistedExecution };
+      }
+
+      if (persistedExecution && persistedExecution.status !== context.status) {
         throw Object.assign(new Error('Execution outcome persistence diverged from runtime state'), {
           code: 'EXECUTION_OUTCOME_DIVERGENCE'
         });
