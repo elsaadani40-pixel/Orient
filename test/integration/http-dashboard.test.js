@@ -1,6 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
 
 const createServer = require('../../src/interfaces/http/server');
 
