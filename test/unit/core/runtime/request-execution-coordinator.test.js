@@ -233,10 +233,7 @@ test('resume returns durable cancellation when cancellation wins terminal comple
           status: 'running',
           cancellationRequested: false
         }),
-        update: async (id, patch) => {
-          writes.push(patch);
-          return { ...durableCancelled, ...patch, status: 'cancelled' };
-        }
+        update: async (id, patch) => ({ ...durableCancelled, ...patch, status: 'cancelled' })
       },
       checkpoints: {
         findLatest: () => ({ checkpointId: 'checkpoint-race', sequence: 1, snapshot }),
@@ -247,12 +244,19 @@ test('resume returns durable cancellation when cancellation wins terminal comple
       events: { appendMany: async () => [] }
     },
     persistenceCoordinator: {
-      persistExecution: async (ctx) => ({
-        ...ctx.snapshot(),
-        status: 'running',
-        cancellationRequested: true,
-        cancellationReason: 'operator requested cancellation'
-      }),
+      persistExecution: async (ctx) => {
+        const persisted = ctx.snapshot();
+        if (persisted.status === 'cancelled') {
+          writes.push(persisted);
+          return { ...durableCancelled, ...persisted };
+        }
+        return {
+          ...persisted,
+          status: 'running',
+          cancellationRequested: true,
+          cancellationReason: 'operator requested cancellation'
+        };
+      },
       persistEvents: async () => [],
       checkpoint: async () => ({})
     },
