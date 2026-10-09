@@ -60,26 +60,30 @@ class JsonMemoryRepository {
 
     while (true) {
       const token = crypto.randomUUID();
-      let acquiredDirectory = false;
+      const owner = { token, pid: process.pid, hostname, acquiredAt: new Date().toISOString() };
+      const candidatePath = `${this.lockPath}.candidate.${token}`;
+      let acquired = false;
+
+      // Prepare complete ownership metadata privately, then publish it with one
+      // same-filesystem rename. Contenders never observe a published lock
+      // directory before owner.json is complete.
       try {
-        fs.mkdirSync(this.lockPath);
-        acquiredDirectory = true;
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
+        fs.mkdirSync(candidatePath, { mode: 0o700 });
+        fs.writeFileSync(path.join(candidatePath, 'owner.json'), JSON.stringify(owner) + '\n', {
+          encoding: 'utf8', flag: 'wx', mode: 0o600
+        });
+        try {
+          fs.renameSync(candidatePath, this.lockPath);
+          acquired = true;
+        } catch (publishError) {
+          if (!['EEXIST', 'ENOTEMPTY', 'EISDIR'].includes(publishError.code)) throw publishError;
+        }
+      } finally {
+        try { fs.rmSync(candidatePath, { recursive: true, force: true }); } catch {}
       }
 
-      if (acquiredDirectory) {
+      if (acquired) {
         const ownerPath = path.join(this.lockPath, 'owner.json');
-        const owner = { token, pid: process.pid, hostname, acquiredAt: new Date().toISOString() };
-        try {
-          fs.writeFileSync(ownerPath, JSON.stringify(owner) + '\n', {
-            encoding: 'utf8', flag: 'wx', mode: 0o600
-          });
-        } catch (error) {
-          try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {}
-          throw error;
-        }
-
         try {
           return operation();
         } finally {
@@ -91,7 +95,6 @@ class JsonMemoryRepository {
           } catch {}
         }
       }
-
       let owner = null;
       try {
         owner = JSON.parse(fs.readFileSync(path.join(this.lockPath, 'owner.json'), 'utf8'));
