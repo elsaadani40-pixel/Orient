@@ -35,7 +35,6 @@
 - Version consistency PR #128: package metadata is the version source; config and runtime read the shared version module. Strict CI run #37984907052 succeeded 6/6 jobs.
 - Async execution status PR #130: unit/architecture tests for Node 20/22/24, PostgreSQL integration, static safety, and full repository suite passed in Strict CI run #37985452253 before merge.
 - HTTP mission PR #132: Strict CI run #37985823703 succeeded 6/6 jobs before merge; the test exercises a real HTTP request through the runtime and reads back its execution status.
-- Local memory workflow PR #136: Strict CI run #37987284944 succeeded 6/6 jobs before merge; a memory fact is saved through HTTP, displayed by the local UI, retrieved after repository recreation, and isolated by tenant.
 - Local memory workflow PR #136: Strict CI run #37987284944 succeeded 6/6 jobs before merge; a memory fact is saved through the HTTP agent path, displayed by the local UI, retrieved after repository recreation, and isolated by tenant.
 - Tool registry boundary PR #133: Strict CI run #37986360803 succeeded 6/6 jobs before merge; the registered tool function now enforces the authorization binding when the registry's authorization gate is enabled.
 - These results apply to those revisions and test cases; they are not a blanket claim that the product is complete or production-ready.
