@@ -230,17 +230,6 @@ class RequestExecutionCoordinator {
         execution: context.snapshot()
       };
     } catch (error) {
-      // Lease loss is a concurrency-control failure, not an execution failure.
-      // Preserve the resumable checkpoint rather than committing a terminal
-      // failure after another worker may have acquired ownership.
-      if (error?.code === 'CHECKPOINT_RESUME_LEASE_RENEWAL_UNSUPPORTED' ||
-          error?.code === 'CHECKPOINT_RESUME_LEASE_LOST') {
-        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
-        }
-        throw error;
-      }
-
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
@@ -592,6 +581,17 @@ class RequestExecutionCoordinator {
         execution: context.snapshot()
       };
     } catch (error) {
+      // Lease loss is a concurrency-control failure, not an execution failure.
+      // Preserve the resumable checkpoint rather than committing a terminal
+      // failure after another worker may have acquired ownership.
+      if (error?.code === 'CHECKPOINT_RESUME_LEASE_RENEWAL_UNSUPPORTED' ||
+          error?.code === 'CHECKPOINT_RESUME_LEASE_LOST') {
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
+        throw error;
+      }
+
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
