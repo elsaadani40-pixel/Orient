@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const WorkspacePolicy = require('../../../../../src/core/agent/project-builder/workspace/workspace-policy');
 const CommandRunner = require('../../../../../src/core/agent/project-builder/workspace/command-runner');
+const TestCommandIsolator = require('./test-command-isolator');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -19,7 +20,7 @@ test('sandbox commands do not inherit host environment secrets', async () => {
       allowedCommands: ['node'],
       environment: { ORIENT_SANDBOX: '1' }
     });
-    const runner = new CommandRunner({ policy });
+    const runner = new CommandRunner({ policy, isolator: new TestCommandIsolator() });
     const result = await runner.run(process.execPath, {
       args: [
         '-e',
