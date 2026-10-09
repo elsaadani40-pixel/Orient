@@ -176,7 +176,7 @@ class CommandRunner {
             observedCpuQuota === String(expectedCpuQuota / 1000000) + 's' ||
             observedCpuQuota === String(expectedCpuQuota / 1000) + 'ms' ||
             observedCpuQuota === String(expectedCpuQuota) + 'us';
-          const limitsVerified = !isSystemdUnit || Boolean(
+          const limitsVerified = isSystemdUnit && Boolean(
             initialStatus?.activeState === 'active' &&
             observedLimits &&
             observedLimits.memoryMax === String(expectedLimits.memoryMaxBytes) &&
