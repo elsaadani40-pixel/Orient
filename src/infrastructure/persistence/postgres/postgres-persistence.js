@@ -425,6 +425,29 @@ class PostgresCheckpointRepository {
     throw error;
   }
 
+  async renewResumeLease(executionId, leaseId, { tenantId = null, leaseDurationMs = 30000 } = {}) {
+    if (!executionId || !leaseId) return null;
+    if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
+      throw new TypeError('leaseDurationMs must be a positive integer');
+    }
+    const effectiveTenant = tenantOrLocal(tenantId);
+    const result = await this.db.query(
+      `UPDATE execution_resume_leases
+       SET expires_at=NOW()+($4::double precision * INTERVAL '1 millisecond')
+       WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3 AND expires_at>NOW()
+       RETURNING lease_id,acquired_at,expires_at`,
+      [executionId, effectiveTenant, leaseId, leaseDurationMs]
+    );
+    if (!result.rows.length) return null;
+    const row = result.rows[0];
+    return {
+      leaseId: row.lease_id,
+      acquiredAt: new Date(row.acquired_at).toISOString(),
+      expiresAt: new Date(row.expires_at).toISOString(),
+      expiresAtMs: new Date(row.expires_at).getTime()
+    };
+  }
+
   async releaseResumeLease(executionId, leaseId, { tenantId = null } = {}) {
     if (!executionId || !leaseId) return false;
     const effectiveTenant = tenantOrLocal(tenantId);
