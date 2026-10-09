@@ -70,22 +70,19 @@ class JsonMemoryRepository {
 
     const restoreQuarantine = quarantinePath => {
       try {
-        // Never overwrite a lock that another contender may have published.
+        // Restore only via a no-clobber link. Never fall back to rename, which
+        // can replace a lock published by a different contender.
         fs.linkSync(quarantinePath, this.lockPath);
         fs.unlinkSync(quarantinePath);
       } catch (error) {
-        if (error.code === 'EEXIST') {
-          // Another owner already published a lock. Keep our quarantined object
-          // out of the active namespace; it is not safe to delete an unknown owner.
+        if (error.code === 'EEXIST' || error.code === 'EPERM' ||
+            error.code === 'EISDIR' || error.code === 'EMLINK' ||
+            error.code === 'ENOENT') {
+          // Preserve an unverified quarantined object rather than risk deleting
+          // or overwriting another owner's active lock.
           return;
         }
-        if (error.code === 'EPERM' || error.code === 'EISDIR' || error.code === 'EMLINK') {
-          try { fs.renameSync(quarantinePath, this.lockPath); } catch (restoreError) {
-            if (restoreError.code !== 'EEXIST' && restoreError.code !== 'ENOTEMPTY') throw restoreError;
-          }
-          return;
-        }
-        if (error.code !== 'ENOENT') throw error;
+        throw error;
       }
     };
 
