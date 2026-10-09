@@ -44,3 +44,35 @@ test('OllamaProvider converts HTTP failures into provider errors', async () => {
     error => error.code === 'MODEL_PROVIDER_REQUEST_FAILED'
   );
 });
+
+test('OllamaProvider refuses remote URLs so remote inference cannot masquerade as local', () => {
+  for (const baseUrl of [
+    'https://example.com',
+    'http://192.168.1.20:11434',
+    'http://user:pass@127.0.0.1:11434',
+    'http://127.0.0.1:11434?redirect=https://example.com',
+    'file:///tmp/ollama'
+  ]) {
+    assert.throws(
+      () => new OllamaProvider({ baseUrl, fetchImpl: async () => ({}) }),
+      error => [
+        'MODEL_PROVIDER_REMOTE_URL_DENIED',
+        'MODEL_PROVIDER_INVALID_URL'
+      ].includes(error.code),
+      baseUrl
+    );
+  }
+});
+
+test('OllamaProvider accepts explicit loopback IPv4, IPv6, and localhost endpoints', () => {
+  for (const baseUrl of [
+    'http://127.0.0.2:11434',
+    'http://[::1]:11434',
+    'http://localhost:11434'
+  ]) {
+    assert.doesNotThrow(
+      () => new OllamaProvider({ baseUrl, fetchImpl: async () => ({}) }),
+      baseUrl
+    );
+  }
+});
