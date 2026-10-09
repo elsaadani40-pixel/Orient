@@ -16,7 +16,6 @@ function validateLocalBaseUrl(value) {
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   const ipVersion = net.isIP(hostname);
   const isLoopback =
-    hostname === 'localhost' ||
     (ipVersion === 4 && hostname.split('.')[0] === '127') ||
     (ipVersion === 6 && hostname === '::1');
 
