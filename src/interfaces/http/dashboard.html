@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>ORIENT ONE · Dashboard</title>
+<style>
+:root{color-scheme:dark;--bg:#090d14;--panel:#111824;--panel2:#151f2d;--line:#263244;--text:#edf3fb;--muted:#94a3b8;--accent:#79aaff;--green:#4ade80;--amber:#fbbf24;--red:#fb7185}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% -20%,#1a3152 0,transparent 40%),var(--bg);color:var(--text);font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}.layout{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh}.side{border-left:1px solid var(--line);padding:25px 18px;background:#0c121c}.brand{display:flex;align-items:center;gap:12px;margin:0 0 34px}.logo{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:#182b49;border:1px solid #355782;color:#a9caff;font-weight:800;font-size:20px}.brand strong{display:block;letter-spacing:.08em}.brand small,.muted{color:var(--muted)}.nav{display:grid;gap:8px}.nav button{border:1px solid transparent;background:transparent;color:#b9c6d8;text-align:right;padding:11px 13px;border-radius:10px}.nav button.active,.nav button:hover{background:#182438;border-color:#293c58;color:white}.side-note{position:sticky;top:calc(100vh - 130px);margin-top:38px;border:1px solid var(--line);border-radius:12px;padding:13px;color:var(--muted);font-size:12px}.main{padding:30px;max-width:1500px;width:100%;margin:auto}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:25px}.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em}.top h1{font-size:clamp(24px,3vw,34px);margin:3px 0}.status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 12px #4ade8066}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{border:1px solid var(--line);border-radius:15px;background:linear-gradient(145deg,#131d2b,#0e1520);padding:18px;min-width:0}.metric-label{color:var(--muted);font-size:13px}.metric{font-size:27px;font-weight:750;line-height:1.3;margin:8px 0}.metric-foot{font-size:12px;color:var(--muted)}.section{margin-top:18px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.section-head h2{font-size:17px;margin:0}.pill{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:11px;color:var(--muted)}.two{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);gap:14px}.input{width:100%;border:1px solid #344257;border-radius:10px;background:#0b111a;color:var(--text);padding:12px;outline:none}.input:focus{border-color:#79aaff;box-shadow:0 0 0 3px #79aaff1c}textarea.input{min-height:105px;resize:vertical}.btn{border:1px solid #365782;background:#1b3557;color:#e8f2ff;padding:10px 14px;border-radius:10px;font-weight:650}.btn:hover{filter:brightness(1.15)}.btn.secondary{background:#131d2b;border-color:var(--line);color:#d2dbea}.btn:disabled{opacity:.55;cursor:wait}.formrow{display:flex;gap:9px;align-items:center;margin-top:10px}.output{margin-top:13px;padding:12px;border-radius:10px;background:#090f18;border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere;min-height:65px;color:#d8e3f2;font-size:13px}.empty{color:var(--muted);font-size:13px;padding:12px 0}.timeline{display:grid;gap:10px}.event{display:flex;gap:12px;padding:12px;border:1px solid var(--line);border-radius:11px;background:#0d1420}.event-icon{width:31px;height:31px;display:grid;place-items:center;border-radius:9px;background:#1a2a41;flex-shrink:0}.event strong{display:block;font-size:13px}.event small{color:var(--muted)}.tag{font-size:11px;border-radius:6px;padding:2px 7px;background:#17273b;color:#b9d3ff}.warning{border:1px solid #725a25;background:#2a2110;color:#f8d98b;border-radius:10px;padding:10px 12px;font-size:12px;margin-top:12px}.footer{margin-top:22px;color:var(--muted);font-size:11px;text-align:center}.hidden{display:none!important}
+@media(max-width:1000px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.two{grid-template-columns:1fr}.layout{grid-template-columns:190px minmax(0,1fr)}.main{padding:22px}}
+@media(max-width:650px){.layout{display:block}.side{padding:12px 14px;border-left:0;border-bottom:1px solid var(--line)}.brand{margin:0 0 10px}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap;padding:8px 11px}.side-note{display:none}.main{padding:18px 13px}.top{align-items:flex-start;flex-direction:column}.grid{gap:9px}.card{padding:13px}.metric{font-size:23px}}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="side">
+ <div class="brand"><div class="logo">O</div><div><strong>ORIENT ONE</strong><small>Personal AI Runtime</small></div></div>
+ <nav class="nav" aria-label="التنقل">
+  <button class="active" data-view="overview">◈ نظرة عامة</button>
+  <button data-view="agent">✳ تشغيل الوكيل</button>
+  <button data-view="memory">▤ الذاكرة</button>
+  <button data-view="security">⬡ الأمان والحوكمة</button>
+ </nav>
+ <div class="side-note">LOCAL-FIRST<br>الواجهة تتصل بالخادم المحلي فقط. لا تعرض بيانات تجريبية على أنها حالة حقيقية.</div>
+</aside>
+<main class="main">
+ <header class="top"><div><div class="eyebrow">CONTROL PLANE / LOCAL INSTANCE</div><h1 id="pageTitle">مركز القيادة</h1><div class="muted">لوحة تشغيل واضحة، مع حالة صادقة وحدود صلاحيات صريحة.</div></div><div class="status"><span class="dot" id="healthDot"></span><span id="healthText">جارٍ التحقق من الخادم…</span></div></header>
+ <section class="grid" aria-label="مؤشرات الحالة">
+  <article class="card"><div class="metric-label">اتصال الخادم</div><div class="metric" id="serverMetric">—</div><div class="metric-foot">فحص HTTP محلي</div></article>
+  <article class="card"><div class="metric-label">تنفيذات تم إرسالها من هذه الجلسة</div><div class="metric" id="runMetric">0</div><div class="metric-foot">عداد واجهة فقط، وليس سجلًا دائمًا</div></article>
+  <article class="card"><div class="metric-label">آخر تنفيذ</div><div class="metric" id="lastMetric">—</div><div class="metric-foot">لا تُستنتج الحالة دون استجابة</div></article>
+  <article class="card"><div class="metric-label">وضع النموذج</div><div class="metric">محلي أولًا</div><div class="metric-foot">لا يوجد اعتماد إلزامي على API مدفوع</div></article>
+ </section>
+ <section id="view-overview" class="section two">
+  <article class="card"><div class="section-head"><h2>إرسال مهمة إلى ORIENT</h2><span class="pill">POST /agent</span></div><p class="muted">ابدأ بمهمة واضحة. سيعرض النظام الاستجابة الفعلية كما أعادها الخادم.</p><form id="taskForm"><label for="taskInput" class="metric-label">المهمة</label><textarea class="input" id="taskInput" maxlength="20000" required placeholder="مثال: احفظ أنني أختبر لوحة ORIENT ONE"></textarea><div class="formrow"><button class="btn" id="taskSubmit" type="submit">إرسال المهمة ←</button><button class="btn secondary" type="button" id="clearTask">مسح</button></div></form><div class="output" id="taskOutput" role="status" aria-live="polite">لم يتم إرسال أي مهمة بعد.</div></article>
+  <article class="card"><div class="section-head"><h2>حالة النظام</h2><span class="pill">LIVE CHECK</span></div><div class="timeline"><div class="event"><div class="event-icon">✓</div><div><strong>واجهة لوحة القيادة</strong><small>تم تحميل HTML وCSS محليًا.</small></div></div><div class="event"><div class="event-icon">↔</div><div><strong>واجهات الخادم</strong><small id="apiState">جارٍ اختبار الوصول إلى نقطة الذاكرة.</small></div></div><div class="event"><div class="event-icon">⬡</div><div><strong>الموافقات والصلاحيات</strong><small>لا تتجاوز اللوحة بوابة التفويض، ولا تمنح نفسها صلاحيات.</small></div></div></div><div class="warning">هذه النسخة لا تعرض قائمة تنفيذات تاريخية أو إحصاءات دائمة ما لم يوفر الخادم API صريحًا لها. لا يتم اختلاق هذه البيانات.</div></article>
+ </section>
+ <section id="view-agent" class="section hidden"><article class="card"><div class="section-head"><h2>تشغيل الوكيل</h2><span class="pill">CANONICAL RUNTIME</span></div><form id="taskForm2"><label for="taskInput2" class="metric-label">المهمة</label><textarea class="input" id="taskInput2" maxlength="20000" required placeholder="اكتب المهمة المطلوب تنفيذها…"></textarea><div class="formrow"><button class="btn" type="submit">تشغيل</button></div></form><div class="output" id="taskOutput2" role="status" aria-live="polite">في انتظار المهمة.</div></article></section>
+ <section id="view-memory" class="section hidden"><article class="card"><div class="section-head"><h2>الذاكرة الدائمة</h2><span class="pill">EXISTING UI</span></div><p class="muted">تُدار إضافة الذاكرة والبحث والحذف عبر الواجهة الحالية للخادم.</p><a class="btn" href="/" style="display:inline-block;text-decoration:none">فتح واجهة الذاكرة ←</a><div class="warning">لم يتم تضمين API جديد للذاكرة داخل لوحة القيادة؛ هذا يحافظ على مسار الذاكرة والصلاحيات القائمين دون تكرار منطق الأعمال في الواجهة.</div></article></section>
+ <section id="view-security" class="section hidden"><div class="grid"><article class="card"><div class="metric-label">نمط الاتصال</div><div class="metric">Local-first</div><div class="metric-foot">تعتمد اللوحة على نفس الأصل ولا تتصل بخدمات خارجية.</div></article><article class="card"><div class="metric-label">التفويض</div><div class="metric">الخادم</div><div class="metric-foot">كل طلب تنفيذ يمر عبر /agent ومسار التشغيل الحالي.</div></article></div><article class="card section"><h2>حدود الأمان</h2><div class="timeline"><div class="event"><div class="event-icon">1</div><div><strong>لا أسرار في المتصفح</strong><small>لا مفاتيح API ولا كلمات مرور مخزنة في ملفات الواجهة.</small></div></div><div class="event"><div class="event-icon">2</div><div><strong>لا صلاحيات إضافية</strong><small>الواجهة لا تنفذ أدوات مباشرة ولا تتجاوز سياسة التفويض.</small></div></div><div class="event"><div class="event-icon">3</div><div><strong>الحالة غير المتاحة تظل غير متاحة</strong><small>عند فشل الاتصال، تظهر حالة تعذر الاتصال بدل نتائج افتراضية.</small></div></div></div></article></section>
+ <div class="footer">ORIENT ONE · Dashboard foundation · لا تُعد هذه الواجهة شهادة أمنية أو بديلًا عن اختبار التكامل.</div>
+</main>
+</div>
+<script>
+(() => {
+ const $ = id => document.getElementById(id);
+ let sent = 0;
+ document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b === button));
+  document.querySelectorAll('[id^="view-"]').forEach(s => s.classList.add('hidden'));
+  $('view-' + button.dataset.view).classList.remove('hidden');
+  $('pageTitle').textContent = ({overview:'مركز القيادة',agent:'تشغيل الوكيل',memory:'الذاكرة',security:'الأمان والحوكمة'})[button.dataset.view];
+ }));
+ async function checkServer() {
+  try {
+   const response = await fetch('/', {method:'GET',cache:'no-store',headers:{'Accept':'text/html'}});
+   if (!response.ok) throw new Error('HTTP ' + response.status);
+   $('serverMetric').textContent = 'متصل';
+   $('healthText').textContent = 'الخادم يستجيب';
+   $('apiState').textContent = 'الخادم يستجيب لطلب GET /. لم يتم استنتاج صحة بقية الخدمات.';
+   $('healthDot').style.background = 'var(--green)';
+  } catch {
+   $('serverMetric').textContent = 'غير متاح';
+   $('healthText').textContent = 'تعذر الاتصال بالخادم';
+   $('apiState').textContent = 'تعذر الاتصال. شغّل الخادم المحلي ثم أعد تحميل الصفحة.';
+   $('healthDot').style.background = 'var(--red)';
+  }
+ }
+ async function submitTask(event, inputId, outputId, button) {
+  event.preventDefault();
+  const input = $(inputId).value.trim();
+  const output = $(outputId);
+  if (!input) return;
+  const submit = button || event.submitter;
+  if (submit) submit.disabled = true;
+  output.textContent = 'جارٍ إرسال المهمة إلى الخادم…';
+  try {
+   const response = await fetch('/agent', {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({input})});
+   const body = await response.text();
+   let parsed; try { parsed = JSON.parse(body); } catch { parsed = body; }
+   if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2));
+   output.textContent = typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2);
+   sent += 1; $('runMetric').textContent = String(sent);
+   $('lastMetric').textContent = new Date().toLocaleTimeString('ar-EG');
+  } catch (error) {
+   output.textContent = 'فشل إرسال المهمة: ' + error.message + '\nلم يتم تسجيل نتيجة ناجحة.';
+  } finally { if (submit) submit.disabled = false; }
+ }
+ $('taskForm').addEventListener('submit', e => submitTask(e,'taskInput','taskOutput',$('taskSubmit')));
+ $('taskForm2').addEventListener('submit', e => submitTask(e,'taskInput2','taskOutput2'));
+ $('clearTask').addEventListener('click', () => { $('taskInput').value=''; $('taskOutput').textContent='لم يتم إرسال أي مهمة بعد.'; });
+ checkServer();
+})();
+</script>
+</body>
+</html>
