@@ -66,3 +66,45 @@ test('execution event query fails closed when durable event storage is absent', 
     error => error.code === 'EXECUTION_EVENT_STORAGE_REQUIRED'
   );
 });
+
+
+test('execution history returns bounded summaries and never exposes input or result payloads', async () => {
+  const runtime = {
+    tenantId: 'tenant-a',
+    persistence: {
+      executions: {
+        async findAll(options) {
+          assert.deepEqual(options, { tenantId: 'tenant-a' });
+          return [
+            { executionId: 'old', status: 'completed', updatedAt: '2026-10-01T00:00:00.000Z', input: 'secret input', result: { secret: true } },
+            { executionId: 'new', status: 'running', updatedAt: '2026-10-02T00:00:00.000Z', input: 'secret input', result: { secret: true } },
+            { executionId: 'mid', status: 'failed', updatedAt: '2026-10-01T12:00:00.000Z', input: 'secret input', result: { secret: true } }
+          ];
+        }
+      }
+    }
+  };
+  const result = await OrientRuntime.prototype.listExecutionSummaries.call(runtime, { limit: 1, offset: 1 });
+  assert.equal(result.total, 3);
+  assert.equal(result.limit, 1);
+  assert.equal(result.offset, 1);
+  assert.equal(result.executions[0].executionId, 'mid');
+  assert.equal(Object.hasOwn(result.executions[0], 'input'), false);
+  assert.equal(Object.hasOwn(result.executions[0], 'result'), false);
+});
+
+test('pending approval inbox delegates with the runtime tenant and bounded limit', async () => {
+  let received;
+  const runtime = {
+    tenantId: 'tenant-a',
+    approvalService: {
+      async listPending(options) {
+        received = options;
+        return [{ approvalId: 'approval-1' }];
+      }
+    }
+  };
+  const result = await OrientRuntime.prototype.listPendingApprovals.call(runtime, { limit: 999 });
+  assert.deepEqual(received, { tenantId: 'tenant-a', limit: 100 });
+  assert.deepEqual(result, [{ approvalId: 'approval-1' }]);
+});
