@@ -162,9 +162,12 @@ test('command runner captures terminal systemd status after a successful command
       spawn: () => child,
       inspect: async () => {
         inspections += 1;
-        return inspections === 1
-          ? { result: 'running', activeState: 'active', enforcedProperties: { memoryMax: '268435456' } }
-          : { result: 'success', activeState: 'inactive', mainStatus: '0', enforcedProperties: { memoryMax: '268435456' } };
+        return {
+          result: 'success',
+          activeState: 'inactive',
+          mainStatus: '0',
+          enforcedProperties: { memoryMax: 'infinity' }
+        };
       },
       cleanup: async () => { cleaned = true; return true; }
     }
