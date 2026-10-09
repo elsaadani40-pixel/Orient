@@ -7,6 +7,8 @@ const path = require('node:path');
 const CommandRunner =
   require('../../../../../src/core/agent/project-builder/workspace/command-runner');
 
+const TestCommandIsolator = require('./test-command-isolator');
+
 const WorkspacePolicy =
   require('../../../../../src/core/agent/project-builder/workspace/workspace-policy');
 
@@ -25,7 +27,7 @@ test('timeout terminates the complete child process group on POSIX', {
     timeoutMs: 150
   });
 
-  const runner = new CommandRunner({ policy });
+  const runner = new CommandRunner({ policy, isolator: new TestCommandIsolator() });
 
   await assert.rejects(
     () => runner.run(process.execPath, {
