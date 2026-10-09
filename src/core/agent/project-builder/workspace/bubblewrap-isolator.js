@@ -10,7 +10,6 @@ const SYSTEM_MOUNTS = [
   '/sbin',
   '/lib',
   '/lib64',
-  '/opt',
   '/etc'
 ];
 
@@ -49,6 +48,20 @@ class BubblewrapIsolator {
 
     for (const mount of SYSTEM_MOUNTS) {
       if (fs.existsSync(mount)) argsForSandbox.push('--ro-bind', mount, mount);
+    }
+
+    const runtimeDirectory = path.dirname(fs.realpathSync.native(process.execPath));
+    if (!runtimeDirectory.startsWith('/usr/') &&
+        !runtimeDirectory.startsWith('/bin/') &&
+        !runtimeDirectory.startsWith('/sbin/') &&
+        !runtimeDirectory.startsWith('/lib/')) {
+      const components = runtimeDirectory.split('/').filter(Boolean);
+      let current = '';
+      for (const component of components.slice(0, -1)) {
+        current += `/${component}`;
+        argsForSandbox.push('--dir', current);
+      }
+      argsForSandbox.push('--ro-bind', runtimeDirectory, runtimeDirectory);
     }
 
     argsForSandbox.push(
