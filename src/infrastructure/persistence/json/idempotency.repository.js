@@ -3,8 +3,12 @@ const path = require('path');
 const crypto = require('crypto');
 
 class IdempotencyRepository {
-  constructor(filePath) {
+  constructor(filePath, { lockTimeoutMs = 30000 } = {}) {
     if (!filePath) throw new TypeError('filePath is required');
+    if (!Number.isInteger(lockTimeoutMs) || lockTimeoutMs < 1) {
+      throw new TypeError('lockTimeoutMs must be a positive integer');
+    }
+    this.lockTimeoutMs = lockTimeoutMs;
     this.filePath = filePath;
     this.lockPath = filePath + '.lock';
     this.ensureStorage();
@@ -72,7 +76,7 @@ class IdempotencyRepository {
   }
 
   withLock(operation) {
-    const timeoutMs = 30000;
+    const timeoutMs = this.lockTimeoutMs;
     const deadline = Date.now() + timeoutMs;
     const hostname = require('os').hostname();
     const token = crypto.randomUUID();

@@ -62,15 +62,33 @@ test('terminal updates accept the canonical tenant string used by AgentLoop', ()
 
 test('lock held by a live process is not reclaimed based on directory age', () => {
   const s = make();
-  fs.mkdirSync(s.repo.lockPath);
-  fs.writeFileSync(path.join(s.repo.lockPath, 'owner.json'), JSON.stringify({
+  const repo = new IdempotencyRepository(s.repo.filePath, { lockTimeoutMs: 20 });
+  fs.mkdirSync(repo.lockPath);
+  fs.writeFileSync(path.join(repo.lockPath, 'owner.json'), JSON.stringify({
     token: 'live-owner',
     pid: process.pid,
     hostname: require('os').hostname(),
     acquiredAt: new Date(0).toISOString()
   }));
-  const deadline = Date.now() + 40;
-  while (Date.now() < deadline) {}
-  assert.throws(() => s.repo.withLock(() => true), error => error.code === 'IDEMPOTENCY_STORAGE_LOCK_TIMEOUT');
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(repo.lockPath, old, old);
+  assert.throws(() => repo.withLock(() => true), error => error.code === 'IDEMPOTENCY_STORAGE_LOCK_TIMEOUT');
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
+
+test('lock owned by a dead local process is recovered before acquiring a new lock', () => {
+  const s = make();
+  const repo = new IdempotencyRepository(s.repo.filePath, { lockTimeoutMs: 100 });
+  fs.mkdirSync(repo.lockPath);
+  fs.writeFileSync(path.join(repo.lockPath, 'owner.json'), JSON.stringify({
+    token: 'dead-owner',
+    pid: 2147483647,
+    hostname: require('os').hostname(),
+    acquiredAt: new Date(0).toISOString()
+  }));
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(repo.lockPath, old, old);
+  assert.equal(repo.withLock(() => 'acquired'), 'acquired');
+  assert.equal(fs.existsSync(repo.lockPath), false);
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
