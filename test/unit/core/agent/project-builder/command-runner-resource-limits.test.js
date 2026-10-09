@@ -146,3 +146,32 @@ test('command runner distinguishes a file-size SIGXFSZ status encoded by systemd
   const result = await execution;
   assert.equal(result.failureCode, 'FILE_SIZE_LIMIT_EXCEEDED');
 });
+
+test('command runner captures terminal systemd status after a successful command exit', async () => {
+  const child = fakeChild();
+  let inspections = 0;
+  let cleaned = false;
+  const runner = new CommandRunner({
+    policy: createPolicy(),
+    isolator: {
+      spawn: () => child,
+      inspect: async () => {
+        inspections += 1;
+        return inspections === 1
+          ? { result: 'running', activeState: 'active', enforcedProperties: { memoryMax: '268435456' } }
+          : { result: 'success', activeState: 'inactive', mainStatus: '0', enforcedProperties: { memoryMax: '268435456' } };
+      },
+      cleanup: async () => { cleaned = true; return true; }
+    }
+  });
+
+  const execution = runner.run('node');
+  child.emit('close', 0, null);
+  const result = await execution;
+
+  assert.equal(inspections, 2, 'initial and terminal systemd states must both be inspected');
+  assert.equal(cleaned, true);
+  assert.equal(result.failureCode, null);
+  assert.equal(result.resourceLimitStatus.result, 'success');
+  assert.equal(result.resourceLimitStatus.activeState, 'inactive');
+});
