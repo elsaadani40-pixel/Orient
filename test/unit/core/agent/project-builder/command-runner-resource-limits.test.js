@@ -101,3 +101,48 @@ test('command runner surfaces systemd cgroup OOM as a distinct structured failur
   assert.equal(result.failureCode, 'MEMORY_LIMIT_EXCEEDED');
   assert.equal(result.resourceLimitStatus.enforcedProperties.memoryMax, '268435456');
 });
+
+
+test('command runner distinguishes a CPU-time SIGXCPU status encoded by systemd', async () => {
+  const child = fakeChild();
+  const runner = new CommandRunner({
+    policy: createPolicy(),
+    isolator: {
+      spawn: () => child,
+      inspect: async () => ({
+        result: 'exit-code',
+        mainCode: '1',
+        mainStatus: '152',
+        enforcedProperties: { limitCPU: '2', limitCPUSoft: '1' }
+      }),
+      cleanup: async () => true
+    }
+  });
+
+  const execution = runner.run('node');
+  child.emit('close', 152, null);
+  const result = await execution;
+  assert.equal(result.failureCode, 'CPU_LIMIT_EXCEEDED');
+});
+
+test('command runner distinguishes a file-size SIGXFSZ status encoded by systemd', async () => {
+  const child = fakeChild();
+  const runner = new CommandRunner({
+    policy: createPolicy(),
+    isolator: {
+      spawn: () => child,
+      inspect: async () => ({
+        result: 'exit-code',
+        mainCode: '1',
+        mainStatus: '153',
+        enforcedProperties: { limitFSize: '1048576' }
+      }),
+      cleanup: async () => true
+    }
+  });
+
+  const execution = runner.run('node');
+  child.emit('close', 153, null);
+  const result = await execution;
+  assert.equal(result.failureCode, 'FILE_SIZE_LIMIT_EXCEEDED');
+});
