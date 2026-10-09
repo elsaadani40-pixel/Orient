@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { assertLocalHttpHost } = require('../../../src/core/config/local-bind-policy');
+const { assertLocalHttpHost } = require('../../../../src/core/config/local-bind-policy');
 
 test('HTTP bind policy permits only explicit loopback addresses', () => {
   assert.equal(assertLocalHttpHost('127.0.0.1'), '127.0.0.1');
