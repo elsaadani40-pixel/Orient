@@ -73,6 +73,8 @@ test('WebGL command scene is served locally with a JavaScript content type', asy
   assert.match(source, /window\.ORIENTScene/);
   assert.match(source, /addExecutionEvent\(event\)/);
   assert.match(source, /eventNodes\.forEach/);
+  assert.match(source, /gl\.drawArrays\(gl\.LINES, 0, 2\)/);
+  assert.match(source, /drawLine\(\[0, 0, 0\], endpoint/);
   assert.match(source, /eventNodes.length > 6/);
   assert.match(source, /drawSphere\(core, activeTint/);
 });
