@@ -164,8 +164,10 @@ test('high-risk crash after side effect does not execute the side effect twice',
   const manifestPath = path.join(root, 'package.json');
   fs.writeFileSync(manifestPath, '{"name":"mission-8-crash"}\n');
 
+  const persistenceRoot = path.join(root, '.orient-state');
+  const persistence = new JsonPersistence({ rootDir: persistenceRoot });
   const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
-  const runtime = createRuntime(root, { approvalService: approvals });
+  let runtime = createRuntime(root, { approvalService: approvals, persistence });
   const { challenge, approval } = await approveChallenge(runtime, approvals, root);
 
   const originalExecute = runtime.toolRegistry.execute.bind(runtime.toolRegistry);
@@ -196,11 +198,32 @@ test('high-risk crash after side effect does not execute the side effect twice',
   assert.equal(executionCount, 1);
   assert.equal(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts.test, 'node --test');
 
+  // Simulate a real process restart: discard the runtime, reopen every JSON
+  // repository from disk, and resume without passing the original approval.
+  runtime.shutdown({ cancelQueued: false });
+  const restartedPersistence = new JsonPersistence({ rootDir: persistenceRoot });
+  runtime = createRuntime(root, { persistence: restartedPersistence });
+
+  const restartedExecute = runtime.toolRegistry.execute.bind(runtime.toolRegistry);
+  runtime.toolRegistry.execute = async (name, input, context) => {
+    if (name === 'project.execute_change') executionCount += 1;
+    return restartedExecute(name, input, context);
+  };
+
+  const recovered = await runtime.resume(challenge.executionId);
+  assert.equal(recovered.resumed, true);
+  assert.equal(recovered.execution.status, 'completed');
+  assert.equal(executionCount, 1, 'restart must reuse the durable idempotency result, not repeat the side effect');
+  assert.equal(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts.test, 'node --test');
+  assert.ok(
+    recovered.execution.events.some(event => event.type === 'idempotency.reused'),
+    'recovery should record that it reused the completed idempotency record'
+  );
+
   const terminal = await runtime.resume(challenge.executionId);
   assert.equal(terminal.resumed, false);
   assert.equal(terminal.reason, 'execution_already_terminal');
   assert.equal(executionCount, 1);
-  assert.equal(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).scripts.test, 'node --test');
 
   runtime.shutdown({ cancelQueued: false });
   fs.rmSync(root, { recursive: true, force: true });
