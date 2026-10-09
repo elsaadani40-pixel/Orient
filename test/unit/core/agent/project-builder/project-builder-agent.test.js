@@ -2359,3 +2359,52 @@ test('project builder validates the execution change set before modifying files'
 
   await fs.rm(root, { recursive: true, force: true });
 });
+
+test(
+  'workspace policy denies access when its allowed-root symlink is retargeted outside the original workspace',
+  { skip: process.platform !== 'linux' },
+  async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'orient-policy-root-retarget-')
+    );
+    const originalRoot = path.join(parent, 'workspace');
+    const outsideRoot = path.join(parent, 'outside');
+    const rootLink = path.join(parent, 'workspace-link');
+
+    try {
+      await fs.mkdir(originalRoot);
+      await fs.mkdir(outsideRoot);
+      await fs.writeFile(path.join(outsideRoot, 'secret.txt'), 'outside secret');
+      await fs.symlink(originalRoot, rootLink, 'dir');
+
+      const policy = new WorkspacePolicy({
+        allowedRoot: rootLink,
+        allowRead: true,
+        allowWrite: true
+      });
+
+      await fs.rm(rootLink);
+      await fs.symlink(outsideRoot, rootLink, 'dir');
+
+      assert.throws(
+        () => policy.assertRead('secret.txt'),
+        /escapes allowed root/
+      );
+      assert.throws(
+        () => policy.assertWrite('new-file.txt'),
+        /escapes allowed root/
+      );
+      assert.equal(
+        await fs.readFile(path.join(outsideRoot, 'secret.txt'), 'utf8'),
+        'outside secret'
+      );
+      await assert.rejects(
+        () => fs.access(path.join(outsideRoot, 'new-file.txt')),
+        { code: 'ENOENT' }
+      );
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  }
+);
+
