@@ -88,7 +88,9 @@ class ProjectBuilderAgent {
           policy.maxOutput ?? 20000,
         timeoutMs:
           policy.timeoutMs ??
-          this.executionProfile.timeoutMs
+          this.executionProfile.timeoutMs,
+        resourceLimits:
+          policy.resourceLimits ?? {}
       });
 
     this.workspace =

@@ -53,6 +53,43 @@ jobs:
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
           bwrap --version
 
+      - name: Start user systemd manager and verify cgroup quota enforcement
+        shell: bash
+        run: |
+          set -euo pipefail
+          user="$(id -un)"
+          uid="$(id -u)"
+          sudo loginctl enable-linger "$user"
+          sudo systemctl start "user@${uid}.service"
+          runtime="/run/user/${uid}"
+          for attempt in $(seq 1 30); do
+            if test -S "$runtime/bus"; then break; fi
+            sleep 1
+          done
+          test -S "$runtime/bus"
+          controllers="$(cat /sys/fs/cgroup/cgroup.controllers)"
+          for controller in cpu memory pids; do
+            grep -qw "$controller" <<< "$controllers"
+          done
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="$runtime"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"
+          systemctl --user is-active default.target
+          systemd-run --user --wait --collect --pipe --service-type=exec \
+            --unit="orient-pb-ci-smoke-${uid}.service" \
+            --property=CPUQuota=100% \
+            --property=LimitCPU=5:6 \
+            --property=MemoryMax=268435456 \
+            --property=MemorySwapMax=0 \
+            --property=TasksMax=64 \
+            --property=LimitNOFILE=256 \
+            --property=LimitFSIZE=67108864 \
+            --property=RuntimeMaxSec=5s \
+            --property=KillMode=control-group \
+            --property=OOMPolicy=kill \
+            -- /usr/bin/true
+
       - name: Verify SQLite runtime
         shell: bash
         run: |
@@ -188,6 +225,43 @@ jobs:
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
           bwrap --version
           sqlite3 --version
+
+      - name: Start user systemd manager and verify cgroup quota enforcement
+        shell: bash
+        run: |
+          set -euo pipefail
+          user="$(id -un)"
+          uid="$(id -u)"
+          sudo loginctl enable-linger "$user"
+          sudo systemctl start "user@${uid}.service"
+          runtime="/run/user/${uid}"
+          for attempt in $(seq 1 30); do
+            if test -S "$runtime/bus"; then break; fi
+            sleep 1
+          done
+          test -S "$runtime/bus"
+          controllers="$(cat /sys/fs/cgroup/cgroup.controllers)"
+          for controller in cpu memory pids; do
+            grep -qw "$controller" <<< "$controllers"
+          done
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="$runtime"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"
+          systemctl --user is-active default.target
+          systemd-run --user --wait --collect --pipe --service-type=exec \
+            --unit="orient-pb-ci-smoke-${uid}.service" \
+            --property=CPUQuota=100% \
+            --property=LimitCPU=5:6 \
+            --property=MemorySwapMax=0 \
+            --property=MemoryMax=268435456 \
+            --property=TasksMax=64 \
+            --property=LimitNOFILE=256 \
+            --property=LimitFSIZE=67108864 \
+            --property=RuntimeMaxSec=5s \
+            --property=KillMode=control-group \
+            --property=OOMPolicy=kill \
+            -- /usr/bin/true
 
       - name: Run every repository test
         shell: bash
