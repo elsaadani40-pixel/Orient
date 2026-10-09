@@ -81,9 +81,9 @@ class RequestExecutionCoordinator {
       : 'tool_result';
   }
 
-  isCancellationRequested(executionId) {
+  async isCancellationRequested(executionId) {
     if (!executionId || typeof this.persistence?.executions?.findById !== 'function') return false;
-    const execution = this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
+    const execution = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
     return Boolean(execution?.cancellationRequested);
   }
 
@@ -295,7 +295,7 @@ class RequestExecutionCoordinator {
       });
     }
 
-    const checkpoint = this.persistence.checkpoints.findLatest(executionId, {
+    const checkpoint = await this.persistence.checkpoints.findLatest(executionId, {
       tenantId: this.tenantId
     });
     if (!checkpoint) {
@@ -328,7 +328,7 @@ class RequestExecutionCoordinator {
     // state before the corresponding checkpoint update. The durable execution
     // record is authoritative for terminal state; never re-run side effects.
     const durableExecution = typeof this.persistence?.executions?.findById === 'function'
-      ? this.persistence.executions.findById(executionId, { tenantId: this.tenantId })
+      ? await this.persistence.executions.findById(executionId, { tenantId: this.tenantId })
       : null;
 
     if (durableExecution?.cancellationRequested && context.isActive()) {
@@ -337,7 +337,7 @@ class RequestExecutionCoordinator {
 
     if (durableExecution && ['completed', 'failed', 'cancelled'].includes(durableExecution.status)) {
       if (typeof this.persistence.checkpoints.save === 'function') {
-        this.persistence.checkpoints.save(
+        await this.persistence.checkpoints.save(
           durableExecution,
           { reason: 'recovery_reconciled_terminal', tenantId: this.tenantId }
         );
