@@ -255,7 +255,7 @@ class ExecutionRepository {
 
       // A durable cancellation request wins over a later terminal completion write.
       // This is the atomic outcome boundary for JSON persistence.
-      if (current.cancellationRequested && patch.status === 'completed') {
+      if (current.cancellationRequested && ['completed', 'failed'].includes(patch.status)) {
         return current;
       }
 
