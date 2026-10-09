@@ -1,5 +1,6 @@
 const path = require('path');
 const version = require('../version');
+const { assertLocalHttpHost } = require('./local-bind-policy');
 
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
@@ -8,7 +9,7 @@ function positiveInteger(value, fallback) {
 
 const config = Object.freeze({
   port: positiveInteger(process.env.PORT, 8080),
-  host: process.env.HOST || '127.0.0.1',
+  host: assertLocalHttpHost(process.env.HOST || '127.0.0.1'),
   nodeEnv: process.env.NODE_ENV || 'development',
   persistenceMode: process.env.ORIENT_PERSISTENCE || 'json',
   databaseUrl: process.env.ORIENT_DATABASE_URL || process.env.DATABASE_URL || '',
