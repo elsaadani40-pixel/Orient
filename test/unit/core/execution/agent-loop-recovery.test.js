@@ -32,9 +32,15 @@ function toolRegistry(counter) {
       assert.equal(name, tool.name);
       return tool;
     },
-    async execute(name, input) {
+    async execute(name, input, executionContext) {
       assert.equal(name, tool.name);
       counter.count += 1;
+      counter.contexts ||= [];
+      counter.contexts.push({
+        operationId: executionContext?.operationId,
+        idempotencyKey: executionContext?.idempotencyKey,
+        tenantId: executionContext?.tenantId
+      });
       return { ok: true, input };
     }
   };
@@ -129,6 +135,10 @@ test('crash after external side effect never blindly replays an unknown operatio
   );
 
   assert.equal(counter.count, 1);
+  assert.match(counter.contexts[0].operationId, /^[a-f0-9]{64}$/);
+  assert.match(counter.contexts[0].idempotencyKey, /^[a-f0-9]{64}$/);
+  assert.notEqual(counter.contexts[0].idempotencyKey, counter.contexts[0].operationId);
+  assert.equal(counter.contexts[0].tenantId, 'local');
   assert.equal(
     [...repository.records.values()][0].status,
     'running'
