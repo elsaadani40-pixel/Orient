@@ -203,6 +203,7 @@ class BubblewrapIsolator {
     child.orientResourceUnitName = unitName;
     child.orientResourceLimits = limits;
     child.orientSystemdEnvironment = this._systemdClientEnvironment();
+    child.orientInitialInspection = this.inspect(child, { waitMs: 1500 });
     return child;
   }
 
@@ -280,83 +281,108 @@ class BubblewrapIsolator {
     });
   }
 
-  inspect(child) {
-    if (!child || !child.orientResourceUnitName) {
-      return Promise.resolve(null);
-    }
+  inspect(child, { waitMs = 0 } = {}) {
+    if (!child || !child.orientResourceUnitName) return Promise.resolve(null);
 
     const unitName = child.orientResourceUnitName;
     const environment = child.orientSystemdEnvironment || this._systemdClientEnvironment();
+    const deadline = Date.now() + Math.max(0, waitMs);
 
     return new Promise(resolve => {
-      let probe;
-      try {
-        probe = this.spawnProcess(this.systemctlPath, [
-          '--user',
-          'show',
-          '--property=Result',
-          '--property=ExecMainCode',
-          '--property=ExecMainStatus',
-          '--property=MemoryMax',
-          '--property=CPUQuotaPerSecUSec',
-          '--property=TasksMax',
-          '--property=LimitNOFILE',
-          '--property=LimitFSIZE',
-          '--property=RuntimeMaxUSec',
-          '--property=LimitCPU',
-          '--property=MemorySwapMax',
-          '--value',
-          unitName
-        ], {
-          shell: false,
-          windowsHide: true,
-          stdio: ['ignore', 'pipe', 'ignore'],
-          env: environment
-        });
-      } catch {
-        resolve(null);
-        return;
-      }
-
-      let output = '';
-      if (probe.stdout) {
-        probe.stdout.on('data', chunk => {
-          if (output.length < 4096) output += chunk.toString();
-        });
-      }
-      probe.once('error', () => resolve(null));
-      probe.once('close', code => {
-        if (code !== 0) {
+      const retryOrResolve = value => {
+        if (value !== null) {
+          resolve(value);
+          return;
+        }
+        if (Date.now() >= deadline) {
           resolve(null);
           return;
         }
-        const [
-          result,
-          mainCode,
-          mainStatus,
-          memoryMax,
-          cpuQuotaPerSecUSec,
-          tasksMax,
-          limitNoFile,
-          limitFSize,
-          runtimeMaxUSec,
-          limitCPU,
-          memorySwapMax
-        ] = output.trim().split(/\r?\n/);
-        resolve({
-          result: result || 'unknown',
-          mainCode: mainCode || 'unknown',
-          mainStatus: mainStatus || 'unknown',
-          enforcedProperties: {
-            memoryMax: memoryMax || 'unknown',
-            cpuQuotaPerSecUSec: cpuQuotaPerSecUSec || 'unknown',
-            tasksMax: tasksMax || 'unknown',
-            limitNoFile: limitNoFile || 'unknown',
-            limitFSize: limitFSize || 'unknown',
-            runtimeMaxUSec: runtimeMaxUSec || 'unknown'
+        setTimeout(probeUnit, 25);
+      };
+
+      const probeUnit = () => {
+        let probe;
+        try {
+          probe = this.spawnProcess(this.systemctlPath, [
+            '--user',
+            'show',
+            '--property=Result',
+            '--property=ExecMainCode',
+            '--property=ExecMainStatus',
+            '--property=MemoryMax',
+            '--property=CPUQuotaPerSecUSec',
+            '--property=TasksMax',
+            '--property=LimitNOFILE',
+            '--property=LimitFSIZE',
+            '--property=RuntimeMaxUSec',
+            '--property=LimitCPU',
+            '--property=MemorySwapMax',
+            '--value',
+            unitName
+          ], {
+            shell: false,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'ignore'],
+            env: environment
+          });
+        } catch {
+          retryOrResolve(null);
+          return;
+        }
+
+        let output = '';
+        let finished = false;
+        const finish = value => {
+          if (finished) return;
+          finished = true;
+          retryOrResolve(value);
+        };
+
+        if (probe.stdout) {
+          probe.stdout.on('data', chunk => {
+            if (output.length < 4096) output += chunk.toString();
+          });
+        }
+        probe.once('error', () => finish(null));
+        probe.once('close', code => {
+          if (code !== 0 || !output.trim()) {
+            finish(null);
+            return;
           }
+
+          const [
+            result,
+            mainCode,
+            mainStatus,
+            memoryMax,
+            cpuQuotaPerSecUSec,
+            tasksMax,
+            limitNoFile,
+            limitFSize,
+            runtimeMaxUSec,
+            limitCPU,
+            memorySwapMax
+          ] = output.trim().split(/\r?\n/);
+          finish({
+            result: result || 'unknown',
+            mainCode: mainCode || 'unknown',
+            mainStatus: mainStatus || 'unknown',
+            enforcedProperties: {
+              memoryMax: memoryMax || 'unknown',
+              cpuQuotaPerSecUSec: cpuQuotaPerSecUSec || 'unknown',
+              tasksMax: tasksMax || 'unknown',
+              limitNoFile: limitNoFile || 'unknown',
+              limitFSize: limitFSize || 'unknown',
+              runtimeMaxUSec: runtimeMaxUSec || 'unknown',
+              limitCPU: limitCPU || 'unknown',
+              memorySwapMax: memorySwapMax || 'unknown'
+            }
+          });
         });
-      });
+      };
+
+      probeUnit();
     });
   }
 }
