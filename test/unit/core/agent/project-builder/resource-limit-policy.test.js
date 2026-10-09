@@ -23,6 +23,7 @@ test('resource limit policy rejects unknown and unsafe values instead of silentl
   assert.throws(() => normalizeResourceLimits({ maxProcesses: 1.5 }), /maxProcesses/);
   assert.throws(() => normalizeResourceLimits({ cpuQuotaPercent: 1001 }), /cpuQuotaPercent/);
   assert.throws(() => normalizeResourceLimits({ maxCpuTimeSeconds: 0 }), /maxCpuTimeSeconds/);
+  assert.equal(normalizeResourceLimits({ maxOutputBytes: 128 }).maxOutputBytes, 128);
   assert.throws(() => normalizeResourceLimits({ memroyMaxBytes: 10 }), /Unknown project-builder resource limit/);
   assert.throws(() => normalizeResourceLimits(null), /resourceLimits must be an object/);
 });
