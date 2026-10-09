@@ -482,9 +482,6 @@ class RequestExecutionCoordinator {
         : null;
 
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.renewResumeLease !== 'function') {
-        if (typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
-        }
         throw Object.assign(new Error('Durable resume lease renewal is required for safe execution'), {
           code: 'CHECKPOINT_RESUME_LEASE_RENEWAL_UNSUPPORTED'
         });
