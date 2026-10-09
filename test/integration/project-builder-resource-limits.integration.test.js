@@ -56,14 +56,14 @@ test('Project Builder command runs in a systemd cgroup with configured OS-enforc
     assert.ok(['success', 'running'].includes(result.resourceLimitStatus?.result), JSON.stringify(result.resourceLimitStatus));
     const properties = result.resourceLimitStatus?.enforcedProperties;
     assert.ok(properties, 'effective systemd resource properties must be observable');
-    assert.notEqual(properties.memoryMax, 'unknown');
+    assert.equal(properties.memoryMax, String(policy.resourceLimits.memoryMaxBytes));
     assert.notEqual(properties.cpuQuotaPerSecUSec, 'unknown');
-    assert.notEqual(properties.tasksMax, 'unknown');
-    assert.notEqual(properties.limitNoFile, 'unknown');
-    assert.notEqual(properties.limitFSize, 'unknown');
-    assert.notEqual(properties.runtimeMaxUSec, 'unknown');
-    assert.notEqual(properties.limitCPU, 'unknown');
-    assert.notEqual(properties.limitCPUSoft, 'unknown');
+    assert.equal(properties.tasksMax, String(policy.resourceLimits.maxProcesses));
+    assert.equal(properties.limitNoFile, String(policy.resourceLimits.maxOpenFiles));
+    assert.equal(properties.limitFSize, String(policy.resourceLimits.maxFileSizeBytes));
+    assert.equal(properties.runtimeMaxUSec, '10s');
+    assert.equal(properties.limitCPU, String(policy.resourceLimits.maxCpuTimeSeconds + 1));
+    assert.equal(properties.limitCPUSoft, String(policy.resourceLimits.maxCpuTimeSeconds));
     assert.equal(properties.memorySwapMax, '0');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
