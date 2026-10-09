@@ -20,6 +20,26 @@ const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const JsonPersistence = require('../../src/infrastructure/persistence/json/json-persistence');
+const WorkspacePolicy = require('../../src/core/agent/project-builder/workspace/workspace-policy');
+const CommandRunner = require('../../src/core/agent/project-builder/workspace/command-runner');
+
+
+async function skipIfOsSandboxUnavailable(t, root) {
+  const policy = new WorkspacePolicy({
+    allowedRoot: root,
+    allowCommands: true,
+    allowedCommands: ['node'],
+    timeoutMs: 5000
+  });
+  const result = await new CommandRunner({ policy }).run('node', {
+    args: ['--version']
+  });
+  if (result.code !== 0 && /Failed RTM_NEWADDR|Operation not permitted/.test(result.stderr || '')) {
+    t.skip('host runner cannot create the network namespace required by the OS sandbox; execution fails closed');
+    return true;
+  }
+  return false;
+}
 
 function createRuntime(root, { approvalService = null, persistence: persisted = null } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
@@ -100,8 +120,9 @@ async function approveChallenge(runtime, approvals, root) {
   return { challenge, approval };
 }
 
-test('high-risk verification failure rolls back after a real approval and cannot be replayed', async () => {
+test('high-risk verification failure rolls back after a real approval and cannot be replayed', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-mission-8-rollback-'));
+  if (await skipIfOsSandboxUnavailable(t, root)) { fs.rmSync(root, { recursive: true, force: true }); return; }
   fs.mkdirSync(path.join(root, 'test'));
   fs.writeFileSync(
     path.join(root, 'test', 'failing.test.js'),
@@ -131,8 +152,9 @@ test('high-risk verification failure rolls back after a real approval and cannot
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('high-risk crash after side effect does not execute the side effect twice', async () => {
+test('high-risk crash after side effect does not execute the side effect twice', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-mission-8-crash-'));
+  if (await skipIfOsSandboxUnavailable(t, root)) { fs.rmSync(root, { recursive: true, force: true }); return; }
   fs.mkdirSync(path.join(root, 'test'));
   fs.writeFileSync(
     path.join(root, 'test', 'smoke.test.js'),

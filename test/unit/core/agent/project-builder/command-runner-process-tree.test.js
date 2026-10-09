@@ -7,12 +7,14 @@ const path = require('node:path');
 const CommandRunner =
   require('../../../../../src/core/agent/project-builder/workspace/command-runner');
 
+const TestCommandIsolator = require('./test-command-isolator');
+
 const WorkspacePolicy =
   require('../../../../../src/core/agent/project-builder/workspace/workspace-policy');
 
 test('timeout terminates the complete child process group on POSIX', {
   skip: process.platform === 'win32'
-}, async () => {
+}, async t => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), 'orient-command-tree-')
   );
@@ -25,26 +27,38 @@ test('timeout terminates the complete child process group on POSIX', {
     timeoutMs: 150
   });
 
-  const runner = new CommandRunner({ policy });
+  const runner = new CommandRunner({ policy, isolator: new TestCommandIsolator() });
 
-  await assert.rejects(
-    () => runner.run(process.execPath, {
-      cwd: '.',
-      args: [
-        '-e',
-        [
-          "const fs=require('fs');",
-          "const {spawn}=require('child_process');",
-          "const out=process.argv[1];",
-          "const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});",
-          "fs.writeFileSync(out,String(child.pid));",
-          "setInterval(()=>{},1000);"
-        ].join(''),
-        pidFile
-      ]
-    }),
-    /Command timed out/
-  );
+  const execution = await runner.run(process.execPath, {
+    cwd: '.',
+    args: [
+      '-e',
+      [
+        "const fs=require('fs');",
+        "const {spawn}=require('child_process');",
+        "const out=process.argv[1];",
+        "const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});",
+        "fs.writeFileSync(out,String(child.pid));",
+        "setInterval(()=>{},1000);"
+      ].join(''),
+      pidFile
+    ]
+  }).catch(error => {
+    if (/Command timed out/.test(error.message)) return { timedOut: true };
+    throw error;
+  });
+
+  if (execution.code !== undefined && execution.code !== 0 &&
+      /Failed RTM_NEWADDR|Operation not permitted/.test(execution.stderr || '')) {
+    await fs.rm(root, { recursive: true, force: true });
+    t.skip('host runner denies the network namespace required by the OS sandbox; no direct-execution fallback was used');
+    return;
+  }
+
+  if (!execution.timedOut) {
+    await fs.rm(root, { recursive: true, force: true });
+    assert.fail('Expected command to time out inside the OS sandbox');
+  }
 
   const grandchildPid = Number(
     await fs.readFile(pidFile, 'utf8')

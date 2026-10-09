@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const BubblewrapIsolator = require('./bubblewrap-isolator');
 
 function terminateProcessTree(child) {
   if (!child || !child.pid) {
@@ -30,12 +30,16 @@ function terminateProcessTree(child) {
 }
 
 class CommandRunner {
-  constructor({ policy }) {
+  constructor({ policy, isolator = new BubblewrapIsolator() }) {
     if (!policy) {
       throw new TypeError('policy is required');
     }
 
     this.policy = policy;
+    if (!isolator || typeof isolator.spawn !== 'function') {
+      throw new TypeError('isolator with spawn() is required');
+    }
+    this.isolator = isolator;
   }
 
   run(
@@ -55,24 +59,20 @@ class CommandRunner {
       this.policy.maxOutput;
 
     return new Promise((resolve, reject) => {
-      const child = spawn(
-        executable,
-        args.map(String),
-        {
+      let child;
+      try {
+        child = this.isolator.spawn({
+          executable,
+          args: args.map(String),
+          workspaceRoot: this.policy.allowedRoot,
           cwd: workingDirectory,
-          shell: false,
-          windowsHide: true,
-          detached: process.platform !== 'win32',
-          // Keep only non-secret runtime essentials from the host; all other variables are explicit policy allowlist entries.
-          env: {
-            PATH: process.env.PATH || '',
-            ...(process.platform === 'win32' && process.env.SystemRoot
-              ? { SystemRoot: process.env.SystemRoot }
-              : {}),
-            ...this.policy.environment
-          }
-        }
-      );
+          environment: this.policy.environment,
+          timeoutMs: this.policy.timeoutMs
+        });
+      } catch (error) {
+        reject(error);
+        return;
+      }
 
       let stdout = '';
       let stderr = '';
