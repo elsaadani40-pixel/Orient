@@ -54,9 +54,40 @@ class JsonMemoryRepository {
   }
 
   withLock(operation) {
-    const timeoutMs = this.lockTimeoutMs;
-    const deadline = Date.now() + timeoutMs;
+    const deadline = Date.now() + this.lockTimeoutMs;
     const hostname = require('os').hostname();
+
+    const readOwner = lockPath => {
+      try {
+        const stat = fs.lstatSync(lockPath);
+        const ownerPath = stat.isDirectory() ? path.join(lockPath, 'owner.json') : lockPath;
+        return JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+      } catch (error) {
+        if (['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code) || error instanceof SyntaxError) return null;
+        throw error;
+      }
+    };
+
+    const restoreQuarantine = quarantinePath => {
+      try {
+        // Never overwrite a lock that another contender may have published.
+        fs.linkSync(quarantinePath, this.lockPath);
+        fs.unlinkSync(quarantinePath);
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          // Another owner already published a lock. Keep our quarantined object
+          // out of the active namespace; it is not safe to delete an unknown owner.
+          return;
+        }
+        if (error.code === 'EPERM' || error.code === 'EISDIR' || error.code === 'EMLINK') {
+          try { fs.renameSync(quarantinePath, this.lockPath); } catch (restoreError) {
+            if (restoreError.code !== 'EEXIST' && restoreError.code !== 'ENOTEMPTY') throw restoreError;
+          }
+          return;
+        }
+        if (error.code !== 'ENOENT') throw error;
+      }
+    };
 
     while (true) {
       const token = crypto.randomUUID();
@@ -64,48 +95,58 @@ class JsonMemoryRepository {
       const candidatePath = `${this.lockPath}.candidate.${token}`;
       let acquired = false;
 
-      // Prepare complete ownership metadata privately, then publish it with one
-      // same-filesystem rename. Contenders never observe a published lock
-      // directory before owner.json is complete.
+      // A fully-written regular file is published with link(2), which is
+      // atomic and fails with EEXIST instead of replacing another owner's lock.
       try {
-        fs.mkdirSync(candidatePath, { mode: 0o700 });
-        fs.writeFileSync(path.join(candidatePath, 'owner.json'), JSON.stringify(owner) + '\n', {
-          encoding: 'utf8', flag: 'wx', mode: 0o600
-        });
+        const fd = fs.openSync(candidatePath, 'wx', 0o600);
         try {
-          fs.renameSync(candidatePath, this.lockPath);
+          fs.writeFileSync(fd, JSON.stringify(owner) + '\\n', 'utf8');
+          fs.fsyncSync(fd);
+        } finally {
+          fs.closeSync(fd);
+        }
+        try {
+          fs.linkSync(candidatePath, this.lockPath);
           acquired = true;
         } catch (publishError) {
-          if (!['EEXIST', 'ENOTEMPTY', 'EISDIR'].includes(publishError.code)) throw publishError;
+          if (publishError.code !== 'EEXIST' && publishError.code !== 'EPERM' &&
+              publishError.code !== 'EACCES' && publishError.code !== 'EISDIR') throw publishError;
+          if (publishError.code !== 'EEXIST' && !fs.existsSync(this.lockPath)) throw publishError;
         }
       } finally {
-        try { fs.rmSync(candidatePath, { recursive: true, force: true }); } catch {}
+        try { fs.unlinkSync(candidatePath); } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
       }
 
       if (acquired) {
-        const ownerPath = path.join(this.lockPath, 'owner.json');
         try {
           return operation();
         } finally {
+          const quarantinePath = `${this.lockPath}.release.${token}`;
           try {
-            const currentOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
-            if (currentOwner.token === token) {
-              fs.rmSync(this.lockPath, { recursive: true, force: true });
+            fs.renameSync(this.lockPath, quarantinePath);
+            const releasedOwner = readOwner(quarantinePath);
+            if (releasedOwner && releasedOwner.token === token) {
+              fs.unlinkSync(quarantinePath);
+            } else {
+              restoreQuarantine(quarantinePath);
             }
-          } catch {}
+          } catch (releaseError) {
+            if (releaseError.code !== 'ENOENT') {
+              // Do not mask the protected operation's exception with cleanup
+              // trouble; preserve the quarantined lock for conservative recovery.
+            }
+          }
         }
       }
-      let owner = null;
-      try {
-        owner = JSON.parse(fs.readFileSync(path.join(this.lockPath, 'owner.json'), 'utf8'));
-      } catch (ownerError) {
-        if (ownerError.code !== 'ENOENT' && !(ownerError instanceof SyntaxError)) throw ownerError;
-      }
 
+      const existingOwner = readOwner(this.lockPath);
       let stale = false;
-      if (owner && owner.hostname === hostname && Number.isInteger(owner.pid) && owner.pid > 0) {
+      if (existingOwner && existingOwner.hostname === hostname &&
+          Number.isInteger(existingOwner.pid) && existingOwner.pid > 0) {
         try {
-          process.kill(owner.pid, 0);
+          process.kill(existingOwner.pid, 0);
         } catch (processError) {
           stale = processError.code === 'ESRCH';
           if (processError.code !== 'ESRCH' && processError.code !== 'EPERM') throw processError;
@@ -113,20 +154,22 @@ class JsonMemoryRepository {
       }
 
       if (stale) {
-        const quarantinePath = this.lockPath + '.stale.' + crypto.randomUUID();
+        const quarantinePath = `${this.lockPath}.stale.${crypto.randomUUID()}`;
         try {
           fs.renameSync(this.lockPath, quarantinePath);
-          let movedOwner = null;
-          try { movedOwner = JSON.parse(fs.readFileSync(path.join(quarantinePath, 'owner.json'), 'utf8')); } catch {}
-          if (movedOwner && movedOwner.token === owner.token &&
-              movedOwner.pid === owner.pid && movedOwner.hostname === owner.hostname) {
-            fs.rmSync(quarantinePath, { recursive: true, force: true });
+          const movedOwner = readOwner(quarantinePath);
+          if (movedOwner && movedOwner.token === existingOwner.token &&
+              movedOwner.pid === existingOwner.pid && movedOwner.hostname === existingOwner.hostname) {
+            const stat = fs.lstatSync(quarantinePath);
+            if (stat.isDirectory()) fs.rmSync(quarantinePath, { recursive: true, force: true });
+            else fs.unlinkSync(quarantinePath);
           } else {
-            try { fs.renameSync(quarantinePath, this.lockPath); } catch {}
+            restoreQuarantine(quarantinePath);
           }
           continue;
         } catch (reclaimError) {
-          if (reclaimError.code !== 'ENOENT' && reclaimError.code !== 'EEXIST') throw reclaimError;
+          if (reclaimError.code !== 'ENOENT' && reclaimError.code !== 'EEXIST' &&
+              reclaimError.code !== 'ENOTEMPTY') throw reclaimError;
         }
       }
 
