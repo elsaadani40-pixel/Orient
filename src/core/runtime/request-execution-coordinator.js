@@ -452,6 +452,19 @@ class RequestExecutionCoordinator {
         tenantId: this.tenantId,
         agentId: context.metadata?.agentId || 'ORIENT_RUNTIME',
         resumed: true,
+        renewResumeLease: resumeLease?.leaseId && typeof this.persistence.checkpoints.renewResumeLease === 'function'
+          ? async () => {
+              const renewedLease = await this.persistence.checkpoints.renewResumeLease(executionId, resumeLease.leaseId, {
+                tenantId: this.tenantId,
+                leaseDurationMs: this.resumeLeaseDurationMs
+              });
+              if (!renewedLease) {
+                throw Object.assign(new Error('Execution resume lease was lost before checkpoint commit'), {
+                  code: 'CHECKPOINT_RESUME_LEASE_LOST'
+                });
+              }
+            }
+          : null,
         isCancellationRequested: () => this.isCancellationRequested(context.executionId),
         cancellationReason: context.cancellationReason || 'Execution cancellation requested'
       });
