@@ -141,7 +141,10 @@ class RequestExecutionCoordinator {
       context.complete();
       const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
 
-      if (persistedExecution?.status !== context.status) {
+      // Some lightweight runtimes intentionally omit an execution repository.
+      // Enforce divergence checks whenever durable state is available; absence
+      // of a persistence adapter is not itself an outcome conflict.
+      if (persistedExecution && persistedExecution.status !== context.status) {
         if (persistedExecution?.status === 'cancelled') {
           return {
             requestId,
