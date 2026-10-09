@@ -35,6 +35,22 @@ class PostgresExecutionRepository {
     return result.rows.map(row => row.payload);
   }
 
+  async findPage({ tenantId = null, limit = 50, offset = 0 } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
+    const boundedOffset = Number.isInteger(offset) ? Math.max(0, Math.min(offset, 10000)) : 0;
+    const [countResult, pageResult] = tenantId
+      ? await Promise.all([
+          this.db.query('SELECT COUNT(*)::int AS total FROM executions WHERE tenant_id=$1', [tenantId]),
+          this.db.query('SELECT payload FROM executions WHERE tenant_id=$1 ORDER BY updated_at DESC, execution_id DESC LIMIT $2 OFFSET $3', [tenantId, boundedLimit, boundedOffset])
+        ])
+      : await Promise.all([
+          this.db.query('SELECT COUNT(*)::int AS total FROM executions'),
+          this.db.query('SELECT payload FROM executions ORDER BY updated_at DESC, execution_id DESC LIMIT $1 OFFSET $2', [boundedLimit, boundedOffset])
+        ]);
+    return { total: Number(countResult.rows[0]?.total || 0), limit: boundedLimit, offset: boundedOffset, executions: pageResult.rows.map(row => row.payload) };
+  }
+
+
   async findByGoalId(goalId, { tenantId = null } = {}) {
     const result = await this.db.query(tenantId ? 'SELECT payload FROM executions WHERE tenant_id=$1 AND payload->>\'goalId\'=$2 ORDER BY updated_at DESC' : 'SELECT payload FROM executions WHERE payload->>\'goalId\'=$1 ORDER BY updated_at DESC', tenantId ? [tenantId,goalId] : [goalId]); return result.rows.map(row => row.payload);
   }
@@ -193,8 +209,16 @@ class PostgresEventRepository {
     return result.rows.map(row => row.payload);
   }
 
-  async findByExecutionId(id, { tenantId = null } = {}) {
-    const result = await this.db.query(tenantId ? 'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp ASC' : 'SELECT payload FROM events WHERE execution_id=$1 ORDER BY timestamp ASC', tenantId ? [tenantId,id] : [id]); return result.rows.map(row => row.payload);
+  async findByExecutionId(id, { tenantId = null, limit = null } = {}) {
+    if (Number.isInteger(limit) && limit > 0) {
+      const boundedLimit = Math.min(limit, 200);
+      const result = tenantId
+        ? await this.db.query('SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp DESC,event_id DESC LIMIT $3) recent ORDER BY timestamp ASC,event_id ASC', [tenantId, id, boundedLimit])
+        : await this.db.query('SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE execution_id=$1 ORDER BY timestamp DESC,event_id DESC LIMIT $2) recent ORDER BY timestamp ASC,event_id ASC', [id, boundedLimit]);
+      return result.rows.map(row => row.payload);
+    }
+    const result = await this.db.query(tenantId ? 'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp ASC,event_id ASC' : 'SELECT payload FROM events WHERE execution_id=$1 ORDER BY timestamp ASC,event_id ASC', tenantId ? [tenantId,id] : [id]);
+    return result.rows.map(row => row.payload);
   }
 
   async findByGoalId(id, { tenantId = null } = {}) {
@@ -748,6 +772,31 @@ class PostgresWorkflowLeaseRepository {
 
 class PostgresApprovalRepository {
   constructor(db) { this.db = db; }
+
+  mapRow(row) {
+    return this.mapRow(row);
+  }
+
+  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null } = {}) {
+    if (!executionId) return [];
+    const clauses = ['execution_id=$1'];
+    const values = [String(executionId)];
+    if (tenantId) { values.push(tenantId); clauses.push(`tenant_id=${values.length}`); }
+    if (step !== null) { values.push(Number(step)); clauses.push(`step=${values.length}`); }
+    if (tool !== null) { values.push(tool); clauses.push(`tool=${values.length}`); }
+    if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=${values.length}`); }
+    const result = await this.db.query(`SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`, values);
+    return result.rows.map(row => this.mapRow(row));
+  }
+
+  async findPending({ tenantId = null, limit = 100, now = Date.now() } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
+    const nowIso = new Date(now).toISOString();
+    const result = tenantId
+      ? await this.db.query('SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 ORDER BY issued_at ASC, approval_id ASC LIMIT $3', [tenantId, nowIso, boundedLimit])
+      : await this.db.query('SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 ORDER BY issued_at ASC, approval_id ASC LIMIT $2', [nowIso, boundedLimit]);
+    return result.rows.map(row => this.mapRow(row));
+  }
 
   async save(approval, { tenantId = null } = {}) {
     const effectiveTenant = tenantOrLocal(approval.tenantId || approval.metadata?.tenantId);
