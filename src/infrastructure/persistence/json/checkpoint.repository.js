@@ -146,6 +146,37 @@ class CheckpointRepository {
     });
   }
 
+  renewResumeLease(executionId, leaseId, { tenantId = null, leaseDurationMs = 30000 } = {}) {
+    if (!executionId || !leaseId) return null;
+    if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
+      throw new TypeError('leaseDurationMs must be a positive integer');
+    }
+
+    return this.withLock(() => {
+      const records = this.read();
+      const checkpoint = records[executionId];
+      if (!checkpoint) return null;
+
+      const snapshot = checkpoint.snapshot || {};
+      const snapshotTenantId = snapshot.tenantId || snapshot.metadata?.tenantId || (tenantId === 'local' ? 'local' : null);
+      if (tenantId && snapshotTenantId !== tenantId) return null;
+
+      const existing = checkpoint.resumeLease;
+      const now = Date.now();
+      if (!existing || existing.leaseId !== leaseId || Number(existing.expiresAtMs) <= now) return null;
+
+      const lease = {
+        ...existing,
+        renewedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + leaseDurationMs).toISOString(),
+        expiresAtMs: now + leaseDurationMs
+      };
+      records[executionId] = { ...checkpoint, resumeLease: lease };
+      this.write(records);
+      return JSON.parse(JSON.stringify(lease));
+    });
+  }
+
   releaseResumeLease(executionId, leaseId, { tenantId = null } = {}) {
     if (!executionId || !leaseId) return false;
 
