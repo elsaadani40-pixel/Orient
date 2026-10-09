@@ -142,3 +142,57 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
         run: node --test test/integration/postgres-persistence.integration.test.js
+
+  full-repository-suite:
+    name: Full Repository Test Suite (Node 24 + PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: orient_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d orient_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          check-latest: true
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install OS sandbox runtime and narrow AppArmor profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles apparmor-utils sqlite3
+          test -x /usr/bin/bwrap
+          test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          bwrap --version
+          sqlite3 --version
+
+      - name: Run every repository test
+        shell: bash
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
+        run: |
+          set -euo pipefail
+          npm test -- --test-timeout=120000 --test-reporter=spec
