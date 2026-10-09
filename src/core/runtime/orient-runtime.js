@@ -293,6 +293,47 @@ class OrientRuntime {
     });
   }
 
+  async listExecutionSummaries({ limit = 50, offset = 0 } = {}) {
+    if (!this.persistence?.executions?.findAll) {
+      throw Object.assign(new Error('Durable execution storage is required for history'), {
+        code: 'EXECUTION_STORAGE_REQUIRED'
+      });
+    }
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
+    const boundedOffset = Number.isInteger(offset) ? Math.max(0, Math.min(offset, 10000)) : 0;
+    const executions = await this.persistence.executions.findAll({ tenantId: this.tenantId });
+    const ordered = executions.sort((a, b) =>
+      Date.parse(b.updatedAt || b.startedAt || 0) - Date.parse(a.updatedAt || a.startedAt || 0)
+    );
+    return {
+      total: ordered.length,
+      limit: boundedLimit,
+      offset: boundedOffset,
+      executions: ordered.slice(boundedOffset, boundedOffset + boundedLimit).map(execution => ({
+        executionId: execution.executionId,
+        requestId: execution.requestId,
+        goalId: execution.goalId,
+        status: execution.status,
+        agentLifecycle: execution.agentLifecycle,
+        currentStep: execution.currentStep,
+        startedAt: execution.startedAt,
+        completedAt: execution.completedAt,
+        updatedAt: execution.updatedAt,
+        cancellationRequested: Boolean(execution.cancellationRequested)
+      }))
+    };
+  }
+
+  async listPendingApprovals({ limit = 100 } = {}) {
+    if (!this.approvalService?.listPending) {
+      throw Object.assign(new Error('Approval service is required for the pending inbox'), {
+        code: 'APPROVAL_SERVICE_REQUIRED'
+      });
+    }
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
+    return this.approvalService.listPending({ tenantId: this.tenantId, limit: boundedLimit });
+  }
+
   async getExecutionEvents(executionId, { limit = 200 } = {}) {
     if (!this.persistence?.events?.findByExecutionId) {
       throw Object.assign(new Error('Durable execution event storage is required'), {
