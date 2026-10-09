@@ -225,7 +225,13 @@ class CommandRunner {
           if (isSystemdUnit && !limitsVerified) {
             reject(commandError(
               'RESOURCE_LIMITS_UNAVAILABLE',
-              'Command completed without verifiable systemd resource limits; refusing to report execution as successful',
+              'Command completed without verifiable systemd resource limits; refusing to report execution as successful. Verification evidence: ' +
+                JSON.stringify({
+                  expectedLimits,
+                  initialActiveState: initialStatus?.activeState ?? null,
+                  observed: executionStatus?.enforcedProperties ?? null,
+                  terminalState: executionStatus?.activeState ?? null
+                }),
               {
                 command: [executable, ...args.map(String)].join(' '),
                 exitCode: code,
