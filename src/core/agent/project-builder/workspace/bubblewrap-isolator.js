@@ -205,7 +205,7 @@ class BubblewrapIsolator {
     child.orientResourceUnitName = unitName;
     child.orientResourceLimits = limits;
     child.orientSystemdEnvironment = this._systemdClientEnvironment();
-    child.orientInitialInspection = this.inspect(child, { waitMs: 1500 });
+    child.orientInitialInspection = this.inspect(child, { waitMs: 1500, waitForActive: true });
     return child;
   }
 
