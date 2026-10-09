@@ -166,6 +166,23 @@ class CommandRunner {
 
           let failureCode = null;
           const lowerStderr = stderr.toLowerCase();
+          const expectedLimits = this.policy.resourceLimits;
+          const observedLimits = executionStatus?.enforcedProperties;
+          const isSystemdUnit = Boolean(child.orientResourceUnitName);
+          const expectedRuntime = String(Math.max(1, Math.ceil(this.policy.timeoutMs / 1000))) + 's';
+          const limitsVerified = !isSystemdUnit || Boolean(
+            initialStatus?.activeState === 'active' &&
+            observedLimits &&
+            observedLimits.memoryMax === String(expectedLimits.memoryMaxBytes) &&
+            observedLimits.cpuQuotaPerSecUSec === String(expectedLimits.cpuQuotaPercent * 10000) &&
+            observedLimits.tasksMax === String(expectedLimits.maxProcesses) &&
+            observedLimits.limitNoFile === String(expectedLimits.maxOpenFiles) &&
+            observedLimits.limitFSize === String(expectedLimits.maxFileSizeBytes) &&
+            observedLimits.runtimeMaxUSec === expectedRuntime &&
+            observedLimits.limitCPU === String(expectedLimits.maxCpuTimeSeconds + 1) &&
+            observedLimits.limitCPUSoft === String(expectedLimits.maxCpuTimeSeconds) &&
+            observedLimits.memorySwapMax === '0'
+          );
           const systemdUnavailable = /failed to connect to bus|no medium found|failed to start transient|failed to create transient|unknown assignment|not supported|failed to set unit properties/.test(lowerStderr);
 
           if (executionStatus?.result === 'oom-kill' || /out of memory|cannot allocate memory/.test(lowerStderr)) {
@@ -191,6 +208,10 @@ class CommandRunner {
             failureCode = 'COMMAND_FAILED';
           }
 
+          if (isSystemdUnit && !limitsVerified) {
+            failureCode = 'RESOURCE_LIMITS_UNAVAILABLE';
+          }
+
           resolve({
             command: [executable, ...args.map(String)].join(' '),
             cwd: workingDirectory,
@@ -201,6 +222,7 @@ class CommandRunner {
             truncated: false,
             resourceLimitMode: child.orientResourceUnitName ? 'systemd-user-service-cgroup-v2' : 'custom-isolator',
             resourceLimitStatus: executionStatus,
+            resourceLimitsVerified: limitsVerified,
             failureCode
           });
         });
