@@ -40,12 +40,14 @@ class BubblewrapIsolator {
     spawnProcess = spawn,
     platform = process.platform,
     systemdRunPath = process.env.ORIENT_SYSTEMD_RUN_PATH || 'systemd-run',
-    systemctlPath = process.env.ORIENT_SYSTEMCTL_PATH || 'systemctl'
+    systemctlPath = process.env.ORIENT_SYSTEMCTL_PATH || 'systemctl',
+    readFileSync = fs.readFileSync
   } = {}) {
     this.spawnProcess = spawnProcess;
     this.platform = platform;
     this.systemdRunPath = systemdRunPath;
     this.systemctlPath = systemctlPath;
+    this.readFileSync = readFileSync;
   }
 
   buildArgs({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
@@ -116,8 +118,8 @@ class BubblewrapIsolator {
     let controllers;
 
     try {
-      cgroupMembership = fs.readFileSync('/proc/self/cgroup', 'utf8');
-      controllers = fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8')
+      cgroupMembership = this.readFileSync('/proc/self/cgroup', 'utf8');
+      controllers = this.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8')
         .trim()
         .split(/\s+/)
         .filter(Boolean);
