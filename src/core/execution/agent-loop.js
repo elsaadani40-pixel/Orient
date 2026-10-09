@@ -653,7 +653,7 @@ class AgentLoop {
           if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
             await this.idempotencyStore.delete(
               idempotency.key,
-              { tenantId: operationTenantId }
+              operationTenantId
             );
           }
           throw error;
