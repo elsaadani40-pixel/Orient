@@ -98,6 +98,9 @@
     return upload(gl.ARRAY_BUFFER, new Float32Array(points), 3);
   }
   const ringBuffer = ring(144);
+  const eventLineBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, eventLineBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(6), gl.DYNAMIC_DRAW);
   const identity = () => [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
   function multiply(a,b) {
     const o = new Array(16);
@@ -140,6 +143,18 @@
     gl.uniformMatrix4fv(loc.modelView, false, new Float32Array(model));
     gl.uniform3fv(loc.tint, tint);
     gl.drawArrays(gl.LINE_LOOP, 0, ringBuffer.count);
+  }
+  function drawLine(from, to, tint, projection, modelView) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, eventLineBuffer);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array([...from, ...to]));
+    gl.enableVertexAttribArray(loc.position);
+    gl.vertexAttribPointer(loc.position, 3, gl.FLOAT, false, 0, 0);
+    gl.disableVertexAttribArray(loc.normal);
+    gl.vertexAttrib3f(loc.normal, 0, 1, 0);
+    gl.uniformMatrix4fv(loc.projection, false, projection);
+    gl.uniformMatrix4fv(loc.modelView, false, new Float32Array(modelView));
+    gl.uniform3fv(loc.tint, tint);
+    gl.drawArrays(gl.LINES, 0, 2);
   }
   let frame = 0, started = performance.now(), lastTime = 0, destroyed = false;
   let activeTint = [0.20, 0.69, 0.93];
@@ -208,12 +223,17 @@
       const point = multiply(multiply(multiply(camera, rotateY(t*0.35)), rotateZ(0.72)), multiply(translate(Math.cos(s.a)*s.r,s.y,Math.sin(s.a)*s.r),scale(0.085,0.085,0.085)));
       drawSphere(point,s.c,projection,mesh.count);
     });
-    const eventOrbit = multiply(multiply(camera, rotateY(t*0.35)), rotateZ(0.72));
+    const eventRotation = multiply(rotateY(t*0.35), rotateZ(0.72));
+    const eventOrbit = multiply(camera, eventRotation);
     eventNodes.forEach((node, index) => {
       const angle = t * 0.45 + index * (Math.PI * 2 / Math.max(eventNodes.length, 1));
       const radius = 1.18 + (index % 3) * 0.22;
       const height = ((index % 3) - 1) * 0.32;
-      const point = multiply(eventOrbit, multiply(translate(Math.cos(angle) * radius, height, Math.sin(angle) * radius), scale(0.06, 0.06, 0.06)));
+      const translation = translate(Math.cos(angle) * radius, height, Math.sin(angle) * radius);
+      const worldPosition = multiply(eventRotation, translation);
+      const endpoint = [worldPosition[12], worldPosition[13], worldPosition[14]];
+      drawLine([0, 0, 0], endpoint, [0.14, 0.34, 0.52], projection, camera);
+      const point = multiply(eventOrbit, multiply(translation, scale(0.06, 0.06, 0.06)));
       drawSphere(point, eventTint(node.type), projection, mesh.count);
     });
     if (!reducedMotion.matches) frame = requestAnimationFrame(render);
