@@ -394,7 +394,7 @@ class AgentLoop {
           input: resolvedInput
         }))
         .digest('hex');
-      const recoveringPersistedOperation =
+      const hasPersistedRunningStep =
         Array.isArray(context.steps) &&
         context.steps.some(
           (persistedStep) =>
@@ -404,6 +404,26 @@ class AgentLoop {
             persistedStep.step === stepNumber &&
             persistedStep.tool === step.tool
         );
+
+      // A checkpoint saying "running" is not sufficient evidence that this
+      // operation was reserved. Only an existing tenant-scoped idempotency
+      // record authorizes the recovery/reconciliation path. If the checkpoint
+      // and idempotency ledger disagree, fail closed before authorization,
+      // reservation, or tool invocation rather than treating it as a fresh run.
+      const persistedOperation = hasPersistedRunningStep
+        ? this.idempotencyStore.get(operationId, operationTenantId)
+        : null;
+
+      if (hasPersistedRunningStep && !persistedOperation) {
+        throw new AppError(
+          'الخطوة المستعادة تشير إلى تنفيذ جارٍ لكن سجل Idempotency غير موجود',
+          409,
+          'IDEMPOTENCY_RECOVERY_RECORD_MISSING'
+        );
+      }
+
+      const recoveringPersistedOperation =
+        hasPersistedRunningStep && Boolean(persistedOperation);
 
       let executionAuthorization = null;
 

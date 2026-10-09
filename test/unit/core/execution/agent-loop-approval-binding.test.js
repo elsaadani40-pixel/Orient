@@ -78,3 +78,79 @@ test('AgentLoop sends canonical agent and operation identity into approval autho
     context.steps[0].operationId
   );
 });
+
+
+test('AgentLoop fails closed when a persisted running step has no idempotency record', async () => {
+  let authorizationCalls = 0;
+  let toolCalls = 0;
+  const registry = {
+    requireAuthorization() {},
+    has(tool) { return tool === 'danger.write'; },
+    get() { return { name: 'danger.write' }; },
+    authorizeExecutionContext() {},
+    async execute() { toolCalls += 1; return { status: 'unexpected' }; }
+  };
+
+  const context = {
+    executionId: 'exec-missing-idempotency',
+    requestId: 'request-recovery',
+    tenantId: 'tenant-a',
+    input: { target: 'project' },
+    status: 'RUNNING',
+    currentStep: 1,
+    steps: [{
+      step: 1,
+      tool: 'danger.write',
+      planRevision: 1,
+      status: 'running'
+    }],
+    observations: [],
+    record() {},
+    setTool() {},
+    startStep({ step, tool, planRevision, operationId }) {
+      this.steps.push({ step, tool, planRevision, operationId, status: 'running' });
+    },
+    completeStep() {},
+    failStep() {},
+    addObservation(value) { this.observations.push(value); }
+  };
+
+  const authorizationService = {
+    approvalService: null,
+    async assertAuthorized() {
+      authorizationCalls += 1;
+      return {
+        allowed: true,
+        capability: 'external.write',
+        risk: 'high',
+        requiresApproval: false
+      };
+    }
+  };
+
+  const loop = new AgentLoop({
+    toolRegistry: registry,
+    authorizationService,
+    maxSteps: 1
+  });
+
+  await assert.rejects(
+    loop.run({
+      plan: {
+        agentId: 'PROJECT_BUILDER_AGENT',
+        steps: [{
+          step: 1,
+          tool: 'danger.write',
+          input: { target: 'project' },
+          agentId: 'PROJECT_BUILDER_AGENT'
+        }]
+      },
+      context,
+      runtimeContext: { tenantId: 'tenant-a' }
+    }),
+    error => error.code === 'IDEMPOTENCY_RECOVERY_RECORD_MISSING'
+  );
+
+  assert.equal(authorizationCalls, 0);
+  assert.equal(toolCalls, 0);
+});
