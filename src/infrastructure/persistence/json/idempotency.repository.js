@@ -95,7 +95,7 @@ class IdempotencyRepository {
           // This avoids stealing a live lock during a slow fsync/write.
           fs.writeFileSync(
             path.join(this.lockPath, 'owner.json'),
-            JSON.stringify(owner) + '\\n',
+            JSON.stringify(owner) + '\n',
             { encoding: 'utf8', flag: 'wx', mode: 0o600 }
           );
           return operation();
