@@ -216,15 +216,22 @@ class BubblewrapIsolator {
 
     return new Promise(resolve => {
       let completed = 0;
-      const finish = () => {
-        completed += 1;
-        if (completed >= 2) resolve(true);
+      const finishOnce = () => {
+        let finished = false;
+        return () => {
+          if (finished) return;
+          finished = true;
+          completed += 1;
+          if (completed >= 3) resolve(true);
+        };
       };
 
       for (const args of [
         ['--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unitName],
-        ['--user', 'stop', unitName]
+        ['--user', 'stop', unitName],
+        ['--user', 'reset-failed', unitName]
       ]) {
+        const finish = finishOnce();
         let cleanup;
         try {
           cleanup = this.spawnProcess(this.systemctlPath, args, {
@@ -246,6 +253,30 @@ class BubblewrapIsolator {
       } catch {
         // The unit stop is the authoritative process-tree cleanup mechanism.
       }
+    });
+  }
+
+  cleanup(child) {
+    if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
+    return new Promise(resolve => {
+      let cleanup;
+      try {
+        cleanup = this.spawnProcess(this.systemctlPath, [
+          '--user',
+          'reset-failed',
+          child.orientResourceUnitName
+        ], {
+          shell: false,
+          windowsHide: true,
+          stdio: 'ignore',
+          env: child.orientSystemdEnvironment || this._systemdClientEnvironment()
+        });
+      } catch {
+        resolve(false);
+        return;
+      }
+      cleanup.once('error', () => resolve(false));
+      cleanup.once('close', code => resolve(code === 0));
     });
   }
 
