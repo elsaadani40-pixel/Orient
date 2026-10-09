@@ -102,6 +102,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
   document.querySelectorAll('[id^="view-"]').forEach(s => s.classList.add('hidden'));
   $('view-' + button.dataset.view).classList.remove('hidden');
   $('pageTitle').textContent = ({overview:'مركز القيادة',agent:'تشغيل الوكيل',memory:'الذاكرة',security:'الأمان والحوكمة'})[button.dataset.view];
+  if (button.dataset.view === 'security') { void loadExecutionHistory(); void loadPendingApprovals(); }
  }));
  async function checkServer() {
   try {
