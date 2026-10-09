@@ -87,7 +87,8 @@ test('resource supervisor parses named systemd properties even when Result is em
     'LimitNOFILE=128',
     'LimitFSIZE=1048576',
     'RuntimeMaxUSec=2000000000',
-    'LimitCPU=2:3',
+    'LimitCPU=2',
+    'LimitCPUSoft=1',
     'MemorySwapMax=0',
     ''
   ].join('\n');
@@ -116,5 +117,6 @@ test('resource supervisor parses named systemd properties even when Result is em
   assert.equal(status.result, 'running');
   assert.equal(status.enforcedProperties.memoryMax, '134217728');
   assert.equal(status.enforcedProperties.tasksMax, '24');
+  assert.equal(status.enforcedProperties.limitCPUSoft, '1');
   assert.equal(status.enforcedProperties.memorySwapMax, '0');
 });
