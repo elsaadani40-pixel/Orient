@@ -253,7 +253,8 @@ class CommandRunner {
                   expectedLimits,
                   initialActiveState: initialStatus?.activeState ?? null,
                   observed: executionStatus?.enforcedProperties ?? null,
-                  terminalState: executionStatus?.activeState ?? null
+                  terminalState: executionStatus?.activeState ?? null,
+                  stderrTail: stderr.slice(-1200)
                 }),
               {
                 command: [executable, ...args.map(String)].join(' '),
