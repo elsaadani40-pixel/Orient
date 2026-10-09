@@ -330,6 +330,7 @@ class BubblewrapIsolator {
             '--property=LimitFSIZE',
             '--property=RuntimeMaxUSec',
             '--property=LimitCPU',
+            '--property=LimitCPUSoft',
             '--property=MemorySwapMax',
             unitName
           ], {
@@ -391,6 +392,7 @@ class BubblewrapIsolator {
               limitFSize: properties.LimitFSIZE || 'unknown',
               runtimeMaxUSec: properties.RuntimeMaxUSec || 'unknown',
               limitCPU: properties.LimitCPU || 'unknown',
+              limitCPUSoft: properties.LimitCPUSoft || 'unknown',
               memorySwapMax: properties.MemorySwapMax || 'unknown'
             }
           });
