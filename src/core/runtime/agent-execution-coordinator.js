@@ -13,7 +13,7 @@ class AgentExecutionCoordinator {
     this.validateReplannedPlan = validateReplannedPlan;
   }
 
-  async run({ context, plan, validation, planRevision = 1, replans = 0, previousFingerprint, approval = null, approvals = {}, requestId = context.requestId, input = context.input, tenantId, agentId = null, resumed = false, isCancellationRequested = null, cancellationReason = null }) {
+  async run({ context, plan, validation, planRevision = 1, replans = 0, previousFingerprint, approval = null, approvals = {}, requestId = context.requestId, input = context.input, tenantId, agentId = null, resumed = false, isCancellationRequested = null, cancellationReason = null, renewResumeLease = null }) {
     let loopResult = null;
     let replanningDecision = null;
     let currentPlan = plan;
@@ -69,6 +69,7 @@ class AgentExecutionCoordinator {
           isCancellationRequested,
           cancellationReason,
           onCheckpoint: async ({ step, planRevision: checkpointPlanRevision, reason = resumed ? 'resume_step_completed' : 'step_completed' } = {}) => {
+            if (typeof renewResumeLease === 'function') await renewResumeLease();
             context.metadata.planRevision = checkpointPlanRevision;
             context.metadata.replans = currentReplans;
             return this.checkpoint(context, 'update', reason + ':plan-' + checkpointPlanRevision + ':step-' + step);
