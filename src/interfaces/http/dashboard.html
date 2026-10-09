@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>ORIENT ONE · Dashboard</title>
+<style>
+:root{color-scheme:dark;--bg:#090d14;--panel:#111824;--panel2:#151f2d;--line:#263244;--text:#edf3fb;--muted:#94a3b8;--accent:#79aaff;--green:#4ade80;--amber:#fbbf24;--red:#fb7185}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% -20%,#1a3152 0,transparent 40%),var(--bg);color:var(--text);font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}.layout{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh}.side{border-left:1px solid var(--line);padding:25px 18px;background:#0c121c}.brand{display:flex;align-items:center;gap:12px;margin:0 0 34px}.logo{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:#182b49;border:1px solid #355782;color:#a9caff;font-weight:800;font-size:20px}.brand strong{display:block;letter-spacing:.08em}.brand small,.muted{color:var(--muted)}.nav{display:grid;gap:8px}.nav button{border:1px solid transparent;background:transparent;color:#b9c6d8;text-align:right;padding:11px 13px;border-radius:10px}.nav button.active,.nav button:hover{background:#182438;border-color:#293c58;color:white}.side-note{position:sticky;top:calc(100vh - 130px);margin-top:38px;border:1px solid var(--line);border-radius:12px;padding:13px;color:var(--muted);font-size:12px}.main{padding:30px;max-width:1500px;width:100%;margin:auto}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:25px}.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em}.top h1{font-size:clamp(24px,3vw,34px);margin:3px 0}.status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 12px #4ade8066}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{border:1px solid var(--line);border-radius:15px;background:linear-gradient(145deg,#131d2b,#0e1520);padding:18px;min-width:0}.metric-label{color:var(--muted);font-size:13px}.metric{font-size:27px;font-weight:750;line-height:1.3;margin:8px 0}.metric-foot{font-size:12px;color:var(--muted)}.section{margin-top:18px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.section-head h2{font-size:17px;margin:0}.pill{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:11px;color:var(--muted)}.two{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);gap:14px}.input{width:100%;border:1px solid #344257;border-radius:10px;background:#0b111a;color:var(--text);padding:12px;outline:none}.input:focus{border-color:#79aaff;box-shadow:0 0 0 3px #79aaff1c}textarea.input{min-height:105px;resize:vertical}.btn{border:1px solid #365782;background:#1b3557;color:#e8f2ff;padding:10px 14px;border-radius:10px;font-weight:650}.btn:hover{filter:brightness(1.15)}.btn.secondary{background:#131d2b;border-color:var(--line);color:#d2dbea}.btn:disabled{opacity:.55;cursor:wait}.formrow{display:flex;gap:9px;align-items:center;margin-top:10px}.output{margin-top:13px;padding:12px;border-radius:10px;background:#090f18;border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere;min-height:65px;color:#d8e3f2;font-size:13px}.empty{color:var(--muted);font-size:13px;padding:12px 0}.timeline{display:grid;gap:10px}.event{display:flex;gap:12px;padding:12px;border:1px solid var(--line);border-radius:11px;background:#0d1420}.event-icon{width:31px;height:31px;display:grid;place-items:center;border-radius:9px;background:#1a2a41;flex-shrink:0}.event strong{display:block;font-size:13px}.event small{color:var(--muted)}.tag{font-size:11px;border-radius:6px;padding:2px 7px;background:#17273b;color:#b9d3ff}.warning{border:1px solid #725a25;background:#2a2110;color:#f8d98b;border-radius:10px;padding:10px 12px;font-size:12px;margin-top:12px}.footer{margin-top:22px;color:var(--muted);font-size:11px;text-align:center}.hidden{display:none!important}
+@media(max-width:1000px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.two{grid-template-columns:1fr}.layout{grid-template-columns:190px minmax(0,1fr)}.main{padding:22px}}
+@media(max-width:650px){.layout{display:block}.side{padding:12px 14px;border-left:0;border-bottom:1px solid var(--line)}.brand{margin:0 0 10px}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap;padding:8px 11px}.side-note{display:none}.main{padding:18px 13px}.top{align-items:flex-start;flex-direction:column}.grid{gap:9px}.card{padding:13px}.metric{font-size:23px}}
+
+/* ORIENT ONE immersive 3D command deck */
+:root{--neon:#65f0d0;--violet:#9d8cff;--cyan:#65c8ff}
+body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),radial-gradient(ellipse at 100% 55%,#151735 0,transparent 32%),var(--bg)}
+.card{position:relative;overflow:hidden;box-shadow:0 18px 55px #0003;transition:transform .25s ease,border-color .25s ease,box-shadow .25s ease}
+.card:hover{border-color:#3d587b;box-shadow:0 20px 60px #0005}
+.command-hero{position:relative;isolation:isolate;min-height:345px;margin:0 0 18px;padding:26px 28px;border:1px solid #314562;border-radius:22px;overflow:hidden;background:linear-gradient(112deg,#0d1725ee 4%,#111d31e8 54%,#111426f2);box-shadow:0 28px 90px #0006,inset 0 1px #ffffff12;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(260px,.9fr);align-items:center;gap:16px}
+.command-hero:before{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(#a3c9ff08 1px,transparent 1px),linear-gradient(90deg,#a3c9ff08 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(90deg,transparent,#000 55%,#000)}
+.command-hero:after{content:"";position:absolute;inset:auto -10% -70% 15%;height:250px;background:#416dff18;filter:blur(65px);z-index:-1}
+.hero-copy{position:relative;z-index:2}.hero-kicker{display:inline-flex;gap:8px;align-items:center;border:1px solid #3a5b70;background:#10282f99;color:#8ff5df;border-radius:999px;padding:6px 11px;font-size:11px;letter-spacing:.12em;font-weight:750}.hero-kicker i{width:7px;height:7px;border-radius:50%;background:var(--neon);box-shadow:0 0 15px var(--neon);animation:pulseGlow 1.8s infinite}.hero-title{font-size:clamp(28px,4vw,47px);line-height:1.12;letter-spacing:-.04em;margin:18px 0 12px;font-weight:850}.hero-title span{display:block;color:transparent;background:linear-gradient(90deg,#e8f5ff,#80d8ff 45%,#9c91ff);background-clip:text;-webkit-background-clip:text}.hero-desc{max-width:520px;color:#9fb0c6;font-size:14px;line-height:1.9}.hero-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}.hero-chip{font-size:11px;padding:6px 9px;border:1px solid #30435b;background:#101a29bd;border-radius:8px;color:#c8d9ef}.hero-visual{position:relative;display:grid;place-items:center;min-height:285px;perspective:900px;isolation:isolate}.scene-canvas{position:absolute;inset:0;width:100%;height:100%;z-index:1;display:block}.hero-side-stat,.visual-label{z-index:3}.hero-visual:before{content:"";position:absolute;width:230px;height:230px;border-radius:50%;background:radial-gradient(circle,#40d9e51c 0,transparent 68%);filter:blur(10px)}
+.orbit-stage{position:relative;width:min(100%,330px);height:290px;transform-style:preserve-3d;animation:stageFloat 7s ease-in-out infinite}
+.core-sphere{position:absolute;width:112px;height:112px;left:calc(50% - 56px);top:calc(50% - 56px);border-radius:50%;transform-style:preserve-3d;background:radial-gradient(circle at 32% 24%,#efffff 0,#79e8f1 4%,#398ac5 17%,#172d65 45%,#0a1025 70%);box-shadow:inset -14px -17px 30px #020817,inset 7px 7px 20px #a3ffff66,0 0 30px #54dfff70,0 0 85px #6264ff3b;animation:corePulse 4s ease-in-out infinite}
+.core-sphere:before,.core-sphere:after{content:"";position:absolute;inset:13px -8px;border:1px solid #89f7f1aa;border-radius:50%;transform:rotateX(67deg) rotateZ(24deg);box-shadow:0 0 18px #4ee7ff30}
+.core-sphere:after{inset:-9px 15px;transform:rotateY(66deg) rotateZ(-24deg);border-color:#9e9aff99}
+.orbit{position:absolute;left:50%;top:50%;border:1px solid #70d9f344;border-radius:50%;transform-style:preserve-3d;pointer-events:none}
+.orbit.one{width:230px;height:92px;margin:-46px 0 0 -115px;transform:rotateX(68deg) rotateZ(-25deg);animation:orbitSpin 12s linear infinite}
+.orbit.two{width:255px;height:112px;margin:-56px 0 0 -127px;transform:rotateX(63deg) rotateZ(65deg);border-color:#a89bff55;animation:orbitSpin 16s linear infinite reverse}
+.orbit.three{width:205px;height:205px;margin:-102px 0 0 -102px;border-style:dashed;border-color:#75c9ff28;transform:rotateX(70deg) rotateY(20deg);animation:orbitSpin 32s linear infinite}
+.node{position:absolute;width:31px;height:31px;border:1px solid #83e9f5aa;border-radius:10px;background:linear-gradient(145deg,#203b56,#10182b);box-shadow:0 0 24px #51caff38;display:grid;place-items:center;color:#b7f8ff;font-size:13px;transform:translateZ(35px);animation:nodeBob 4s ease-in-out infinite}
+.node.n1{top:18px;left:51px}.node.n2{right:24px;top:81px;animation-delay:-1.2s}.node.n3{bottom:22px;left:62px;animation-delay:-2.1s}.node.n4{right:53px;bottom:35px;animation-delay:-.7s}
+.visual-label{position:absolute;bottom:0;left:50%;transform:translateX(-50%);white-space:nowrap;color:#91a9c7;font-size:10px;letter-spacing:.22em}
+.hero-side-stat{position:absolute;right:0;top:16px;border:1px solid #34465f;background:#0c1525d9;border-radius:10px;padding:8px 10px;font-size:10px;color:#9fb4cf;backdrop-filter:blur(12px)}
+.hero-side-stat strong{display:block;color:#d8faff;font-size:13px;letter-spacing:.05em}
+@keyframes stageFloat{0%,100%{transform:translateY(0) rotateX(0)}50%{transform:translateY(-8px) rotateX(3deg)}}
+@keyframes orbitSpin{from{rotate:0deg}to{rotate:360deg}}
+@keyframes corePulse{0%,100%{filter:brightness(1);scale:1}50%{filter:brightness(1.18);scale:1.035}}
+@keyframes nodeBob{0%,100%{translate:0 0}50%{translate:0 -7px}}
+@keyframes pulseGlow{0%,100%{opacity:1}50%{opacity:.4}}
+@media(max-width:850px){.command-hero{grid-template-columns:1fr;padding:22px;gap:0}.hero-visual{min-height:260px;grid-row:1}.hero-copy{grid-row:2}.hero-side-stat{right:8%;top:0}}
+@media(max-width:520px){.command-hero{padding:18px;min-height:auto}.hero-visual{min-height:235px}.orbit-stage{transform:scale(.86)}.hero-title{font-size:30px}.hero-chips{gap:6px}}
+@media(prefers-reduced-motion:reduce){.orbit-stage,.core-sphere,.orbit,.node,.hero-kicker i{animation:none!important}.card{transition:none}}
+
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="side">
+ <div class="brand"><div class="logo">O</div><div><strong>ORIENT ONE</strong><small>Personal AI Runtime</small></div></div>
+ <nav class="nav" aria-label="التنقل">
+  <button class="active" data-view="overview">◈ نظرة عامة</button>
+  <button data-view="agent">✳ تشغيل الوكيل</button>
+  <button data-view="memory">▤ الذاكرة</button>
+  <button data-view="security">⬡ الأمان والحوكمة</button>
+ </nav>
+ <div class="side-note">LOCAL-FIRST<br>الواجهة تتصل بالخادم المحلي فقط. لا تعرض بيانات تجريبية على أنها حالة حقيقية.</div>
+</aside>
+<main class="main">
+ <header class="top"><div><div class="eyebrow">CONTROL PLANE / LOCAL INSTANCE</div><h1 id="pageTitle">مركز القيادة</h1><div class="muted">لوحة تشغيل واضحة، مع حالة صادقة وحدود صلاحيات صريحة.</div></div><div class="status"><span class="dot" id="healthDot"></span><span id="healthText">جارٍ التحقق من الخادم…</span></div></header>
+
+ <section class="command-hero" aria-label="مركز القيادة ثلاثي الأبعاد">
+  <div class="hero-copy">
+   <div class="hero-kicker"><i aria-hidden="true"></i> AUTONOMOUS INTELLIGENCE · ORIENT CORE</div>
+   <h2 class="hero-title">أكثر من لوحة تحكم.<span>مركز قيادة للذكاء الاصطناعي.</span></h2>
+   <p class="hero-desc">مشهد WebGL ثلاثي الأبعاد يعمل داخل المتصفح دون مكتبات أو اتصالات خارجية، كبداية لرؤية الوكيل والذاكرة والحوكمة. التنفيذ الحقيقي والصلاحيات يظلان تحت سيطرة الـ Runtime.</p>
+   <div class="hero-chips"><span class="hero-chip">◈ Multi-Agent Runtime</span><span class="hero-chip">⬡ Governed Actions</span><span class="hero-chip">⌘ Local-first</span><span class="hero-chip">◌ Human Approval</span></div>
+  </div>
+  <div class="hero-visual" aria-label="تصور ثلاثي الأبعاد لنواة ORIENT">
+   <canvas id="orientScene" class="scene-canvas" aria-hidden="true"></canvas>
+   <div class="hero-side-stat">SERVER STATUS<strong id="heroCoreState">CHECKING…</strong><span style="display:block;margin-top:4px">RENDERER <strong id="sceneRenderer">STARTING…</strong></span></div>
+   <div class="orbit-stage" aria-hidden="true"><div class="orbit one"></div><div class="orbit two"></div><div class="orbit three"></div><div class="core-sphere"></div><div class="node n1">AI</div><div class="node n2">↗</div><div class="node n3">⌘</div><div class="node n4">⬡</div></div>
+   <div class="visual-label">PERCEPTION · REASONING · GOVERNANCE</div>
+  </div>
+ </section>
+
+ <section class="grid" aria-label="مؤشرات الحالة">
+  <article class="card"><div class="metric-label">اتصال الخادم</div><div class="metric" id="serverMetric">—</div><div class="metric-foot">فحص HTTP محلي</div></article>
+  <article class="card"><div class="metric-label">طلبات أعادت استجابة ناجحة في هذه الجلسة</div><div class="metric" id="runMetric">0</div><div class="metric-foot">عداد واجهة فقط، وليس سجلًا دائمًا</div></article>
+  <article class="card"><div class="metric-label">آخر استجابة ناجحة</div><div class="metric" id="lastMetric">—</div><div class="metric-foot">لا تُستنتج الحالة دون استجابة</div></article>
+  <article class="card"><div class="metric-label">وضع النموذج</div><div class="metric">محلي أولًا</div><div class="metric-foot">لا يوجد اعتماد إلزامي على API مدفوع</div></article>
+ </section>
+ <section id="view-overview" class="section two">
+  <article class="card"><div class="section-head"><h2>إرسال مهمة إلى ORIENT</h2><span class="pill">POST /agent</span></div><p class="muted">ابدأ بمهمة واضحة. سيعرض النظام الاستجابة الفعلية كما أعادها الخادم.</p><form id="taskForm"><label for="taskInput" class="metric-label">المهمة</label><textarea class="input" id="taskInput" maxlength="20000" required placeholder="مثال: احفظ أنني أختبر لوحة ORIENT ONE"></textarea><div class="formrow"><button class="btn" id="taskSubmit" type="submit">إرسال المهمة ←</button><button class="btn secondary" type="button" id="clearTask">مسح</button></div></form><div class="output" id="taskOutput" role="status" aria-live="polite">لم يتم إرسال أي مهمة بعد.</div></article>
+  <article class="card"><div class="section-head"><h2>حالة النظام</h2><span class="pill">LIVE CHECK</span></div><div class="timeline"><div class="event"><div class="event-icon">✓</div><div><strong>واجهة لوحة القيادة</strong><small>تم تحميل HTML وCSS محليًا.</small></div></div><div class="event"><div class="event-icon">↔</div><div><strong>واجهات الخادم</strong><small id="apiState">جارٍ اختبار الوصول إلى نقطة الذاكرة.</small></div></div><div class="event"><div class="event-icon">⬡</div><div><strong>الموافقات والصلاحيات</strong><small>لا تتجاوز اللوحة بوابة التفويض، ولا تمنح نفسها صلاحيات.</small></div></div></div><div class="warning">توجد واجهات حالة وموافقات مرتبطة بمعرّف تنفيذ، لكن هذه اللوحة لا تعرض بعد سجلًا عامًا أو صندوق موافقات موحدًا أو بث أحداث حيًا. لا يتم اختلاق هذه البيانات.</div></article>
+ </section>
+ <section id="view-agent" class="section hidden"><article class="card"><div class="section-head"><h2>تشغيل الوكيل</h2><span class="pill">CANONICAL RUNTIME</span></div><form id="taskForm2"><label for="taskInput2" class="metric-label">المهمة</label><textarea class="input" id="taskInput2" maxlength="20000" required placeholder="اكتب المهمة المطلوب تنفيذها…"></textarea><div class="formrow"><button class="btn" type="submit">تشغيل</button></div></form><div class="output" id="taskOutput2" role="status" aria-live="polite">في انتظار المهمة.</div></article></section>
+ <section id="view-memory" class="section hidden"><article class="card"><div class="section-head"><h2>الذاكرة الدائمة</h2><span class="pill">EXISTING UI</span></div><p class="muted">تُدار إضافة الذاكرة والبحث والحذف عبر الواجهة الحالية للخادم.</p><a class="btn" href="/" style="display:inline-block;text-decoration:none">فتح واجهة الذاكرة ←</a><div class="warning">لم يتم تضمين API جديد للذاكرة داخل لوحة القيادة؛ هذا يحافظ على مسار الذاكرة والصلاحيات القائمين دون تكرار منطق الأعمال في الواجهة.</div></article></section>
+ <section id="view-security" class="section hidden"><div class="grid"><article class="card"><div class="metric-label">نمط الاتصال</div><div class="metric">Local-first</div><div class="metric-foot">تعتمد اللوحة على نفس الأصل ولا تتصل بخدمات خارجية.</div></article><article class="card"><div class="metric-label">التفويض</div><div class="metric">الخادم</div><div class="metric-foot">كل طلب تنفيذ يمر عبر /agent ومسار التشغيل الحالي.</div></article></div><article class="card section"><div class="section-head"><h2>مراقبة تنفيذ محدد</h2><span class="pill">READ-ONLY API</span></div><p class="muted">أدخل معرّف تنفيذ موجودًا لقراءة الحالة أو الموافقات من واجهات الخادم الفعلية. لا تُعرض قائمة شاملة أو بيانات مصطنعة.</p><label for="executionId" class="metric-label">معرّف التنفيذ</label><input class="input" id="executionId" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Execution ID"><div class="formrow"><button class="btn" type="button" id="loadExecutionStatus">قراءة الحالة</button><button class="btn secondary" type="button" id="loadExecutionApprovals">قراءة الموافقات</button></div><div class="output" id="executionOutput" role="status" aria-live="polite">لم يتم طلب حالة تنفيذ بعد.</div></article>
+ <article class="card section"><h2>حدود الأمان</h2><div class="timeline"><div class="event"><div class="event-icon">1</div><div><strong>لا أسرار في المتصفح</strong><small>لا مفاتيح API ولا كلمات مرور مخزنة في ملفات الواجهة.</small></div></div><div class="event"><div class="event-icon">2</div><div><strong>لا صلاحيات إضافية</strong><small>الواجهة لا تنفذ أدوات مباشرة ولا تتجاوز سياسة التفويض.</small></div></div><div class="event"><div class="event-icon">3</div><div><strong>الحالة غير المتاحة تظل غير متاحة</strong><small>عند فشل الاتصال، تظهر حالة تعذر الاتصال بدل نتائج افتراضية.</small></div></div></div></article></section>
+ <div class="footer">ORIENT ONE · Dashboard foundation · لا تُعد هذه الواجهة شهادة أمنية أو بديلًا عن اختبار التكامل.</div>
+</main>
+</div>
+<script>
+(() => {
+ const $ = id => document.getElementById(id);
+ const coreState = $('heroCoreState');
+ let sent = 0;
+ document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b === button));
+  document.querySelectorAll('[id^="view-"]').forEach(s => s.classList.add('hidden'));
+  $('view-' + button.dataset.view).classList.remove('hidden');
+  $('pageTitle').textContent = ({overview:'مركز القيادة',agent:'تشغيل الوكيل',memory:'الذاكرة',security:'الأمان والحوكمة'})[button.dataset.view];
+ }));
+ async function checkServer() {
+  try {
+   const response = await fetch('/', {method:'GET',cache:'no-store',headers:{'Accept':'text/html'}});
+   if (!response.ok) throw new Error('HTTP ' + response.status);
+   if (coreState) coreState.textContent = 'REACHABLE';
+   $('serverMetric').textContent = 'متصل';
+   $('healthText').textContent = 'الخادم يستجيب';
+   $('apiState').textContent = 'الخادم يستجيب لطلب GET /. لم يتم استنتاج صحة بقية الخدمات.';
+   $('healthDot').style.background = 'var(--green)';
+  } catch {
+   $('serverMetric').textContent = 'غير متاح';
+   $('healthText').textContent = 'تعذر الاتصال بالخادم';
+   $('apiState').textContent = 'تعذر الاتصال. شغّل الخادم المحلي ثم أعد تحميل الصفحة.';
+   $('healthDot').style.background = 'var(--red)';
+   if (coreState) coreState.textContent = 'OFFLINE';
+  }
+ }
+ async function submitTask(event, inputId, outputId, button) {
+  event.preventDefault();
+  const input = $(inputId).value.trim();
+  const output = $(outputId);
+  if (!input) return;
+  const submit = button || event.submitter;
+  if (submit) submit.disabled = true;
+  output.textContent = 'جارٍ إرسال المهمة إلى الخادم…';
+  try {
+   const response = await fetch('/agent', {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({input})});
+   const body = await response.text();
+   let parsed; try { parsed = JSON.parse(body); } catch { parsed = body; }
+   if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2));
+   output.textContent = typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2);
+   sent += 1; $('runMetric').textContent = String(sent);
+   $('lastMetric').textContent = new Date().toLocaleTimeString('ar-EG');
+  } catch (error) {
+   output.textContent = 'فشل إرسال المهمة: ' + error.message + '\nلم يتم تسجيل نتيجة ناجحة.';
+  } finally { if (submit) submit.disabled = false; }
+ }
+ $('taskForm').addEventListener('submit', e => submitTask(e,'taskInput','taskOutput',$('taskSubmit')));
+ $('taskForm2').addEventListener('submit', e => submitTask(e,'taskInput2','taskOutput2'));
+ $('clearTask').addEventListener('click', () => { $('taskInput').value=''; $('taskOutput').textContent='لم يتم إرسال أي مهمة بعد.'; });
+ async function loadExecutionResource(resource) {
+  const id = $('executionId').value.trim();
+  const output = $('executionOutput');
+  const statusButton = $('loadExecutionStatus');
+  const approvalsButton = $('loadExecutionApprovals');
+  if (!id) { output.textContent = 'أدخل معرّف تنفيذ أولًا.'; return; }
+  statusButton.disabled = true; approvalsButton.disabled = true;
+  output.textContent = 'جارٍ طلب البيانات الفعلية من الخادم…';
+  try {
+   const response = await fetch('/executions/' + encodeURIComponent(id) + (resource === 'approvals' ? '/approvals' : ''), {method:'GET',cache:'no-store',headers:{'Accept':'application/json, text/plain'}});
+   const body = await response.text();
+   let parsed; try { parsed = JSON.parse(body); } catch { parsed = body; }
+   if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2));
+   output.textContent = typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2);
+  } catch (error) {
+   output.textContent = 'تعذر قراءة ' + (resource === 'approvals' ? 'الموافقات' : 'حالة التنفيذ') + ': ' + error.message;
+  } finally { statusButton.disabled = false; approvalsButton.disabled = false; }
+ }
+ $('loadExecutionStatus').addEventListener('click', () => loadExecutionResource('status'));
+ $('loadExecutionApprovals').addEventListener('click', () => loadExecutionResource('approvals'));
+ checkServer();
+})();
+</script>
+<script src="/command-scene.js" defer></script>
+</body>
+</html>
