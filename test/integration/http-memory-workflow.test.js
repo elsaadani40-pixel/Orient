@@ -118,7 +118,7 @@ test('HTTP memory task persists across repository restart and remains tenant-sco
   });
   assert.equal(response.status, 200);
   const result = await response.json();
-  assert.equal(result.type, 'tool_result');
+  assert.equal(result.type, 'memory_result');
   assert.equal(result.execution.status, 'completed');
   assert.equal(result.result.text, 'أنني أختبر ORIENT ONE');
 
