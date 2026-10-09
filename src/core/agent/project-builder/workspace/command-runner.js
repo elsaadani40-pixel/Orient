@@ -176,8 +176,11 @@ class CommandRunner {
             observedCpuQuota === String(expectedCpuQuota / 1000000) + 's' ||
             observedCpuQuota === String(expectedCpuQuota / 1000) + 'ms' ||
             observedCpuQuota === String(expectedCpuQuota) + 'us';
+          // Do not require the asynchronous initial probe to catch the unit in
+          // "active" state: short, successful commands may finish before that
+          // probe runs. Accept only an exact snapshot of every configured limit;
+          // missing/reset/default ("infinity") properties still fail closed.
           const limitsVerified = isSystemdUnit && Boolean(
-            initialStatus?.activeState === 'active' &&
             observedLimits &&
             observedLimits.memoryMax === String(expectedLimits.memoryMaxBytes) &&
             cpuQuotaMatches &&
@@ -212,10 +215,6 @@ class CommandRunner {
             failureCode = 'RESOURCE_LIMIT_EXCEEDED_OR_KILLED';
           } else if (Number(code) !== 0) {
             failureCode = 'COMMAND_FAILED';
-          }
-
-          if (isSystemdUnit && !limitsVerified) {
-            failureCode = 'RESOURCE_LIMITS_UNAVAILABLE';
           }
 
           if (isSystemdUnit && !limitsVerified) {
