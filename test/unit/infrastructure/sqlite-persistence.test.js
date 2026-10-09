@@ -62,7 +62,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
 
   const firstPersistence = new SqlitePersistence({ filePath });
   const firstApproval = new ApprovalService({
-    repository: firstPersistence.approvals
+    repository: firstPersistence.approvals,
+    tenantId: 'tenant-a'
   });
 
   const issued = await firstApproval.issue({
@@ -76,7 +77,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
 
   const secondPersistence = new SqlitePersistence({ filePath });
   const secondApproval = new ApprovalService({
-    repository: secondPersistence.approvals
+    repository: secondPersistence.approvals,
+    tenantId: 'tenant-a'
   });
 
   const validation = await secondApproval.validate({
@@ -90,6 +92,12 @@ test('SQLite approval storage survives restart and remains single-use', async ()
   });
 
   assert.equal(validation.allowed, true);
+  const durableExecutionApprovals = await secondApproval.listForExecution({ executionId: 'exec-approval-1', tenantId: 'tenant-a' });
+  assert.equal(durableExecutionApprovals.length, 1);
+  assert.equal(durableExecutionApprovals[0].approvalId, issued.approvalId);
+  const durablePending = await secondApproval.listPending({ tenantId: 'tenant-a' });
+  assert.equal(durablePending.length, 1);
+  assert.equal(durablePending[0].approvalId, issued.approvalId);
   assert.equal(await secondApproval.consume(issued.approvalId), true);
   assert.equal(await secondApproval.consume(issued.approvalId), false);
 
