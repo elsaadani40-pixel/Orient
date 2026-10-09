@@ -90,3 +90,49 @@ test('checkpoint repository rejects tampered snapshots', () => {
     force: true
   });
 });
+
+test('checkpoint saves preserve an active resume lease until its owner releases it', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-checkpoint-resume-lease-'));
+  const repository = new CheckpointRepository(path.join(directory, 'checkpoints.json'));
+
+  repository.save({
+    executionId: 'exec-resume-lease',
+    tenantId: 'tenant-a',
+    metadata: { tenantId: 'tenant-a' },
+    status: 'running',
+    currentStep: 1
+  }, { tenantId: 'tenant-a', reason: 'step_completed' });
+
+  const lease = repository.acquireResumeLease('exec-resume-lease', {
+    tenantId: 'tenant-a',
+    leaseDurationMs: 30000
+  });
+  assert.ok(lease.leaseId);
+
+  repository.save({
+    executionId: 'exec-resume-lease',
+    tenantId: 'tenant-a',
+    metadata: { tenantId: 'tenant-a' },
+    status: 'running',
+    currentStep: 2
+  }, { tenantId: 'tenant-a', reason: 'resume_step_completed' });
+
+  assert.throws(
+    () => repository.acquireResumeLease('exec-resume-lease', {
+      tenantId: 'tenant-a',
+      leaseDurationMs: 30000
+    }),
+    error => error.code === 'CHECKPOINT_RESUME_LEASE_HELD'
+  );
+
+  assert.equal(
+    repository.releaseResumeLease('exec-resume-lease', lease.leaseId, { tenantId: 'tenant-a' }),
+    true
+  );
+  assert.ok(repository.acquireResumeLease('exec-resume-lease', {
+    tenantId: 'tenant-a',
+    leaseDurationMs: 30000
+  }).leaseId);
+
+  fs.rmSync(directory, { recursive: true, force: true });
+});
