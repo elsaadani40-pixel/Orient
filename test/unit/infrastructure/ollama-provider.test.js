@@ -51,6 +51,7 @@ test('OllamaProvider refuses remote URLs so remote inference cannot masquerade a
     'https://example.com',
     'http://192.168.1.20:11434',
     'http://localhost:11434',
+    'http://localhost.:11434',
     'http://user:pass@127.0.0.1:11434',
     'http://2130706433:11434',
     'http://0177.0.0.1:11434',
