@@ -21,7 +21,7 @@ class ApprovalRepository {
 
   read() {
     const raw = fs.readFileSync(this.filePath, 'utf8');
-    if (!raw.trim()) return {};
+    if (!raw.trim()) throw new Error('Approval storage file is empty');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('Approval storage root must be an object');

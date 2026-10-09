@@ -96,3 +96,48 @@ test('approval repository recovers a lock whose local owner process is dead', ()
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('approval repository fails closed on empty or whitespace-only persisted state', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-corrupt-state-'));
+  const file = path.join(dir, 'approvals.json');
+  const repo = new ApprovalRepository(file);
+  try {
+    for (const invalidContent of ['', '   ' + String.fromCharCode(10, 9)]) {
+      fs.writeFileSync(file, invalidContent, 'utf8');
+      assert.throws(
+        () => repo.read(),
+        /Approval storage file is empty/,
+        'empty approval storage must not be interpreted as an empty approval ledger'
+      );
+      await assert.rejects(
+        () => repo.save({
+          approvalId: 'new-approval',
+          executionId: 'execution-1',
+          step: 1,
+          tool: 'danger.write',
+          capability: 'external.write',
+          tenantId: 'tenant-a'
+        }, { tenantId: 'tenant-a' }),
+        /Approval storage file is empty/,
+        'a write must not overwrite an approval ledger whose persisted state is empty'
+      );
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('approval repository rejects valid JSON with an invalid root shape', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-invalid-root-'));
+  const file = path.join(dir, 'approvals.json');
+  const repo = new ApprovalRepository(file);
+  try {
+    for (const invalidContent of ['[]', 'null', '"approval"', '42']) {
+      fs.writeFileSync(file, invalidContent, 'utf8');
+      assert.throws(() => repo.read(), /Approval storage root must be an object/);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
