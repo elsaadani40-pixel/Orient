@@ -154,7 +154,7 @@ class CommandRunner {
             ? {
                 ...initialStatus,
                 ...finalStatus,
-                enforcedProperties: finalStatus.enforcedProperties || initialStatus?.enforcedProperties
+                enforcedProperties: initialStatus?.enforcedProperties || finalStatus.enforcedProperties
               }
             : initialStatus;
 
