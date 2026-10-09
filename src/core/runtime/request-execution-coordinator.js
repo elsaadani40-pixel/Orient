@@ -223,7 +223,7 @@ class RequestExecutionCoordinator {
       });
     }
 
-    const context = ExecutionContext.restore(checkpoint.snapshot);
+    let context = ExecutionContext.restore(checkpoint.snapshot);
     this.quotaService.assertTenant(context.tenantId || this.tenantId);
     this.quotaService.assertInputSize(context.input);
 
