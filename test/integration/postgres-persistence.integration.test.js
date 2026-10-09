@@ -703,6 +703,20 @@ test('PostgreSQL cancellation wins terminal completion race', async () => {
   assert.equal(attemptedCompletion.cancellationRequested, true);
   assert.equal(attemptedCompletion.result, null);
 
+  const attemptedFailure = await persistence.executions.update(
+    executionId,
+    {
+      status: 'failed',
+      error: { code: 'TOOL_FAILED' },
+      completedAt: new Date().toISOString()
+    },
+    { tenantId: 'tenant-outcome' }
+  );
+
+  assert.equal(attemptedFailure.status, 'running');
+  assert.equal(attemptedFailure.cancellationRequested, true);
+  assert.equal(attemptedFailure.result, null);
+
   await persistence.executions.deleteById(executionId, {
     tenantId: 'tenant-outcome'
   });
