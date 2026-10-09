@@ -13,6 +13,8 @@ CREATE INDEX IF NOT EXISTS idx_events_tenant_timestamp ON events(tenant_id, time
 CREATE TABLE IF NOT EXISTS idempotency (key TEXT NOT NULL, tenant_id TEXT NOT NULL, payload JSONB NOT NULL, status TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (tenant_id,key));
 CREATE INDEX IF NOT EXISTS idx_idempotency_tenant ON idempotency(tenant_id);
 CREATE TABLE IF NOT EXISTS checkpoints (execution_id TEXT NOT NULL, tenant_id TEXT NOT NULL, sequence BIGINT NOT NULL, checkpoint_id TEXT NOT NULL UNIQUE, reason TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, snapshot JSONB NOT NULL, snapshot_sha256 TEXT NOT NULL, PRIMARY KEY (execution_id, sequence));
+CREATE TABLE IF NOT EXISTS execution_resume_leases (execution_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, lease_id TEXT NOT NULL UNIQUE, acquired_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL); 
+CREATE INDEX IF NOT EXISTS idx_execution_resume_leases_expiry ON execution_resume_leases(tenant_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_tenant_execution ON checkpoints(tenant_id, execution_id, sequence DESC);
 CREATE TABLE IF NOT EXISTS workflows (workflow_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, state TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_workflows_tenant_state ON workflows(tenant_id, state);
@@ -83,6 +85,17 @@ const MIGRATIONS = [
       ON workflow_dispatch_claims(tenant_id, worker_id, expires_at);
   `},  {version:5,sql:`
     ALTER TABLE tenant_quota_reservations ADD COLUMN IF NOT EXISTS fencing_token BIGINT;
+  `},
+  {version:6,sql:`
+    CREATE TABLE IF NOT EXISTS execution_resume_leases (
+      execution_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      lease_id TEXT NOT NULL UNIQUE,
+      acquired_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_execution_resume_leases_expiry
+      ON execution_resume_leases(tenant_id, expires_at);
   `},
 
 ];
