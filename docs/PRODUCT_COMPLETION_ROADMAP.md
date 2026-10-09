@@ -22,7 +22,7 @@
 - The HTTP server exposes memory routes and agent execution/status/approval/cancel/resume endpoints.
 - Configuration defaults to JSON persistence and localhost binding; the model provider defaults to `none`, with an Ollama URL/model configured as an option.
 - The repository currently has no open issues or open pull requests at the time this baseline was queried.
-- A consistency item needs resolution before release work: `package.json` reports version `0.9.0`, while `src/core/config/index.js` reports `0.12.0`. Do not assume which is authoritative; define one source of truth and test it.
+- Version metadata drift was resolved in PR #128: `package.json` is now the source of truth (`0.12.0`), and both application config and `OrientRuntime.version` read the shared `src/core/version.js` value. `test/unit/core/version-consistency.test.js` guards package/config consistency.
 - The recent Strict CI success (6/6 jobs, 476 passing and 0 failing in the reported full-suite logs) validates that run, not every security property or every future product requirement.
 
 ## Delivery phases
@@ -31,7 +31,7 @@
 
 **Goal:** make the repository's status and release identity internally consistent.
 
-- [ ] Reconcile package/runtime version metadata and add a regression test so the values cannot silently drift.
+- [x] Reconcile package/runtime version metadata and add a regression test so the values cannot silently drift (PR #128 merged; Strict CI run #37984907052 succeeded 6/6 jobs).
 - [ ] Verify documented commands and configuration defaults against the actual entry point.
 - [ ] Publish a capability matrix with three states only: implemented-and-verified, implemented-but-unverified, planned.
 - [ ] Record current CI run links and the exact checks included; do not infer untested behavior.
