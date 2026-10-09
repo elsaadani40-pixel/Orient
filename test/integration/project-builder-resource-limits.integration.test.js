@@ -42,7 +42,7 @@ test('Project Builder command runs in a systemd cgroup with configured OS-enforc
     });
     const runner = new CommandRunner({ policy });
     const result = await runner.run('node', {
-      args: ['-e', 'process.stdout.write("resource-limits-ok")']
+      args: ['-e', 'setTimeout(() => process.stdout.write("resource-limits-ok"), 500)']
     });
 
     if (result.code !== 0 && /Failed RTM_NEWADDR|Operation not permitted|Creating new namespace failed/.test(result.stderr || '')) {
@@ -62,6 +62,8 @@ test('Project Builder command runs in a systemd cgroup with configured OS-enforc
     assert.notEqual(properties.limitNoFile, 'unknown');
     assert.notEqual(properties.limitFSize, 'unknown');
     assert.notEqual(properties.runtimeMaxUSec, 'unknown');
+    assert.notEqual(properties.limitCPU, 'unknown');
+    assert.equal(properties.memorySwapMax, '0');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
