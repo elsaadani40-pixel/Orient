@@ -159,13 +159,25 @@ class CommandRunner {
           settled = true;
 
           let failureCode = null;
-          if (executionStatus?.result === 'oom-kill') {
+          const lowerStderr = stderr.toLowerCase();
+          const systemdUnavailable = /failed to connect to bus|no medium found|failed to start transient|failed to create transient|unknown assignment|not supported|failed to set unit properties/.test(lowerStderr);
+
+          if (executionStatus?.result === 'oom-kill' || /out of memory|cannot allocate memory/.test(lowerStderr)) {
             failureCode = 'MEMORY_LIMIT_EXCEEDED';
           } else if (executionStatus?.result === 'timeout') {
             failureCode = 'COMMAND_TIMEOUT';
-          } else if (executionStatus?.result === 'signal' && Number(executionStatus.mainStatus) === 24) {
+          } else if (
+            (executionStatus?.result === 'signal' && Number(executionStatus.mainStatus) === 24) ||
+            signal === 'SIGXCPU'
+          ) {
             failureCode = 'CPU_LIMIT_EXCEEDED';
-          } else if (executionStatus?.result === 'resources') {
+          } else if (signal === 'SIGXFSZ' || Number(executionStatus?.mainStatus) === 25 || /file size limit exceeded/.test(lowerStderr)) {
+            failureCode = 'FILE_SIZE_LIMIT_EXCEEDED';
+          } else if (/too many open files|emfile/.test(lowerStderr)) {
+            failureCode = 'OPEN_FILE_LIMIT_EXCEEDED';
+          } else if (/resource temporarily unavailable|fork:.*eagain|pthread_create.*eagain/.test(lowerStderr)) {
+            failureCode = 'PROCESS_LIMIT_EXCEEDED';
+          } else if (systemdUnavailable || executionStatus?.result === 'resources') {
             failureCode = 'RESOURCE_LIMITS_UNAVAILABLE';
           } else if (signal === 'SIGKILL' || Number(code) === 137) {
             failureCode = 'RESOURCE_LIMIT_EXCEEDED_OR_KILLED';
@@ -181,7 +193,7 @@ class CommandRunner {
             stdout,
             stderr,
             truncated: false,
-            resourceLimitMode: 'systemd-user-service-cgroup-v2',
+            resourceLimitMode: child.orientResourceUnitName ? 'systemd-user-service-cgroup-v2' : 'custom-isolator',
             resourceLimitStatus: executionStatus,
             failureCode
           });
