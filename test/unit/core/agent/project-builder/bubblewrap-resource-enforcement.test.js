@@ -96,7 +96,7 @@ for (const failedAction of ['kill', 'stop', 'reset-failed']) {
     const { isolator, child, calls } = makeTerminationScenario({ failAt: failedAction });
     assert.equal(await isolator.terminate(child), false);
     assert.ok(calls.includes(failedAction));
-    assert.ok(!calls.includes('reset-failed') || failedAction === 'reset-failed');
+    assert.deepEqual(calls, ['kill', 'stop', 'show', 'reset-failed']);
   });
 }
 
