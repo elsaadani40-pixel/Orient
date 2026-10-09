@@ -171,11 +171,11 @@ class CommandRunner {
             signal === 'SIGXCPU'
           ) {
             failureCode = 'CPU_LIMIT_EXCEEDED';
-          } else if (signal === 'SIGXFSZ' || Number(executionStatus?.mainStatus) === 25 || /file size limit exceeded/.test(lowerStderr)) {
+          } else if (signal === 'SIGXFSZ' || Number(executionStatus?.mainStatus) === 25 || /file size limit exceeded|efbig|file too large/.test(lowerStderr)) {
             failureCode = 'FILE_SIZE_LIMIT_EXCEEDED';
           } else if (/too many open files|emfile/.test(lowerStderr)) {
             failureCode = 'OPEN_FILE_LIMIT_EXCEEDED';
-          } else if (/resource temporarily unavailable|fork:.*eagain|pthread_create.*eagain/.test(lowerStderr)) {
+          } else if (/process_limit_eagain|resource temporarily unavailable|fork:.*eagain|pthread_create.*eagain/.test(lowerStderr)) {
             failureCode = 'PROCESS_LIMIT_EXCEEDED';
           } else if (systemdUnavailable || executionStatus?.result === 'resources') {
             failureCode = 'RESOURCE_LIMITS_UNAVAILABLE';
