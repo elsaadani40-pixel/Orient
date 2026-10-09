@@ -68,7 +68,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
   </div>
   <div class="hero-visual" aria-label="تصور ثلاثي الأبعاد لنواة ORIENT">
    <canvas id="orientScene" class="scene-canvas" aria-hidden="true"></canvas>
-   <div class="hero-side-stat">SERVER STATUS<strong id="heroCoreState">CHECKING…</strong><span style="display:block;margin-top:4px">RENDERER <strong id="sceneRenderer">STARTING…</strong></span></div>
+   <div class="hero-side-stat">SERVER STATUS<strong id="heroCoreState">CHECKING…</strong><span style="display:block;margin-top:4px">RENDERER <strong id="sceneRenderer">STARTING…</strong></span><span style="display:block;margin-top:4px">EXECUTION <strong id="heroExecutionState">NOT SELECTED</strong></span></div>
    <div class="orbit-stage" aria-hidden="true"><div class="orbit one"></div><div class="orbit two"></div><div class="orbit three"></div><div class="core-sphere"></div><div class="node n1">AI</div><div class="node n2">↗</div><div class="node n3">⌘</div><div class="node n4">⬡</div></div>
    <div class="visual-label">PERCEPTION · REASONING · GOVERNANCE</div>
   </div>
@@ -142,6 +142,18 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
  $('taskForm').addEventListener('submit', e => submitTask(e,'taskInput','taskOutput',$('taskSubmit')));
  $('taskForm2').addEventListener('submit', e => submitTask(e,'taskInput2','taskOutput2'));
  $('clearTask').addEventListener('click', () => { $('taskInput').value=''; $('taskOutput').textContent='لم يتم إرسال أي مهمة بعد.'; });
+ function extractExecutionState(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const nested = payload.execution && typeof payload.execution === 'object' ? payload.execution : {};
+  const candidates = [payload.status, payload.state, payload.phase, payload.executionStatus, nested.status, nested.state];
+  const value = candidates.find(item => typeof item === 'string' && item.trim());
+  return value ? value.trim().slice(0, 64) : null;
+ }
+ function updateExecutionVisualization(value) {
+  const state = String(value || 'UNKNOWN').slice(0, 64);
+  $('heroExecutionState').textContent = state;
+  if (window.ORIENTScene && typeof window.ORIENTScene.setExecutionState === 'function') window.ORIENTScene.setExecutionState(state);
+ }
  async function loadExecutionResource(resource) {
   const id = $('executionId').value.trim();
   const output = $('executionOutput');
@@ -156,7 +168,12 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
    let parsed; try { parsed = JSON.parse(body); } catch { parsed = body; }
    if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2));
    output.textContent = typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2);
+   if (resource === 'status') {
+    const actualState = extractExecutionState(parsed);
+    updateExecutionVisualization(actualState || 'UNKNOWN FIELD');
+   }
   } catch (error) {
+   if (resource === 'status') updateExecutionVisualization('UNAVAILABLE');
    output.textContent = 'تعذر قراءة ' + (resource === 'approvals' ? 'الموافقات' : 'حالة التنفيذ') + ': ' + error.message;
   } finally { statusButton.disabled = false; approvalsButton.disabled = false; }
  }
