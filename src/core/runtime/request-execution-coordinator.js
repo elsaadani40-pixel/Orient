@@ -104,7 +104,7 @@ class RequestExecutionCoordinator {
     this.quotaService.assertTenant(this.tenantId);
     this.quotaService.assertInputSize(text);
 
-    const context = new ExecutionContext({
+    let context = new ExecutionContext({
       requestId,
       input: text,
       tenantId: this.tenantId,
@@ -138,6 +138,7 @@ class RequestExecutionCoordinator {
       });
 
       const { plan, loopResult, replanningDecision } = executionResult;
+      const activeContextSnapshot = context.snapshot();
       context.complete();
       const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
 
@@ -146,23 +147,15 @@ class RequestExecutionCoordinator {
       // of a persistence adapter is not itself an outcome conflict.
       if (persistedExecution?.cancellationRequested || persistedExecution?.status === 'cancelled') {
         const cancellationReason = persistedExecution.cancellationReason || 'Execution cancellation requested';
-        const cancellationSnapshot = {
-          ...context.snapshot(),
-          status: 'cancelled',
-          cancellationRequested: true,
-          cancellationReason,
-          completedAt: context.snapshot().completedAt || new Date().toISOString()
-        };
-        const durableCancellation = await this.persistence.executions.update(
-          context.executionId,
-          cancellationSnapshot,
-          { tenantId: this.tenantId }
-        );
+        context = ExecutionContext.restore(activeContextSnapshot);
+        context.cancel(cancellationReason);
+        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
         await this.persistenceCoordinator.persistEvents(context);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
         return {
           requestId,
           type: 'execution_cancelled',
-          execution: durableCancellation || cancellationSnapshot
+          execution: durableCancellation || context.snapshot()
         };
       }
 
@@ -376,6 +369,7 @@ class RequestExecutionCoordinator {
       });
 
       const { loopResult, replanningDecision } = executionResult;
+      const activeContextSnapshot = context.snapshot();
       context.complete();
       const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
 
@@ -384,24 +378,15 @@ class RequestExecutionCoordinator {
       // repository rejected the terminal completion write.
       if (persistedExecution?.cancellationRequested || persistedExecution?.status === 'cancelled') {
         const cancellationReason = persistedExecution.cancellationReason || 'Execution cancellation requested';
-        const cancellationSnapshot = {
-          ...context.snapshot(),
-          status: 'cancelled',
-          cancellationRequested: true,
-          cancellationReason,
-          completedAt: context.snapshot().completedAt || new Date().toISOString()
-        };
-        const durableCancellation = await this.persistence.executions.update(
-          executionId,
-          cancellationSnapshot,
-          { tenantId: this.tenantId }
-        );
+        context = ExecutionContext.restore(activeContextSnapshot);
+        context.cancel(cancellationReason);
+        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
         await this.persistenceCoordinator.persistEvents(context);
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
           this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }
-        return { resumed: false, reason: 'execution_cancelled', execution: durableCancellation || cancellationSnapshot };
+        return { resumed: false, reason: 'execution_cancelled', execution: durableCancellation || context.snapshot() };
       }
 
       if (persistedExecution && persistedExecution.status !== context.status) {
