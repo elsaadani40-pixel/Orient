@@ -74,7 +74,7 @@ test('reconciles a terminal durable execution instead of replaying an active che
     recoveryCoordinator: {},
     persistence: {
       executions: {
-        findById: () => ({
+        findById: async () => ({
           executionId: 'execution-terminal',
           requestId: 'request-terminal',
           goalId: 'goal-terminal',
@@ -87,7 +87,7 @@ test('reconciles a terminal durable execution instead of replaying an active che
         })
       },
       checkpoints: {
-        findLatest: () => ({
+        findLatest: async () => ({
           checkpointId: 'checkpoint-active',
           sequence: 4,
           snapshot: {
@@ -104,7 +104,7 @@ test('reconciles a terminal durable execution instead of replaying an active che
           },
           snapshotSha256: null
         }),
-        save: (snapshot, options) => {
+        save: async (snapshot, options) => {
           checkpointSaves += 1;
           assert.equal(snapshot.status, 'completed');
           assert.equal(options.reason, 'recovery_reconciled_terminal');
