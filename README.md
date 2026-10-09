@@ -41,7 +41,7 @@ Start the HTTP application:
 node app.js
 ```
 
-Open `http://127.0.0.1:8080` for the local memory interface. To submit a task to the canonical agent runtime from another terminal:
+Open `http://127.0.0.1:8080` for the local memory interface or `http://127.0.0.1:8080/dashboard` for the local control plane. The dashboard exposes tenant-scoped execution history, per-execution SSE events, a bounded event-driven WebGL view, pending approvals, and explicit cancellation requests. See [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md) for the exact API contract, safety boundaries, and smoke checklist. To submit a task to the canonical agent runtime from another terminal:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/agent \\
