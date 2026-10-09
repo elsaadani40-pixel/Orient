@@ -111,6 +111,38 @@ class BubblewrapIsolator {
     return argsForSandbox;
   }
 
+  _assertCgroupV2() {
+    let cgroupMembership;
+    let controllers;
+
+    try {
+      cgroupMembership = fs.readFileSync('/proc/self/cgroup', 'utf8');
+      controllers = fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8')
+        .trim()
+        .split(/\\s+/)
+        .filter(Boolean);
+    } catch (error) {
+      const failure = new Error('Required cgroup v2 resource enforcement is unavailable; refusing command execution');
+      failure.code = 'RESOURCE_LIMITS_UNAVAILABLE';
+      failure.cause = error;
+      throw failure;
+    }
+
+    if (!/^0::/m.test(cgroupMembership)) {
+      const failure = new Error('Unified cgroup v2 is required for Project Builder resource limits');
+      failure.code = 'RESOURCE_LIMITS_UNAVAILABLE';
+      throw failure;
+    }
+
+    for (const controller of ['cpu', 'memory', 'pids']) {
+      if (!controllers.includes(controller)) {
+        const failure = new Error(`Required cgroup v2 controller "${controller}" is unavailable`);
+        failure.code = 'RESOURCE_LIMITS_UNAVAILABLE';
+        throw failure;
+      }
+    }
+  }
+
   _systemdClientEnvironment() {
     const environment = {
       PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin'
