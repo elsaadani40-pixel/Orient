@@ -167,11 +167,11 @@ class CommandRunner {
           } else if (executionStatus?.result === 'timeout') {
             failureCode = 'COMMAND_TIMEOUT';
           } else if (
-            (executionStatus?.result === 'signal' && Number(executionStatus.mainStatus) === 24) ||
+            (executionStatus?.result === 'signal' && [24, 152].includes(Number(executionStatus.mainStatus)) ||
             signal === 'SIGXCPU'
           ) {
             failureCode = 'CPU_LIMIT_EXCEEDED';
-          } else if (signal === 'SIGXFSZ' || Number(executionStatus?.mainStatus) === 25 || /file size limit exceeded|efbig|file too large/.test(lowerStderr)) {
+          } else if (signal === 'SIGXFSZ' || [25, 153].includes(Number(executionStatus?.mainStatus)) || /file size limit exceeded|efbig|file too large/.test(lowerStderr)) {
             failureCode = 'FILE_SIZE_LIMIT_EXCEEDED';
           } else if (/too many open files|emfile/.test(lowerStderr)) {
             failureCode = 'OPEN_FILE_LIMIT_EXCEEDED';
