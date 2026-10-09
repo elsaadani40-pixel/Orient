@@ -133,12 +133,24 @@ class CommandRunner {
         if (settled) return;
         clearTimeout(timer);
 
-        const inspect = typeof this.isolator.inspect === 'function'
-          ? this.isolator.inspect(child)
+        const initialInspection = child.orientInitialInspection || Promise.resolve(null);
+        const finalInspection = typeof this.isolator.inspect === 'function' && (code !== 0 || signal)
+          ? Promise.resolve(this.isolator.inspect(child)).catch(() => null)
           : Promise.resolve(null);
 
-        Promise.resolve(inspect).catch(() => null).then(async executionStatus => {
+        Promise.all([
+          Promise.resolve(initialInspection).catch(() => null),
+          finalInspection
+        ]).then(async ([initialStatus, finalStatus]) => {
           if (settled) return;
+
+          const executionStatus = finalStatus
+            ? {
+                ...initialStatus,
+                ...finalStatus,
+                enforcedProperties: finalStatus.enforcedProperties || initialStatus?.enforcedProperties
+              }
+            : initialStatus;
 
           if (typeof this.isolator.cleanup === 'function') {
             await Promise.resolve(this.isolator.cleanup(child)).catch(() => false);
@@ -157,6 +169,8 @@ class CommandRunner {
             failureCode = 'RESOURCE_LIMITS_UNAVAILABLE';
           } else if (signal === 'SIGKILL' || Number(code) === 137) {
             failureCode = 'RESOURCE_LIMIT_EXCEEDED_OR_KILLED';
+          } else if (Number(code) !== 0) {
+            failureCode = 'COMMAND_FAILED';
           }
 
           resolve({
