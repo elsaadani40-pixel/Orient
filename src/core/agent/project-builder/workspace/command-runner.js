@@ -170,11 +170,17 @@ class CommandRunner {
           const observedLimits = executionStatus?.enforcedProperties;
           const isSystemdUnit = Boolean(child.orientResourceUnitName);
           const expectedRuntime = String(Math.max(1, Math.ceil(this.policy.timeoutMs / 1000))) + 's';
+          const expectedCpuQuota = expectedLimits.cpuQuotaPercent * 10000;
+          const observedCpuQuota = observedLimits?.cpuQuotaPerSecUSec;
+          const cpuQuotaMatches = observedCpuQuota === String(expectedCpuQuota) ||
+            observedCpuQuota === String(expectedCpuQuota / 1000000) + 's' ||
+            observedCpuQuota === String(expectedCpuQuota / 1000) + 'ms' ||
+            observedCpuQuota === String(expectedCpuQuota) + 'us';
           const limitsVerified = !isSystemdUnit || Boolean(
             initialStatus?.activeState === 'active' &&
             observedLimits &&
             observedLimits.memoryMax === String(expectedLimits.memoryMaxBytes) &&
-            observedLimits.cpuQuotaPerSecUSec === String(expectedLimits.cpuQuotaPercent * 10000) &&
+            cpuQuotaMatches &&
             observedLimits.tasksMax === String(expectedLimits.maxProcesses) &&
             observedLimits.limitNoFile === String(expectedLimits.maxOpenFiles) &&
             observedLimits.limitFSize === String(expectedLimits.maxFileSizeBytes) &&
