@@ -86,7 +86,8 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
  </section>
  <section id="view-agent" class="section hidden"><article class="card"><div class="section-head"><h2>تشغيل الوكيل</h2><span class="pill">CANONICAL RUNTIME</span></div><form id="taskForm2"><label for="taskInput2" class="metric-label">المهمة</label><textarea class="input" id="taskInput2" maxlength="20000" required placeholder="اكتب المهمة المطلوب تنفيذها…"></textarea><div class="formrow"><button class="btn" type="submit">تشغيل</button></div></form><div class="output" id="taskOutput2" role="status" aria-live="polite">في انتظار المهمة.</div></article></section>
  <section id="view-memory" class="section hidden"><article class="card"><div class="section-head"><h2>الذاكرة الدائمة</h2><span class="pill">EXISTING UI</span></div><p class="muted">تُدار إضافة الذاكرة والبحث والحذف عبر الواجهة الحالية للخادم.</p><a class="btn" href="/" style="display:inline-block;text-decoration:none">فتح واجهة الذاكرة ←</a><div class="warning">لم يتم تضمين API جديد للذاكرة داخل لوحة القيادة؛ هذا يحافظ على مسار الذاكرة والصلاحيات القائمين دون تكرار منطق الأعمال في الواجهة.</div></article></section>
- <section id="view-security" class="section hidden"><div class="grid"><article class="card"><div class="metric-label">نمط الاتصال</div><div class="metric">Local-first</div><div class="metric-foot">تعتمد اللوحة على نفس الأصل ولا تتصل بخدمات خارجية.</div></article><article class="card"><div class="metric-label">التفويض</div><div class="metric">الخادم</div><div class="metric-foot">كل طلب تنفيذ يمر عبر /agent ومسار التشغيل الحالي.</div></article></div><article class="card section"><div class="section-head"><h2>مراقبة تنفيذ محدد</h2><span class="pill">READ-ONLY API</span></div><p class="muted">أدخل معرّف تنفيذ موجودًا لقراءة الحالة أو الموافقات من واجهات الخادم الفعلية. لا تُعرض قائمة شاملة أو بيانات مصطنعة.</p><label for="executionId" class="metric-label">معرّف التنفيذ</label><input class="input" id="executionId" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Execution ID"><div class="formrow"><button class="btn" type="button" id="loadExecutionStatus">قراءة الحالة</button><button class="btn secondary" type="button" id="loadExecutionApprovals">قراءة الموافقات</button></div><div class="output" id="executionOutput" role="status" aria-live="polite">لم يتم طلب حالة تنفيذ بعد.</div><div class="formrow"><button class="btn" type="button" id="startExecutionStream">بدء متابعة الأحداث الحية</button><button class="btn secondary" type="button" id="stopExecutionStream" disabled>إيقاف المتابعة</button></div><p class="muted" id="eventStreamState" role="status" aria-live="polite">بث الأحداث غير متصل.</p><ol id="executionEvents" class="timeline" aria-label="أحداث التنفيذ الحقيقية"></ol></article>
+ <section id="view-security" class="section hidden"><div class="grid"><article class="card"><div class="metric-label">نمط الاتصال</div><div class="metric">Local-first</div><div class="metric-foot">تعتمد اللوحة على نفس الأصل ولا تتصل بخدمات خارجية.</div></article><article class="card"><div class="metric-label">التفويض</div><div class="metric">الخادم</div><div class="metric-foot">كل طلب تنفيذ يمر عبر /agent ومسار التشغيل الحالي.</div></article></div><section class="grid section two" aria-label="سجل التنفيذات والموافقات"><article class="card"><div class="section-head"><h2>سجل التنفيذات</h2><button class="btn secondary" type="button" id="refreshExecutionHistory">تحديث</button></div><p class="muted">سجل دائم من الخادم، ضمن مساحة المستأجر الحالية. تُعرض ملخصات فقط.</p><div class="output" id="executionHistoryState" role="status" aria-live="polite">لم يتم تحميل سجل التنفيذات.</div><div id="executionHistory" class="timeline"></div></article><article class="card"><div class="section-head"><h2>صندوق الموافقات المعلقة</h2><button class="btn secondary" type="button" id="refreshPendingApprovals">تحديث</button></div><p class="muted">الموافقة هنا إجراء صريح: راجع الأداة والقدرة والخطوة قبل تأكيد الاستئناف. التفويض النهائي يظل داخل الـ Runtime.</p><div class="output" id="pendingApprovalsState" role="status" aria-live="polite">لم يتم تحميل الموافقات.</div><div id="pendingApprovals" class="timeline"></div></article></section>
+ <article class="card section"><div class="section-head"><h2>مراقبة تنفيذ محدد</h2><span class="pill">READ-ONLY API</span></div><p class="muted">أدخل معرّف تنفيذ موجودًا لقراءة الحالة أو الموافقات من واجهات الخادم الفعلية. لا تُعرض قائمة شاملة أو بيانات مصطنعة.</p><label for="executionId" class="metric-label">معرّف التنفيذ</label><input class="input" id="executionId" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Execution ID"><div class="formrow"><button class="btn" type="button" id="loadExecutionStatus">قراءة الحالة</button><button class="btn secondary" type="button" id="loadExecutionApprovals">قراءة الموافقات</button></div><div class="output" id="executionOutput" role="status" aria-live="polite">لم يتم طلب حالة تنفيذ بعد.</div><div class="formrow"><button class="btn" type="button" id="startExecutionStream">بدء متابعة الأحداث الحية</button><button class="btn secondary" type="button" id="stopExecutionStream" disabled>إيقاف المتابعة</button></div><p class="muted" id="eventStreamState" role="status" aria-live="polite">بث الأحداث غير متصل.</p><ol id="executionEvents" class="timeline" aria-label="أحداث التنفيذ الحقيقية"></ol></article>
  <article class="card section"><h2>حدود الأمان</h2><div class="timeline"><div class="event"><div class="event-icon">1</div><div><strong>لا أسرار في المتصفح</strong><small>لا مفاتيح API ولا كلمات مرور مخزنة في ملفات الواجهة.</small></div></div><div class="event"><div class="event-icon">2</div><div><strong>لا صلاحيات إضافية</strong><small>الواجهة لا تنفذ أدوات مباشرة ولا تتجاوز سياسة التفويض.</small></div></div><div class="event"><div class="event-icon">3</div><div><strong>الحالة غير المتاحة تظل غير متاحة</strong><small>عند فشل الاتصال، تظهر حالة تعذر الاتصال بدل نتائج افتراضية.</small></div></div></div></article></section>
  <div class="footer">ORIENT ONE · Dashboard foundation · لا تُعد هذه الواجهة شهادة أمنية أو بديلًا عن اختبار التكامل.</div>
 </main>
@@ -229,6 +230,85 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
  }
  $('startExecutionStream').addEventListener('click', startExecutionStream);
  $('stopExecutionStream').addEventListener('click', () => stopExecutionStream());
+ async function loadExecutionHistory() {
+  const state = $('executionHistoryState');
+  const list = $('executionHistory');
+  state.textContent = 'جارٍ تحميل سجل التنفيذات من التخزين الدائم…';
+  try {
+   const response = await fetch('/executions?limit=50&offset=0', {cache:'no-store',headers:{'Accept':'application/json'}});
+   const body = await response.text();
+   let data; try { data = JSON.parse(body); } catch { throw new Error('استجابة الخادم ليست JSON صالحًا.'); }
+   if (!response.ok) throw new Error(typeof data === 'string' ? data : JSON.stringify(data));
+   if (!Array.isArray(data.executions)) throw new Error('تنسيق سجل التنفيذات غير معروف.');
+   list.replaceChildren();
+   for (const item of data.executions) {
+    const row = document.createElement('div'); row.className = 'event';
+    const icon = document.createElement('div'); icon.className = 'event-icon'; icon.textContent = '↗';
+    const content = document.createElement('div');
+    const title = document.createElement('strong'); title.textContent = String(item.status || 'unknown') + ' · ' + String(item.executionId || '');
+    const detail = document.createElement('small'); detail.textContent = [item.updatedAt || item.startedAt || 'وقت غير متاح', item.currentStep != null ? 'Step ' + item.currentStep : null, item.cancellationRequested ? 'إلغاء مطلوب' : null].filter(Boolean).join(' · ');
+    const select = document.createElement('button'); select.className = 'btn secondary'; select.type = 'button'; select.textContent = 'مراقبة التنفيذ';
+    select.addEventListener('click', () => {
+     $('executionId').value = String(item.executionId || '');
+     $('loadExecutionStatus').click();
+     document.querySelector('[data-view="security"]').click();
+     $('executionId').value = String(item.executionId || '');
+    });
+    content.append(title, detail, select); row.append(icon, content); list.append(row);
+   }
+   state.textContent = 'تم تحميل ' + data.executions.length + ' من ' + data.total + ' تنفيذ مسجل.';
+   if (!data.executions.length) state.textContent = 'لا توجد تنفيذات مسجلة في مساحة المستأجر الحالية.';
+  } catch (error) {
+   state.textContent = 'تعذر تحميل سجل التنفيذات: ' + error.message;
+  }
+ }
+ async function loadPendingApprovals() {
+  const state = $('pendingApprovalsState');
+  const list = $('pendingApprovals');
+  state.textContent = 'جارٍ تحميل الموافقات المعلقة…';
+  try {
+   const response = await fetch('/approvals/pending?limit=100', {cache:'no-store',headers:{'Accept':'application/json'}});
+   const body = await response.text();
+   let data; try { data = JSON.parse(body); } catch { throw new Error('استجابة الخادم ليست JSON صالحًا.'); }
+   if (!response.ok) throw new Error(typeof data === 'string' ? data : JSON.stringify(data));
+   if (!Array.isArray(data)) throw new Error('تنسيق صندوق الموافقات غير معروف.');
+   list.replaceChildren();
+   for (const item of data) {
+    const row = document.createElement('div'); row.className = 'event';
+    const icon = document.createElement('div'); icon.className = 'event-icon'; icon.textContent = '⬡';
+    const content = document.createElement('div');
+    const title = document.createElement('strong'); title.textContent = String(item.tool || 'أداة غير معروفة') + ' · ' + String(item.capability || 'قدرة غير معروفة');
+    const detail = document.createElement('small'); detail.textContent = ['التنفيذ: ' + String(item.executionId || ''), 'الخطوة: ' + String(item.step || '?'), 'تنتهي: ' + String(item.expiresAt || 'غير معروف')].join(' · ');
+    const approve = document.createElement('button'); approve.className = 'btn'; approve.type = 'button'; approve.textContent = 'موافقة صريحة واستئناف';
+    approve.addEventListener('click', async () => {
+     const confirmation = 'ستوافق على استئناف التنفيذ لإتاحة الأداة: ' + item.tool + '\nالقدرة: ' + item.capability + '\nالخطوة: ' + item.step + '\nتنتهي الموافقة: ' + item.expiresAt + '\n\nهل راجعت النطاق وتريد المتابعة؟';
+     if (!window.confirm(confirmation)) return;
+     approve.disabled = true;
+     state.textContent = 'جارٍ إرسال الموافقة إلى الـ Runtime…';
+     try {
+      const result = await fetch('/executions/' + encodeURIComponent(item.executionId) + '/resume', {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({approval:{approvalId:item.approvalId}})});
+      const textBody = await result.text();
+      let parsed; try { parsed = JSON.parse(textBody); } catch { parsed = textBody; }
+      if (!result.ok) throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed));
+      state.textContent = 'استجاب الـ Runtime لطلب الاستئناف: ' + JSON.stringify(parsed);
+      await loadPendingApprovals();
+      await loadExecutionHistory();
+      $('executionId').value = String(item.executionId || '');
+      await loadExecutionResource('status');
+     } catch (error) {
+      state.textContent = 'لم يتم تأكيد الاستئناف: ' + error.message;
+      approve.disabled = false;
+     }
+    });
+    content.append(title, detail, approve); row.append(icon, content); list.append(row);
+   }
+   state.textContent = data.length ? 'عدد الموافقات المعلقة الصالحة: ' + data.length : 'لا توجد موافقات معلقة صالحة.';
+  } catch (error) {
+   state.textContent = 'تعذر تحميل الموافقات: ' + error.message;
+  }
+ }
+ $('refreshExecutionHistory').addEventListener('click', loadExecutionHistory);
+ $('refreshPendingApprovals').addEventListener('click', loadPendingApprovals);
  $('loadExecutionStatus').addEventListener('click', () => loadExecutionResource('status'));
  $('loadExecutionApprovals').addEventListener('click', () => loadExecutionResource('approvals'));
  checkServer();
