@@ -1,0 +1,72 @@
+# ORIENT ONE
+
+**An offline-first, policy-governed personal AI runtime — under active development.**
+
+ORIENT ONE is being built around a canonical runtime that coordinates planning, agent invocation, capability authorization, tool execution, durable state, observability, and recovery. The project prioritizes local-first operation, explicit permissions, human approval for consequential actions, and verifiable behavior over autonomous actions without boundaries.
+
+> **Project status:** active engineering / pre-release. This repository is not a claim that every planned capability is production-ready. Read the source, tests, and architecture notes to distinguish implemented behavior from future work.
+
+## Current engineering focus
+
+- A canonical runtime and governed tool/capability execution path.
+- Tenant/scope-aware memory and durable execution state.
+- Risk-based authorization and human approval for high-risk operations.
+- Checkpointing, idempotency, cancellation, and failure recovery.
+- Sandboxed project operations with explicit resource limits.
+- Automated tests across supported Node.js versions and PostgreSQL integration.
+
+The test suite is evidence for the scenarios it covers; it is not a blanket security certification or a guarantee against every failure mode.
+
+## Requirements
+
+- Node.js 20 or newer
+- npm
+- PostgreSQL only when using PostgreSQL persistence
+
+## Quick start
+
+```bash
+git clone https://github.com/elsaadani40-pixel/Orient.git
+cd Orient
+npm ci
+npm test
+npm run check:syntax
+```
+
+The default configuration uses local JSON persistence and binds the HTTP server to `127.0.0.1:8080`. Review `src/core/config/index.js` and the security documentation before exposing any service to a network.
+
+### Optional PostgreSQL persistence
+
+Set `ORIENT_PERSISTENCE=postgres` and `ORIENT_DATABASE_URL` (or `DATABASE_URL`) in your local environment. Never commit real connection strings or credentials. Use a dedicated development/test database and least-privilege credentials.
+
+A sample environment file is provided in [`.env.example`](.env.example). Copy it to `.env` for local use; `.env` is ignored by Git.
+
+## Repository map
+
+- `src/core` — runtime, policies, planning, execution, and governance
+- `src/application` — application services and tool adapters
+- `src/infrastructure` — persistence and external-system implementations
+- `src/interfaces` — HTTP interfaces
+- `test/unit` — unit and architecture tests
+- `test/integration` — runtime recovery and persistence proofs
+- `docs/architecture` — architecture decisions and ownership boundaries
+- `docs/security` — security design notes and constraints
+- `AGENT.md` — engineering constitution for coding agents
+
+Archived implementations under `archive/` are historical reference material, not canonical runtime owners.
+
+## Security and data handling
+
+- Do not commit API keys, tokens, private keys, credentials, production database URLs, personal memories, customer data, or runtime state.
+- Keep local runtime data under ignored paths; verify `git status --short` before every push.
+- Do not put sensitive details in public issues or pull requests.
+- Review [SECURITY.md](SECURITY.md) before using the project with sensitive data.
+- The repository being public means its code, history, issues, and pull-request discussions may be visible and copied. Removing a file in a later commit does not erase it from Git history or other copies.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Changes should be focused, tested, documented, and merged only after required CI checks pass.
+
+## License
+
+No license is currently declared in this repository. Until a license is added by the project owner, do not assume that the code is licensed for reuse, redistribution, or commercial use.
