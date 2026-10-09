@@ -36,6 +36,8 @@ test('dashboard route serves the local control UI with security headers', async 
   assert.match(html, /src="\/command-scene.js"/);
   assert.match(html, /id="loadExecutionStatus"/);
   assert.match(html, /id="loadExecutionApprovals"/);
+  assert.match(html, /id="heroExecutionState"/);
+  assert.match(html, /extractExecutionState/);
   assert.match(response.headers.get('content-security-policy') || '', /script-src 'self'/);
 });
 
@@ -57,6 +59,8 @@ test('WebGL command scene is served locally with a JavaScript content type', asy
   assert.match(response.headers.get('content-security-policy') || '', /script-src 'self'/);
   assert.match(source, /getContext\('webgl'/);
   assert.match(source, /CSS FALLBACK/);
+  assert.match(source, /window\\.ORIENTScene/);
+  assert.match(source, /drawSphere\\(core, activeTint/);
 });
 
 test('execution status and approval reads dispatch through existing agent routes', async (t) => {
