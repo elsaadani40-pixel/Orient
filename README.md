@@ -33,6 +33,24 @@ npm test
 npm run check:syntax
 ```
 
+### Run a first local task
+
+Start the HTTP application:
+
+```bash
+node app.js
+```
+
+Open `http://127.0.0.1:8080` for the local memory interface. To submit a task to the canonical agent runtime from another terminal:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/agent \\
+  -H 'Content-Type: application/json' \\
+  -d '{"input":"احفظ أنني أختبر ORIENT ONE"}'
+```
+
+The default planner is deterministic and does not require a paid model API. The example uses local JSON persistence. Check the returned execution status and verify the saved memory in the local interface; do not treat an HTTP response alone as proof that every future tool or integration is available.
+
 The default configuration uses local JSON persistence and binds the HTTP server to `127.0.0.1:8080`. Review `src/core/config/index.js` and the security documentation before exposing any service to a network.
 
 ### Optional PostgreSQL persistence
