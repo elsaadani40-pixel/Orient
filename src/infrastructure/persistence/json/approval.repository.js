@@ -160,6 +160,17 @@ class ApprovalRepository {
     });
   }
 
+  async findPending({ tenantId = null, limit = 100, now = Date.now() } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
+    return Object.values(this.read())
+      .filter(record => record && !record.used)
+      .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
+      .filter(record => !record.expiresAt || now < Date.parse(record.expiresAt))
+      .sort((a, b) => Date.parse(a.issuedAt || 0) - Date.parse(b.issuedAt || 0))
+      .slice(0, boundedLimit)
+      .map(record => JSON.parse(JSON.stringify(record)));
+  }
+
   async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null } = {}) {
     if (!executionId) return [];
     return Object.values(this.read())
