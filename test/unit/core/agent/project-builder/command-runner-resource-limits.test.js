@@ -100,6 +100,7 @@ test('command runner surfaces systemd cgroup OOM as a distinct structured failur
   const result = await execution;
   assert.equal(result.failureCode, 'MEMORY_LIMIT_EXCEEDED');
   assert.equal(result.resourceLimitStatus.enforcedProperties.memoryMax, '268435456');
+  assert.equal(result.resourceLimitsVerified, false, 'a custom isolator without a verified systemd cgroup must not be reported as enforcing resource limits');
 });
 
 
