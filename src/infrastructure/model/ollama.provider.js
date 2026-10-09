@@ -1,3 +1,42 @@
+'use strict';
+
+const net = require('node:net');
+
+function validateLocalBaseUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value));
+  } catch {
+    throw Object.assign(
+      new TypeError('Ollama baseUrl must be a valid loopback URL'),
+      { code: 'MODEL_PROVIDER_INVALID_URL' }
+    );
+  }
+
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const ipVersion = net.isIP(hostname);
+  const isLoopback =
+    hostname === 'localhost' ||
+    (ipVersion === 4 && hostname.split('.')[0] === '127') ||
+    (ipVersion === 6 && hostname === '::1');
+
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    !isLoopback ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw Object.assign(
+      new Error('Ollama provider is local-only; remote or ambiguous base URLs are denied'),
+      { code: 'MODEL_PROVIDER_REMOTE_URL_DENIED' }
+    );
+  }
+
+  return url.toString().replace(/\/$/, '');
+}
+
 class OllamaProvider {
   constructor({
     id = 'ollama.local',
@@ -11,7 +50,7 @@ class OllamaProvider {
     }
 
     this.id = id;
-    this.baseUrl = String(baseUrl).replace(/\/$/, '');
+    this.baseUrl = validateLocalBaseUrl(baseUrl);
     this.model = model;
     this.timeoutMs = timeoutMs;
     this.fetch = fetchImpl;
