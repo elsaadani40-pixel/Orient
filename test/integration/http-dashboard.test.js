@@ -45,10 +45,10 @@ test('WebGL command scene is served locally with a JavaScript content type', asy
   const response = await fetch(`http://127.0.0.1:${address.port}/command-scene.js`);
   const source = await response.text();
   assert.equal(response.status, 200);
-  assert.match(response.headers.get('content-type') || '', /application\\/javascript; charset=utf-8/);
+  assert.match(response.headers.get('content-type') || '', /application\/javascript; charset=utf-8/);
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.match(response.headers.get('content-security-policy') || '', /script-src 'self'/);
-  assert.match(source, /getContext\\('webgl'/);
+  assert.match(source, /getContext\('webgl'/);
   assert.match(source, /CSS FALLBACK/);
 });
 
