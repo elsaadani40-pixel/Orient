@@ -61,6 +61,7 @@ class BubblewrapIsolator {
         current += `/${component}`;
         argsForSandbox.push('--dir', current);
       }
+      argsForSandbox.push('--dir', runtimeDirectory);
       argsForSandbox.push('--ro-bind', runtimeDirectory, runtimeDirectory);
     }
 
