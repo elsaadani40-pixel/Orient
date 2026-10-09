@@ -149,6 +149,11 @@ test('command runner distinguishes a file-size SIGXFSZ status encoded by systemd
 
 test('command runner captures terminal systemd status after a successful command exit', async () => {
   const child = fakeChild();
+  child.orientInitialInspection = Promise.resolve({
+    result: 'running',
+    activeState: 'active',
+    enforcedProperties: { memoryMax: '268435456' }
+  });
   let inspections = 0;
   let cleaned = false;
   const runner = new CommandRunner({
@@ -169,9 +174,10 @@ test('command runner captures terminal systemd status after a successful command
   child.emit('close', 0, null);
   const result = await execution;
 
-  assert.equal(inspections, 2, 'initial and terminal systemd states must both be inspected');
+  assert.equal(inspections, 1, 'terminal systemd state must be inspected after the initial snapshot');
   assert.equal(cleaned, true);
   assert.equal(result.failureCode, null);
   assert.equal(result.resourceLimitStatus.result, 'success');
   assert.equal(result.resourceLimitStatus.activeState, 'inactive');
+  assert.equal(result.resourceLimitStatus.enforcedProperties.memoryMax, '268435456');
 });
