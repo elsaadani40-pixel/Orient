@@ -79,14 +79,25 @@ class PostgresExecutionRepository {
       tenantId: effectiveTenant,
       updatedAt: new Date().toISOString()
     };
-    if (current.cancellationRequested && patch.status === 'completed') {
-      return current;
-    }
-
-    await this.db.query(
-      'UPDATE executions SET payload=$3,updated_at=$4 WHERE execution_id=$1 AND tenant_id=$2',
-      [executionId, effectiveTenant, updated, updated.updatedAt]
+    // Compare-and-set the terminal outcome in PostgreSQL itself. The
+    // cancellation flag is read from the row being updated, not from the
+    // earlier snapshot, so a concurrent cancellation cannot be overwritten
+    // by a stale completion write.
+    const result = await this.db.query(
+      `UPDATE executions
+       SET payload=$3, updated_at=$4
+       WHERE execution_id=$1
+         AND tenant_id=$2
+         AND NOT (
+           COALESCE(payload->>'cancellationRequested', 'false') = 'true'
+           AND $5::text = 'completed'
+         )
+       RETURNING payload`,
+      [executionId, effectiveTenant, updated, updated.updatedAt, patch.status || '']
     );
+
+    if (result.rows.length) return result.rows[0].payload;
+    // A concurrent cancellation won the race; return the authoritative row.
     return this.findById(executionId, { tenantId: effectiveTenant });
   }
 
