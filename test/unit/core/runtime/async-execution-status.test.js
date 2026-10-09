@@ -81,7 +81,7 @@ test('HTTP execution status route awaits the service result before serialization
   const response = {
     writeHead(status, headers) {
       assert.equal(status, 200);
-      assert.match(headers['Content-Type'], /application\\/json/);
+      assert.ok(headers['Content-Type'].includes('application/json'));
     },
     end(value) { body = value; }
   };
