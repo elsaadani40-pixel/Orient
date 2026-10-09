@@ -19,7 +19,7 @@
 - The README describes the repository as active engineering / pre-release and explicitly warns that not all planned capabilities are production-ready.
 - The package exposes `npm test` and `npm run check:syntax`; Strict CI includes Node 20/22/24 unit and architecture tests, sandbox prerequisites, PostgreSQL integration, and full repository tests.
 - The code contains a canonical `OrientRuntime`, request/workflow/agent/recovery coordinators, authorization and approval services, tool execution authorization, and a Project Builder path with OS-level sandbox/resource enforcement.
-- The HTTP server exposes memory routes and agent execution/status/approval/cancel/resume endpoints. PR #130 fixed async PostgreSQL status/approval reads and added regression coverage.
+- The HTTP server exposes memory routes and agent execution/status/approval/cancel/resume endpoints. PR #130 fixed async PostgreSQL status/approval reads; PR #132 added a real HTTP-to-runtime read-only mission; PR #133 closes direct calls through a registered tool returned by `ToolRegistry.get()` when authorization is enabled.
 - Configuration defaults to JSON persistence and localhost binding; the model provider defaults to `none`, with an Ollama URL/model configured as an option.
 - The repository currently has no open issues or open pull requests at the time this baseline was queried.
 - Version metadata drift was resolved in PR #128: `package.json` is now the source of truth (`0.12.0`), and both application config and `OrientRuntime.version` read the shared `src/core/version.js` value. `test/unit/core/version-consistency.test.js` guards package/config consistency.
@@ -56,7 +56,7 @@
 **Goal:** a user can submit a real task and observe a trustworthy outcome through the public application interface.
 
 - [ ] Trace the HTTP `POST /agent` path end to end: input validation → planning → plan validation → authorization/approval → tool execution → persistence/events → evaluation → response.
-- [ ] Add a reproducible smoke scenario using only local/test fixtures and no paid API.
+- [x] Add a reproducible smoke scenario using only local/test fixtures and no paid API (PR #132; broader approval/resume/error-state coverage remains open).
 - [ ] Return stable execution identifiers and status; make blocked, awaiting-approval, failed, cancelled, and completed states distinguishable.
 - [ ] Verify request limits, malformed input, client disconnect/cancellation, and internal-error responses.
 - [ ] Provide a documented CLI/curl example and expected response for the working slice.
