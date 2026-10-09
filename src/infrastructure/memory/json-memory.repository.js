@@ -71,9 +71,12 @@ class JsonMemoryRepository {
   readRaw() {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8');
-      if (!raw.trim()) return [];
+      if (!raw.trim()) throw new Error('Memory storage file is empty');
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) {
+        throw new Error('Memory storage root must be an array');
+      }
+      return parsed;
     } catch (error) {
       throw new Error(`Memory storage read failed: ${error.message}`);
     }
