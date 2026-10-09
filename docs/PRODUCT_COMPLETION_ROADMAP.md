@@ -19,7 +19,7 @@
 - The README describes the repository as active engineering / pre-release and explicitly warns that not all planned capabilities are production-ready.
 - The package exposes `npm test` and `npm run check:syntax`; Strict CI includes Node 20/22/24 unit and architecture tests, sandbox prerequisites, PostgreSQL integration, and full repository tests.
 - The code contains a canonical `OrientRuntime`, request/workflow/agent/recovery coordinators, authorization and approval services, tool execution authorization, and a Project Builder path with OS-level sandbox/resource enforcement.
-- The HTTP server exposes memory routes and agent execution/status/approval/cancel/resume endpoints.
+- The HTTP server exposes memory routes and agent execution/status/approval/cancel/resume endpoints. PR #130 fixed async PostgreSQL status/approval reads and added regression coverage.
 - Configuration defaults to JSON persistence and localhost binding; the model provider defaults to `none`, with an Ollama URL/model configured as an option.
 - The repository currently has no open issues or open pull requests at the time this baseline was queried.
 - Version metadata drift was resolved in PR #128: `package.json` is now the source of truth (`0.12.0`), and both application config and `OrientRuntime.version` read the shared `src/core/version.js` value. `test/unit/core/version-consistency.test.js` guards package/config consistency.
@@ -33,7 +33,7 @@
 
 - [x] Reconcile package/runtime version metadata and add a regression test so the values cannot silently drift (PR #128 merged; Strict CI run #37984907052 succeeded 6/6 jobs).
 - [ ] Verify documented commands and configuration defaults against the actual entry point.
-- [ ] Publish a capability matrix with three states only: implemented-and-verified, implemented-but-unverified, planned.
+- [x] Publish a capability matrix with three states only: implemented-and-verified, implemented-but-unverified, planned (see `docs/CAPABILITY_MATRIX.md`).
 - [ ] Record current CI run links and the exact checks included; do not infer untested behavior.
 
 **Exit gate:** version/config tests pass; README setup instructions are reproducible; capability claims link to code/tests.
