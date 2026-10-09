@@ -25,6 +25,7 @@ test('OllamaProvider sends a local chat request and returns normalized text', as
   });
 
   assert.equal(request.url, 'http://127.0.0.1:11434/api/chat');
+  assert.equal(request.options.redirect, 'error');
   assert.equal(JSON.parse(request.options.body).model, 'test-model');
   assert.equal(result.text, '{"intent":"memory.search","steps":[]}');
   assert.equal(result.provider, 'ollama.local');
