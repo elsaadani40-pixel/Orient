@@ -184,3 +184,50 @@ test('command runner captures terminal systemd status after a successful command
   assert.equal(result.resourceLimitStatus.activeState, 'inactive');
   assert.equal(result.resourceLimitStatus.enforcedProperties.memoryMax, '268435456');
 });
+
+
+test('command runner fails closed when a systemd command has no verified initial quota snapshot', async () => {
+  const child = fakeChild();
+  child.orientResourceUnitName = 'orient-pb-0123456789abcdef.service';
+  child.orientInitialInspection = Promise.resolve(null);
+  const limits = {
+    memoryMaxBytes: 268435456,
+    cpuQuotaPercent: 100,
+    maxCpuTimeSeconds: 10,
+    maxProcesses: 64,
+    maxOpenFiles: 256,
+    maxFileSizeBytes: 67108864,
+    maxOutputBytes: 1024
+  };
+  const runner = new CommandRunner({
+    policy: createPolicy({ timeoutMs: 10000, resourceLimits: limits }),
+    isolator: {
+      spawn: () => child,
+      inspect: async () => ({
+        result: 'success',
+        activeState: 'inactive',
+        mainStatus: '0',
+        enforcedProperties: {
+          memoryMax: 'infinity',
+          cpuQuotaPerSecUSec: 'infinity',
+          tasksMax: 'infinity',
+          limitNoFile: 'infinity',
+          limitFSize: 'infinity',
+          runtimeMaxUSec: 'infinity',
+          limitCPU: 'infinity',
+          limitCPUSoft: 'infinity',
+          memorySwapMax: 'infinity'
+        }
+      }),
+      cleanup: async () => true
+    }
+  });
+
+  const execution = runner.run('node');
+  child.emit('close', 0, null);
+  const result = await execution;
+
+  assert.equal(result.code, 0);
+  assert.equal(result.resourceLimitsVerified, false);
+  assert.equal(result.failureCode, 'RESOURCE_LIMITS_UNAVAILABLE');
+});
