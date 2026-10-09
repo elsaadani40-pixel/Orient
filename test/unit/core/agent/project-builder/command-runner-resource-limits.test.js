@@ -226,9 +226,10 @@ test('command runner fails closed when a systemd command has no verified initial
 
   const execution = runner.run('node');
   child.emit('close', 0, null);
-  const result = await execution;
-
-  assert.equal(result.code, 0);
-  assert.equal(result.resourceLimitsVerified, false);
-  assert.equal(result.failureCode, 'RESOURCE_LIMITS_UNAVAILABLE');
+  await assert.rejects(execution, error => {
+    assert.equal(error.code, 'RESOURCE_LIMITS_UNAVAILABLE');
+    assert.equal(error.details.exitCode, 0);
+    assert.equal(error.details.resourceLimitsVerified, false);
+    return true;
+  });
 });
