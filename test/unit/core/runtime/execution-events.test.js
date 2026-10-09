@@ -38,7 +38,7 @@ test('execution event query validates the tenant-scoped execution and bounds rep
   assert.equal(result.at(-1).id, 'event-249');
   assert.deepEqual(calls, [
     { kind: 'execution', id: 'exec-1', options: { tenantId: 'tenant-a' } },
-    { kind: 'events', id: 'exec-1', options: { tenantId: 'tenant-a' } }
+    { kind: 'events', id: 'exec-1', options: { tenantId: 'tenant-a', limit: 200 } }
   ]);
 });
 
@@ -107,4 +107,23 @@ test('pending approval inbox delegates with the runtime tenant and bounded limit
   const result = await OrientRuntime.prototype.listPendingApprovals.call(runtime, { limit: 999 });
   assert.deepEqual(received, { tenantId: 'tenant-a', limit: 100 });
   assert.deepEqual(result, [{ approvalId: 'approval-1' }]);
+});
+
+
+test('execution history uses the adapter indexed page when available', async () => {
+  const runtime = {
+    tenantId: 'tenant-a',
+    persistence: {
+      executions: {
+        async findPage(options) {
+          assert.deepEqual(options, { tenantId: 'tenant-a', limit: 10, offset: 20 });
+          return { total: 37, executions: [{ executionId: 'page-21', status: 'completed', updatedAt: '2026-10-10T00:00:00.000Z' }] };
+        },
+        async findAll() { throw new Error('unbounded query must not be used when findPage exists'); }
+      }
+    }
+  };
+  const result = await OrientRuntime.prototype.listExecutionSummaries.call(runtime, { limit: 10, offset: 20 });
+  assert.equal(result.total, 37);
+  assert.deepEqual(result.executions.map(item => item.executionId), ['page-21']);
 });
