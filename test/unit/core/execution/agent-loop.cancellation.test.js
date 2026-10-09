@@ -88,3 +88,42 @@ test('AgentLoop awaits cancellation requested at the step-start checkpoint befor
     'a cancellation before tool invocation must release its unused reservation'
   );
 });
+
+
+test('AgentLoop releases the idempotency reservation when the pre-effect checkpoint fails', async () => {
+  const loop = new AgentLoop({
+    toolRegistry: {
+      has: () => true,
+      get: () => ({ name: 'side.effect', retryable: false }),
+      execute: async () => { throw new Error('tool must not run'); }
+    }
+  });
+  const context = new ExecutionContext({
+    requestId: 'req-checkpoint-failure',
+    input: 'checkpoint failure before side effect',
+    executionId: 'exec-checkpoint-failure',
+    tenantId: 'tenant-a'
+  });
+  context.start();
+
+  await assert.rejects(
+    loop.run({
+      plan: {
+        intent: 'test.checkpoint.failure',
+        steps: [{ step: 1, tool: 'side.effect', input: 'x', dependsOn: null }]
+      },
+      context,
+      runtimeContext: {
+        tenantId: 'tenant-a',
+        onCheckpoint: async ({ reason }) => {
+          if (reason === 'step_started') {
+            throw new Error('durable checkpoint unavailable');
+          }
+        }
+      }
+    }),
+    /durable checkpoint unavailable/
+  );
+
+  assert.equal(loop.idempotencyStore.records.size, 0);
+});

@@ -640,23 +640,25 @@ class AgentLoop {
       );
 
       if (idempotency.created && typeof runtimeContext.onCheckpoint === 'function') {
-        await runtimeContext.onCheckpoint({
-          step: stepNumber,
-          planRevision,
-          reason: 'step_started'
-        });
-
-        // Cancellation observed after persisting the step-start checkpoint is
-        // still before the tool boundary. Release the reservation so a safe
-        // retry does not mistake a never-started side effect for an unknown one.
         try {
+          await runtimeContext.onCheckpoint({
+            step: stepNumber,
+            planRevision,
+            reason: 'step_started'
+          });
+
+          // We are still before the tool boundary, so cancellation can safely
+          // release the reservation instead of leaving a never-started operation
+          // looking like an ambiguous external side effect.
           await throwIfCancellationRequested();
         } catch (error) {
-          if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
+          try {
             await this.idempotencyStore.delete(
               idempotency.key,
               operationTenantId
             );
+          } catch (cleanupError) {
+            error.idempotencyCleanupError = cleanupError;
           }
           throw error;
         }
@@ -902,7 +904,23 @@ class AgentLoop {
         throw error;
       }
 
-      await throwIfCancellationRequested();
+      try {
+        await throwIfCancellationRequested();
+      } catch (error) {
+        // This is the last cancellation gate before tool invocation. If this
+        // operation was reserved in this attempt, no side effect has started.
+        if (idempotency.created) {
+          try {
+            await this.idempotencyStore.delete(
+              idempotency.key,
+              operationTenantId
+            );
+          } catch (cleanupError) {
+            error.idempotencyCleanupError = cleanupError;
+          }
+        }
+        throw error;
+      }
 
       const toolDefinition =
         this.toolRegistry.get(
