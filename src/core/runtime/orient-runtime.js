@@ -293,6 +293,32 @@ class OrientRuntime {
     });
   }
 
+  async getExecutionEvents(executionId, { limit = 200 } = {}) {
+    if (!this.persistence?.events?.findByExecutionId) {
+      throw Object.assign(new Error('Durable execution event storage is required'), {
+        code: 'EXECUTION_EVENT_STORAGE_REQUIRED'
+      });
+    }
+    if (!executionId) {
+      throw Object.assign(new Error('executionId is required'), {
+        code: 'EXECUTION_ID_REQUIRED'
+      });
+    }
+    const execution = await this.persistence?.executions?.findById?.(executionId, {
+      tenantId: this.tenantId
+    });
+    if (!execution) {
+      throw Object.assign(new Error(`Execution not found: ${executionId}`), {
+        code: 'EXECUTION_NOT_FOUND'
+      });
+    }
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 200)) : 200;
+    const events = await this.persistence.events.findByExecutionId(executionId, {
+      tenantId: this.tenantId
+    });
+    return events.slice(-boundedLimit);
+  }
+
   async getExecutionStatus(executionId) {
     if (!this.persistence?.executions?.findById) {
       throw Object.assign(new Error('Durable execution storage is required for status'), {
