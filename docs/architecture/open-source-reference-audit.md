@@ -18,9 +18,9 @@ No dependency should be added until a separate proposal includes a concrete ORIE
 ## ORIENT baseline observed
 
 - package.json identifies ORIENT ONE as CommonJS, Node.js >=20, version 0.9.0; the current dependency list contains pg. The main test command is node --test.
-- Project Builder currently uses Bubblewrap as a mandatory Linux isolation boundary and launches it through a transient systemd user service with cgroup/resource-limit enforcement. The code explicitly refuses an unsandboxed fallback and refuses non-Linux execution.
-- The resource-limit branch already has a separate review/CI path. It must remain separate from this research document; this audit does not authorize merging it.
-- JsonMemoryRepository.ensureStorage() currently uses existsSync(filePath) followed by writeFileSync(filePath, '[]\\n'). That check-then-create pattern can truncate a file if another process initializes and writes between those operations. Issue #115 tracks reproducing and fixing this suspected race. Resolve and stress-test that issue before designing a new memory layer.
+- Project Builder uses Bubblewrap as a mandatory Linux isolation boundary and launches it through a transient systemd user service with cgroup/resource-limit enforcement. The code explicitly refuses an unsandboxed fallback and refuses non-Linux execution.
+- Project Builder resource quotas are proposed in open PR #114. Its latest Strict CI run (#1458) passed all six jobs, but no independent review is recorded and the PR remains unmerged; this audit does not authorize merging it.
+- The original JSON-memory check-then-create race tracked by issue #115 is addressed by the candidate changes in open PR #117: temporary-file initialization with atomic no-clobber publication, locked migration re-read, and multi-process stress tests. Strict CI #1460 passed all six jobs, but the PR remains unmerged and has no independent review. Treat the fix as proposed, not as part of main.
 - ORIENT's non-negotiable boundary remains: one central Runtime/Supervisor; explicit capability authorization and risk policy; human approval for high-risk actions; no autonomous self-modification or agent creation/execution in the initial product.
 
 ## Repository-by-repository assessment
@@ -152,8 +152,8 @@ The README describes it as a **Beta Research Preview**; its security page curren
 
 ## Recommended execution sequence
 
-1. Finish Project Builder termination correctness in the existing resource-quota PR branch; wait for CI and review.
-2. Fix and stress-test memory initialization/migration under issue #115 on a separate branch.
+1. Complete independent security review of PR #114, including termination truthfulness and resource-enforcement evidence; merge only after review approval.
+2. Complete independent review of PR #117's atomic initialization, migration, lock ownership, and filesystem-error handling; merge only after review approval.
 3. Publish a small memory-evaluation RFC based on Letta/Mem0, with no dependency initially.
 4. Write the adapter contract and threat model from ZeroClaw/OpenClaw patterns.
 5. Only then run a bounded SRT network-policy experiment if a real use case requires outbound network access.
