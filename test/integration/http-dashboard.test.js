@@ -30,6 +30,8 @@ test('dashboard route serves the local control UI with security headers', async 
   assert.match(html, /ORIENT ONE/);
   assert.match(html, /fetch\('\/agent'/);
   assert.match(html, /تعذر الاتصال بالخادم/);
+  assert.match(html, /SERVER STATUS/);
+  assert.match(html, /طلبات أعادت استجابة ناجحة في هذه الجلسة/);
   assert.match(html, /id="orientScene"/);
   assert.match(html, /src="\/command-scene.js"/);
   assert.match(html, /id="loadExecutionStatus"/);
