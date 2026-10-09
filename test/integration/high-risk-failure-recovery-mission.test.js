@@ -274,17 +274,14 @@ test('concurrent resume attempts are serialized by the durable lease', async t =
   const entered = new Promise(resolve => { signalEntered = resolve; });
   let releaseRun;
   const runGate = new Promise(resolve => { releaseRun = resolve; });
-  const originalRun = runtimeA.agentExecutionCoordinator.run.bind(runtimeA.agentExecutionCoordinator);
-  runtimeA.agentExecutionCoordinator.run = async options => {
-    signalEntered();
-    await runGate;
-    return originalRun(options);
-  };
-
   let sideEffectCount = 0;
   const originalExecute = runtimeA.toolRegistry.execute.bind(runtimeA.toolRegistry);
   runtimeA.toolRegistry.execute = async (name, input, context) => {
-    if (name === 'project.execute_change') sideEffectCount += 1;
+    if (name === 'project.execute_change') {
+      signalEntered();
+      await runGate;
+      sideEffectCount += 1;
+    }
     return originalExecute(name, input, context);
   };
 
