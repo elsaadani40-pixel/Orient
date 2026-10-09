@@ -95,6 +95,30 @@ class ApprovalService {
       }));
   }
 
+  async listPending({ tenantId = this.tenantId, limit = 100 } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
+    const candidates = this.repository?.findPending
+      ? await this.repository.findPending({ tenantId, limit: boundedLimit, now: this.clock() })
+      : Array.from(this.approvals.values())
+        .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
+        .sort((a, b) => Date.parse(a.issuedAt || 0) - Date.parse(b.issuedAt || 0));
+    return candidates
+      .filter(record => record && !record.used)
+      .filter(record => !record.expiresAt || this.clock() < Date.parse(record.expiresAt))
+      .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
+      .slice(0, boundedLimit)
+      .map(record => ({
+        approvalId: record.approvalId,
+        executionId: record.executionId,
+        step: record.step,
+        tool: record.tool,
+        capability: record.capability,
+        issuedAt: record.issuedAt,
+        expiresAt: record.expiresAt,
+        tenantId: record.tenantId
+      }));
+  }
+
   async consume(approvalId, tenantId = this.tenantId) {
     const stored = this.repository?.findById
       ? await this.repository.findById(approvalId, { tenantId })

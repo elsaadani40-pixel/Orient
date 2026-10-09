@@ -2,6 +2,40 @@ const AppError = require('../../../core/errors/AppError');
 
 function createAgentRoutes(agentService) {
   return {
+    async executions(req, res) {
+      const url = new URL(req.url, 'http://localhost');
+      const limitValue = url.searchParams.get('limit');
+      const offsetValue = url.searchParams.get('offset');
+      const limit = limitValue === null ? 50 : Number(limitValue);
+      const offset = offsetValue === null ? 0 : Number(offsetValue);
+      if (!Number.isInteger(limit) || !Number.isInteger(offset) || limit < 1 || offset < 0) {
+        throw new AppError('Invalid execution history pagination', 400, 'INVALID_PAGINATION');
+      }
+      const result = await agentService.listExecutionSummaries({ limit, offset });
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+      });
+      res.end(JSON.stringify(result, null, 2));
+    },
+
+    async pendingApprovals(req, res) {
+      const url = new URL(req.url, 'http://localhost');
+      const limitValue = url.searchParams.get('limit');
+      const limit = limitValue === null ? 100 : Number(limitValue);
+      if (!Number.isInteger(limit) || limit < 1) {
+        throw new AppError('Invalid approval inbox limit', 400, 'INVALID_PAGINATION');
+      }
+      const result = await agentService.listPendingApprovals({ limit });
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+      });
+      res.end(JSON.stringify(result, null, 2));
+    },
+
     async events(req, res, executionId) {
       const initialEvents = await agentService.getExecutionEvents(executionId, { limit: 200 });
       res.writeHead(200, {

@@ -136,6 +136,43 @@ test('execution event stream replays after Last-Event-ID and excludes unapproved
   assert.doesNotMatch(chunk, /must-not-leak/);
 });
 
+test('execution history and pending approval APIs return service-scoped summaries', async (t) => {
+  const createAgentRoutes = require('../../src/interfaces/http/routes/agent.routes');
+  const received = [];
+  const server = createServer({
+    memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('memory'); }, add() {}, delete() {} },
+    agentRoutes: createAgentRoutes({
+      async listExecutionSummaries(options) {
+        received.push({ kind: 'history', options });
+        return { total: 1, limit: options.limit, offset: options.offset, executions: [{ executionId: 'exec-1', status: 'running', updatedAt: '2026-10-10T10:00:00.000Z' }] };
+      },
+      async listPendingApprovals(options) {
+        received.push({ kind: 'approvals', options });
+        return [{ approvalId: 'approval-1', executionId: 'exec-1', step: 2, tool: 'files.write', capability: 'filesystem.write', expiresAt: '2026-10-10T10:05:00.000Z' }];
+      }
+    })
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  }));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const history = await fetch(base + '/executions?limit=10&offset=5');
+  assert.equal(history.status, 200);
+  assert.equal(history.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await history.json(), { total: 1, limit: 10, offset: 5, executions: [{ executionId: 'exec-1', status: 'running', updatedAt: '2026-10-10T10:00:00.000Z' }] });
+  const approvals = await fetch(base + '/approvals/pending?limit=20');
+  assert.equal(approvals.status, 200);
+  assert.equal(approvals.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await approvals.json(), [{ approvalId: 'approval-1', executionId: 'exec-1', step: 2, tool: 'files.write', capability: 'filesystem.write', expiresAt: '2026-10-10T10:05:00.000Z' }]);
+  assert.deepEqual(received, [
+    { kind: 'history', options: { limit: 10, offset: 5 } },
+    { kind: 'approvals', options: { limit: 20 } }
+  ]);
+  const invalid = await fetch(base + '/executions?limit=0&offset=-1');
+  assert.equal(invalid.status, 400);
+});
+
 test('dashboard does not replace the existing memory home route', async (t) => {
   const server = createServer({
     memoryRoutes: {

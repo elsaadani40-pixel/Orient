@@ -111,6 +111,22 @@ function createServer({ memoryRoutes, agentRoutes }) {
         return;
       }
 
+      if (
+        req.method === 'GET' &&
+        requestUrl.pathname === '/executions'
+      ) {
+        await agentRoutes.executions(req, res);
+        return;
+      }
+
+      if (
+        req.method === 'GET' &&
+        requestUrl.pathname === '/approvals/pending'
+      ) {
+        await agentRoutes.pendingApprovals(req, res);
+        return;
+      }
+
       const executionStatusMatch =
         requestUrl.pathname.match(/^\/executions\/([^/]+)$/);
 
