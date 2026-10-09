@@ -102,7 +102,182 @@ jobs:
           set -euo pipefail
           test ! -e ORIENT-ONE-AUDIT-PACKAGE.md
           test ! -e ORIENT-ONE-AUDIT-PACKAGE-SAFE.md
-          if git ls-files | grep -E '(^|/)[.]env([.]|$)|[.](pem|key|p12|pfx|sqlite|db)$|(^|/)data/|ORIENT-ONE-AUDIT-PACKAGE.*[.]md' | grep -vE '^[.]env[.]example$'; then
+          git check-ignore --no-index -q .env
+          ! git check-ignore --no-index -q .env.example
+          if git ls-files | grep -E '(^|/)[.]env([.]|$)|[.](pem|key|p12|pfx|sqlite|db)$|(^|/)data/|ORIENT-ONE-AUDIT-PACKAGE.*[.]md' | grep -vE '^[.]env[.]example            echo "Potentially sensitive or generated file is tracked"
+            exit 1
+          fi
+
+      - name: Run strict Node test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(find test/unit -type f -name '*.test.js' -print | sort)
+          test "${#tests[@]}" -gt 0
+          node --test --test-timeout=120000 --test-reporter=spec "${tests[@]}"
+
+      - name: Run high-risk runtime integration proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-timeout=120000 --test-reporter=spec test/integration/project-audit-mission.test.js
+          node --test --test-timeout=120000 --test-reporter=spec test/integration/high-risk-failure-recovery-mission.test.js
+
+  static:
+    name: Static Safety Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r file; do
+            node --check "$file"
+          done < <(find src test -type f -name '*.js' -print | sort)
+
+      - name: Verify shell script syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n rebuild-audit-package.sh
+
+      - name: Reject obvious secret patterns
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE '(AIzaSy|ghp_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' -- ':!AGENT.md' ':!.github/workflows/strict-ci.yml'; then
+            echo "Potential credential material detected"
+            exit 1
+          fi
+
+  postgres-integration:
+    name: PostgreSQL Integration (Node 20)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: orient_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d orient_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          check-latest: true
+
+      - name: Install PostgreSQL client dependency
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run PostgreSQL integration suite
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
+        run: node --test test/integration/postgres-persistence.integration.test.js
+
+  full-repository-suite:
+    name: Full Repository Test Suite (Node 24 + PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: orient_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d orient_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          check-latest: true
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install OS sandbox runtime and narrow AppArmor profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles apparmor-utils sqlite3
+          test -x /usr/bin/bwrap
+          test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          bwrap --version
+          sqlite3 --version
+
+      - name: Start user systemd manager and verify cgroup quota enforcement
+        shell: bash
+        run: |
+          set -euo pipefail
+          user="$(id -un)"
+          uid="$(id -u)"
+          sudo loginctl enable-linger "$user"
+          sudo systemctl start "user@${uid}.service"
+          runtime="/run/user/${uid}"
+          for attempt in $(seq 1 30); do
+            if test -S "$runtime/bus"; then break; fi
+            sleep 1
+          done
+          test -S "$runtime/bus"
+          controllers="$(cat /sys/fs/cgroup/cgroup.controllers)"
+          for controller in cpu memory pids; do
+            grep -qw "$controller" <<< "$controllers"
+          done
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="$runtime"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"
+          systemctl --user is-active default.target
+          systemd-run --user --wait --collect --pipe --service-type=exec \
+            --unit="orient-pb-ci-smoke-${uid}.service" \
+            --property=CPUQuota=100% \
+            --property=LimitCPU=5:6 \
+            --property=MemorySwapMax=0 \
+            --property=MemoryMax=268435456 \
+            --property=TasksMax=64 \
+            --property=LimitNOFILE=256 \
+            --property=LimitFSIZE=67108864 \
+            --property=RuntimeMaxSec=5s \
+            --property=KillMode=control-group \
+            --property=OOMPolicy=kill \
+            -- /usr/bin/true
+
+      - name: Run every repository test
+        shell: bash
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
+        run: |
+          set -euo pipefail
+          npm test -- --test-timeout=120000 --test-reporter=spec
+; then
             echo "Potentially sensitive or generated file is tracked"
             exit 1
           fi
@@ -136,6 +311,12 @@ jobs:
           while IFS= read -r file; do
             node --check "$file"
           done < <(find src test -type f -name '*.js' -print | sort)
+
+      - name: Verify shell script syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n rebuild-audit-package.sh
 
       - name: Reject obvious secret patterns
         shell: bash
