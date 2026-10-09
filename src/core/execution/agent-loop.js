@@ -816,7 +816,7 @@ class AgentLoop {
             this.idempotencyStore.complete(
               idempotency.key,
               reconciledResult,
-              runtimeContext.tenantId || context.tenantId
+              operationTenantId
             );
 
             context.record('idempotency.reconciled', {
@@ -950,7 +950,7 @@ class AgentLoop {
         this.idempotencyStore.complete(
           idempotency.key,
           result,
-          runtimeContext.tenantId || context.tenantId
+          operationTenantId
         );
         idempotencyCompleted = true;
 
@@ -1059,7 +1059,7 @@ class AgentLoop {
         this.idempotencyStore.fail(
           idempotency.key,
           error,
-          runtimeContext.tenantId || context.tenantId
+          operationTenantId
         );
 
         context.record(

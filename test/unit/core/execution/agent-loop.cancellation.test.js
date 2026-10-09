@@ -176,3 +176,41 @@ test('AgentLoop releases a durable local-tenant reservation when the pre-effect 
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('AgentLoop completes durable local-tenant idempotency records with the canonical tenant identity', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-idempotency-local-complete-'));
+  const repository = new IdempotencyRepository(path.join(directory, 'idempotency.json'));
+  try {
+    const loop = new AgentLoop({
+      toolRegistry: {
+        has: () => true,
+        get: () => ({ name: 'side.effect', retryable: false }),
+        execute: async () => ({ ok: true })
+      },
+      idempotencyRepository: repository
+    });
+    const context = new ExecutionContext({
+      requestId: 'req-local-complete',
+      input: 'complete local operation',
+      executionId: 'exec-local-complete'
+    });
+    context.start();
+
+    const result = await loop.run({
+      plan: {
+        intent: 'test.local.complete',
+        steps: [{ step: 1, tool: 'side.effect', input: 'x', dependsOn: null }]
+      },
+      context
+    });
+
+    assert.equal(result.status, 'done');
+    const records = Object.values(repository.read());
+    assert.equal(records.length, 1);
+    assert.equal(records[0].tenantId, 'local');
+    assert.equal(records[0].status, 'completed');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
