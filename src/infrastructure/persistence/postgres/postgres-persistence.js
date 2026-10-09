@@ -90,7 +90,7 @@ class PostgresExecutionRepository {
          AND tenant_id=$2
          AND NOT (
            COALESCE(payload->>'cancellationRequested', 'false') = 'true'
-           AND $5::text = 'completed'
+           AND $5::text IN ('completed', 'failed')
          )
        RETURNING payload`,
       [executionId, effectiveTenant, updated, updated.updatedAt, patch.status || '']
