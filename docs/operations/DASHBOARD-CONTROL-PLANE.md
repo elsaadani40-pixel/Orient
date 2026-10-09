@@ -30,7 +30,7 @@ node app.js
 
 Open \`http://127.0.0.1:8080/dashboard\`. The default server binding is loopback-only (\`127.0.0.1\`). The root path \`/\` remains the existing memory interface.
 
-The dashboard uses same-origin HTTP requests and introduces no CDN, external analytics, or new frontend package dependency.
+The dashboard uses same-origin HTTP requests and introduces no CDN, external analytics, or new frontend package dependency. Task input fields are capped at 5,000 characters to match the runtime service's current input limit.
 
 ## HTTP surface
 

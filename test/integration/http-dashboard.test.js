@@ -29,6 +29,7 @@ test('dashboard route serves the local control UI with security headers', async 
   assert.match(response.headers.get('content-security-policy') || '', /default-src 'self'/);
   assert.match(html, /ORIENT ONE/);
   assert.match(html, /fetch\('\/agent'/);
+  assert.match(html, /maxlength="5000"/);
   assert.match(html, /تعذر الاتصال بالخادم/);
   assert.match(html, /SERVER STATUS/);
   assert.match(html, /طلبات أعادت استجابة ناجحة في هذه الجلسة/);
