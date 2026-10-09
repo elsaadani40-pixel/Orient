@@ -373,6 +373,19 @@ class BubblewrapIsolator {
     });
 
     return (async () => {
+      const loadState = async () => {
+        const status = await runSystemctl([
+          '--user', 'show', '--property=LoadState', '--value', unitName
+        ], true);
+        return status.ok ? status.output.trim() : null;
+      };
+
+      // Successful transient units may already have been unloaded. Avoid
+      // resetting a missing unit and verify the actual manager state either way.
+      let state = await loadState();
+      if (state === 'not-found') return true;
+      if (!state) return false;
+
       const reset = await runSystemctl(['--user', 'reset-failed', unitName]);
       if (!reset.ok) return false;
 
@@ -381,11 +394,9 @@ class BubblewrapIsolator {
       // cgroup status first to classify OOM/timeout/resource-limit failures.
       const deadline = Date.now() + 1000;
       while (Date.now() <= deadline) {
-        const status = await runSystemctl([
-          '--user', 'show', '--property=LoadState', '--value', unitName
-        ], true);
-        if (!status.ok) return false;
-        if (status.output.trim() === 'not-found') return true;
+        state = await loadState();
+        if (state === 'not-found') return true;
+        if (!state) return false;
         await new Promise(resolve => setTimeout(resolve, 25));
       }
       return false;
