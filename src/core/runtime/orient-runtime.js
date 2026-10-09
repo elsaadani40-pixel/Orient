@@ -277,7 +277,7 @@ class OrientRuntime {
     }
 
     if (this.persistence?.executions?.findById) {
-      const execution = this.persistence.executions.findById(executionId, {
+      const execution = await this.persistence.executions.findById(executionId, {
         tenantId: this.tenantId
       });
       if (!execution) {
@@ -293,7 +293,7 @@ class OrientRuntime {
     });
   }
 
-  getExecutionStatus(executionId) {
+  async getExecutionStatus(executionId) {
     if (!this.persistence?.executions?.findById) {
       throw Object.assign(new Error('Durable execution storage is required for status'), {
         code: 'EXECUTION_STORAGE_REQUIRED'
@@ -306,7 +306,7 @@ class OrientRuntime {
       });
     }
 
-    const execution = this.persistence.executions.findById(executionId, {
+    const execution = await this.persistence.executions.findById(executionId, {
       tenantId: this.tenantId
     });
 

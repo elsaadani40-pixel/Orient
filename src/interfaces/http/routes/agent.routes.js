@@ -3,7 +3,7 @@ const AppError = require('../../../core/errors/AppError');
 function createAgentRoutes(agentService) {
   return {
     async status(req, res, executionId) {
-      const result = agentService.getExecutionStatus(executionId);
+      const result = await agentService.getExecutionStatus(executionId);
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
