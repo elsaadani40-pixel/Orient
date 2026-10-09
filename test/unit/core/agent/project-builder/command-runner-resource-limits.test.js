@@ -204,7 +204,7 @@ test('command runner accepts the in-unit quota gate for a short-lived command', 
     }
   });
   const execution = runner.run('node');
-  child.stderr.emit('data', Buffer.from('__ORIENT_RESOURCE_LIMITS_VERIFIED__\\n'));
+  child.stderr.emit('data', Buffer.from('__ORIENT_RESOURCE_LIMITS_VERIFIED__\n'));
   child.emit('close', 0, null);
   const result = await execution;
   assert.equal(result.resourceLimitsVerified, true);
