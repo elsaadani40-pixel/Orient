@@ -115,3 +115,33 @@ test('memory lock publishes ownership metadata atomically and preserves operatio
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('memory repository conservatively times out on an ownerless legacy lock directory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-ownerless-lock-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file, { lockTimeoutMs: 20 });
+  try {
+    fs.mkdirSync(repo.lockPath);
+    assert.throws(() => repo.withLock(() => 'must not run'),
+      error => error.code === 'MEMORY_STORAGE_LOCK_TIMEOUT');
+    assert.equal(fs.statSync(repo.lockPath).isDirectory(), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('memory repository reclaims a dead owner in the new file-lock format', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-dead-file-lock-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file, { lockTimeoutMs: 100 });
+  try {
+    fs.writeFileSync(repo.lockPath, JSON.stringify({
+      token: 'dead-file-owner', pid: 2147483647, hostname: os.hostname(), acquiredAt: new Date(0).toISOString()
+    }));
+    assert.equal(repo.withLock(() => 'acquired'), 'acquired');
+    assert.equal(fs.existsSync(repo.lockPath), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
