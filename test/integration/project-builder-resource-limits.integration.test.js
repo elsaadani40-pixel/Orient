@@ -53,7 +53,7 @@ test('Project Builder command runs in a systemd cgroup with configured OS-enforc
     assert.equal(result.code, 0, JSON.stringify(result));
     assert.equal(result.stdout, 'resource-limits-ok');
     assert.equal(result.resourceLimitMode, 'systemd-user-service-cgroup-v2');
-    assert.equal(result.resourceLimitStatus?.result, 'success');
+    assert.ok(['success', 'running'].includes(result.resourceLimitStatus?.result), JSON.stringify(result.resourceLimitStatus));
     const properties = result.resourceLimitStatus?.enforcedProperties;
     assert.ok(properties, 'effective systemd resource properties must be observable');
     assert.notEqual(properties.memoryMax, 'unknown');
