@@ -71,7 +71,7 @@ while(Date.now()<=deadline){
  p.MemorySwapMax==='0'){ok=true;break;}
  sleep(25);
 }
-if(!ok){process.stderr.write('ORIENT resource quota preflight failed; refusing to start sandbox: '+JSON.stringify({limits:l,timeoutMs,observed:show()})+'\\n');process.exit(125);}
+if(!ok){process.stderr.write('ORIENT resource quota preflight failed; refusing to start sandbox\\n');process.exit(125);}
 process.stderr.write('__ORIENT_RESOURCE_LIMITS_VERIFIED__\n');
 const result=spawnSync('prlimit',['--nofile='+l.maxOpenFiles+':'+l.maxOpenFiles,executable,...args],{stdio:'inherit',env:clientEnvironment});
 if(result.error){process.stderr.write('ORIENT sandbox launch failed: '+result.error.message+'\n');process.exit(126);}
