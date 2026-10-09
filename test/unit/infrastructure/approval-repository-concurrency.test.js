@@ -103,7 +103,7 @@ test('approval repository fails closed on empty or whitespace-only persisted sta
   const file = path.join(dir, 'approvals.json');
   const repo = new ApprovalRepository(file);
   try {
-    for (const invalidContent of ['', '   \\n\\t']) {
+    for (const invalidContent of ['', '   ' + String.fromCharCode(10, 9)]) {
       fs.writeFileSync(file, invalidContent, 'utf8');
       assert.throws(
         () => repo.read(),
