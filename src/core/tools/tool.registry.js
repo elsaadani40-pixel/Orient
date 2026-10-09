@@ -36,9 +36,13 @@ class ToolRegistry {
     }
 
 
+    const execute = tool.execute.bind(tool);
     const registeredTool = Object.freeze({
       ...tool,
-      execute: tool.execute.bind(tool),
+      execute: (input, context = {}) => {
+        this.assertExecutionAuthorized(tool.name, context);
+        return execute(input, context);
+      },
       capabilities: Array.isArray(tool.capabilities)
         ? Object.freeze([...tool.capabilities])
         : Object.freeze([]),
@@ -95,6 +99,11 @@ class ToolRegistry {
       );
     }
 
+    this.assertExecutionAuthorized(name, context);
+    return tool.execute(input, context);
+  }
+
+  assertExecutionAuthorized(name, context = {}) {
     if (this.authorizationRequired && !this.executionAuthorizer.isAuthorized(context, {
       tool: name,
       agentId: context.agentId,
@@ -108,8 +117,6 @@ class ToolRegistry {
         'TOOL_EXECUTION_AUTHORIZATION_REQUIRED'
       );
     }
-
-    return tool.execute(input, context);
   }
 
   authorizeExecutionContext(context, decision, binding = {}) {
