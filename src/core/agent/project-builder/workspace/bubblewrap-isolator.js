@@ -43,7 +43,7 @@ const show = () => {
 const one = (v, xs) => xs.includes(v);
 const durationMatches = (value, seconds) => {
  const text = String(value || '');
- const re = /(\\d+)(us|µs|ms|s|min|h|d|w)/g;
+ const re = /(\d+)(us|µs|ms|s|min|h|d|w)/g;
  let total = 0, end = 0, match;
  const factor = { us: 1, 'µs': 1, ms: 1000, s: 1000000, min: 60000000, h: 3600000000, d: 86400000000, w: 604800000000 };
  while ((match = re.exec(text)) !== null) {
