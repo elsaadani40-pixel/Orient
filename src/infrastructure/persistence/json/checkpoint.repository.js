@@ -97,7 +97,8 @@ class CheckpointRepository {
         reason,
         createdAt: new Date().toISOString(),
         snapshot: storedSnapshot,
-        snapshotSha256: this.digest(storedSnapshot)
+        snapshotSha256: this.digest(storedSnapshot),
+        ...(previous?.resumeLease ? { resumeLease: previous.resumeLease } : {})
       };
       records[snapshot.executionId] = checkpoint;
       this.write(records);
