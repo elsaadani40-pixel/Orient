@@ -87,3 +87,45 @@ test('commits terminal failure checkpoint before a secondary persistence failure
   assert.equal(calls.filter(call => call[0] === 'checkpoint').length, 1);
   assert.equal(calls.find(call => call[0] === 'checkpoint')[3], 'recovery_failure_committed');
 });
+
+
+test('does not publish failure events when durable cancellation wins the failure commit', async () => {
+  const calls = [];
+  const context = {
+    isActive: () => true,
+    canTransitionAgentTo: () => true,
+    transitionAgentTo: state => calls.push(['transition', state]),
+    record: (type, payload) => calls.push(['record', type, payload]),
+    fail: error => calls.push(['fail', error.message])
+  };
+
+  const coordinator = new ExecutionRecoveryCoordinator({
+    agentOrchestrator: {
+      async recover() {
+        return { action: 'abort', reason: 'tool failed' };
+      }
+    },
+    persistExecution: async () => calls.push(['persistExecution']),
+    persistEvents: async () => calls.push(['persistEvents']),
+    checkpoint: async () => {
+      calls.push(['checkpoint']);
+      return {
+        snapshot: {
+          status: 'running',
+          cancellationRequested: true
+        }
+      };
+    }
+  });
+
+  const result = await coordinator.fail({
+    context,
+    error: new Error('tool failed')
+  });
+
+  assert.equal(result.outcome, 'execution_cancelled');
+  assert.equal(result.cancellationRequested, true);
+  assert.equal(calls.filter(call => call[0] === 'checkpoint').length, 1);
+  assert.equal(calls.some(call => call[0] === 'persistExecution'), false);
+  assert.equal(calls.some(call => call[0] === 'persistEvents'), false);
+});
