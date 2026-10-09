@@ -2,9 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const AgentLoop = require('../../../../src/core/execution/agent-loop');
 const ExecutionContext = require('../../../../src/core/execution/execution-context');
+const IdempotencyRepository = require('../../../../src/infrastructure/persistence/json/idempotency.repository');
 
 test('AgentLoop observes durable cancellation before entering a tool side-effect boundary', async () => {
   let executions = 0;
@@ -126,4 +130,49 @@ test('AgentLoop releases the idempotency reservation when the pre-effect checkpo
   );
 
   assert.equal(loop.idempotencyStore.records.size, 0);
+});
+
+
+test('AgentLoop releases a durable local-tenant reservation when the pre-effect checkpoint fails', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-idempotency-checkpoint-'));
+  const repository = new IdempotencyRepository(path.join(directory, 'idempotency.json'));
+  try {
+    const loop = new AgentLoop({
+      toolRegistry: {
+        has: () => true,
+        get: () => ({ name: 'side.effect', retryable: false }),
+        execute: async () => { throw new Error('tool must not run'); }
+      },
+      idempotencyRepository: repository
+    });
+    const context = new ExecutionContext({
+      requestId: 'req-checkpoint-failure-local',
+      input: 'checkpoint failure before side effect',
+      executionId: 'exec-checkpoint-failure-local'
+    });
+    context.start();
+
+    await assert.rejects(
+      loop.run({
+        plan: {
+          intent: 'test.checkpoint.failure.local',
+          steps: [{ step: 1, tool: 'side.effect', input: 'x', dependsOn: null }]
+        },
+        context,
+        runtimeContext: {
+          onCheckpoint: async ({ reason }) => {
+            if (reason === 'step_started') {
+              throw new Error('durable checkpoint unavailable');
+            }
+          }
+        }
+      }),
+      /durable checkpoint unavailable/
+    );
+
+    assert.equal(repository.count(), 0,
+      'a pre-effect failure must remove the durable reservation for the canonical local tenant');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

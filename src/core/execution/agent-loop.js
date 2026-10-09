@@ -624,7 +624,8 @@ class AgentLoop {
           tool: step.tool,
           planRevision,
           operationId,
-          tenantId: runtimeContext.tenantId || context.tenantId
+          // Persist the same canonical tenant identity used by operationId and cleanup.
+          tenantId: operationTenantId
         });
 
       context.record(
