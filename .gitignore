@@ -29,6 +29,7 @@ orient-one/
 .DS_Store
 
 # Local backups and generated review bundles
+.architecture-backups/
 *.backup*
 *.pre-*
 *.old
