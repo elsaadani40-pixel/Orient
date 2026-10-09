@@ -82,4 +82,9 @@ test('AgentLoop awaits cancellation requested at the step-start checkpoint befor
 
   assert.equal(executions, 0);
   assert.equal(context.cancellationRequested, true);
+  assert.equal(
+    loop.idempotencyStore.records.size,
+    0,
+    'a cancellation before tool invocation must release its unused reservation'
+  );
 });
