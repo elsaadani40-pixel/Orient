@@ -68,7 +68,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
   </div>
   <div class="hero-visual" aria-label="تصور ثلاثي الأبعاد لنواة ORIENT">
    <canvas id="orientScene" class="scene-canvas" aria-hidden="true"></canvas>
-   <div class="hero-side-stat">CORE STATUS<strong id="heroCoreState">CHECKING…</strong><span style="display:block;margin-top:4px">RENDERER <strong id="sceneRenderer">STARTING…</strong></span></div>
+   <div class="hero-side-stat">SERVER STATUS<strong id="heroCoreState">CHECKING…</strong><span style="display:block;margin-top:4px">RENDERER <strong id="sceneRenderer">STARTING…</strong></span></div>
    <div class="orbit-stage" aria-hidden="true"><div class="orbit one"></div><div class="orbit two"></div><div class="orbit three"></div><div class="core-sphere"></div><div class="node n1">AI</div><div class="node n2">↗</div><div class="node n3">⌘</div><div class="node n4">⬡</div></div>
    <div class="visual-label">PERCEPTION · REASONING · GOVERNANCE</div>
   </div>
@@ -76,8 +76,8 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
 
  <section class="grid" aria-label="مؤشرات الحالة">
   <article class="card"><div class="metric-label">اتصال الخادم</div><div class="metric" id="serverMetric">—</div><div class="metric-foot">فحص HTTP محلي</div></article>
-  <article class="card"><div class="metric-label">تنفيذات تم إرسالها من هذه الجلسة</div><div class="metric" id="runMetric">0</div><div class="metric-foot">عداد واجهة فقط، وليس سجلًا دائمًا</div></article>
-  <article class="card"><div class="metric-label">آخر تنفيذ</div><div class="metric" id="lastMetric">—</div><div class="metric-foot">لا تُستنتج الحالة دون استجابة</div></article>
+  <article class="card"><div class="metric-label">طلبات أعادت استجابة ناجحة في هذه الجلسة</div><div class="metric" id="runMetric">0</div><div class="metric-foot">عداد واجهة فقط، وليس سجلًا دائمًا</div></article>
+  <article class="card"><div class="metric-label">آخر استجابة ناجحة</div><div class="metric" id="lastMetric">—</div><div class="metric-foot">لا تُستنتج الحالة دون استجابة</div></article>
   <article class="card"><div class="metric-label">وضع النموذج</div><div class="metric">محلي أولًا</div><div class="metric-foot">لا يوجد اعتماد إلزامي على API مدفوع</div></article>
  </section>
  <section id="view-overview" class="section two">
@@ -106,7 +106,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
   try {
    const response = await fetch('/', {method:'GET',cache:'no-store',headers:{'Accept':'text/html'}});
    if (!response.ok) throw new Error('HTTP ' + response.status);
-   if (coreState) coreState.textContent = 'CONNECTED';
+   if (coreState) coreState.textContent = 'REACHABLE';
    $('serverMetric').textContent = 'متصل';
    $('healthText').textContent = 'الخادم يستجيب';
    $('apiState').textContent = 'الخادم يستجيب لطلب GET /. لم يتم استنتاج صحة بقية الخدمات.';
