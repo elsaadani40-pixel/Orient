@@ -49,6 +49,7 @@ test('OllamaProvider refuses remote URLs so remote inference cannot masquerade a
   for (const baseUrl of [
     'https://example.com',
     'http://192.168.1.20:11434',
+    'http://localhost:11434',
     'http://user:pass@127.0.0.1:11434',
     'http://127.0.0.1:11434?redirect=https://example.com',
     'file:///tmp/ollama'
@@ -64,11 +65,10 @@ test('OllamaProvider refuses remote URLs so remote inference cannot masquerade a
   }
 });
 
-test('OllamaProvider accepts explicit loopback IPv4, IPv6, and localhost endpoints', () => {
+test('OllamaProvider accepts only literal loopback IPv4 and IPv6 endpoints', () => {
   for (const baseUrl of [
     'http://127.0.0.2:11434',
-    'http://[::1]:11434',
-    'http://localhost:11434'
+    'http://[::1]:11434'
   ]) {
     assert.doesNotThrow(
       () => new OllamaProvider({ baseUrl, fetchImpl: async () => ({}) }),
