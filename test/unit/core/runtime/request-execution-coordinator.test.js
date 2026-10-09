@@ -216,10 +216,14 @@ test('resume returns durable cancellation when cancellation wins terminal comple
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {},
     agentExecutionCoordinator: {
-      run: async () => ({
-        loopResult: { result: { ok: true }, evaluation: { success: true } },
-        replanningDecision: { toJSON: () => ({ outcome: 'done' }) }
-      })
+      run: async ({ context: resumedContext }) => {
+        resumedContext.transitionAgentTo(AgentState.LIFECYCLE.OBSERVING);
+        resumedContext.transitionAgentTo(AgentState.LIFECYCLE.EVALUATING);
+        return {
+          loopResult: { result: { ok: true }, evaluation: { success: true } },
+          replanningDecision: { toJSON: () => ({ outcome: 'done' }) }
+        };
+      }
     },
     recoveryCoordinator: { fail: async () => {} },
     persistence: {
