@@ -3,8 +3,12 @@ const path = require('path');
 const crypto = require('crypto');
 
 class WorkflowLeaseRepository {
-  constructor(filePath) {
+  constructor(filePath, { lockTimeoutMs = 30000 } = {}) {
     if (!filePath) throw new TypeError('filePath is required');
+    if (!Number.isInteger(lockTimeoutMs) || lockTimeoutMs < 1) {
+      throw new TypeError('lockTimeoutMs must be a positive integer');
+    }
+    this.lockTimeoutMs = lockTimeoutMs;
     this.filePath = path.resolve(filePath);
     this.lockPath = this.filePath + '.lock';
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
@@ -25,22 +29,90 @@ class WorkflowLeaseRepository {
   }
 
   withLock(operation) {
-    const timeoutMs = 30000;
+    const timeoutMs = this.lockTimeoutMs;
     const deadline = Date.now() + timeoutMs;
+    const hostname = require('os').hostname();
+
     while (true) {
+      const token = crypto.randomUUID();
       try {
         fs.mkdirSync(this.lockPath);
-        try { return operation(); }
-        finally { try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {} }
       } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        let stale = false;
-        try { stale = Date.now() - fs.statSync(this.lockPath).mtimeMs > timeoutMs; }
-        catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
-        if (stale) { try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {} continue; }
-        if (Date.now() >= deadline) throw Object.assign(new Error('Workflow lease lock timeout'), { code: 'WORKFLOW_LEASE_LOCK_TIMEOUT' });
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
+
+      if (fs.existsSync(this.lockPath)) {
+        // Only execute under a lock whose ownership metadata we created.
+        let acquiredByThisCall = false;
+        try {
+          const ownerPath = path.join(this.lockPath, 'owner.json');
+          const owner = {
+            token,
+            pid: process.pid,
+            hostname,
+            acquiredAt: new Date().toISOString()
+          };
+          fs.writeFileSync(ownerPath, JSON.stringify(owner) + '\n', {
+            encoding: 'utf8', flag: 'wx', mode: 0o600
+          });
+          acquiredByThisCall = true;
+          try {
+            return operation();
+          } finally {
+            try {
+              const currentOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+              if (currentOwner.token === token) {
+                fs.rmSync(this.lockPath, { recursive: true, force: true });
+              }
+            } catch {}
+          }
+        } catch (error) {
+          if (acquiredByThisCall || error.code !== 'EEXIST') throw error;
+          // owner.json already exists: another process owns this lock.
+        }
+      }
+
+      let owner = null;
+      try {
+        owner = JSON.parse(fs.readFileSync(path.join(this.lockPath, 'owner.json'), 'utf8'));
+      } catch (ownerError) {
+        if (ownerError.code !== 'ENOENT' && !(ownerError instanceof SyntaxError)) throw ownerError;
+      }
+
+      let stale = false;
+      if (owner && owner.hostname === hostname && Number.isInteger(owner.pid) && owner.pid > 0) {
+        try {
+          process.kill(owner.pid, 0);
+        } catch (processError) {
+          stale = processError.code === 'ESRCH';
+          if (processError.code !== 'ESRCH' && processError.code !== 'EPERM') throw processError;
+        }
+      }
+
+      if (stale) {
+        const quarantinePath = this.lockPath + '.stale.' + crypto.randomUUID();
+        try {
+          fs.renameSync(this.lockPath, quarantinePath);
+          let movedOwner = null;
+          try {
+            movedOwner = JSON.parse(fs.readFileSync(path.join(quarantinePath, 'owner.json'), 'utf8'));
+          } catch {}
+          if (movedOwner && movedOwner.token === owner.token &&
+              movedOwner.pid === owner.pid && movedOwner.hostname === owner.hostname) {
+            fs.rmSync(quarantinePath, { recursive: true, force: true });
+          } else {
+            try { fs.renameSync(quarantinePath, this.lockPath); } catch {}
+          }
+          continue;
+        } catch (reclaimError) {
+          if (reclaimError.code !== 'ENOENT' && reclaimError.code !== 'EEXIST') throw reclaimError;
+        }
+      }
+
+      if (Date.now() >= deadline) {
+        throw Object.assign(new Error('Workflow lease lock timeout'), { code: 'WORKFLOW_LEASE_LOCK_TIMEOUT' });
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
   }
 
