@@ -35,40 +35,41 @@ class WorkflowLeaseRepository {
 
     while (true) {
       const token = crypto.randomUUID();
+      let acquiredDirectory = false;
       try {
         fs.mkdirSync(this.lockPath);
+        acquiredDirectory = true;
       } catch (error) {
         if (error.code !== 'EEXIST') throw error;
       }
 
-      if (fs.existsSync(this.lockPath)) {
-        // Only execute under a lock whose ownership metadata we created.
-        let acquiredByThisCall = false;
+      if (acquiredDirectory) {
+        const ownerPath = path.join(this.lockPath, 'owner.json');
+        const owner = {
+          token,
+          pid: process.pid,
+          hostname,
+          acquiredAt: new Date().toISOString()
+        };
         try {
-          const ownerPath = path.join(this.lockPath, 'owner.json');
-          const owner = {
-            token,
-            pid: process.pid,
-            hostname,
-            acquiredAt: new Date().toISOString()
-          };
           fs.writeFileSync(ownerPath, JSON.stringify(owner) + '\n', {
             encoding: 'utf8', flag: 'wx', mode: 0o600
           });
-          acquiredByThisCall = true;
-          try {
-            return operation();
-          } finally {
-            try {
-              const currentOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
-              if (currentOwner.token === token) {
-                fs.rmSync(this.lockPath, { recursive: true, force: true });
-              }
-            } catch {}
-          }
         } catch (error) {
-          if (acquiredByThisCall || error.code !== 'EEXIST') throw error;
-          // owner.json already exists: another process owns this lock.
+          // We created this directory, so an incomplete acquisition is ours.
+          try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {}
+          throw error;
+        }
+
+        try {
+          return operation();
+        } finally {
+          try {
+            const currentOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+            if (currentOwner.token === token) {
+              fs.rmSync(this.lockPath, { recursive: true, force: true });
+            }
+          } catch {}
         }
       }
 
