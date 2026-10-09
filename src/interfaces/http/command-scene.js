@@ -142,6 +142,18 @@
     gl.drawArrays(gl.LINE_LOOP, 0, ringBuffer.count);
   }
   let frame = 0, started = performance.now(), lastTime = 0, destroyed = false;
+  let activeTint = [0.20, 0.69, 0.93];
+  window.ORIENTScene = Object.freeze({
+    setExecutionState(value) {
+      const state = String(value || '').trim().slice(0, 64);
+      const normalized = state.toLowerCase();
+      if (/fail|error|reject|denied|cancel/.test(normalized)) activeTint = [0.98, 0.25, 0.39];
+      else if (/success|succeed|complete|finished|done/.test(normalized)) activeTint = [0.25, 0.88, 0.51];
+      else if (/approv|pending|wait|review|queued|pause/.test(normalized)) activeTint = [0.98, 0.72, 0.25];
+      else if (/run|active|process|execut/.test(normalized)) activeTint = [0.24, 0.78, 0.98];
+      else activeTint = [0.48, 0.58, 0.76];
+    }
+  });
   function resize() {
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -163,7 +175,7 @@
     gl.useProgram(program);
     const camera = translate(0, 0, -4.25);
     const core = multiply(multiply(camera, rotateY(t)), multiply(rotateX(-0.22), scale(0.78,0.78,0.78)));
-    drawSphere(core, [0.20,0.69,0.93], projection);
+    drawSphere(core, activeTint, projection);
     drawRing(multiply(multiply(camera, rotateY(-t*0.65)), rotateZ(0.72)), [0.22,0.91,0.88], projection);
     drawRing(multiply(multiply(camera, rotateY(t*0.42)), rotateX(1.05)), [0.54,0.48,0.98], projection);
     const satellites = [
