@@ -208,55 +208,47 @@ class BubblewrapIsolator {
   }
 
   terminate(child) {
-    if (!child || !child.orientResourceUnitName) {
-      return Promise.resolve(false);
-    }
+    if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
 
     const unitName = child.orientResourceUnitName;
     const environment = child.orientSystemdEnvironment || this._systemdClientEnvironment();
 
-    return new Promise(resolve => {
-      let completed = 0;
-      const finishOnce = () => {
-        let finished = false;
-        return () => {
-          if (finished) return;
-          finished = true;
-          completed += 1;
-          if (completed >= 3) resolve(true);
-        };
-      };
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // The systemd unit stop remains authoritative for descendants.
+    }
 
-      for (const args of [
-        ['--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unitName],
-        ['--user', 'stop', unitName],
-        ['--user', 'reset-failed', unitName]
-      ]) {
-        const finish = finishOnce();
-        let cleanup;
-        try {
-          cleanup = this.spawnProcess(this.systemctlPath, args, {
-            shell: false,
-            windowsHide: true,
-            stdio: 'ignore',
-            env: environment
-          });
-        } catch {
-          finish();
-          continue;
-        }
-        cleanup.once('error', finish);
-        cleanup.once('close', finish);
-      }
-
+    const runSystemctl = args => new Promise(resolve => {
+      let command;
       try {
-        child.kill('SIGTERM');
+        command = this.spawnProcess(this.systemctlPath, args, {
+          shell: false,
+          windowsHide: true,
+          stdio: 'ignore',
+          env: environment
+        });
       } catch {
-        // The unit stop is the authoritative process-tree cleanup mechanism.
+        resolve(false);
+        return;
       }
-    });
-  }
 
+      let done = false;
+      const finish = value => {
+        if (done) return;
+        done = true;
+        resolve(value);
+      };
+      command.once('error', () => finish(false));
+      command.once('close', code => finish(code === 0));
+    });
+
+    return runSystemctl(['--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unitName])
+      .then(() => runSystemctl(['--user', 'stop', unitName]))
+      .then(() => runSystemctl(['--user', 'reset-failed', unitName]))
+      .then(() => true)
+      .catch(() => false);
+  }
   cleanup(child) {
     if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
     return new Promise(resolve => {
