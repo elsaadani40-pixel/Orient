@@ -1,3 +1,5 @@
+const version = require('../version');
+
 const AgentLoop =
   require('../execution/agent-loop');
 
@@ -190,7 +192,7 @@ class OrientRuntime {
       'ORIENT_RUNTIME';
 
     this.version =
-      '0.9.0';
+      version;
   }
 
   persistEvents(context) {

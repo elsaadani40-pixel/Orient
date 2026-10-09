@@ -1,4 +1,5 @@
 const path = require('path');
+const version = require('../version');
 
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
@@ -33,7 +34,7 @@ const config = Object.freeze({
   ollamaModel: process.env.ORIENT_OLLAMA_MODEL || 'llama3.2:3b',
   ollamaTimeoutMs: positiveInteger(process.env.ORIENT_OLLAMA_TIMEOUT_MS, 60000),
   appName: 'ORIENT ONE',
-  version: '0.12.0'
+  version
 });
 
 module.exports = config;
