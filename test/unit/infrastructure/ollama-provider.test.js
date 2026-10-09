@@ -25,6 +25,7 @@ test('OllamaProvider sends a local chat request and returns normalized text', as
   });
 
   assert.equal(request.url, 'http://127.0.0.1:11434/api/chat');
+  assert.equal(request.options.redirect, 'error');
   assert.equal(JSON.parse(request.options.body).model, 'test-model');
   assert.equal(result.text, '{"intent":"memory.search","steps":[]}');
   assert.equal(result.provider, 'ollama.local');
@@ -43,4 +44,41 @@ test('OllamaProvider converts HTTP failures into provider errors', async () => {
     () => provider.complete({ input: 'test' }),
     error => error.code === 'MODEL_PROVIDER_REQUEST_FAILED'
   );
+});
+
+test('OllamaProvider refuses remote URLs so remote inference cannot masquerade as local', () => {
+  for (const baseUrl of [
+    'https://example.com',
+    'http://192.168.1.20:11434',
+    'http://localhost:11434',
+    'http://localhost.:11434',
+    'http://user:pass@127.0.0.1:11434',
+    'http://2130706433:11434',
+    'http://0177.0.0.1:11434',
+    'http://0x7f000001:11434',
+    'http://[::ffff:127.0.0.1]:11434',
+    'http://127.0.0.1:11434?redirect=https://example.com',
+    'file:///tmp/ollama'
+  ]) {
+    assert.throws(
+      () => new OllamaProvider({ baseUrl, fetchImpl: async () => ({}) }),
+      error => [
+        'MODEL_PROVIDER_REMOTE_URL_DENIED',
+        'MODEL_PROVIDER_INVALID_URL'
+      ].includes(error.code),
+      baseUrl
+    );
+  }
+});
+
+test('OllamaProvider accepts only literal loopback IPv4 and IPv6 endpoints', () => {
+  for (const baseUrl of [
+    'http://127.0.0.2:11434',
+    'http://[::1]:11434'
+  ]) {
+    assert.doesNotThrow(
+      () => new OllamaProvider({ baseUrl, fetchImpl: async () => ({}) }),
+      baseUrl
+    );
+  }
 });
