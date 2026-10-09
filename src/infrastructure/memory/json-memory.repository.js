@@ -216,23 +216,20 @@ class JsonMemoryRepository {
       }
 
       if (stale) {
-        const quarantinePath = `${this.lockPath}.stale.${crypto.randomUUID()}`;
-        try {
-          fs.renameSync(this.lockPath, quarantinePath);
-          const movedOwner = readOwner(quarantinePath);
-          if (movedOwner && movedOwner.token === existingOwner.token &&
-              movedOwner.pid === existingOwner.pid && movedOwner.hostname === existingOwner.hostname) {
-            const stat = fs.lstatSync(quarantinePath);
-            if (stat.isDirectory()) fs.rmSync(quarantinePath, { recursive: true, force: true });
-            else fs.unlinkSync(quarantinePath);
-          } else {
-            restoreQuarantine(quarantinePath);
-          }
-          continue;
-        } catch (reclaimError) {
-          if (reclaimError.code !== 'ENOENT' && reclaimError.code !== 'EEXIST' &&
-              reclaimError.code !== 'ENOTEMPTY') throw reclaimError;
-        }
+        // Reclaiming by rename is not ownership-safe: the lock path may be
+        // replaced after readOwner() and before renameSync(). The rename could
+        // therefore move a different, live owner's lock. Fail closed instead;
+        // recovery must be an explicit operator action while contenders are stopped.
+        const staleLockError = new Error(
+          'Memory storage lock appears stale; explicit recovery is required'
+        );
+        staleLockError.code = 'MEMORY_STORAGE_STALE_LOCK';
+        staleLockError.details = {
+          pid: existingOwner.pid,
+          hostname: existingOwner.hostname,
+          token: existingOwner.token
+        };
+        throw staleLockError;
       }
 
       if (Date.now() >= deadline) {
