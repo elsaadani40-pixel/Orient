@@ -169,6 +169,10 @@ class CommandRunner {
           const expectedLimits = this.policy.resourceLimits;
           const observedLimits = executionStatus?.enforcedProperties;
           const isSystemdUnit = Boolean(child.orientResourceUnitName);
+          const verifiedByInUnitGate = isSystemdUnit &&
+            typeof child.orientResourceLimitsGateMarker === 'string' &&
+            stderr.includes(child.orientResourceLimitsGateMarker);
+          if (verifiedByInUnitGate) stderr = stderr.replace(child.orientResourceLimitsGateMarker, '').trim();
           const expectedRuntime = String(Math.max(1, Math.ceil(this.policy.timeoutMs / 1000))) + 's';
           const expectedCpuQuota = expectedLimits.cpuQuotaPercent * 10000;
           const observedCpuQuota = observedLimits?.cpuQuotaPerSecUSec;
@@ -186,7 +190,7 @@ class CommandRunner {
           // probe runs. Accept only an exact snapshot of every configured limit;
           // missing/reset/default ("infinity") properties still fail closed.
           const limitsVerified = isSystemdUnit && Boolean(
-            observedLimits &&
+            verifiedByInUnitGate || (observedLimits &&
             observedLimits.memoryMax === String(expectedLimits.memoryMaxBytes) &&
             cpuQuotaMatches &&
             observedLimits.tasksMax === String(expectedLimits.maxProcesses) &&
@@ -195,7 +199,7 @@ class CommandRunner {
             observedLimits.runtimeMaxUSec === expectedRuntime &&
             cpuTimeLimitMatches(observedLimits.limitCPU, expectedLimits.maxCpuTimeSeconds + 1) &&
             cpuTimeLimitMatches(observedLimits.limitCPUSoft, expectedLimits.maxCpuTimeSeconds) &&
-            observedLimits.memorySwapMax === '0'
+            observedLimits.memorySwapMax === '0')
           );
           const systemdUnavailable = /failed to connect to bus|no medium found|failed to start transient|failed to create transient|unknown assignment|not supported|failed to set unit properties/.test(lowerStderr);
 
