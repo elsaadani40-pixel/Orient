@@ -27,6 +27,14 @@ class AgentService {
     return this.runtime.execute(clean);
   }
 
+  listExecutionSummaries(options = {}) {
+    return this.runtime.listExecutionSummaries(options);
+  }
+
+  listPendingApprovals(options = {}) {
+    return this.runtime.listPendingApprovals(options);
+  }
+
   getExecutionEvents(executionId, options = {}) {
     return this.runtime.getExecutionEvents(executionId, options);
   }
