@@ -42,6 +42,8 @@ test('systemd runner args set cgroup-wide limits, file descriptor/file size limi
   });
 
   assert.ok(args.includes('--property=CPUQuota=75%'));
+  assert.ok(args.includes('--property=LimitCPU=2'));
+  assert.ok(args.includes('--property=MemorySwapMax=0'));
   assert.ok(args.includes('--property=MemoryMax=134217728'));
   assert.ok(args.includes('--property=TasksMax=24'));
   assert.ok(args.includes('--property=LimitNOFILE=128'));
