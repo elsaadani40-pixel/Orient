@@ -86,8 +86,10 @@ class JsonMemoryRepository {
   }
 
   migrateLegacyData() {
-    // Migration is a read-modify-write operation and must serialize with inserts
-    // and updates; otherwise a stale snapshot can replace concurrent writes.
+    // Avoid lock overhead for the normal empty/new store. If legacy records
+    // exist, re-read under the lock so migration cannot overwrite concurrent writes.
+    if (!this.readRaw().length) return;
+
     return this.withLock(() => {
       const current = this.readRaw();
       if (!current.length) return;
