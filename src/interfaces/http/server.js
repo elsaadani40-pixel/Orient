@@ -44,13 +44,27 @@ function createServer({ memoryRoutes, agentRoutes }) {
     try {
       if (
         req.method === 'GET' &&
+        requestUrl.pathname === '/command-scene.js'
+      ) {
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+          'Content-Security-Policy': "default-src 'none'; script-src 'self'; base-uri 'none'"
+        });
+        res.end(require('fs').readFileSync(require('path').join(__dirname, 'command-scene.js'), 'utf8'));
+        return;
+      }
+
+      if (
+        req.method === 'GET' &&
         requestUrl.pathname === '/dashboard'
       ) {
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'X-Content-Type-Options': 'nosniff',
           'Cache-Control': 'no-store',
-          'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
+          'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
           'Referrer-Policy': 'no-referrer'
         });
         res.end(require('fs').readFileSync(require('path').join(__dirname, 'dashboard.html'), 'utf8'));
