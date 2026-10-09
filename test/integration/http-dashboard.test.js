@@ -30,6 +30,11 @@ test('dashboard route serves the local control UI with security headers', async 
   assert.match(html, /ORIENT ONE/);
   assert.match(html, /fetch\('\/agent'/);
   assert.match(html, /تعذر الاتصال بالخادم/);
+  assert.match(html, /id="orientScene"/);
+  assert.match(html, /src="\/command-scene.js"/);
+  assert.match(html, /id="loadExecutionStatus"/);
+  assert.match(html, /id="loadExecutionApprovals"/);
+  assert.match(response.headers.get('content-security-policy') || '', /script-src 'self'/);
 });
 
 test('WebGL command scene is served locally with a JavaScript content type', async (t) => {
@@ -50,6 +55,32 @@ test('WebGL command scene is served locally with a JavaScript content type', asy
   assert.match(response.headers.get('content-security-policy') || '', /script-src 'self'/);
   assert.match(source, /getContext\('webgl'/);
   assert.match(source, /CSS FALLBACK/);
+});
+
+test('execution status and approval reads dispatch through existing agent routes', async (t) => {
+  const server = createServer({
+    memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('memory'); }, add() {}, delete() {} },
+    agentRoutes: {
+      async status(_req, res, executionId) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: executionId, state: 'observed-by-test' }));
+      },
+      async approvals(_req, res, executionId) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: executionId, approvals: [] }));
+      }
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  }));
+  const address = server.address();
+  const base = `http://127.0.0.1:${address.port}`;
+  const status = await fetch(base + '/executions/exec%20one');
+  assert.deepEqual(await status.json(), { id: 'exec one', state: 'observed-by-test' });
+  const approvals = await fetch(base + '/executions/exec%20one/approvals');
+  assert.deepEqual(await approvals.json(), { id: 'exec one', approvals: [] });
 });
 
 test('dashboard does not replace the existing memory home route', async (t) => {
