@@ -380,6 +380,7 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
       toolRegistry: makeToolRegistry(),
       agentOrchestrator
     });
+    await runtimeBeforeRestart.shutdown();
     const created = runtimeBeforeRestart.workflowExecutionCoordinator.createInstance(
       'perform the owner-approved operation',
       { workflowId }
@@ -396,7 +397,6 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
       approvalId: issued.approvalId
     };
     await persistence.workflows.save(workflow, TENANT_ID);
-    await runtimeBeforeRestart.shutdown();
 
     const approvalServiceAfterRestart = new ApprovalService({
       repository: persistence.approvals,
