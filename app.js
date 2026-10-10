@@ -8,6 +8,8 @@ const MemoryService =
   require('./src/application/memory/memory.service');
 const MemoryAuditRepository =
   require('./src/infrastructure/memory/memory-audit.repository');
+const JsonAccessAuditRepository =
+  require('./src/infrastructure/security/json-access-audit.repository');
 
 const AgentRegistry =
   require('./src/core/agent/boundary/agent-registry');
@@ -120,6 +122,11 @@ const agentInvocationService =
 const memoryAuditRepository =
   new MemoryAuditRepository(
     require('path').join(config.agentDataDirectory, 'memory-audit.json')
+  );
+
+const accessAuditRepository =
+  new JsonAccessAuditRepository(
+    require('path').join(config.agentDataDirectory, 'access-audit.jsonl')
   );
 
 const memoryService =
@@ -287,13 +294,15 @@ const agentRoutes =
 const server =
   createServer({
     memoryRoutes,
-    agentRoutes
+    agentRoutes,
+    accessAudit: accessAuditRepository
   });
 
 async function start() {
   if (typeof persistenceRuntime.initialize === 'function') {
     await persistenceRuntime.initialize();
   }
+  await accessAuditRepository.initialize();
 
   server.listen(
     config.port,
