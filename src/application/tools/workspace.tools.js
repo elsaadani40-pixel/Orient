@@ -220,11 +220,9 @@ function createWorkspaceTools(projectBuilder) {
           if (!entry.isFile()) continue;
 
           visitedFiles += 1;
-          let absolutePath;
           let stats;
           try {
-            absolutePath = projectBuilder.policy.assertRead(relativePath);
-            stats = await fs.stat(absolutePath);
+            ({ stats } = await statAllowed(projectBuilder, relativePath));
           } catch (_) {
             continue;
           }
