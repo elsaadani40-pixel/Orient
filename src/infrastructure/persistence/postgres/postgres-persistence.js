@@ -629,6 +629,23 @@ class PostgresWorkflowRepository {
     return result.rows.length ? result.rows[0].payload : null;
   }
 
+  async findByApprovalExecutionId({ executionId, tenantId = null } = {}) {
+    if (!executionId) return null;
+    const values = [String(executionId)];
+    let tenantClause = '';
+    if (tenantId) {
+      values.push(tenantId);
+      tenantClause = ' AND tenant_id=$' + values.length;
+    }
+    const result = await this.db.query(
+      "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
+      "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
+      ' ORDER BY updated_at DESC LIMIT 1',
+      values
+    );
+    return result.rows.length ? result.rows[0].payload : null;
+  }
+
   async findAll({ tenantId = null } = {}) {
     const result = tenantId
       ? await this.db.query('SELECT payload FROM workflows WHERE tenant_id=$1 ORDER BY updated_at DESC', [tenantId])
