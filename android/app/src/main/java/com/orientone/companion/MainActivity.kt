@@ -163,7 +163,7 @@ private fun OrientCompanionApp() {
                                                         client = candidate
                                                         isAuthenticated = true
                                                         password = ""
-                                                        resultText = candidate.fetchExecutions()
+                                                        resultText = candidate.fetchTasks()
                                                     } catch (error: Exception) {
                                                         candidate.clearSession()
                                                         handleFailure(error)
@@ -229,8 +229,8 @@ private fun OrientCompanionApp() {
                                         isBusy = true
                                         scope.launch {
                                             try {
-                                                resultText = activeClient.fetchExecutions()
-                                                statusText = "تم تحديث سجل التنفيذات."
+                                                resultText = activeClient.fetchTasks()
+                                                statusText = "تم تحديث قائمة المهام من واجهة API الموحدة."
                                             } catch (error: Exception) {
                                                 handleFailure(error)
                                             } finally {
@@ -240,7 +240,7 @@ private fun OrientCompanionApp() {
                                     },
                                     modifier = Modifier.fillMaxWidth(),
                                     enabled = !isBusy
-                                ) { Text("تحديث سجل التنفيذات") }
+                                ) { Text("تحديث قائمة المهام") }
 
                                 TextButton(
                                     onClick = {

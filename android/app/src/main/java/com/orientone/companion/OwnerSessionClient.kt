@@ -73,6 +73,19 @@ internal class OwnerSessionClient(
         "تم تسجيل الدخول إلى ORIENT بنجاح."
     }
 
+    suspend fun fetchTasks(): String = withContext(Dispatchers.IO) {
+        val response = request("GET", "/api/v1/tasks?limit=20")
+        prettyJson(response.body)
+    }
+
+    suspend fun fetchTask(taskId: String): String = withContext(Dispatchers.IO) {
+        require(taskId.matches(Regex("[A-Za-z0-9_-]{1,200}"))) {
+            "معرّف المهمة غير صالح."
+        }
+        val response = request("GET", "/api/v1/tasks/$taskId")
+        prettyJson(response.body)
+    }
+
     suspend fun fetchExecutions(): String = withContext(Dispatchers.IO) {
         val response = request("GET", "/executions?limit=20")
         prettyJson(response.body)

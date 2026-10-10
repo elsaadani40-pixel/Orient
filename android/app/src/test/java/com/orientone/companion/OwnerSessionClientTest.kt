@@ -33,6 +33,8 @@ class OwnerSessionClientTest {
         val expiry = System.currentTimeMillis() + 60_000
         val executionRequests = AtomicInteger()
         val taskRequests = AtomicInteger()
+        val unifiedTaskRequests = AtomicInteger()
+        val taskDetailRequests = AtomicInteger()
         val logoutRequests = AtomicInteger()
         val loginMethod = AtomicReference<String?>()
         val loginOrigin = AtomicReference<String?>()
@@ -53,6 +55,19 @@ class OwnerSessionClientTest {
                         """{"ok":true,"csrfToken":"csrf-test-token","expiresAt":$expiry}""",
                         "orient_owner_session=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; Path=/; HttpOnly; SameSite=Strict"
                     )
+                }
+                "/api/v1/tasks" -> {
+                    assertEquals("GET", exchange.requestMethod)
+                    assertTrue(exchange.requestURI.rawQuery?.contains("limit=20") == true)
+                    assertTrue(exchange.requestHeaders.getFirst("Cookie")?.startsWith("orient_owner_session=") == true)
+                    unifiedTaskRequests.incrementAndGet()
+                    respond(exchange, 200, """{"apiVersion":"v1","items":[{"id":"exec-1","status":"completed"}],"page":{"limit":20,"offset":0,"total":1}}""")
+                }
+                "/api/v1/tasks/exec-1" -> {
+                    assertEquals("GET", exchange.requestMethod)
+                    assertTrue(exchange.requestHeaders.getFirst("Cookie")?.startsWith("orient_owner_session=") == true)
+                    taskDetailRequests.incrementAndGet()
+                    respond(exchange, 200, """{"apiVersion":"v1","task":{"id":"exec-1","status":"completed"}}""")
                 }
                 "/executions" -> {
                     executionCookie.set(exchange.requestHeaders.getFirst("Cookie"))
@@ -81,6 +96,9 @@ class OwnerSessionClientTest {
             assertTrue(withApiDiagnostics("login") { runBlocking { client.login("0123456789abcdef") } }.contains("بنجاح"))
             assertTrue(client.isAuthenticated)
             assertTrue(withApiDiagnostics("fetchExecutions") { runBlocking { client.fetchExecutions() } }.contains("executions"))
+            assertTrue(withApiDiagnostics("fetchTasks") { runBlocking { client.fetchTasks() } }.contains("\"apiVersion\": \"v1\""))
+            assertTrue(withApiDiagnostics("fetchTask") { runBlocking { client.fetchTask("exec-1") } }.contains("exec-1"))
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { client.fetchTask("../private") } }
             assertTrue(withApiDiagnostics("executeTask") { runBlocking { client.executeTask("test task") } }.contains("completed"))
             withApiDiagnostics("logout") { runBlocking { client.logout() } }
 
@@ -92,6 +110,8 @@ class OwnerSessionClientTest {
             assertTrue(taskBody.get()?.contains("test task") == true)
             assertEquals("csrf-test-token", logoutCsrf.get())
             assertTrue(logoutCookie.get()?.startsWith("orient_owner_session=") == true)
+            assertEquals(1, unifiedTaskRequests.get())
+            assertEquals(1, taskDetailRequests.get())
             assertEquals(1, executionRequests.get())
             assertEquals(1, taskRequests.get())
             assertEquals(1, logoutRequests.get())
