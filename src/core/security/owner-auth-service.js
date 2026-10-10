@@ -95,12 +95,11 @@ class OwnerAuthService {
       this.failures.delete(this.failures.keys().next().value);
     }
     const existing = this.failures.get(ip);
-    const count = existing && now - existing.windowStartedAt < this.lockoutMs
-      ? existing.count + 1
-      : 1;
+    const withinWindow = Boolean(existing && now - existing.windowStartedAt < this.lockoutMs);
+    const count = withinWindow ? existing.count + 1 : 1;
     this.failures.set(ip, {
       count,
-      windowStartedAt: existing?.windowStartedAt || now,
+      windowStartedAt: withinWindow ? existing.windowStartedAt : now,
       blockedUntil: count >= this.maxFailures ? now + this.lockoutMs : 0
     });
   }
