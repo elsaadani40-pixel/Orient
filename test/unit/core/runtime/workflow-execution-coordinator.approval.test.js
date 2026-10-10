@@ -39,6 +39,8 @@ async function saveApprovalBlockedWorkflow(repository, { workflowId, executionId
   instance.transition('RUNNING');
   instance.transition('WAITING');
   instance.metadata = {
+    taskId: workflowId,
+    executionId,
     approvalBlocked: true,
     approvalExecutionId: executionId,
     approvalId,
@@ -68,6 +70,8 @@ test('approved execution reconciles its blocked workflow to a durable completed 
     assert.equal(reconciled.state, WorkflowInstance.STATES.COMPLETED);
     assert.equal(reconciled.steps['agent-runtime'].state, WorkflowDefinition.STEP_STATES.COMPLETED);
     assert.equal(reconciled.steps['agent-runtime'].result.executionId, 'execution-approval-complete');
+    assert.equal(reconciled.metadata.taskId, 'workflow-approval-complete');
+    assert.equal(reconciled.metadata.executionId, 'execution-approval-complete');
     assert.equal(reconciled.metadata.approvalBlocked, false);
     assert.equal(reconciled.metadata.approvalDecisionStatus, 'approved');
 
@@ -91,6 +95,8 @@ test('approval challenge refresh and rejection update the same tenant-scoped wor
 
     assert.equal(await coordinator.updateApprovalChallenge('execution-approval-reject', 'approval-new'), true);
     const refreshed = await repository.findById('workflow-approval-reject', 'tenant-a');
+    assert.equal(refreshed.metadata.taskId, 'workflow-approval-reject');
+    assert.equal(refreshed.metadata.executionId, 'execution-approval-reject');
     assert.equal(refreshed.metadata.approvalId, 'approval-new');
     assert.equal(refreshed.metadata.approvalBlocked, true);
 
