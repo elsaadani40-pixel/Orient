@@ -244,3 +244,54 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
     assert.equal(decisionCalls[1].executionId, 'exec-123');
   }, agentRoutes);
 });
+
+
+test('owner execution never resumes or cancels when the durable approval decision cannot be recorded', async () => {
+  const actions = [];
+  const agentRoutes = {
+    async recordApprovalDecision({ decision }) {
+      throw Object.assign(new Error('decision storage unavailable'), {
+        code: 'APPROVAL_DECISION_CONFLICT'
+      });
+    },
+    async resume(_req, res) {
+      actions.push('resume');
+      res.writeHead(200);
+      res.end('{}');
+    },
+    async cancel(_req, res) {
+      actions.push('cancel');
+      res.writeHead(200);
+      res.end('{}');
+    }
+  };
+
+  await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
+    const login = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ password: PASSWORD })
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const { csrfToken } = await login.json();
+    const headers = { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken };
+
+    const resume = await request(origin, '/owner/executions/exec-guarded/resume', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ approval: { approvalId: 'approval-guarded' } })
+    });
+    assert.equal(resume.status, 409);
+    assert.equal((await resume.json()).code, 'APPROVAL_DECISION_CONFLICT');
+
+    const reject = await request(origin, '/owner/executions/exec-guarded/cancel', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ approval: { approvalId: 'approval-guarded' } })
+    });
+    assert.equal(reject.status, 409);
+    assert.equal((await reject.json()).code, 'APPROVAL_DECISION_CONFLICT');
+    assert.deepEqual(actions, [], 'execution must remain untouched if the durable decision write fails');
+  }, agentRoutes);
+});
