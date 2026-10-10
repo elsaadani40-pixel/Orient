@@ -25,6 +25,12 @@ android {
     }
 }
 
+// The JVM HttpURLConnection used by Robolectric suppresses the Origin header by default.
+// Permit it in the test JVM so the contract test exercises the same explicit header sent by the Android client.
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    jvmArgs("-Dsun.net.http.allowRestrictedHeaders=true")
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
     implementation(composeBom)
