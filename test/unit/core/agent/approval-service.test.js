@@ -99,7 +99,7 @@ test('durable approval issue fails closed when persistence fails', async () => {
 
 test('expired approval cannot be consumed after validation', async () => {
   let now = 5000;
-  const service = new ApprovalService({ clock: () => now });
+  const service = new ApprovalService({ clock: () => now, decisionAuthorizer: async () => true });
   const approval = await service.issue({
     executionId: 'exec-expiry',
     step: 1,
@@ -107,6 +107,7 @@ test('expired approval cannot be consumed after validation', async () => {
     capability: 'external.write',
     ttlMs: 100
   });
+  await service.decide({ approvalId: approval.approvalId, executionId: 'exec-expiry', decision: 'approved', actorId: 'owner-test' });
 
   assert.equal((await service.validate({
     approval,
