@@ -100,4 +100,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). Changes should be focused, tested, doc
 
 ## License
 
-No license is currently declared in this repository. Until a license is added by the project owner, do not assume that the code is licensed for reuse, redistribution, or commercial use.
+ORIENT is licensed under the [MIT License](LICENSE). The license applies to the repository's original code and documentation; third-party components remain subject to their own licenses. The `private: true` setting in `package.json` prevents accidental npm publication and does not itself grant or remove rights to the public Git repository.
