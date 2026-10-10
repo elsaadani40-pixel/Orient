@@ -81,3 +81,20 @@ test('in-memory idempotency is tenant-scoped and rejects terminal outcome confli
   assert.equal(store.delete(tenantA.key, 'tenant-a'), true);
   assert.equal(store.get(tenantA.key, 'tenant-b').status, 'failed');
 });
+
+
+test('has awaits asynchronous repository lookups instead of treating promises as records', async () => {
+  const store = new IdempotencyStore({
+    repository: {
+      async findByKey(key, { tenantId }) {
+        return key === 'known-operation' && tenantId === 'tenant-a'
+          ? { key, tenantId, status: 'running' }
+          : null;
+      }
+    }
+  });
+
+  assert.equal(await store.has('known-operation', 'tenant-a'), true);
+  assert.equal(await store.has('known-operation', 'tenant-b'), false);
+  assert.equal(await store.has('missing-operation', 'tenant-a'), false);
+});
