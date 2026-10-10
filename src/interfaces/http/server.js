@@ -262,7 +262,30 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, status, { ok: false, code, message: status < 500 ? 'تعذر اعتماد الموافقة المطلوبة.' : 'تعذر تسجيل قرار الموافقة.' });
             return;
           }
-          await agentRoutes.resume(req, res, ownerResumeMatch[1], { approval: { approvalId } });
+          try {
+            await agentRoutes.resume(req, res, ownerResumeMatch[1], { approval: { approvalId } });
+          } catch (error) {
+            if (error?.code === 'APPROVAL_REQUIRED') {
+              sendJson(res, 409, {
+                ok: false,
+                code: 'APPROVAL_REQUIRED',
+                executionId: ownerResumeMatch[1],
+                approvalId: error.executionContext?.approvalId || null,
+                message: 'التنفيذ يحتاج موافقة إضافية. حدّث قائمة الموافقات قبل المتابعة.'
+              });
+              return;
+            }
+            if (error?.code === 'APPROVAL_NOT_APPROVED') {
+              sendJson(res, 409, {
+                ok: false,
+                code: 'APPROVAL_NOT_APPROVED',
+                executionId: ownerResumeMatch[1],
+                message: 'لا يمكن استئناف التنفيذ دون قرار موافقة محفوظ يخص هذا التنفيذ.'
+              });
+              return;
+            }
+            throw error;
+          }
           return;
         }
 
