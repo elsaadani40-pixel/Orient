@@ -167,7 +167,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         const secure = req.socket?.encrypted ? '; Secure' : '';
         const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
         sendJson(res, 200, { ok: true, csrfToken: result.csrfToken, expiresAt: result.expiresAt }, {
-          'Set-Cookie': 'orient_owner_session=' + result.token + '; Path=/owner; HttpOnly; SameSite=Strict; Max-Age=' + maxAge + secure
+          'Set-Cookie': 'orient_owner_session=' + result.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + maxAge + secure
         });
         return;
       }
@@ -180,7 +180,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         if (!ownerSession) {
           authenticationOutcome = 'unauthenticated';
           sendJson(res, 401, { ok: false, code: 'OWNER_AUTH_REQUIRED', message: 'يلزم تسجيل دخول المالك.' }, {
-            'Set-Cookie': 'orient_owner_session=; Path=/owner; HttpOnly; SameSite=Strict; Max-Age=0' + (req.socket?.encrypted ? '; Secure' : '')
+            'Set-Cookie': 'orient_owner_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0' + (req.socket?.encrypted ? '; Secure' : '')
           });
           return;
         }
@@ -214,13 +214,35 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           }
           ownerAuth.logout(ownerCookie);
           sendJson(res, 200, { ok: true }, {
-            'Set-Cookie': 'orient_owner_session=; Path=/owner; HttpOnly; SameSite=Strict; Max-Age=0' + (req.socket?.encrypted ? '; Secure' : '')
+            'Set-Cookie': 'orient_owner_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0' + (req.socket?.encrypted ? '; Secure' : '')
           });
           return;
         }
 
         sendJson(res, 404, { ok: false, code: 'OWNER_ROUTE_NOT_FOUND', message: 'المسار غير موجود.' });
         return;
+      }
+
+      // In the production composition, the owner session protects every operational
+      // page and API. The standalone server tests may omit ownerAuth deliberately.
+      if (ownerAuth) {
+        if (!ownerAuth.enabled) {
+          sendJson(res, 503, { ok: false, code: 'OWNER_AUTH_NOT_CONFIGURED', message: 'لم يتم إعداد مصادقة المالك.' });
+          return;
+        }
+        if (!ownerSession) {
+          authenticationOutcome = 'unauthenticated';
+          sendJson(res, 401, { ok: false, code: 'OWNER_AUTH_REQUIRED', message: 'يلزم تسجيل دخول المالك.' }, {
+            'Set-Cookie': 'orient_owner_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0' + (req.socket?.encrypted ? '; Secure' : '')
+          });
+          return;
+        }
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !isSameOrigin(req)) {
+          authenticationOutcome = 'csrf_rejected';
+          sendJson(res, 403, { ok: false, code: 'OWNER_ORIGIN_REJECTED', message: 'تم رفض مصدر الطلب.' });
+          return;
+        }
+        authenticationOutcome = 'authenticated';
       }
 
       if (
