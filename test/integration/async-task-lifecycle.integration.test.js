@@ -252,8 +252,9 @@ test('public async task API survives restart, pauses for approval, and resumes t
       headers: resumeHeaders,
       body: { approval: { approvalId } }
     });
-    assert.equal(resumeResponse.status, 200);
-    const resumePayload = await resumeResponse.json();
+    const resumeResponseText = await resumeResponse.text();
+    assert.equal(resumeResponse.status, 200, 'owner resume failed: ' + resumeResponseText);
+    const resumePayload = JSON.parse(resumeResponseText);
     assert.equal(resumePayload.execution.executionId, canonicalExecutionId);
     assert.equal(resumePayload.execution.status, 'completed');
     assert.equal(sideEffects, 1);
