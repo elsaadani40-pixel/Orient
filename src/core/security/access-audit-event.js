@@ -44,7 +44,8 @@ function createAccessAuditEvent({
   pathname,
   statusCode,
   userAgent,
-  durationMs
+  durationMs,
+  authenticationOutcome = 'not_evaluated'
 } = {}) {
   const numericStatus = Number(statusCode);
   const numericDuration = Number(durationMs);
@@ -66,7 +67,7 @@ function createAccessAuditEvent({
     durationMs: Number.isFinite(numericDuration) && numericDuration >= 0
       ? Math.min(Math.floor(numericDuration), 86400000)
       : 0,
-    authenticationOutcome: 'not_evaluated'
+    authenticationOutcome: ['success', 'failure', 'rate_limited', 'not_configured', 'not_evaluated'].includes(authenticationOutcome) ? authenticationOutcome : 'not_evaluated'
   });
 }
 
