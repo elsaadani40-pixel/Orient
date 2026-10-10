@@ -90,6 +90,19 @@ test('public async task API survives restart, pauses for approval, and resumes t
     server.listen(0, '127.0.0.1', resolve);
   });
   const origin = 'http://127.0.0.1:' + server.address().port;
+  const loginResponse = await request(origin, '/owner/login', {
+    method: 'POST',
+    headers: { Origin: origin },
+    body: { password: OWNER_PASSWORD }
+  });
+  assert.equal(loginResponse.status, 200);
+  const cookie = loginResponse.headers.get('set-cookie').split(';')[0];
+  const loginPayload = await loginResponse.json();
+  const ownerHeaders = {
+    Origin: origin,
+    Cookie: cookie,
+    'X-ORIENT-CSRF': loginPayload.csrfToken
+  };
   const workerServices = [];
 
   const createWorkerService = scheduler => {
@@ -175,7 +188,7 @@ test('public async task API survives restart, pauses for approval, and resumes t
   try {
     const acceptedResponse = await request(origin, '/api/v1/tasks', {
       method: 'POST',
-      headers: { 'Idempotency-Key': 'async-e2e-request-0001' },
+      headers: { ...ownerHeaders, 'Idempotency-Key': 'async-e2e-request-0001' },
       body: { goal: 'perform the protected operation' }
     });
     assert.equal(acceptedResponse.status, 201);
@@ -209,14 +222,14 @@ test('public async task API survives restart, pauses for approval, and resumes t
     assert.equal(workerExecutions, 1);
     assert.equal(workerErrors.length, 0);
 
-    const statusResponse = await request(origin, '/api/v1/tasks/' + encodeURIComponent(taskId));
+    const statusResponse = await request(origin, '/api/v1/tasks/' + encodeURIComponent(taskId), { headers: ownerHeaders });
     assert.equal(statusResponse.status, 200);
     const statusPayload = await statusResponse.json();
     assert.equal(statusPayload.task.status, 'waiting');
     assert.equal(statusPayload.task.executionId, canonicalExecutionId);
     assert.equal(statusPayload.task.approvalRequired, true);
 
-    const listResponse = await request(origin, '/api/v1/tasks?limit=10&offset=0');
+    const listResponse = await request(origin, '/api/v1/tasks?limit=10&offset=0', { headers: ownerHeaders });
     assert.equal(listResponse.status, 200);
     const listPayload = await listResponse.json();
     assert.equal(listPayload.items.length, 1);
@@ -232,17 +245,8 @@ test('public async task API survives restart, pauses for approval, and resumes t
     assert.equal(workflow.state, 'WAITING');
     assert.equal(workerExecutions, 1);
 
-    const loginResponse = await request(origin, '/owner/login', {
-      method: 'POST',
-      headers: { Origin: origin },
-      body: { password: OWNER_PASSWORD }
-    });
-    assert.equal(loginResponse.status, 200);
-    const cookie = loginResponse.headers.get('set-cookie').split(';')[0];
-    const loginPayload = await loginResponse.json();
-
     const resumeRoute = '/owner/executions/' + encodeURIComponent(canonicalExecutionId) + '/resume';
-    const resumeHeaders = { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': loginPayload.csrfToken };
+    const resumeHeaders = ownerHeaders;
     const resumeResponse = await request(origin, resumeRoute, {
       method: 'POST',
       headers: resumeHeaders,
