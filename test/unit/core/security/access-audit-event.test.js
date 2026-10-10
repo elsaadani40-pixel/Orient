@@ -40,3 +40,9 @@ test('audit events omit query strings and bound client-controlled fields', () =>
   assert.equal(JSON.stringify(event).includes('not-logged'), false);
   assert.equal(routeTemplate('/executions/private-id/cancel'), '/executions/:id/cancel');
 });
+
+test('owner approval actions are classified without logging execution identifiers', () => {
+  assert.equal(routeTemplate('/owner/approvals'), '/owner/approvals');
+  assert.equal(routeTemplate('/owner/executions/exec-secret-123/resume'), '/owner/executions/:id/resume');
+  assert.equal(routeTemplate('/owner/executions/exec-secret-123/cancel'), '/owner/executions/:id/cancel');
+});
