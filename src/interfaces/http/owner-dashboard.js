@@ -103,7 +103,21 @@
     loginStatus.textContent = 'تم تسجيل الخروج.';
   });
 
-  // A reload intentionally requires re-authentication because the CSRF token is
-  // held only in memory and is never persisted to localStorage/sessionStorage.
-  setLoggedIn(false);
+  async function restoreSession() {
+    setLoggedIn(false);
+    try {
+      const result = await request('/owner/session', { method: 'GET' });
+      csrfToken = result.csrfToken;
+      setLoggedIn(true);
+      await loadAudit();
+    } catch (error) {
+      if (error.status === 503) {
+        loginStatus.textContent = 'مصادقة المالك غير مهيأة. اضبط ORIENT_OWNER_PASSWORD محليًا ثم أعد تشغيل الخدمة.';
+      }
+    }
+  }
+
+  // The server releases a CSRF token only after validating the HttpOnly session cookie.
+  // No token or password is persisted in browser storage.
+  restoreSession();
 })();
