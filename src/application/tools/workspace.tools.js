@@ -376,6 +376,9 @@ function createWorkspaceTools(projectBuilder, { operationReceiptStore = null } =
       });
 
       const changeSet = { changes };
+      if (operationReceiptStore && !hasReceiptIdentity(context)) {
+        fail('تنفيذ تغييرات المشروع يتطلب معرّف عملية ومستأجر موثوقين من Runtime', 400, 'PROJECT_OPERATION_RECEIPT_IDENTITY_REQUIRED');
+      }
       const receiptIdentity = operationReceiptStore && hasReceiptIdentity(context)
         ? {
             operationId: context.operationId,
@@ -393,6 +396,12 @@ function createWorkspaceTools(projectBuilder, { operationReceiptStore = null } =
           if (existingReceipt.workspaceId !== receiptIdentity.workspaceId ||
               existingReceipt.changeSetHash !== receiptIdentity.changeSetHash) {
             fail('معرّف العملية مرتبط بتغيير مختلف ولا يجوز إعادة استخدامه', 409, 'PROJECT_OPERATION_RECEIPT_IDENTITY_CONFLICT');
+          }
+          for (const change of changes) {
+            if (!(await projectBuilder.workspace.exists(change.path)) ||
+                (await projectBuilder.workspace.readText(change.path)) !== change.content) {
+              fail('نتيجة العملية المسجلة تغيرت لاحقًا؛ يلزم استرداد مضبوط', 409, 'PROJECT_OPERATION_RECEIPT_POST_STATE_CONFLICT');
+            }
           }
           return existingReceipt.result;
         }
