@@ -37,10 +37,11 @@ function publicApprovalSummary(value) {
 }
 
 class ApprovalService {
-  constructor({ clock = () => Date.now(), repository = null, tenantId = null } = {}) {
+  constructor({ clock = () => Date.now(), repository = null, tenantId = null, decisionAuthorizer = null } = {}) {
     this.clock = clock;
     this.repository = repository;
     this.tenantId = tenantId;
+    this.decisionAuthorizer = decisionAuthorizer;
     this.approvals = new Map();
   }
 
@@ -159,6 +160,64 @@ class ApprovalService {
           ? { summary: publicApprovalSummary(record.metadata.approvalSummary) }
           : {})
       }));
+  }
+
+
+  async decide({ approvalId, decision, actorId, tenantId = this.tenantId } = {}) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) {
+      throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    }
+    if (!['approved', 'rejected'].includes(decision)) {
+      throw Object.assign(new TypeError('decision must be approved or rejected'), { code: 'APPROVAL_DECISION_INVALID' });
+    }
+    if (typeof actorId !== 'string' || !actorId.trim()) {
+      throw Object.assign(new TypeError('actorId is required'), { code: 'APPROVAL_ACTOR_REQUIRED' });
+    }
+
+    const stored = this.repository?.findById
+      ? await this.repository.findById(approvalId, { tenantId })
+      : this.approvals.get(approvalId);
+    if (!stored) {
+      throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+    }
+    if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) {
+      throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
+    }
+    if (stored.used) {
+      throw Object.assign(new Error('Approval has already been consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    }
+    if (!stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) {
+      throw Object.assign(new Error('Approval has expired'), { code: 'APPROVAL_EXPIRED' });
+    }
+    if (typeof this.decisionAuthorizer !== 'function' ||
+        await this.decisionAuthorizer({ actorId, tenantId, decision, approval: { ...stored } }) !== true) {
+      throw Object.assign(new Error('Approval decision is not authorized'), { code: 'APPROVAL_DECISION_FORBIDDEN' });
+    }
+
+    const decisionRecord = {
+      status: decision,
+      actorId,
+      decidedAt: new Date(this.clock()).toISOString()
+    };
+    let updated;
+    if (this.repository?.recordDecision) {
+      updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId);
+    } else {
+      const current = stored.decision || null;
+      if (current && (current.status !== decision || current.actorId !== actorId)) {
+        throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      updated = current ? stored : { ...stored, decision: decisionRecord };
+      this.approvals.set(approvalId, updated);
+    }
+
+    return {
+      approvalId,
+      executionId: updated.executionId,
+      tenantId: updated.tenantId || tenantId || null,
+      decision: { ...updated.decision },
+      idempotent: Boolean(updated.decision?.decidedAt !== decisionRecord.decidedAt)
+    };
   }
 
   async consume(approvalId, tenantId = this.tenantId) {
