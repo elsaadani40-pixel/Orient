@@ -7,6 +7,8 @@
   const loginStatus = document.getElementById('login-status');
   const auditStatus = document.getElementById('audit-status');
   const auditRows = document.getElementById('audit-rows');
+  const approvalStatus = document.getElementById('approval-status');
+  const approvalItems = document.getElementById('approval-items');
   let csrfToken = null;
 
   function setLoggedIn(value) {
@@ -71,6 +73,110 @@
     }
   }
 
+  async function loadApprovals() {
+    approvalStatus.textContent = 'جارٍ تحميل الموافقات…';
+    approvalItems.replaceChildren();
+    try {
+      const result = await request('/owner/approvals?limit=50', { method: 'GET' });
+      const approvals = Array.isArray(result)
+        ? result
+        : Array.isArray(result.approvals)
+          ? result.approvals
+          : Array.isArray(result.items)
+            ? result.items
+            : [];
+
+      for (const approval of approvals) {
+        const card = document.createElement('article');
+        card.className = 'card';
+        const heading = document.createElement('h3');
+        heading.textContent = 'موافقة مطلوبة · ' + String(approval.tool || 'أداة غير معروفة');
+        const details = document.createElement('p');
+        details.className = 'muted';
+        details.textContent = [
+          'الصلاحية: ' + String(approval.capability || 'غير محددة'),
+          'التنفيذ: ' + String(approval.executionId || ''),
+          'الخطوة: ' + String(approval.step || ''),
+          'تنتهي: ' + String(approval.expiresAt || '')
+        ].join(' · ');
+        const actions = document.createElement('div');
+        actions.className = 'row';
+        const approve = document.createElement('button');
+        approve.className = 'btn';
+        approve.type = 'button';
+        approve.textContent = 'موافقة واستئناف';
+        const cancel = document.createElement('button');
+        cancel.className = 'btn secondary';
+        cancel.type = 'button';
+        cancel.textContent = 'رفض وإلغاء التنفيذ';
+
+        approve.addEventListener('click', async () => {
+          const summary = 'الأداة: ' + String(approval.tool || '') +
+            '\\nالصلاحية: ' + String(approval.capability || '') +
+            '\\nالتنفيذ: ' + String(approval.executionId || '') +
+            '\\nهل توافق على استئناف التنفيذ؟';
+          if (!window.confirm(summary)) return;
+          approve.disabled = true;
+          cancel.disabled = true;
+          approvalStatus.textContent = 'جارٍ إرسال الموافقة…';
+          try {
+            const response = await request(
+              '/owner/executions/' + encodeURIComponent(String(approval.executionId)) + '/resume',
+              { method: 'POST', body: JSON.stringify({ approval: { approvalId: approval.approvalId } }) }
+            );
+            approvalStatus.textContent = 'تم إرسال الموافقة. حالة Runtime: ' + String(response.status || 'تمت معالجة الطلب');
+            await Promise.all([loadApprovals(), loadAudit()]);
+          } catch (error) {
+            approvalStatus.textContent = error.message;
+            if (error.status === 401) {
+              csrfToken = null;
+              setLoggedIn(false);
+            }
+            approve.disabled = false;
+            cancel.disabled = false;
+          }
+        });
+
+        cancel.addEventListener('click', async () => {
+          if (!window.confirm('سيتم إلغاء التنفيذ ' + String(approval.executionId || '') + ' بدلًا من الموافقة. هل تريد المتابعة؟')) return;
+          approve.disabled = true;
+          cancel.disabled = true;
+          approvalStatus.textContent = 'جارٍ إلغاء التنفيذ…';
+          try {
+            await request(
+              '/owner/executions/' + encodeURIComponent(String(approval.executionId)) + '/cancel',
+              { method: 'POST', body: JSON.stringify({ reason: 'owner_rejected' }) }
+            );
+            approvalStatus.textContent = 'تم إرسال طلب الإلغاء.';
+            await Promise.all([loadApprovals(), loadAudit()]);
+          } catch (error) {
+            approvalStatus.textContent = error.message;
+            if (error.status === 401) {
+              csrfToken = null;
+              setLoggedIn(false);
+            }
+            approve.disabled = false;
+            cancel.disabled = false;
+          }
+        });
+
+        actions.append(approve, cancel);
+        card.append(heading, details, actions);
+        approvalItems.append(card);
+      }
+
+      approvalStatus.textContent = approvals.length
+        ? 'عدد الموافقات المعلقة: ' + approvals.length
+        : 'لا توجد موافقات معلقة.';
+    } catch (error) {
+      approvalStatus.textContent = error.message;
+      if (error.status === 401) {
+        csrfToken = null;
+        setLoggedIn(false);
+      }
+    }
+  }
+
   loginForm.addEventListener('submit', async event => {
     event.preventDefault();
     loginStatus.textContent = 'جارٍ التحقق…';
@@ -84,13 +190,14 @@
       passwordInput.value = '';
       loginStatus.textContent = '';
       setLoggedIn(true);
-      await loadAudit();
+      await Promise.all([loadAudit(), loadApprovals()]);
     } catch (error) {
       loginStatus.textContent = error.message;
     }
   });
 
   document.getElementById('refresh').addEventListener('click', loadAudit);
+  document.getElementById('refresh-approvals').addEventListener('click', loadApprovals);
   document.getElementById('logout').addEventListener('click', async () => {
     try {
       await request('/owner/logout', { method: 'POST', body: '{}' });
@@ -99,6 +206,7 @@
     }
     csrfToken = null;
     auditRows.replaceChildren();
+    approvalItems.replaceChildren();
     setLoggedIn(false);
     loginStatus.textContent = 'تم تسجيل الخروج.';
   });
@@ -109,7 +217,7 @@
       const result = await request('/owner/session', { method: 'GET' });
       csrfToken = result.csrfToken;
       setLoggedIn(true);
-      await loadAudit();
+      await Promise.all([loadAudit(), loadApprovals()]);
     } catch (error) {
       if (error.status === 503) {
         loginStatus.textContent = 'مصادقة المالك غير مهيأة. اضبط ORIENT_OWNER_PASSWORD محليًا ثم أعد تشغيل الخدمة.';
