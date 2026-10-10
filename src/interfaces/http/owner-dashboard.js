@@ -112,9 +112,9 @@
 
         approve.addEventListener('click', async () => {
           const summary = 'الأداة: ' + String(approval.tool || '') +
-            '\\nالصلاحية: ' + String(approval.capability || '') +
-            '\\nالتنفيذ: ' + String(approval.executionId || '') +
-            '\\nهل توافق على استئناف التنفيذ؟';
+            '\nالصلاحية: ' + String(approval.capability || '') +
+            '\nالتنفيذ: ' + String(approval.executionId || '') +
+            '\nهل توافق على استئناف التنفيذ؟';
           if (!window.confirm(summary)) return;
           approve.disabled = true;
           cancel.disabled = true;
