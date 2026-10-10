@@ -29,6 +29,7 @@ class OwnerAuthService {
     password = process.env.ORIENT_OWNER_PASSWORD || '',
     sessionTtlMs = 30 * 60 * 1000,
     maxFailures = 5,
+    maxSessions = 64,
     lockoutMs = 15 * 60 * 1000,
     now = () => Date.now()
   } = {}) {
@@ -40,7 +41,11 @@ class OwnerAuthService {
     }
     this.enabled = Boolean(password);
     this.sessionTtlMs = sessionTtlMs;
+    if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 4096) {
+      throw new RangeError('maxSessions must be an integer from 1 to 4096');
+    }
     this.maxFailures = maxFailures;
+    this.maxSessions = maxSessions;
     this.lockoutMs = lockoutMs;
     this.now = now;
     this.sessions = new Map();
@@ -72,6 +77,10 @@ class OwnerAuthService {
     }
 
     this.failures.delete(ip);
+    this.pruneExpiredSessions(now);
+    if (this.sessions.size >= this.maxSessions) {
+      return { ok: false, code: 'OWNER_SESSION_LIMIT_REACHED' };
+    }
     const token = randomBytes(32).toString('base64url');
     const csrfToken = randomBytes(32).toString('base64url');
     const session = {
@@ -104,7 +113,14 @@ class OwnerAuthService {
     });
   }
 
+  pruneExpiredSessions(now = this.now()) {
+    for (const [key, session] of this.sessions) {
+      if (session.expiresAt <= now) this.sessions.delete(key);
+    }
+  }
+
   authenticate(token) {
+    this.pruneExpiredSessions();
     if (typeof token !== 'string' || token.length < 40 || token.length > 100) return null;
     const key = digestToken(token);
     const session = this.sessions.get(key);
