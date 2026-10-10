@@ -86,7 +86,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
   const firstPersistence = new SqlitePersistence({ filePath });
   const firstApproval = new ApprovalService({
     repository: firstPersistence.approvals,
-    tenantId: 'tenant-a'
+    tenantId: 'tenant-a',
+    decisionAuthorizer: async () => true
   });
 
   const issued = await firstApproval.issue({
@@ -97,6 +98,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
     capability: 'sensitive.execute',
     scope: { planRevision: 2 }
   });
+
+  await firstApproval.decide({ approvalId: issued.approvalId, executionId: 'exec-approval-1', decision: 'approved', actorId: 'owner-test', tenantId: 'tenant-a' });
 
   const secondPersistence = new SqlitePersistence({ filePath });
   const secondApproval = new ApprovalService({
