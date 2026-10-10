@@ -368,11 +368,21 @@ class MemoryService {
 
       const compensateConflictOperation = originalError => {
         const rollbackErrors = [];
-        if (inserted && typeof this.repository.deleteById === 'function') {
-          try {
-            this.repository.deleteById(inserted.id, tenantId, scope);
-          } catch (rollbackError) {
-            rollbackErrors.push({ operation: 'delete-inserted-memory', message: rollbackError.message });
+        if (inserted) {
+          if (typeof this.repository.deleteById !== 'function') {
+            rollbackErrors.push({
+              operation: 'delete-inserted-memory',
+              message: 'Repository does not support deleteById compensation'
+            });
+          } else {
+            try {
+              const deleted = this.repository.deleteById(inserted.id, tenantId, scope);
+              if (!deleted) {
+                throw new Error(`Inserted memory ${inserted.id} could not be removed during rollback`);
+              }
+            } catch (rollbackError) {
+              rollbackErrors.push({ operation: 'delete-inserted-memory', message: rollbackError.message });
+            }
           }
         }
         if (conflictWasUpdated && conflictSnapshot) {
