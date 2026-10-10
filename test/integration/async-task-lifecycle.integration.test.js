@@ -457,12 +457,9 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
     assert.equal(acceptedTask.status, 'queued');
 
     // Simulate the worker's durable approval pause after public task acceptance.
-    const created = runtimeAfterRestart.workflowExecutionCoordinator.createInstance(
-      'perform the owner-approved operation',
-      { workflowId }
-    );
-    const workflow = created.instance;
-    workflow.transition('QUEUED');
+    const persistedWorkflow = await persistence.workflows.findById(workflowId, TENANT_ID);
+    assert.ok(persistedWorkflow, 'public task must be durably stored before approval pause');
+    const workflow = require('../../src/core/workflow/workflow-instance').fromJSON(persistedWorkflow);
     workflow.transition('RUNNING');
     workflow.transition('WAITING');
     workflow.metadata = {
