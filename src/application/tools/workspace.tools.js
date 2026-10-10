@@ -287,8 +287,27 @@ function createWorkspaceTools(projectBuilder) {
     risk: 'low',
     execute: async (input, context = {}) => {
       const payload = inputObject(input);
-      const proposals = Array.isArray(payload.proposals) ? payload.proposals : [];
-      if (proposals.length > MAX_CHANGES) fail('عدد التغييرات يتجاوز الحد المسموح', 413, 'CHANGE_SET_TOO_LARGE');
+      const rawProposals = Array.isArray(payload.proposals) ? payload.proposals : [];
+      if (rawProposals.length > MAX_CHANGES) fail('عدد التغييرات يتجاوز الحد المسموح', 413, 'CHANGE_SET_TOO_LARGE');
+
+      const proposals = rawProposals.map(proposal => {
+        if (!proposal || typeof proposal !== 'object') fail('صيغة الاقتراح غير صالحة', 400, 'CHANGE_PROPOSAL_INVALID');
+        if (proposal.action !== 'create' && proposal.action !== 'update') fail('الإجراء المسموح هو create أو update', 400, 'CHANGE_ACTION_INVALID');
+        const relativePath = normalizeRelativePath(proposal.path);
+        assertAllowedPath(relativePath);
+        if (typeof proposal.content !== 'string' || Buffer.byteLength(proposal.content, 'utf8') > MAX_CHANGE_BYTES) {
+          fail('محتوى الاقتراح غير صالح أو أكبر من الحد الآمن', 413, 'CHANGE_CONTENT_TOO_LARGE');
+        }
+        if (proposal.action === 'update' && !/^[a-f0-9]{64}$/i.test(String(proposal.expectedContentSha256 || ''))) {
+          fail('تحديث الملف يتطلب expectedContentSha256', 400, 'CHANGE_PRECONDITION_REQUIRED');
+        }
+        return {
+          action: proposal.action,
+          path: relativePath,
+          content: proposal.content,
+          ...(proposal.action === 'update' ? { expectedContentSha256: proposal.expectedContentSha256.toLowerCase() } : {})
+        };
+      });
 
       const goal = String(payload.goal || context.goal || context.plan?.intent || 'Review the current project.').trim().slice(0, 500);
       const buildPlan = await projectBuilder.plan({ goal });
@@ -357,7 +376,9 @@ function createWorkspaceTools(projectBuilder) {
       }];
 
       const result = await projectBuilder.execute({
-        plan: payload.buildPlan || null,
+        plan: payload.buildPlan || await projectBuilder.plan({
+          goal: String(payload.goal || 'Apply the explicit approved change set.').trim().slice(0, 500)
+        }),
         changeSet,
         definitionOfDone,
         checks
