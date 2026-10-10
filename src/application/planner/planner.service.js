@@ -24,7 +24,7 @@ class PlannerService {
           messages: [
             {
               role: 'system',
-              content: 'You are ORIENT ONE planner. Return ONLY valid JSON with intent, confidence, reason, and steps. Each step must contain tool, input, and dependsOn. Never invent tools. Available tools include memory.search, memory.list, memory.add, memory.delete, workspace.read, workspace.list, workspace.search, project.audit, project.propose_changes, and project.execute_change. Workspace tools operate only inside the configured project root and exclude credential/private-data paths. Use PROJECT_BUILDER_AGENT for project/workspace tools. project.execute_change is high-risk: only propose explicit file changes with expectedContentSha256 for updates; execution must remain subject to human approval and verification.'
+              content: 'You are ORIENT ONE planner. Return ONLY valid JSON with intent, confidence, reason, and steps. The confidence field is an uncalibrated model-reported score, not a probability or validated measure. Each step must contain tool, input, and dependsOn. Never invent tools. Available tools include memory.search, memory.list, memory.add, memory.delete, workspace.read, workspace.list, workspace.search, project.audit, project.propose_changes, and project.execute_change. Workspace tools operate only inside the configured project root and exclude credential/private-data paths. Use PROJECT_BUILDER_AGENT for project/workspace tools. project.execute_change is high-risk: only propose explicit file changes with expectedContentSha256 for updates; execution must remain subject to human approval and verification.'
             },
             {
               role: 'user',
@@ -293,6 +293,9 @@ class PlannerService {
     );
     const normalized = {
       ...plan,
+      confidenceBasis: plan.routing
+        ? 'model-reported-uncalibrated'
+        : 'rule-match-heuristic',
       agentId: usesWorkspaceTools
         ? 'PROJECT_BUILDER_AGENT'
         : plan.agentId || this.resolveAgentId(plan.intent || '')
@@ -386,7 +389,40 @@ class PlannerService {
   extractProjectChangeProposal(text) {
     const value = String(text || '').trim();
     if (!/(اقترح|اقتراح|حلل.*مشكلة|change proposal|propose.*change|improvement|التغيير المقترح|proposed change)/i.test(value) || (!/(المشروع|المستودع|repository|project|التغيير المقترح|proposed change)/i.test(value))) return null;
-    const wantsExecution = /(نفذ|apply|implement)/i.test(value); const steps = [{ step: 1, tool: 'project.propose_changes', input: null, dependsOn: null, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.read' }]; if (wantsExecution) steps.push({ step: 2, tool: 'project.execute_change', input: '$previousResult', dependsOn: 1, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.write' }); return { intent: wantsExecution ? 'project.change' : 'project.change.proposal', tool: 'project.propose_changes', input: null, agentId: 'PROJECT_BUILDER_AGENT', confidence: 0.99, reason: wantsExecution ? 'تنفيذ التغيير المقترح بعد التفويض' : 'إنتاج Change Proposal بدون تنفيذ', steps };
+    const wantsExecution = /(نفذ|apply|implement)/i.test(value);
+    const steps = [
+      {
+        step: 1,
+        tool: 'project.propose_changes',
+        input: null,
+        dependsOn: null,
+        agentId: 'PROJECT_BUILDER_AGENT',
+        capability: 'workspace.read'
+      }
+    ];
+
+    if (wantsExecution) {
+      steps.push({
+        step: 2,
+        tool: 'project.execute_change',
+        input: '$previousResult',
+        dependsOn: 1,
+        agentId: 'PROJECT_BUILDER_AGENT',
+        capability: 'workspace.write'
+      });
+    }
+
+    return {
+      intent: wantsExecution ? 'project.change' : 'project.change.proposal',
+      tool: 'project.propose_changes',
+      input: null,
+      agentId: 'PROJECT_BUILDER_AGENT',
+      confidence: 0.99,
+      reason: wantsExecution
+        ? 'تنفيذ التغيير المقترح بعد التفويض'
+        : 'إنتاج Change Proposal بدون تنفيذ',
+      steps
+    };
   }
   extractProjectAudit(text) {
     const value = String(text || '').trim();
