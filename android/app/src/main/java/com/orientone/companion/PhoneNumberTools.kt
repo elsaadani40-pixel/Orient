@@ -11,7 +11,7 @@ import android.provider.ContactsContract
 object PhoneNumberTools {
     fun sanitize(raw: String): String? {
         val value = raw.trim()
-        if (value.isEmpty() || value.any { !(it.isDigit() || it in "+ ().-\\t") }) return null
+        if (value.isEmpty() || value.any { !(it.isDigit() || it in "+ ().-\t") }) return null
 
         val compact = value.filter { it.isDigit() || it == '+' }
         if (compact.count { it == '+' } > 1 || (compact.length > 1 && compact.drop(1).contains('+'))) return null
