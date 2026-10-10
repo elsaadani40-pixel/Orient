@@ -1,5 +1,10 @@
 const crypto = require('crypto');
 
+function isApprovalExpired(expiresAt, now) {
+  const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : NaN;
+  return !Number.isFinite(expiry) || now >= expiry;
+}
+
 function publicApprovalSummary(value) {
   if (!value || typeof value !== 'object') return null;
   if (value.kind === 'file_change' && Array.isArray(value.changes)) {
@@ -82,7 +87,7 @@ class ApprovalService {
     if (!stored) return { allowed: false, reason: 'APPROVAL_NOT_FOUND' };
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return { allowed: false, reason: 'APPROVAL_TENANT_MISMATCH' };
     if (stored.used) return { allowed: false, reason: 'APPROVAL_ALREADY_USED' };
-    if (this.clock() >= Date.parse(stored.expiresAt)) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
+    if (isApprovalExpired(stored.expiresAt, this.clock())) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
     if (stored.executionId !== String(executionId) || stored.step !== step || stored.planRevision !== planRevision || stored.tool !== tool || stored.capability !== capability) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     if (agentId && stored.metadata?.agentId !== agentId) return { allowed: false, reason: 'APPROVAL_AGENT_MISMATCH' };
     if (operationId && stored.metadata?.operationId !== operationId) return { allowed: false, reason: 'APPROVAL_OPERATION_MISMATCH' };
@@ -101,7 +106,7 @@ class ApprovalService {
     for (const candidate of candidates) {
       if (!candidate || candidate.used || candidate.decision?.status !== 'approved') continue;
       if (tenantId && candidate.tenantId !== tenantId && candidate.metadata?.tenantId !== tenantId) continue;
-      if (!candidate.expiresAt || this.clock() >= Date.parse(candidate.expiresAt)) continue;
+      if (isApprovalExpired(candidate.expiresAt, this.clock())) continue;
       return { ...candidate };
     }
     return null;
@@ -119,7 +124,7 @@ class ApprovalService {
     return candidates
       .filter(record => record && (!tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId))
       .filter(record => !record.used)
-      .filter(record => !record.expiresAt || this.clock() < Date.parse(record.expiresAt))
+      .filter(record => !isApprovalExpired(record.expiresAt, this.clock()))
       .map(record => ({
         approvalId: record.approvalId,
         executionId: record.executionId,
@@ -206,7 +211,7 @@ class ApprovalService {
     if (stored.used) {
       throw Object.assign(new Error('Approval has already been consumed'), { code: 'APPROVAL_ALREADY_USED' });
     }
-    if (!stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) {
+    if (isApprovalExpired(stored.expiresAt, this.clock())) {
       throw Object.assign(new Error('Approval has expired'), { code: 'APPROVAL_EXPIRED' });
     }
 
