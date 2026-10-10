@@ -338,3 +338,41 @@ test('project execution requires runtime operation identity before mutating the 
     assert.equal(await fs.readFile(path.join(root, 'src/main.js'), 'utf8'), original);
   }, { allowWrite: true });
 });
+
+
+test('project receipt for one tenant cannot authorize another tenant with the same operation ID', async () => {
+  await withWorkspace(async ({ root, tools, operationReceiptStore, projectBuilder }) => {
+    const execute = tools.find(tool => tool.name === 'project.execute_change');
+    const original = await fs.readFile(path.join(root, 'src/main.js'), 'utf8');
+    const proposed = "const marker = 'tenant-scoped-receipt';\\nmodule.exports = marker;\\n";
+    const changes = [{
+      action: 'update',
+      path: 'src/main.js',
+      content: proposed,
+      expectedContentSha256: crypto.createHash('sha256').update(original, 'utf8').digest('hex')
+    }];
+    await fs.writeFile(path.join(root, 'src/main.js'), proposed, 'utf8');
+    const result = {
+      status: 'verified',
+      changes: [{ action: 'update', path: 'src/main.js' }],
+      verification: { status: 'passed', failed: 0, passed: 1 },
+      policy: { allowed: true },
+      rollback: null,
+      error: null
+    };
+    operationReceiptStore.write({
+      operationId: 'shared-operation-id',
+      tenantId: 'tenant-a',
+      workspaceId: crypto.createHash('sha256').update(path.resolve(projectBuilder.policy.realAllowedRoot), 'utf8').digest('hex'),
+      changeSetHash: crypto.createHash('sha256').update(JSON.stringify(changes), 'utf8').digest('hex'),
+      result
+    });
+
+    const reconciled = await execute.reconcile({ changeSet: { changes } }, {
+      operationId: 'shared-operation-id',
+      tenantId: 'tenant-b'
+    });
+    assert.equal(reconciled.status, 'conflict');
+    assert.equal(reconciled.reason, 'operation_receipt_missing');
+  });
+});
