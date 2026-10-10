@@ -172,3 +172,41 @@ test('approval repository refuses to consume pending, rejected, expired, or malf
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('approval repository rechecks expiry at decision and consumption commit time', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-commit-expiry-'));
+  const repo = new ApprovalRepository(path.join(dir, 'approvals.json'));
+  const now = Date.now();
+  const expiresAt = new Date(now + 1000).toISOString();
+  const base = {
+    step: 1, planRevision: 1, tool: 'danger.write', capability: 'external.write',
+    expiresAt, used: false, tenantId: 'tenant-a', metadata: { tenantId: 'tenant-a' }
+  };
+  try {
+    await repo.save({ ...base, approvalId: 'decision-race', executionId: 'execution-decision-race' }, { tenantId: 'tenant-a' });
+    await assert.rejects(
+      () => repo.recordDecision('decision-race', {
+        status: 'approved', actorId: 'owner-a', decidedAt: new Date(now).toISOString()
+      }, 'tenant-a', () => now + 1001),
+      error => error.code === 'APPROVAL_EXPIRED'
+    );
+    assert.equal((await repo.findById('decision-race', { tenantId: 'tenant-a' })).decision, undefined);
+
+    await repo.save({
+      ...base,
+      approvalId: 'consume-race',
+      executionId: 'execution-consume-race',
+      decision: { status: 'approved', actorId: 'owner-a', decidedAt: new Date(now).toISOString() }
+    }, { tenantId: 'tenant-a' });
+    assert.equal(await repo.consume(
+      'consume-race',
+      new Date(now + 999).toISOString(),
+      'tenant-a',
+      () => now + 1001
+    ), false);
+    assert.equal((await repo.findById('consume-race', { tenantId: 'tenant-a' })).used, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
