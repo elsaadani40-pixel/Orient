@@ -261,3 +261,64 @@ test('approval decision fails closed when no decision authorizer is configured',
   );
 });
 
+
+
+test('pending and rejected approvals cannot authorize tools or be recovered for resume', async () => {
+  const service = new ApprovalService({
+    tenantId: 'tenant-approval-gate',
+    clock: () => 1000,
+    decisionAuthorizer: async () => true
+  });
+  const pending = await service.issue({
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-approval-gate',
+    ttlMs: 10000
+  });
+
+  const validation = await service.validate({
+    approval: { approvalId: pending.approvalId },
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-approval-gate'
+  });
+  assert.equal(validation.allowed, false);
+  assert.equal(validation.reason, 'APPROVAL_NOT_APPROVED');
+  assert.equal(await service.findReusable({
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    tenantId: 'tenant-approval-gate'
+  }), null);
+
+  await service.decide({
+    approvalId: pending.approvalId,
+    executionId: 'exec-pending-gate',
+    decision: 'rejected',
+    actorId: 'owner-gate',
+    tenantId: 'tenant-approval-gate'
+  });
+  assert.equal((await service.validate({
+    approval: { approvalId: pending.approvalId },
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-approval-gate'
+  })).reason, 'APPROVAL_REJECTED');
+  assert.equal(await service.getApprovedForExecution({
+    approvalId: pending.approvalId,
+    executionId: 'exec-pending-gate',
+    tenantId: 'tenant-approval-gate'
+  }), null);
+  assert.equal(await service.findReusable({
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    tenantId: 'tenant-approval-gate'
+  }), null);
+});
