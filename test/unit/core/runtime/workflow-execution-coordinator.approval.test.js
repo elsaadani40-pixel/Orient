@@ -10,6 +10,7 @@ const WorkflowDefinition = require('../../../../src/core/workflow/workflow-defin
 const WorkflowInstance = require('../../../../src/core/workflow/workflow-instance');
 const WorkflowRepository = require('../../../../src/infrastructure/persistence/json/workflow.repository');
 const WorkflowExecutionCoordinator = require('../../../../src/core/runtime/workflow-execution-coordinator');
+const WorkflowScheduler = require('../../../../src/core/workflow/workflow-scheduler');
 
 function createCoordinator(root) {
   const repository = new WorkflowRepository(path.join(root, 'workflows.json'));
@@ -153,6 +154,55 @@ test('approval challenge refresh and rejection update the same tenant-scoped wor
     assert.equal(cancelled.metadata.cancellationReason, 'owner_rejected');
 
     assert.equal(await coordinator.updateApprovalChallenge('execution-approval-reject', 'approval-late'), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('synchronous workflow coordinator durably pauses and indexes an approval challenge', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sync-workflow-approval-e2e-'));
+  try {
+    const repository = new WorkflowRepository(path.join(root, 'workflows.json'));
+    const scheduler = new WorkflowScheduler({
+      workflowRepository: repository,
+      tenantId: 'tenant-a',
+      maxRetries: 3
+    });
+    const coordinator = new WorkflowExecutionCoordinator({
+      scheduler,
+      workflowRepository: repository,
+      tenantId: 'tenant-a',
+      executeRequest: async () => {
+        throw Object.assign(new Error('Human approval is required'), {
+          code: 'APPROVAL_REQUIRED',
+          executionContext: {
+            executionId: 'execution-sync-coordinator',
+            approvalId: 'approval-sync-coordinator'
+          }
+        });
+      }
+    });
+
+    const result = await coordinator.execute('perform guarded work');
+
+    assert.equal(result.type, 'workflow_waiting');
+    assert.equal(result.state, 'WAITING');
+    assert.equal(result.execution.metadata.approvalBlocked, true);
+    assert.equal(result.execution.metadata.taskId, result.workflowId);
+    assert.equal(result.execution.metadata.approvalExecutionId, 'execution-sync-coordinator');
+    assert.equal(result.execution.metadata.approvalId, 'approval-sync-coordinator');
+    assert.equal(result.execution.steps['agent-runtime'].state, WorkflowDefinition.STEP_STATES.PENDING);
+    assert.equal(result.execution.retry.attempt, 0);
+
+    const persisted = await repository.findByApprovalExecutionId({
+      executionId: 'execution-sync-coordinator',
+      tenantId: 'tenant-a'
+    });
+    assert.equal(persisted.workflowId, result.workflowId);
+    assert.equal(persisted.state, 'WAITING');
+    assert.equal(persisted.metadata.approvalBlocked, true);
+    assert.equal(persisted.metadata.approvalId, 'approval-sync-coordinator');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
