@@ -36,7 +36,7 @@ Response: `{ "apiVersion": "v1", "task": { "id": "...", "status": "...", "create
 
 The implemented slice validates the owner session/origin, bounds the request body and goal, routes through the existing AgentService and canonical Runtime, and uses the durable idempotency repository. Repeating the same key and same normalized goal replays the stored task summary; reusing a key for a different goal returns `409 IDEMPOTENCY_KEY_REUSED`; an in-progress or previously failed key returns a conflict rather than rerunning side effects. Responses use `201` for the first request and `200` for a completed replay.
 
-**Important implementation limit:** this endpoint currently awaits the canonical runtime execution synchronously and returns the observed task state. It is not yet a queue-acceptance API, and it does not claim asynchronous dispatch. It fails closed when the configured persistence adapter does not provide durable idempotency storage. Async task acceptance, rate limiting, and a PostgreSQL idempotency repository remain follow-up work.
+**Important implementation limit:** this endpoint currently awaits the canonical runtime execution synchronously and returns the observed task state. It is not yet a queue-acceptance API, and it does not claim asynchronous dispatch. It fails closed when the configured persistence adapter does not provide durable idempotency storage. Both the JSON and PostgreSQL persistence adapters expose durable idempotency repositories; PostgreSQL storage is covered by the dedicated real-database integration contract tests. Async task acceptance, rate limiting, and end-to-end Android synchronization remain follow-up work.
 
 `GET /api/v1/tasks` lists only the caller's authorized tasks, with cursor pagination and bounded page size.
 
