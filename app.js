@@ -42,8 +42,8 @@ const createWorkspaceTools =
 const OrientRuntime =
   require('./src/core/runtime/orient-runtime');
 
-const RuntimeShutdownCoordinator =
-  require('./src/core/runtime/runtime-shutdown-coordinator');
+const createProductionShutdownCoordinator =
+  require('./src/core/runtime/production-shutdown-composition');
 
 const AgentService =
   require('./src/application/agent/agent.service');
@@ -411,14 +411,13 @@ start().catch((error) => {
   process.exitCode = 1;
 });
 
-const shutdownCoordinator = new RuntimeShutdownCoordinator({
+const shutdownCoordinator = createProductionShutdownCoordinator({
   server,
   runtime,
   persistenceRuntime,
   eventStoreSubscriber,
-  // Production remains synchronous by default. If async workers are wired into
-  // this composition later, they must be injected here so they drain before
-  // runtime shutdown and persistence close.
+  // Production remains synchronous by default. Keep this null until all async
+  // side-effect adapter gates are proven and the worker is deliberately enabled.
   workerService: null,
   onError: (error, stage) => {
     logger.error('Graceful shutdown stage failed', {
