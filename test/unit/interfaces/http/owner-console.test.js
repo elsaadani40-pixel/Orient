@@ -129,3 +129,33 @@ test('owner endpoints fail closed until a password is configured', async () => {
     assert.equal((await response.json()).code, 'OWNER_AUTH_NOT_CONFIGURED');
   });
 });
+
+test('operational dashboard and APIs require the owner session in production composition', async () => {
+  await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
+    const deniedDashboard = await request(origin, '/dashboard');
+    assert.equal(deniedDashboard.status, 401);
+    const deniedAgent = await request(origin, '/agent', {
+      method: 'POST',
+      body: JSON.stringify({ input: 'must not execute' })
+    });
+    assert.equal(deniedAgent.status, 401);
+
+    const login = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ password: PASSWORD })
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+
+    const dashboard = await request(origin, '/dashboard', { headers: { Cookie: cookie } });
+    assert.equal(dashboard.status, 200);
+
+    const crossOriginMutation = await request(origin, '/agent', {
+      method: 'POST',
+      headers: { Cookie: cookie, Origin: 'https://attacker.example' },
+      body: JSON.stringify({ input: 'must not execute' })
+    });
+    assert.equal(crossOriginMutation.status, 403);
+  });
+});
