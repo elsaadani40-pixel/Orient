@@ -174,3 +174,88 @@ test('memory reconciliation fails closed without the durable transaction coordin
     reason: 'durable_operation_receipts_unavailable'
   });
 });
+
+
+test('memory.delete reconciliation survives process exit after archive commit and remains tenant-scoped', t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
+  const created = fixture.service.add('delete crash-window reconciliation test', {}, {
+    tenantId: 'tenant-delete-crash',
+    memoryScope: 'personal',
+    operationId: 'operation-create-before-delete-crash'
+  });
+  const root = path.resolve(__dirname, '../../../../');
+  const script = `
+    const root = ${JSON.stringify(root)};
+    const directory = ${JSON.stringify(fixture.directory)};
+    const memoryId = ${JSON.stringify(created.id)};
+    const path = require('node:path');
+    const Coordinator = require(path.join(root, 'src/infrastructure/memory/memory-transaction-coordinator'));
+    const Repository = require(path.join(root, 'src/infrastructure/memory/json-memory.repository'));
+    const AuditRepository = require(path.join(root, 'src/infrastructure/memory/memory-audit.repository'));
+    const Service = require(path.join(root, 'src/application/memory/memory.service'));
+    const coordinator = new Coordinator({
+      memoryFile: path.join(directory, 'memory.json'),
+      auditFile: path.join(directory, 'memory-audit.json'),
+      journalFile: path.join(directory, 'memory-transaction-journal.json')
+    });
+    coordinator.recover();
+    const service = new Service(
+      new Repository(path.join(directory, 'memory.json')),
+      { auditRepository: new AuditRepository(path.join(directory, 'memory-audit.json')), transactionCoordinator: coordinator }
+    );
+    service.delete(memoryId, {
+      tenantId: 'tenant-delete-crash',
+      memoryScope: 'personal',
+      operationId: 'operation-delete-crash'
+    });
+    // Simulate process termination after the archive transaction committed,
+    // but before AgentLoop could commit its operation result.
+    process.exit(23);
+  `;
+  const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  assert.equal(child.status, 23, child.stderr || child.stdout);
+
+  const coordinator = new MemoryTransactionCoordinator({
+    memoryFile: path.join(fixture.directory, 'memory.json'),
+    auditFile: path.join(fixture.directory, 'memory-audit.json'),
+    journalFile: path.join(fixture.directory, 'memory-transaction-journal.json')
+  });
+  assert.deepEqual(coordinator.recover(), { recovered: false, phase: null });
+  const restartedService = new MemoryService(
+    new JsonMemoryRepository(path.join(fixture.directory, 'memory.json')),
+    {
+      auditRepository: new MemoryAuditRepository(path.join(fixture.directory, 'memory-audit.json')),
+      transactionCoordinator: coordinator
+    }
+  );
+  const deleteInput = { id: created.id };
+  const deleteContext = {
+    tenantId: 'tenant-delete-crash',
+    memoryScope: 'personal',
+    operationId: 'operation-delete-crash'
+  };
+
+  const reconciled = restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext);
+  assert.deepEqual(reconciled, { status: 'completed', result: true });
+  assert.deepEqual(
+    restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext),
+    reconciled,
+    'repeated resume must return the same committed deletion result'
+  );
+  assert.equal(
+    restartedService.reconcileToolOperation('memory.delete', deleteInput, {
+      ...deleteContext,
+      tenantId: 'tenant-other'
+    }).status,
+    'unknown',
+    'the same operation ID must not expose another tenant receipt'
+  );
+  const receipts = restartedService.auditRepository.findByOperationId(
+    'operation-delete-crash',
+    'tenant-delete-crash',
+    'personal'
+  );
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].action, 'memory.archived');
+});
