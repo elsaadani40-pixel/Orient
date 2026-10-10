@@ -2,12 +2,12 @@
 
 ## Status and scope
 
-The dashboard is a local-first operations interface served by the existing HTTP server at \`/dashboard\`. It is not a separate runtime and does not execute tools directly. All execution, cancellation, resume, authorization, approval validation, and persistence remain owned by the canonical ORIENT Runtime and its services.
+The dashboard is a local-first operations interface served by the existing HTTP server at `/dashboard`. It is not a separate runtime and does not execute tools directly. All execution, cancellation, resume, authorization, approval validation, and persistence remain owned by the canonical ORIENT Runtime and its services.
 
 The dashboard currently provides:
 
 - HTTP reachability and renderer status, reported separately.
-- Task submission through \`POST /agent\`.
+- Task submission through `POST /agent`.
 - Tenant-scoped execution history with summary-only fields.
 - Read-only status and pending-approval queries.
 - A durable per-execution Server-Sent Events (SSE) stream.
@@ -22,24 +22,24 @@ It does **not** yet provide a global live graph across all executions, an all-te
 
 From the repository root, install dependencies and run the automated tests:
 
-\`\`\`bash
+```bash
 npm ci
 npm test
 npm run check:syntax
-\`\`\`
+```
 
-Before starting the server, set \`ORIENT_OWNER_PASSWORD\` to a unique secret of at least 16 characters. Plain \`node app.js\` does not automatically load \`.env\`. If you store the secret in your ignored local \`.env\` file, copy \`.env.example\` to \`.env\`, edit the secret locally, and load it into the shell before starting Node:
+Before starting the server, set `ORIENT_OWNER_PASSWORD` to a unique secret of at least 16 characters. Plain `node app.js` does not automatically load `.env`. If you store the secret in your ignored local `.env` file, copy `.env.example` to `.env`, edit the secret locally, and load it into the shell before starting Node:
 
-\`\`\`bash
+```bash
 cp .env.example .env
 # Edit .env and set ORIENT_OWNER_PASSWORD to your own private 16+ character secret.
 set -a
 . ./.env
 set +a
 node app.js
-\`\`\`
+```
 
-Without this setting, \`/owner\` displays a configuration error and the protected dashboard and operational APIs fail closed. Open \`http://127.0.0.1:8080/owner\`, sign in, then follow the link to \`/dashboard\`. The default server binding is loopback-only (\`127.0.0.1\`). The root path \`/\` remains the existing memory interface.
+Without this setting, `/owner` displays a configuration error and the protected dashboard and operational APIs fail closed. Open `http://127.0.0.1:8080/owner`, sign in, then follow the link to `/dashboard`. The default server binding is loopback-only (`127.0.0.1`). The root path `/` remains the existing memory interface.
 
 The dashboard uses same-origin HTTP requests and introduces no CDN, external analytics, or new frontend package dependency. Task input fields are capped at 5,000 characters to match the runtime service's current input limit.
 
@@ -47,37 +47,37 @@ The dashboard uses same-origin HTTP requests and introduces no CDN, external ana
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | \`/dashboard\` | Serve the local dashboard |
-| GET | \`/command-scene.js\` | Serve the local WebGL renderer |
-| POST | \`/agent\` | Submit a task to the canonical runtime |
-| GET | \`/executions?limit=50&offset=0\` | Read a bounded page of execution summaries |
-| GET | \`/executions/:id\` | Read tenant-scoped durable execution status |
-| GET | \`/executions/:id/approvals\` | Read pending approvals for one execution |
-| GET | \`/executions/:id/events\` | Stream that execution's durable events using SSE |
-| POST | \`/executions/:id/cancel\` | Persist a cooperative cancellation request |
-| POST | \`/executions/:id/resume\` | Resume a durable checkpoint through runtime policy |
-| GET | \`/approvals/pending?limit=100\` | Read the tenant-scoped pending approval inbox |
+| GET | `/dashboard` | Serve the local dashboard |
+| GET | `/command-scene.js` | Serve the local WebGL renderer |
+| POST | `/agent` | Submit a task to the canonical runtime |
+| GET | `/executions?limit=50&offset=0` | Read a bounded page of execution summaries |
+| GET | `/executions/:id` | Read tenant-scoped durable execution status |
+| GET | `/executions/:id/approvals` | Read pending approvals for one execution |
+| GET | `/executions/:id/events` | Stream that execution's durable events using SSE |
+| POST | `/executions/:id/cancel` | Persist a cooperative cancellation request |
+| POST | `/executions/:id/resume` | Resume a durable checkpoint through runtime policy |
+| GET | `/approvals/pending?limit=100` | Read the tenant-scoped pending approval inbox |
 
-Read APIs use \`Cache-Control: no-store\`. Execution-history pagination is bounded to at most 100 entries per page and offsets are capped. The SSE replay window is bounded to 200 stored events; if a reconnect cursor is no longer available, the server emits a reset notification and replays the latest 50 events.
+Read APIs use `Cache-Control: no-store`. Execution-history pagination is bounded to at most 100 entries per page and offsets are capped. The SSE replay window is bounded to 200 stored events; if a reconnect cursor is no longer available, the server emits a reset notification and replays the latest 50 events.
 
 ## Event stream contract
 
 The server verifies that the requested execution exists in the configured tenant before opening the stream. The stream:
 
-- Sends \`text/event-stream\` and a retry hint.
-- Uses event IDs so browser \`EventSource\` reconnections can send \`Last-Event-ID\`.
+- Sends `text/event-stream` and a retry hint.
+- Uses event IDs so browser `EventSource` reconnections can send `Last-Event-ID`.
 - Replays events after the supplied cursor when it remains in the bounded window.
 - Emits heartbeat comments while idle and cleans up timers when the response closes.
-- Sends only an allowlisted envelope: event ID/type, execution ID, goal ID, timestamp, sequence, and selected scalar fields (\`step\`, \`stepId\`, \`tool\`, \`status\`, \`errorCode\`).
+- Sends only an allowlisted envelope: event ID/type, execution ID, goal ID, timestamp, sequence, and selected scalar fields (`step`, `stepId`, `tool`, `status`, `errorCode`).
 - Does not stream raw task inputs, arbitrary event payloads, or execution results.
 
-The dashboard renders event strings through \`textContent\`, limits its visible timeline to 50 rows, and limits the 3D graph to six recent event nodes. Unknown or unavailable status is not converted into a fabricated success state.
+The dashboard renders event strings through `textContent`, limits its visible timeline to 50 rows, and limits the 3D graph to six recent event nodes. Unknown or unavailable status is not converted into a fabricated success state.
 
 ## Human controls
 
 ### Pending approval
 
-The inbox shows the tool, capability, step, execution ID, and expiry. The user must confirm the operation in the browser before the dashboard submits \`{ approval: { approvalId } }\` to \`POST /executions/:id/resume\`. The runtime's durable approval service remains authoritative; the UI does not mint or broaden permissions. A stale, expired, used, or scope-mismatched approval must fail at the runtime boundary.
+The inbox shows the tool, capability, step, execution ID, and expiry. The user must confirm the operation in the browser before the dashboard submits `{ approval: { approvalId } }` to `POST /executions/:id/resume`. The runtime's durable approval service remains authoritative; the UI does not mint or broaden permissions. A stale, expired, used, or scope-mismatched approval must fail at the runtime boundary.
 
 ### Cancellation
 
@@ -93,14 +93,14 @@ A future scale stage should add indexed cursor pagination and retention policies
 
 ## Security boundary
 
-The HTTP bind policy accepts only \`127.0.0.1\`, \`::1\`, or \`localhost\`. Startup fails closed for wildcard or remote \`HOST\` values because the current HTTP interface does not provide a complete remote-user authentication/session layer. Remote binding remains unsupported until an authentication boundary and transport protection are implemented and tested. Same-origin requests and CSP headers are not substitutes for authentication.
+The HTTP bind policy accepts only `127.0.0.1`, `::1`, or `localhost`. Startup fails closed for wildcard or remote `HOST` values because the current HTTP interface does not provide a complete remote-user authentication/session layer. Remote binding remains unsupported until an authentication boundary and transport protection are implemented and tested. Same-origin requests and CSP headers are not substitutes for authentication.
 
 Approval and cancellation controls are consequential operations. Keep runtime policy checks in place, review the tool/capability details, and never infer that a successful HTTP response proves a downstream side effect has completed.
 
 ## Manual smoke checklist
 
-1. Run \`npm test\` and \`npm run check:syntax\`.
-2. Start the app and open \`/dashboard\`; verify the status distinguishes server reachability from renderer state.
+1. Run `npm test` and `npm run check:syntax`.
+2. Start the app and open `/dashboard`; verify the status distinguishes server reachability from renderer state.
 3. Submit a benign task and verify the actual server response is shown.
 4. Open the security view and load execution history; verify summary fields do not include raw inputs/results.
 5. Select a real execution ID; verify status and approval reads use the real APIs.
@@ -109,7 +109,7 @@ Approval and cancellation controls are consequential operations. Keep runtime po
 8. On a test execution only, request cancellation and verify the returned cancellation state.
 9. On a deliberately created pending approval in a safe test environment, verify that canceling the browser confirmation sends no request; confirming sends the approval ID through the runtime resume route.
 10. Disable WebGL in browser settings or use a browser without WebGL; verify the CSS fallback and event timeline remain available.
-11. Test a narrow mobile viewport and \`prefers-reduced-motion: reduce\`.
+11. Test a narrow mobile viewport and `prefers-reduced-motion: reduce`.
 12. Never use a real high-risk tool or production data as the first manual smoke test.
 
 ## Evidence
