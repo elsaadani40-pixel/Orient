@@ -95,8 +95,14 @@ class OwnerAuthService {
       createdAt: now,
       expiresAt: now + this.sessionTtlMs
     };
-    this.sessions.set(digestToken(token), session);
-    this.persistState();
+    const tokenDigest = digestToken(token);
+    this.sessions.set(tokenDigest, session);
+    try {
+      this.persistState();
+    } catch (error) {
+      this.sessions.delete(tokenDigest);
+      throw error;
+    }
     return {
       ok: true,
       token,
@@ -126,21 +132,34 @@ class OwnerAuthService {
     let raw;
     try { raw = fs.readFileSync(this.stateFile, 'utf8'); }
     catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    const corrupt = message => Object.assign(new Error(message), { code: 'OWNER_AUTH_STATE_CORRUPT' });
+    if (raw.length > 2 * 1024 * 1024) throw corrupt('Owner authentication state exceeds the size limit');
     let state;
     try { state = JSON.parse(raw); }
-    catch (_) { throw Object.assign(new Error('Owner authentication state is corrupt'), { code: 'OWNER_AUTH_STATE_CORRUPT' }); }
-    if (state?.version !== 1 || !Array.isArray(state.sessions) || !Array.isArray(state.failures)) {
-      throw Object.assign(new Error('Owner authentication state has an unsupported schema'), { code: 'OWNER_AUTH_STATE_CORRUPT' });
+    catch (_) { throw corrupt('Owner authentication state is corrupt'); }
+    if (state?.version !== 1 || !Array.isArray(state.sessions) || !Array.isArray(state.failures) ||
+        state.sessions.length > 4096 || state.failures.length > 1024) {
+      throw corrupt('Owner authentication state has an unsupported schema or exceeds limits');
     }
+    const now = this.now();
     for (const item of state.sessions) {
-      if (!item || typeof item.digest !== 'string' || !/^[a-f0-9]{64}$/.test(item.digest) || typeof item.id !== 'string' || typeof item.csrfToken !== 'string' || !Number.isFinite(item.createdAt) || !Number.isFinite(item.expiresAt)) {
-        throw Object.assign(new Error('Owner authentication session state is invalid'), { code: 'OWNER_AUTH_STATE_CORRUPT' });
+      if (!item || typeof item.digest !== 'string' || !/^[a-f0-9]{64}$/.test(item.digest) ||
+          typeof item.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.id) ||
+          typeof item.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(item.csrfToken) ||
+          !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 ||
+          !Number.isSafeInteger(item.expiresAt) || item.expiresAt <= item.createdAt ||
+          this.sessions.has(item.digest)) {
+        throw corrupt('Owner authentication session state is invalid');
       }
-      if (item.expiresAt > this.now()) this.sessions.set(item.digest, { id: item.id, csrfToken: item.csrfToken, createdAt: item.createdAt, expiresAt: item.expiresAt });
+      if (item.expiresAt > now) this.sessions.set(item.digest, { id: item.id, csrfToken: item.csrfToken, createdAt: item.createdAt, expiresAt: item.expiresAt });
     }
     for (const item of state.failures) {
-      if (!item || typeof item.ip !== 'string' || !Number.isInteger(item.count) || !Number.isFinite(item.windowStartedAt) || !Number.isFinite(item.blockedUntil)) {
-        throw Object.assign(new Error('Owner authentication failure state is invalid'), { code: 'OWNER_AUTH_STATE_CORRUPT' });
+      if (!item || typeof item.ip !== 'string' || item.ip.length < 1 || item.ip.length > 64 ||
+          !Number.isInteger(item.count) || item.count < 1 || item.count > 100000 ||
+          !Number.isSafeInteger(item.windowStartedAt) || item.windowStartedAt < 0 ||
+          !Number.isSafeInteger(item.blockedUntil) || item.blockedUntil < 0 ||
+          this.failures.has(item.ip)) {
+        throw corrupt('Owner authentication failure state is invalid');
       }
       this.failures.set(item.ip, { count: item.count, windowStartedAt: item.windowStartedAt, blockedUntil: item.blockedUntil });
     }
