@@ -54,3 +54,33 @@ test('owner auth uses bounded per-IP failure lockout and clears it after a succe
   assert.equal((await auth.login({ password: 'a-strong-owner-password-2026', sourceIp: '192.0.2.1' })).code, 'OWNER_LOGIN_RATE_LIMITED');
   assert.equal((await auth.login({ password: 'a-strong-owner-password-2026', sourceIp: '192.0.2.2' })).ok, true);
 });
+
+test('owner auth caps active sessions and prunes expired sessions before rejecting login', async () => {
+  let now = 1000;
+  const password = 'a-strong-owner-password-2026';
+  const auth = new OwnerAuthService({
+    password,
+    sessionTtlMs: 1000,
+    maxSessions: 1,
+    now: () => now
+  });
+
+  const first = await auth.login({ password, sourceIp: '127.0.0.1' });
+  assert.equal(first.ok, true);
+  const capped = await auth.login({ password, sourceIp: '127.0.0.2' });
+  assert.deepEqual(capped, { ok: false, code: 'OWNER_SESSION_LIMIT_REACHED' });
+  assert.equal(auth.sessions.size, 1);
+
+  now += 1001;
+  const afterExpiry = await auth.login({ password, sourceIp: '127.0.0.3' });
+  assert.equal(afterExpiry.ok, true);
+  assert.equal(auth.sessions.size, 1);
+  assert.equal(auth.authenticate(first.token), null);
+});
+
+test('owner auth rejects invalid session capacity configuration', () => {
+  assert.throws(
+    () => new OwnerAuthService({ password: 'a-strong-owner-password-2026', maxSessions: 0 }),
+    error => error instanceof RangeError
+  );
+});
