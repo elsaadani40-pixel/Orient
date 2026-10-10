@@ -371,7 +371,7 @@ test('memory.delete archive receipt prevents duplicate deletion after workflow l
     const recovered = await secondWorker.tick();
     assert.ok(recovered);
     assert.equal(recovered.state, WorkflowInstance.STATES.COMPLETED);
-    assert.equal(operationRepository.records.size, 2, 'the seed and delete are separate tenant-scoped operations');
+    assert.equal(operationRepository.records.size, 1, 'only the delete is executed through AgentLoop in this test');
     const finalReceipts = restarted.auditRepository.findByOperationId(
       operationRecord.operationId, tenantId, 'personal'
     );
