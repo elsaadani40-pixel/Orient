@@ -78,3 +78,35 @@ test('memory.delete restores the prior active state when the archive audit appen
     fixture.cleanup();
   }
 });
+
+test('memory.add restores the original record when duplicate reinforcement audit fails', () => {
+  const fixture = createFixture();
+  try {
+    const original = fixture.service.add('same fact', {
+      type: 'note',
+      confidence: 0.6
+    }, fixture.context);
+    const originalAppend = fixture.audit.append.bind(fixture.audit);
+    fixture.audit.append = event => {
+      if (event.action === 'memory.reinforced') {
+        throw new Error('injected reinforcement audit failure');
+      }
+      return originalAppend(event);
+    };
+
+    assert.throws(
+      () => fixture.service.add('same fact', {
+        type: 'note',
+        confidence: 0.99
+      }, fixture.context),
+      error => error.code === 'INVALID_MEMORY' && /injected reinforcement audit failure/.test(error.message)
+    );
+
+    const persisted = fixture.repository.findById(original.id, 'tenant-a', 'personal');
+    assert.equal(persisted.confidence, original.confidence);
+    assert.deepEqual(persisted.evidence, original.evidence);
+    assert.equal(persisted.updatedAt, original.updatedAt);
+  } finally {
+    fixture.cleanup();
+  }
+});
