@@ -308,7 +308,13 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         return;
       }
 
-      const v1TaskMatch = requestUrl.pathname.match(new RegExp('^/api/v1/tasks/([A-Za-z0-9_-]{1,200})
+      const v1TaskPrefix = '/api/v1/tasks/';
+      const v1TaskId = requestUrl.pathname.startsWith(v1TaskPrefix)
+        ? requestUrl.pathname.slice(v1TaskPrefix.length)
+        : '';
+      const v1TaskMatch = v1TaskId && /^[A-Za-z0-9_-]{1,200}$/.test(v1TaskId)
+        ? [requestUrl.pathname, v1TaskId]
+        : null;
       if (req.method === 'GET' && v1TaskMatch) {
         await agentRoutes.task(req, res, v1TaskMatch[1]);
         return;
