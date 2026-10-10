@@ -192,7 +192,7 @@ class ApprovalRepository {
   }
 
 
-  async recordDecision(approvalId, decision, tenantId = null, now = Date.now()) {
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now()) {
     if (!approvalId) throw new TypeError('approvalId is required');
     if (!decision || !['approved', 'rejected'].includes(decision.status) ||
         typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
@@ -217,7 +217,8 @@ class ApprovalRepository {
       }
       if (record.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
       const expiresAt = typeof record.expiresAt === 'string' ? Date.parse(record.expiresAt) : NaN;
-      if (!Number.isFinite(expiresAt) || now >= expiresAt) {
+      const decisionNow = typeof now === 'function' ? now() : now;
+      if (!Number.isFinite(expiresAt) || !Number.isFinite(decisionNow) || decisionNow >= expiresAt) {
         throw Object.assign(new Error('Approval expired or has an invalid expiry timestamp'), { code: 'APPROVAL_EXPIRED' });
       }
       records[approvalId] = { ...record, decision: { ...decision } };
@@ -226,7 +227,7 @@ class ApprovalRepository {
     });
   }
 
-  async consume(approvalId, usedAt, tenantId = null) {
+  async consume(approvalId, usedAt, tenantId = null, now = () => Date.now()) {
     if (!approvalId) return false;
 
     return this.withLock(() => {
@@ -235,14 +236,16 @@ class ApprovalRepository {
       if (!record) return false;
       if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) return false;
       if (record.used || record.decision?.status !== 'approved') return false;
-      const consumedAt = typeof usedAt === 'string' ? Date.parse(usedAt) : NaN;
+      const requestedAt = typeof usedAt === 'string' ? Date.parse(usedAt) : NaN;
+      const consumedAt = typeof now === 'function' ? now() : now;
       const expiresAt = typeof record.expiresAt === 'string' ? Date.parse(record.expiresAt) : NaN;
-      if (!Number.isFinite(consumedAt) || !Number.isFinite(expiresAt) || consumedAt >= expiresAt) return false;
+      if (!Number.isFinite(requestedAt) || !Number.isFinite(consumedAt) ||
+          !Number.isFinite(expiresAt) || requestedAt >= expiresAt || consumedAt >= expiresAt) return false;
 
       records[approvalId] = {
         ...record,
         used: true,
-        usedAt
+        usedAt: new Date(consumedAt).toISOString()
       };
       this.write(records);
       return true;
