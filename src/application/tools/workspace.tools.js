@@ -470,16 +470,18 @@ function createWorkspaceTools(projectBuilder) {
       }
 
       if (alreadyApplied === changes.length) {
+        // Matching file contents prove only the current post-state, not that this
+        // logical operation produced it. Another operation or a user may have
+        // independently written identical bytes. Until a durable, tenant-scoped
+        // operation receipt is available, never mark this as completed.
         return {
-          status: 'completed',
-          result: {
-            status: 'success',
-            changes: changes.map(({ action, path: changePath }) => ({ action, path: changePath })),
-            verification: { passed: true, reconciled: true, checkedFiles: changes.length },
-            policy: { allowed: true, reconciled: true },
-            rollback: null,
-            error: null
-          }
+          status: 'conflict',
+          reason: 'operation_receipt_missing',
+          observations: changes.map(({ action, path: changePath }) => ({
+            action,
+            path: changePath,
+            postStateMatches: true
+          }))
         };
       }
 

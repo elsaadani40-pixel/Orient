@@ -107,16 +107,17 @@ test('workspace read rejects symlinks even when their target is inside the root'
 });
 
 
-test('project change reconciliation recognizes an already-applied change without writing again', async () => {
+test('project change reconciliation does not infer operation completion from matching file contents alone', async () => {
   await withWorkspace(async ({ root, tools }) => {
     const execute = tools.find(tool => tool.name === 'project.execute_change');
-    const original = await fs.readFile(path.join(root, 'src', 'main.js'), 'utf8');
-    const proposed = "const marker = 'recovered';\nmodule.exports = marker;\n";
+    const original = await fs.readFile(path.join(root, 'src/main.js'), 'utf8');
+    const proposed = "const marker = 'recovered';\\nmodule.exports = marker;\\n";
     const expectedContentSha256 = crypto.createHash('sha256').update(original, 'utf8').digest('hex');
 
-    // Model a crash after the filesystem commit but before the idempotency ledger
-    // records the operation as completed.
-    await fs.writeFile(path.join(root, 'src', 'main.js'), proposed, 'utf8');
+    // Model a crash after the filesystem commit but before local idempotency
+    // completion. Identical bytes are not an authoritative operation receipt:
+    // another writer could have independently produced the same content.
+    await fs.writeFile(path.join(root, 'src/main.js'), proposed, 'utf8');
     const result = await execute.reconcile({
       changeSet: {
         changes: [{
@@ -126,12 +127,12 @@ test('project change reconciliation recognizes an already-applied change without
           expectedContentSha256
         }]
       }
-    }, {});
+    }, { operationId: 'operation-after-crash', tenantId: 'tenant-a' });
 
-    assert.equal(result.status, 'completed');
-    assert.equal(result.result.verification.reconciled, true);
-    assert.equal(result.result.verification.checkedFiles, 1);
-    assert.equal(await fs.readFile(path.join(root, 'src', 'main.js'), 'utf8'), proposed);
+    assert.equal(result.status, 'conflict');
+    assert.equal(result.reason, 'operation_receipt_missing');
+    assert.equal(result.observations[0].postStateMatches, true);
+    assert.equal(await fs.readFile(path.join(root, 'src/main.js'), 'utf8'), proposed);
   });
 });
 
