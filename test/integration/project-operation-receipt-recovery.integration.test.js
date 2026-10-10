@@ -153,6 +153,7 @@ test('project operation receipt reconciles a crash after filesystem verification
     assert.equal(operationRecord.status, 'running', 'the simulated crash must leave local completion uncommitted');
 
     const restored = ExecutionContext.restore(firstContext.snapshot());
+    const repeatedResumeSnapshot = restored.snapshot();
     const recovered = await loop.run({
       plan,
       context: restored,
@@ -170,7 +171,7 @@ test('project operation receipt reconciles a crash after filesystem verification
 
     const repeatedResume = await loop.run({
       plan,
-      context: ExecutionContext.restore(restored.snapshot()),
+      context: ExecutionContext.restore(repeatedResumeSnapshot),
       runtimeContext: { tenantId, planRevision: 1 }
     });
     assert.equal(repeatedResume.status, 'done');
