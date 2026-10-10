@@ -284,6 +284,16 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
               });
               return;
             }
+            if (error?.code === 'APPROVAL_EXPIRED') {
+              sendJson(res, 409, {
+                ok: false,
+                code: 'APPROVAL_EXPIRED',
+                executionId: ownerResumeMatch[1],
+                approvalId: error.approvalId || approvalId,
+                message: 'انتهت صلاحية الموافقة؛ تم إيقاف التنفيذ وتحديث حالته.'
+              });
+              return;
+            }
             throw error;
           }
           return;
