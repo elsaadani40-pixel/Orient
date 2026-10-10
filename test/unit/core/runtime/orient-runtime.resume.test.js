@@ -507,3 +507,89 @@ test('real runtime restart reconciles an approval-blocked workflow from a durabl
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('durable approval decision survives ApprovalService reconstruction and remains scope-bound', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approved-decision-restart-'));
+  try {
+    const JsonPersistence = require('../../../../src/infrastructure/persistence/json/json-persistence');
+    const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
+    const persistence = new JsonPersistence({ rootDir: directory });
+    const tenantId = 'tenant-approval-restart';
+    const executionId = 'execution-approval-decision-restart';
+    const ownerActorId = 'owner-session-restart';
+
+    const approvalServiceBeforeRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId,
+      decisionAuthorizer: async ({ actorId }) => actorId === ownerActorId
+    });
+    const issued = await approvalServiceBeforeRestart.issue({
+      executionId,
+      step: 2,
+      planRevision: 3,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { resourceId: 'resource-42' },
+      tenantId,
+      ttlMs: 60000
+    });
+
+    const decision = await approvalServiceBeforeRestart.decide({
+      approvalId: issued.approvalId,
+      executionId,
+      decision: 'approved',
+      actorId: ownerActorId,
+      tenantId
+    });
+    assert.equal(decision.decision.status, 'approved');
+
+    // Reconstruct the service against the same durable repository as after a process restart.
+    const approvalServiceAfterRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId,
+      decisionAuthorizer: async ({ actorId }) => actorId === ownerActorId
+    });
+    const restored = await approvalServiceAfterRestart.getApprovedForExecution({
+      approvalId: issued.approvalId,
+      executionId,
+      tenantId
+    });
+    assert.equal(restored.decision.status, 'approved');
+    assert.equal(restored.decision.actorId, ownerActorId);
+
+    const valid = await approvalServiceAfterRestart.validate({
+      approval: { approvalId: issued.approvalId },
+      executionId,
+      step: 2,
+      planRevision: 3,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { resourceId: 'resource-42' },
+      tenantId
+    });
+    assert.equal(valid.allowed, true);
+
+    const wrongScope = await approvalServiceAfterRestart.validate({
+      approval: { approvalId: issued.approvalId },
+      executionId,
+      step: 2,
+      planRevision: 3,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { resourceId: 'resource-other' },
+      tenantId
+    });
+    assert.equal(wrongScope.allowed, false);
+    assert.equal(wrongScope.reason, 'APPROVAL_SCOPE_MISMATCH');
+
+    assert.equal(await approvalServiceAfterRestart.consume(issued.approvalId, tenantId), true);
+    assert.equal(await approvalServiceAfterRestart.getApprovedForExecution({
+      approvalId: issued.approvalId,
+      executionId,
+      tenantId
+    }), null, 'consumed approvals must not be reusable after restart');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
