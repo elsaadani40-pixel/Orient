@@ -154,6 +154,11 @@ class ApprovalRepository {
       if (existing && tenantId && existing.tenantId !== tenantId && existing.metadata?.tenantId !== tenantId) {
         throw Object.assign(new Error('Approval tenant collision'), { code: 'APPROVAL_TENANT_MISMATCH' });
       }
+      if (existing) {
+        throw Object.assign(new Error('Approval identifier already exists; durable records cannot be replaced'), {
+          code: 'APPROVAL_ALREADY_EXISTS'
+        });
+      }
       records[approval.approvalId] = JSON.parse(JSON.stringify(approval));
       this.write(records);
       return JSON.parse(JSON.stringify(records[approval.approvalId]));
