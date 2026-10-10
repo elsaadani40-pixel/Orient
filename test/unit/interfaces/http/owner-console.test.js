@@ -273,5 +273,5 @@ test('authenticated owner can submit a same-origin task through the protected da
     assert.equal(submitted.status, 202);
     assert.deepEqual(await submitted.json(), { accepted: true, executionId: 'exec-smoke-1' });
     assert.deepEqual(dispatched, ['{"input":"run a harmless smoke-test task"}']);
-  });
+  }, agentRoutes);
 });
