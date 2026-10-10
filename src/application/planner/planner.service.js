@@ -24,7 +24,7 @@ class PlannerService {
           messages: [
             {
               role: 'system',
-              content: 'You are ORIENT ONE planner. Return ONLY valid JSON with intent, confidence, reason, and steps. Each step must contain tool, input, and dependsOn. Never invent tools. Prefer memory.search, memory.list, memory.add, memory.delete when applicable.'
+              content: 'You are ORIENT ONE planner. Return ONLY valid JSON with intent, confidence, reason, and steps. Each step must contain tool, input, and dependsOn. Never invent tools. Available tools include memory.search, memory.list, memory.add, memory.delete, workspace.read, workspace.list, workspace.search, project.audit, project.propose_changes, and project.execute_change. Workspace tools operate only inside the configured project root and exclude credential/private-data paths. Use PROJECT_BUILDER_AGENT for project/workspace tools. project.execute_change is high-risk: only propose explicit file changes with expectedContentSha256 for updates; execution must remain subject to human approval and verification.'
             },
             {
               role: 'user',
@@ -66,6 +66,15 @@ class PlannerService {
 
     const projectAudit = this.extractProjectAudit(text);
     if (projectAudit) return this.normalizePlan(projectAudit);
+
+    const workspaceSearch = this.extractWorkspaceSearch(text);
+    if (workspaceSearch) return this.normalizePlan(workspaceSearch);
+
+    const workspaceRead = this.extractWorkspaceRead(text);
+    if (workspaceRead) return this.normalizePlan(workspaceRead);
+
+    const workspaceList = this.extractWorkspaceList(text);
+    if (workspaceList) return this.normalizePlan(workspaceList);
 
     const multiStepPlan =
       this.extractMultiStepPlan(text);
@@ -275,9 +284,18 @@ class PlannerService {
       );
     }
 
+    const toolNames = [
+      plan.tool,
+      ...(Array.isArray(plan.steps) ? plan.steps.map(step => step?.tool) : [])
+    ].filter(tool => typeof tool === 'string');
+    const usesWorkspaceTools = toolNames.some(tool =>
+      tool.startsWith('workspace.') || tool.startsWith('project.')
+    );
     const normalized = {
       ...plan,
-      agentId: plan.agentId || this.resolveAgentId(plan.intent || '')
+      agentId: usesWorkspaceTools
+        ? 'PROJECT_BUILDER_AGENT'
+        : plan.agentId || this.resolveAgentId(plan.intent || '')
     };
 
     if (Array.isArray(plan.steps)) {
@@ -428,6 +446,58 @@ class PlannerService {
     }
 
     return null;
+  }
+
+  extractWorkspaceSearch(text) {
+    const value = String(text || '').trim();
+    const arabic = value.match(/(?:ابحث|فتش|دور|دوّر)\\s+(?:داخل|في)\\s+(?:ملفات|الملفات|المشروع|المستودع)\\s+(?:عن\\s+)?(.+)/i);
+    const english = value.match(/(?:search|find|grep)\\s+(?:for\\s+)?(.+?)\\s+(?:in|inside)\\s+(?:the\\s+)?(?:files|workspace|repository|project)\\b/i)
+      || value.match(/(?:search|find|grep)\\s+(?:in|inside)\\s+(?:the\\s+)?(?:files|workspace|repository|project)\\s+(?:for\\s+)?(.+)/i);
+    const query = (arabic?.[1] || english?.[1] || '').trim();
+    if (query.length < 2) return null;
+    return {
+      intent: 'workspace.search',
+      tool: 'workspace.search',
+      input: query,
+      agentId: 'PROJECT_BUILDER_AGENT',
+      confidence: 0.99,
+      reason: 'بحث نصي داخل ملفات مساحة العمل المسموحة',
+      steps: [{ step: 1, tool: 'workspace.search', input: query, dependsOn: null, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.read' }]
+    };
+  }
+
+  extractWorkspaceRead(text) {
+    const value = String(text || '').trim();
+    const arabic = value.match(/(?:اقرأ|اعرض\\s+محتوى|افتح)\\s+(?:(?:ال)?ملف\\s+)?[\\"'\x60]?([^\\s\\"'\x60،,؟]+)/i);
+    const english = value.match(/(?:read|open|show)\\s+(?:the\\s+)?file\\s+[\\"'\x60]?([^\\s\\"'\x60,?]+)/i);
+    const relativePath = (arabic?.[1] || english?.[1] || '').trim();
+    if (!relativePath || relativePath === 'الملف' || relativePath === 'file') return null;
+    return {
+      intent: 'workspace.read',
+      tool: 'workspace.read',
+      input: { path: relativePath },
+      agentId: 'PROJECT_BUILDER_AGENT',
+      confidence: 0.98,
+      reason: 'قراءة ملف داخل مساحة العمل المسموحة',
+      steps: [{ step: 1, tool: 'workspace.read', input: { path: relativePath }, dependsOn: null, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.read' }]
+    };
+  }
+
+  extractWorkspaceList(text) {
+    const value = String(text || '').trim();
+    const arabic = value.match(/(?:اعرض|استعرض|سرد)\\s+(?:ملفات|الملفات|محتويات\\s+المجلد)(?:\\s+(?:في|داخل)\\s+([^\\s]+))?/i);
+    const english = value.match(/(?:list|show)\\s+(?:the\\s+)?(?:files|directory|contents)(?:\\s+(?:in|of)\\s+([^\\s]+))?/i);
+    if (!arabic && !english) return null;
+    const relativePath = (arabic?.[1] || english?.[1] || '.').trim();
+    return {
+      intent: 'workspace.list',
+      tool: 'workspace.list',
+      input: { path: relativePath },
+      agentId: 'PROJECT_BUILDER_AGENT',
+      confidence: 0.97,
+      reason: 'عرض ملفات مساحة العمل المسموحة',
+      steps: [{ step: 1, tool: 'workspace.list', input: { path: relativePath }, dependsOn: null, agentId: 'PROJECT_BUILDER_AGENT', capability: 'workspace.read' }]
+    };
   }
 
   extractMemoryQuery(text) {
