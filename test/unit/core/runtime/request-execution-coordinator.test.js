@@ -572,12 +572,13 @@ test('resume fails closed before tool execution when a pending approval has no d
 
   let executionAttempts = 0;
   let leaseReleases = 0;
+  let recoveryFailures = 0;
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {},
     agentExecutionCoordinator: {
       run: async () => { executionAttempts += 1; }
     },
-    recoveryCoordinator: { fail: async () => {} },
+    recoveryCoordinator: { fail: async () => { recoveryFailures += 1; } },
     persistence: {
       executions: { findById: async () => null },
       checkpoints: {
@@ -608,5 +609,6 @@ test('resume fails closed before tool execution when a pending approval has no d
     error => error.code === 'APPROVAL_NOT_APPROVED'
   );
   assert.equal(executionAttempts, 0, 'a guarded tool must not run before a durable approval decision');
+  assert.equal(recoveryFailures, 0, 'missing approval must not convert a waiting execution into a failed execution');
   assert.equal(leaseReleases, 1, 'the resume lease must be released after fail-closed rejection');
 });
