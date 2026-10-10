@@ -222,7 +222,7 @@ test('task workbench serves a responsive Arabic task console and same-origin API
   const page = await fetch(origin + '/workbench');
   const html = await page.text();
   assert.equal(page.status, 200);
-  assert.match(page.headers.get('content-type') || '', /text\\/html; charset=utf-8/);
+  assert.ok((page.headers.get('content-type') || '').includes('text/html; charset=utf-8'));
   assert.equal(page.headers.get('cache-control'), 'no-store');
   assert.equal(page.headers.get('x-frame-options'), 'DENY');
   assert.match(page.headers.get('content-security-policy') || '', /connect-src 'self'/);
@@ -231,15 +231,15 @@ test('task workbench serves a responsive Arabic task console and same-origin API
   assert.match(html, /id="taskForm"/);
   assert.match(html, /id="taskList"/);
   assert.match(html, /id="taskEvents"/);
-  assert.match(html, /src="\\/workbench.js"/);
+  assert.ok(html.includes('src="/workbench.js"'));
 
   const script = await fetch(origin + '/workbench.js');
   const source = await script.text();
   assert.equal(script.status, 200);
-  assert.match(script.headers.get('content-type') || '', /application\\/javascript; charset=utf-8/);
+  assert.ok((script.headers.get('content-type') || '').includes('application/javascript; charset=utf-8'));
   assert.match(script.headers.get('content-security-policy') || '', /default-src 'none'/);
   assert.match(source, /POST/);
-  assert.match(source, /\\/api\\/v1\\/tasks/);
+  assert.ok(source.includes('/api/v1/tasks'));
   assert.match(source, /Idempotency-Key/);
   assert.match(source, /textContent/);
   assert.doesNotMatch(source, /innerHTML/);
