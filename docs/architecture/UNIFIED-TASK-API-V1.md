@@ -1,4 +1,4 @@
-# ORIENT ONE Unified Task API — v1 Contract
+# ORIENT Unified Task API — v1 Contract
 
 **Status:** proposed contract; not implemented merely by this document. Runtime handlers and clients must be wired and tested before any endpoint is advertised as available.
 
