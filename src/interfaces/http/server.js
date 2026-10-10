@@ -1,8 +1,10 @@
 const http = require('http');
+const { randomUUID } = require('node:crypto');
 const { URL } = require('url');
 
 const AppError = require('../../core/errors/AppError');
 const logger = require('../../core/logging/logger');
+const { createAccessAuditEvent } = require('../../core/security/access-audit-event');
 
 function readBody(req, maxBytes = 1024 * 1024) {
   return new Promise((resolve, reject) => {
@@ -34,12 +36,31 @@ function readBody(req, maxBytes = 1024 * 1024) {
   });
 }
 
-function createServer({ memoryRoutes, agentRoutes }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null }) {
   return http.createServer(async (req, res) => {
+    const requestStartedAt = Date.now();
+    const requestId = randomUUID();
     const requestUrl = new URL(
       req.url,
       'http://localhost'
     );
+
+    res.setHeader('X-Request-ID', requestId);
+    res.on('finish', () => {
+      if (!accessAudit || typeof accessAudit.record !== 'function') return;
+      const event = createAccessAuditEvent({
+        requestId,
+        sourceIp: req.socket?.remoteAddress,
+        method: req.method,
+        pathname: requestUrl.pathname,
+        statusCode: res.statusCode,
+        userAgent: req.headers['user-agent'],
+        durationMs: Date.now() - requestStartedAt
+      });
+      Promise.resolve(accessAudit.record(event)).catch(() => {
+        logger.error('Access audit write failed', { code: 'ACCESS_AUDIT_WRITE_FAILED' });
+      });
+    });
 
     try {
       if (
