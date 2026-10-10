@@ -191,13 +191,13 @@ test('approval decisions require authorization and persist one immutable tenant-
 
     authorized = true;
     const decided = await service.decide({
-      approvalId: approval.approvalId, executionId: 'exec-no-authorizer', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+      approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
     });
     assert.equal(decided.decision.status, 'approved');
     assert.equal(decided.decision.actorId, 'owner-a');
 
     const replay = await service.decide({
-      approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+      approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
     });
     assert.equal(replay.decision.status, 'approved');
     assert.equal(replay.idempotent, true);
@@ -226,7 +226,7 @@ test('approval decision fails closed when no decision authorizer is configured',
     capability: 'external.write', tenantId: 'tenant-a', ttlMs: 10000
   });
   await assert.rejects(
-    () => service.decide({ approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
+    () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-no-authorizer', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
     error => error.code === 'APPROVAL_DECISION_FORBIDDEN'
   );
 });
