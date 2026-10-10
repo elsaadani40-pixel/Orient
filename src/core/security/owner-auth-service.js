@@ -19,8 +19,8 @@ function digestToken(token) {
 }
 
 function safeEqual(left, right) {
-  const a = Buffer.from(String(left || ''));
-  const b = Buffer.from(String(right || ''));
+  const a = Buffer.isBuffer(left) ? left : Buffer.from(String(left || ''));
+  const b = Buffer.isBuffer(right) ? right : Buffer.from(String(right || ''));
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
