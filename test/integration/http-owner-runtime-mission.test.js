@@ -195,4 +195,42 @@ test('authenticated dashboard request completes a harmless mission through the r
   assert.equal(detail.task.id, created.task.id);
   assert.equal(detail.task.status, 'completed');
   assert.equal(Object.hasOwn(detail.task, 'tenantId'), false, 'public task summary must not disclose tenant identifiers');
+
+  // Task event history is also owner-only and uses an explicit, bounded cursor.
+  const deniedTaskEvents = await fetch(origin + '/api/v1/tasks/' + encodeURIComponent(created.task.id) + '/events?limit=1');
+  assert.equal(deniedTaskEvents.status, 401, 'task event history must require an owner session');
+
+  const firstEventPageResponse = await fetch(
+    origin + '/api/v1/tasks/' + encodeURIComponent(created.task.id) + '/events?limit=1',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(firstEventPageResponse.status, 200);
+  const firstEventPage = await firstEventPageResponse.json();
+  assert.equal(firstEventPage.apiVersion, 'v1');
+  assert.equal(firstEventPage.items.length, 1);
+  const firstEvent = firstEventPage.items[0];
+  assert.ok(firstEvent.id);
+  assert.equal(firstEvent.taskId, created.task.id);
+  assert.equal(Object.hasOwn(firstEvent, 'tenantId'), false, 'public task events must not disclose tenant identifiers');
+  assert.equal(firstEventPage.page.nextCursor, firstEvent.id);
+  assert.equal(firstEventPage.page.hasMore, true, 'runtime mission should expose multiple events for cursor pagination');
+
+  const nextEventPageResponse = await fetch(
+    origin + '/api/v1/tasks/' + encodeURIComponent(created.task.id) +
+      '/events?limit=1&after=' + encodeURIComponent(firstEvent.id),
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(nextEventPageResponse.status, 200);
+  const nextEventPage = await nextEventPageResponse.json();
+  assert.equal(nextEventPage.items.length, 1);
+  assert.notEqual(nextEventPage.items[0].id, firstEvent.id, 'cursor pagination must not repeat the last delivered event');
+  assert.equal(nextEventPage.items[0].taskId, created.task.id);
+
+  const missingCursorResponse = await fetch(
+    origin + '/api/v1/tasks/' + encodeURIComponent(created.task.id) +
+      '/events?limit=1&after=cursor-that-does-not-exist',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(missingCursorResponse.status, 409, 'unknown event cursors must fail explicitly instead of silently skipping history');
+  assert.match(await missingCursorResponse.text(), /Task event cursor is no longer available/);
 });
