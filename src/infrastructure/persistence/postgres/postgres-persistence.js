@@ -828,7 +828,7 @@ class PostgresApprovalRepository {
     await this.db.query(
       `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
+      [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),...(approval.decision ? { decision: approval.decision } : {}),tenantId:effectiveTenant}]
     );
     return { ...approval, tenantId: effectiveTenant };
   }
