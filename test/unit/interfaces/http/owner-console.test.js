@@ -8,11 +8,11 @@ const OwnerAuthService = require('../../../../src/core/security/owner-auth-servi
 
 const PASSWORD = 'correct-horse-battery-staple-2026';
 
-async function withServer(ownerAuth, run) {
+async function withServer(ownerAuth, run, agentRoutes = {}) {
   const auditEvents = [];
   const server = createServer({
     memoryRoutes: {},
-    agentRoutes: {},
+    agentRoutes,
     ownerAuth,
     accessAudit: {
       async record(event) { auditEvents.push(event); },
@@ -158,4 +158,77 @@ test('operational dashboard and APIs require the owner session in production com
     });
     assert.equal(crossOriginMutation.status, 403);
   });
+});
+
+test('owner approval inbox is private and approve/cancel actions require CSRF', async () => {
+  const approval = {
+    approvalId: 'approval-123',
+    executionId: 'exec-123',
+    step: 1,
+    tool: 'project.execute_change',
+    capability: 'workspace.write',
+    expiresAt: new Date(Date.now() + 60000).toISOString()
+  };
+  const calls = [];
+  const agentRoutes = {
+    async pendingApprovals(_req, res) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify([approval]));
+    },
+    async resume(_req, res, executionId, body) {
+      calls.push({ action: 'resume', executionId, body });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ status: 'resumed', executionId, approval: body.approval }));
+    },
+    async cancel(_req, res, executionId, body) {
+      calls.push({ action: 'cancel', executionId, body });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ status: 'cancelled', executionId }));
+    }
+  };
+
+  await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
+    const denied = await request(origin, '/owner/approvals');
+    assert.equal(denied.status, 401);
+
+    const login = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ password: PASSWORD })
+    });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const { csrfToken } = await login.json();
+
+    const inbox = await request(origin, '/owner/approvals?limit=50', {
+      headers: { Cookie: cookie }
+    });
+    assert.equal(inbox.status, 200);
+    assert.equal((await inbox.json())[0].approvalId, 'approval-123');
+
+    const csrfDenied = await request(origin, '/owner/executions/exec-123/resume', {
+      method: 'POST',
+      headers: { Origin: origin, Cookie: cookie },
+      body: JSON.stringify({ approval: { approvalId: 'approval-123' } })
+    });
+    assert.equal(csrfDenied.status, 403);
+
+    const resumed = await request(origin, '/owner/executions/exec-123/resume', {
+      method: 'POST',
+      headers: { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken },
+      body: JSON.stringify({ approval: { approvalId: 'approval-123' }, ignored: 'must not pass through' })
+    });
+    assert.equal(resumed.status, 200);
+    assert.deepEqual((await resumed.json()).approval, { approvalId: 'approval-123' });
+    assert.equal(calls[0].action, 'resume');
+    assert.deepEqual(calls[0].body, { approval: { approvalId: 'approval-123' } });
+
+    const cancelled = await request(origin, '/owner/executions/exec-123/cancel', {
+      method: 'POST',
+      headers: { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken },
+      body: JSON.stringify({ reason: 'owner_rejected' })
+    });
+    assert.equal(cancelled.status, 200);
+    assert.equal(calls[1].action, 'cancel');
+    assert.equal(calls[1].body.reason, 'owner_rejected');
+  }, agentRoutes);
 });
