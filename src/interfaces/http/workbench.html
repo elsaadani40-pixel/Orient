@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#080c13">
+<meta name="description" content="ORIENT Workbench — submit and inspect real task executions through the governed ORIENT runtime.">
+<title>ORIENT · مساحة اختبار المهام</title>
+<style>
+:root{color-scheme:dark;--bg:#080c13;--line:#29384c;--text:#edf4ff;--muted:#9aabc1;--mint:#78f0d1;--blue:#8ab4ff;--amber:#ffd27a;--red:#ff9696;--green:#6ce0a0}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 75% -15%,#1a3b5a 0,transparent 42%),radial-gradient(ellipse at 0 65%,#171936 0,transparent 36%),var(--bg);color:var(--text);font:15px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}a{color:var(--mint);text-decoration:none}.wrap{max-width:1420px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:8px 0 22px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:12px}.mark{width:42px;height:42px;display:grid;place-items:center;border:1px solid #78f0d166;border-radius:13px;color:var(--mint);font-weight:850;font-size:20px;box-shadow:0 0 32px #78f0d012}.brand strong{letter-spacing:.18em}.brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:.04em}.top-actions{display:flex;gap:9px;flex-wrap:wrap}.btn{display:inline-flex;align-items:center;justify-content:center;border:1px solid #3a5779;border-radius:10px;background:#1a3555;color:#f1f7ff;padding:10px 14px;font-weight:700}.btn:hover{filter:brightness(1.13)}.btn.secondary{background:#111a27;border-color:var(--line);color:#d8e4f5}.btn.primary{background:var(--mint);border-color:var(--mint);color:#06120f}.hero{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);gap:18px;padding:24px 0}.hero-card,.card{border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,#121d2cee,#0c131eee);box-shadow:0 18px 60px #0003}.hero-card{padding:25px;position:relative;overflow:hidden}.eyebrow{color:var(--mint);font-size:11px;letter-spacing:.16em;font-weight:800}.hero h1{font-size:clamp(30px,4vw,48px);line-height:1.15;margin:12px 0}.hero p{color:var(--muted);max-width:720px}.orb{min-height:220px;display:grid;place-items:center;position:relative;overflow:hidden;border:1px solid #324760;border-radius:18px;background:radial-gradient(circle,#72efd11a,transparent 56%),#0c1420}.orb:before,.orb:after{content:"";position:absolute;width:190px;height:190px;border:1px solid #78f0d155;border-radius:50%;transform:rotateX(65deg) rotateZ(-25deg);animation:spin 22s linear infinite}.orb:after{width:135px;height:135px;border-color:#8ab4ff66;transform:rotateX(70deg) rotateZ(35deg);animation-direction:reverse}.orb-core{width:76px;height:76px;border-radius:50%;background:radial-gradient(circle at 30% 25%,#dffff7,#78f0d1 12%,#176e79 40%,#101a2a 76%);box-shadow:0 0 45px #78f0d155,0 0 110px #78f0d022;z-index:1}.status-line{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 12px currentColor}.dot.ok{background:var(--green)}.dot.bad{background:var(--red)}.layout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(330px,.9fr);gap:18px;align-items:start}.card{padding:20px;min-width:0}.card-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.card h2{font-size:18px;margin:0}.pill{display:inline-flex;border:1px solid var(--line);border-radius:99px;padding:3px 9px;color:var(--muted);font-size:11px;white-space:nowrap}.hint{font-size:12px;color:var(--muted)}label{display:block;font-size:13px;font-weight:700;margin:13px 0 7px}.input{width:100%;background:#080e17;border:1px solid #34465e;border-radius:11px;color:var(--text);padding:13px;outline:none}.input:focus{border-color:var(--mint);box-shadow:0 0 0 3px #78f0d117}textarea.input{min-height:125px;resize:vertical}.form-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:12px}.message{min-height:45px;margin-top:12px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#080e17;color:var(--muted);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.message.error{border-color:#743d49;color:#ffc3c3}.message.success{border-color:#285d4c;color:#b8ffe0}.list{display:grid;gap:9px}.task{width:100%;text-align:right;border:1px solid var(--line);border-radius:12px;padding:12px;background:#0b121d;color:var(--text);transition:border-color .2s}.task:hover,.task.selected{border-color:#78f0d1aa}.task.selected{background:#102028}.task-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.task-id{font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;direction:ltr;text-align:left;overflow-wrap:anywhere;color:#d9e8ff}.task-meta{display:flex;gap:9px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-top:7px}.state{border:1px solid #34465e;border-radius:99px;padding:2px 8px;font-size:11px;white-space:nowrap}.state.completed{color:var(--green);border-color:#2e6953}.state.failed,.state.cancelled{color:var(--red);border-color:#743d49}.state.running,.state.queued,.state.pending{color:var(--amber);border-color:#725c2d}.empty{color:var(--muted);padding:18px 4px;font-size:13px}.details{margin-top:18px;border-top:1px solid var(--line);padding-top:17px}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}.detail-cell{border:1px solid var(--line);border-radius:10px;padding:10px;min-width:0}.detail-cell small{display:block;color:var(--muted);font-size:11px}.detail-cell strong{display:block;font-size:12px;margin-top:4px;overflow-wrap:anywhere}.events{display:grid;gap:8px;margin-top:12px}.event{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#0a111b}.event strong{display:block;font-size:12px;overflow-wrap:anywhere}.event small{display:block;color:var(--muted);font-size:11px;margin-top:4px}.event pre{margin:8px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;color:#c8d7eb;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.section-space{margin-top:18px}.footer{color:var(--muted);font-size:11px;text-align:center;padding:28px 0 10px}.hidden{display:none!important}
+@keyframes spin{to{transform:rotate(335deg)}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;scroll-behavior:auto!important;transition:none!important}}
+@media(max-width:900px){.hero{grid-template-columns:1fr}.orb{min-height:170px}.layout{grid-template-columns:1fr}}@media(max-width:560px){.wrap{padding:13px}.top{align-items:flex-start}.top-actions{justify-content:flex-end}.hero{padding:15px 0}.hero-card,.card{padding:15px}.detail-grid{grid-template-columns:1fr}.brand strong{font-size:13px}.brand small{max-width:150px}.btn{padding:9px 11px;font-size:12px}}
+</style>
+</head>
+<body>
+<main class="wrap">
+<header class="top">
+  <div class="brand"><div class="mark" aria-hidden="true">O</div><div><strong>ORIENT</strong><small>PERSONAL AI OPERATING SYSTEM</small></div></div>
+  <div class="top-actions"><a class="btn secondary" href="/dashboard">لوحة التشغيل</a><a class="btn secondary" href="/owner">مركز المالك</a><button class="btn" id="refreshAll" type="button">تحديث البيانات</button></div>
+</header>
+<section class="hero">
+  <div class="hero-card"><div class="eyebrow">GOVERNED TASK WORKBENCH · API V1</div><h1>اختبر المهمة.<br><span style="color:var(--mint)">وتابع الدليل.</span></h1><p>أنشئ مهمة عبر واجهة ORIENT الفعلية، ثم راقب الحالة والأحداث التي يعيدها Runtime. إنشاء المهمة لا يعني أنها اكتملت؛ الحكم يكون من الحالة والأدلة التي يعرضها النظام.</p><div class="status-line"><span class="dot" id="connectionDot"></span><span id="connectionState" role="status" aria-live="polite">جارٍ التحقق من اتصال الخادم…</span></div></div>
+  <div class="orb" aria-hidden="true"><div class="orb-core"></div></div>
+</section>
+<div class="layout">
+  <section class="card">
+    <div class="card-head"><h2>إرسال مهمة جديدة</h2><span class="pill">POST /api/v1/tasks</span></div>
+    <p class="hint">اكتب هدفًا واضحًا. الواجهة لا تضيف صلاحيات ولا تتجاوز الموافقات؛ التنفيذ يعتمد على ما يدعمه Runtime وإعداداته.</p>
+    <form id="taskForm">
+      <label for="goal">ما المهمة التي تريد من ORIENT تنفيذها؟</label>
+      <textarea id="goal" class="input" maxlength="5000" required placeholder="مثال: افحص بنية المشروع وحدد اختبارات التحقق المناسبة، ثم أعطني ملخصًا بالأدلة المتاحة."></textarea>
+      <div class="form-actions"><button class="btn primary" id="submitTask" type="submit">إرسال المهمة</button><button class="btn secondary" id="clearGoal" type="button">مسح النص</button></div>
+    </form>
+    <div class="message" id="submitMessage" role="status" aria-live="polite">لم يتم إرسال مهمة من هذه الصفحة بعد.</div>
+    <div class="section-space card-head"><h2>تفاصيل المهمة المحددة</h2><span class="pill">READ-ONLY</span></div>
+    <div id="taskDetails" class="empty">اختر مهمة من القائمة لقراءة حالتها وأحداثها.</div>
+    <div class="form-actions"><button class="btn secondary" id="refreshSelected" type="button" disabled>تحديث الحالة والأحداث</button><button class="btn secondary" id="copyTaskId" type="button" disabled>نسخ معرّف المهمة</button></div>
+    <div class="section-space"><div class="card-head"><h2>أحداث التنفيذ</h2><span id="eventCount" class="pill">0</span></div><div id="taskEvents" class="events"><div class="empty">لا توجد أحداث معروضة.</div></div></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>المهام الأخيرة</h2><span class="pill">GET /api/v1/tasks</span></div>
+    <p class="hint">تُعرض سجلات حقيقية فقط من API. إذا لم تكن هناك مهام أو تعذر الاتصال، ستظهر الحالة كما هي دون بيانات تجريبية.</p>
+    <div id="listMessage" class="message" role="status" aria-live="polite">جارٍ تحميل المهام…</div>
+    <div id="taskList" class="list"><div class="empty">جارٍ تحميل المهام…</div></div>
+    <div class="form-actions"><button class="btn secondary" id="loadMore" type="button" disabled>تحميل المزيد</button></div>
+    <div class="details"><div class="card-head"><h2>حالة الاتصال</h2><span class="pill">NO STORE</span></div><div class="detail-grid"><div class="detail-cell"><small>API</small><strong>v1 tasks</strong></div><div class="detail-cell"><small>تحديث تلقائي</small><strong>كل 5 ثوانٍ</strong></div><div class="detail-cell"><small>تخزين المتصفح</small><strong>لا يوجد</strong></div></div><p class="hint">تعرض هذه الصفحة ملخصات وحالات وأحداث من الخادم. لا تحفظ أهدافك محليًا في المتصفح ولا تعرض مخرجات خاصة غير موجودة في عقد API.</p></div>
+  </section>
+</div>
+<footer class="footer">ORIENT · مساحة اختبار الويب · الواجهة لا تثبت جاهزية الإنتاج ولا تستبدل اختبار الجهاز الحقيقي.</footer>
+</main>
+<script src="/workbench.js" defer></script>
+</body>
+</html>
