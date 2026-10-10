@@ -62,7 +62,7 @@ function createRuntime(root, { approvalService = null, persistence: persisted = 
     recoveryEngine: new RecoveryEngine()
   });
 
-  const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission-8', repository: persistence.approvals });
   const authorizationService = new AuthorizationService({
     capabilityMapper: new CapabilityMapper({
       mappings: {
