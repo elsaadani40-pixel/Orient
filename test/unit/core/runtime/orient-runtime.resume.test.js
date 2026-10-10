@@ -181,3 +181,45 @@ test('runtime resumes from the durable checkpoint without re-running completed s
     force: true
   });
 });
+
+test('expired approval decision cancels the matching execution and reconciles its workflow', async () => {
+  const calls = [];
+  const runtime = {
+    tenantId: 'tenant-a',
+    approvalService: {
+      async decide() {
+        throw Object.assign(new Error('Approval has expired'), { code: 'APPROVAL_EXPIRED' });
+      }
+    },
+    persistence: {
+      executions: {
+        async requestCancellation(...args) {
+          calls.push({ kind: 'cancel', args });
+          return { executionId: args[0], status: 'running' };
+        }
+      }
+    },
+    workflowExecutionCoordinator: {
+      async expireApprovalWorkflow(...args) {
+        calls.push({ kind: 'expire-workflow', args });
+        return true;
+      }
+    }
+  };
+
+  await assert.rejects(
+    () => OrientRuntime.prototype.decideApproval.call(runtime, {
+      approvalId: 'approval-expired',
+      executionId: 'execution-expired',
+      decision: 'approved',
+      actorId: 'owner-session',
+      tenantId: 'tenant-a'
+    }),
+    error => error.code === 'APPROVAL_EXPIRED'
+  );
+
+  assert.deepEqual(calls, [
+    { kind: 'cancel', args: ['execution-expired', 'approval_expired', { tenantId: 'tenant-a' }] },
+    { kind: 'expire-workflow', args: ['execution-expired', 'approval-expired'] }
+  ]);
+});
