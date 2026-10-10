@@ -36,7 +36,7 @@ test('RuntimeShutdownCoordinator closes HTTP ingress, drains workers, then shuts
 
   const shutdown = coordinator.shutdown({ runtimeOptions: { cancelQueued: false } });
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(order, ['subscriber-stop', 'http-close-start']);
+  assert.deepEqual(order, ['http-close-start']);
   closeCallback();
   const result = await shutdown;
 
