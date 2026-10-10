@@ -95,8 +95,8 @@ test('MemoryService add crash after durable audit append is rolled back on resta
   const f = fixture();
   try {
     // Empty valid stores avoid a legacy-data migration before the transaction starts.
-    fs.writeFileSync(f.memoryFile, '[]\\n');
-    fs.writeFileSync(f.auditFile, '[]\\n');
+    fs.writeFileSync(f.memoryFile, '[]');
+    fs.writeFileSync(f.auditFile, '[]');
     const script = [
       `const MemoryRepository = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/json-memory.repository'))});`,
       `const AuditRepository = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/memory-audit.repository'))});`,
