@@ -96,7 +96,7 @@ class OwnerSessionClientTest {
             assertTrue(withApiDiagnostics("login") { runBlocking { client.login("0123456789abcdef") } }.contains("بنجاح"))
             assertTrue(client.isAuthenticated)
             assertTrue(withApiDiagnostics("fetchExecutions") { runBlocking { client.fetchExecutions() } }.contains("executions"))
-            assertTrue(withApiDiagnostics("fetchTasks") { runBlocking { client.fetchTasks() } }.contains("\\\"apiVersion\\\": \\\"v1\\\""))
+            assertTrue(withApiDiagnostics("fetchTasks") { runBlocking { client.fetchTasks() } }.contains("\"apiVersion\": \"v1\""))
             assertTrue(withApiDiagnostics("fetchTask") { runBlocking { client.fetchTask("exec-1") } }.contains("exec-1"))
             assertThrows(IllegalArgumentException::class.java) { runBlocking { client.fetchTask("../private") } }
             assertTrue(withApiDiagnostics("executeTask") { runBlocking { client.executeTask("test task") } }.contains("completed"))
