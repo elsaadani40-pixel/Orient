@@ -352,7 +352,8 @@ class SqliteApprovalRepository {
       'UPDATE approvals SET metadata=' + SqliteDatabase.json(metadata) +
       ' WHERE approval_id=' + SqliteDatabase.literal(approvalId) + tenant +
       ' AND used=0 AND expires_at>' + SqliteDatabase.literal(nowIso) +
-      " AND expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')" +
+      ' AND julianday(expires_at)>julianday(' + SqliteDatabase.literal(nowIso) + ')' +
+      " AND julianday(expires_at)>julianday('now')" +
       " AND json_extract(metadata, '$.decision') IS NULL; SELECT changes() AS changes;"
     );
     if (result.length && Number(result[result.length - 1].changes) === 1) {
@@ -384,7 +385,9 @@ class SqliteApprovalRepository {
       ' AND used=0 AND json_extract(metadata, \'$.decision.status\')=\'approved\'' +
       ' AND expires_at>' + SqliteDatabase.literal(new Date(requestedAt).toISOString()) +
       ' AND expires_at>' + SqliteDatabase.literal(commitAt) +
-      " AND expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now'); SELECT changes() AS changes;"
+      ' AND julianday(expires_at)>julianday(' + SqliteDatabase.literal(new Date(requestedAt).toISOString()) + ')' +
+      ' AND julianday(expires_at)>julianday(' + SqliteDatabase.literal(commitAt) + ')' +
+      " AND julianday(expires_at)>julianday('now'); SELECT changes() AS changes;"
     );
     return Boolean(result.length && Number(result[result.length - 1].changes) === 1);
   }
