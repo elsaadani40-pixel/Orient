@@ -237,6 +237,31 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 400, { ok: false, code: 'APPROVAL_ID_REQUIRED', message: 'معرّف الموافقة غير صالح.' });
             return;
           }
+          if (typeof agentRoutes.recordApprovalDecision !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'APPROVAL_DECISION_UNAVAILABLE', message: 'تسجيل قرار الموافقة غير متاح.' });
+            return;
+          }
+          try {
+            await agentRoutes.recordApprovalDecision({
+              approvalId,
+              executionId: ownerResumeMatch[1],
+              decision: 'approved',
+              actorId: ownerSession.sessionId
+            });
+          } catch (error) {
+            const code = error?.code || 'APPROVAL_DECISION_FAILED';
+            const status = ({
+              APPROVAL_NOT_FOUND: 404,
+              APPROVAL_TENANT_MISMATCH: 404,
+              APPROVAL_EXECUTION_MISMATCH: 409,
+              APPROVAL_EXPIRED: 409,
+              APPROVAL_ALREADY_USED: 409,
+              APPROVAL_DECISION_CONFLICT: 409,
+              APPROVAL_DECISION_FORBIDDEN: 403
+            })[code] || 500;
+            sendJson(res, status, { ok: false, code, message: status < 500 ? 'تعذر اعتماد الموافقة المطلوبة.' : 'تعذر تسجيل قرار الموافقة.' });
+            return;
+          }
           await agentRoutes.resume(req, res, ownerResumeMatch[1], { approval: { approvalId } });
           return;
         }
@@ -257,6 +282,38 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           try { payload = JSON.parse(rawBody || '{}'); } catch (_) {
             sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
             return;
+          }
+          const approvalId = payload?.approval?.approvalId;
+          if (approvalId !== undefined) {
+            if (typeof approvalId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(approvalId)) {
+              sendJson(res, 400, { ok: false, code: 'APPROVAL_ID_INVALID', message: 'معرّف الموافقة غير صالح.' });
+              return;
+            }
+            if (typeof agentRoutes.recordApprovalDecision !== 'function') {
+              sendJson(res, 503, { ok: false, code: 'APPROVAL_DECISION_UNAVAILABLE', message: 'تسجيل قرار الرفض غير متاح.' });
+              return;
+            }
+            try {
+              await agentRoutes.recordApprovalDecision({
+                approvalId,
+                executionId: ownerCancelMatch[1],
+                decision: 'rejected',
+                actorId: ownerSession.sessionId
+              });
+            } catch (error) {
+              const code = error?.code || 'APPROVAL_DECISION_FAILED';
+              const status = ({
+                APPROVAL_NOT_FOUND: 404,
+                APPROVAL_TENANT_MISMATCH: 404,
+                APPROVAL_EXECUTION_MISMATCH: 409,
+                APPROVAL_EXPIRED: 409,
+                APPROVAL_ALREADY_USED: 409,
+                APPROVAL_DECISION_CONFLICT: 409,
+                APPROVAL_DECISION_FORBIDDEN: 403
+              })[code] || 500;
+              sendJson(res, status, { ok: false, code, message: status < 500 ? 'تعذر تسجيل قرار الرفض.' : 'تعذر تسجيل قرار الرفض.' });
+              return;
+            }
           }
           await agentRoutes.cancel(req, res, ownerCancelMatch[1], { reason: 'owner_rejected', ...payload });
           return;
