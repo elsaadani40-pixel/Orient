@@ -500,8 +500,8 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
       if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
     }
-    if (runtimeAfterRestart) await runtimeAfterRestart.shutdown().catch(() => {});
-    if (runtimeBeforeRestart) await runtimeBeforeRestart.shutdown().catch(() => {});
+    if (runtimeAfterRestart) await Promise.resolve().then(() => runtimeAfterRestart.shutdown()).catch(() => {});
+    if (runtimeBeforeRestart) await Promise.resolve().then(() => runtimeBeforeRestart.shutdown()).catch(() => {});
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
 });
