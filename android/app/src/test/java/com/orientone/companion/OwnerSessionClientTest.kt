@@ -155,8 +155,11 @@ class OwnerSessionClientTest {
             try {
                 handler(exchange)
             } catch (error: Throwable) {
-                try { respond(exchange, 500, """{"code":"TEST_SERVER_ERROR"}""") } catch (_: Exception) {}
-                throw error
+                val diagnostic = JSONObject()
+                    .put("code", "TEST_SERVER_ERROR")
+                    .put("message", error.message ?: error.javaClass.simpleName)
+                    .toString()
+                try { respond(exchange, 500, diagnostic) } catch (_: Exception) {}
             }
         }
         server.start()
