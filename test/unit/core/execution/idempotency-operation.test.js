@@ -76,7 +76,7 @@ test('in-memory idempotency is tenant-scoped and rejects terminal outcome confli
     () => store.complete(tenantB.key, { late: true }, 'tenant-b'),
     error => error.code === 'IDEMPOTENCY_TERMINAL_CONFLICT'
   );
-  assert.equal(store.delete(tenantA.key, 'tenant-b'), false);
+  assert.equal(store.delete(tenantA.key, 'tenant-c'), false);
   assert.equal(store.get(tenantA.key, 'tenant-a').status, 'completed');
   assert.equal(store.delete(tenantA.key, 'tenant-a'), true);
   assert.equal(store.get(tenantA.key, 'tenant-b').status, 'failed');
