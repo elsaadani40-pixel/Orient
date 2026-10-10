@@ -1,0 +1,71 @@
+/**
+ * Contract checks for the shipped ORIENT web surfaces.
+ *
+ * These checks intentionally use Node's built-in test runner so the project
+ * does not need a browser dependency or a paid service just to validate the
+ * static client contract. They complement (not replace) browser/device tests.
+ */
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.resolve(__dirname, '../../..');
+const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
+
+const brand = read('website/index.html');
+const dashboard = read('src/interfaces/http/dashboard.html');
+const ownerConsole = read('src/interfaces/http/owner-dashboard.html');
+const ownerScript = read('src/interfaces/http/owner-dashboard.js');
+const server = read('src/interfaces/http/server.js');
+
+test('brand website has mobile metadata, bilingual content, and motion accessibility', () => {
+  assert.match(brand, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
+  assert.match(brand, /data-en=/);
+  assert.match(brand, /data-ar=/);
+  assert.match(brand, /prefers-reduced-motion:\s*reduce/);
+  assert.match(brand, /id="lang"/);
+  assert.match(brand, /document\.documentElement\.dir=ar\?'rtl':'ltr'/);
+});
+
+test('brand navigation targets real sections in the document', () => {
+  const ids = new Set([...brand.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
+  const anchors = [...brand.matchAll(/href="#([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(anchors.length > 0, 'expected in-page navigation links');
+  for (const anchor of anchors) {
+    assert.ok(ids.has(anchor), `navigation target #${anchor} must exist`);
+  }
+  assert.match(brand, /https:\/\/github\.com\/elsaadani40-pixel\/Orient/);
+});
+
+test('operational dashboard is responsive and exposes real runtime controls', () => {
+  assert.match(dashboard, /<meta name="viewport"/);
+  assert.match(dashboard, /@media/);
+  assert.match(dashboard, /prefers-reduced-motion:\s*reduce/);
+  assert.match(dashboard, /\/agent/);
+  assert.match(dashboard, /\/executions/);
+  assert.match(dashboard, /\/approvals\/pending/);
+  assert.match(dashboard, /EventSource|text\/event-stream|addEventListener\(['"]message['"]/);
+  assert.doesNotMatch(dashboard, /<script[^>]+src=["']https?:\/\//i,
+    'dashboard scripts must remain same-origin; no third-party script CDN');
+});
+
+test('owner console keeps password/session handling out of browser storage', () => {
+  assert.match(ownerConsole, /id="login-form"/);
+  assert.match(ownerConsole, /id="logout"/);
+  assert.match(ownerConsole, /name="password"|id="password"/);
+  assert.match(ownerScript, /credentials:\s*'same-origin'/);
+  assert.match(ownerScript, /X-ORIENT-CSRF/);
+  assert.doesNotMatch(ownerScript, /localStorage|sessionStorage/);
+  assert.match(server, /HttpOnly; SameSite=Strict/);
+  assert.match(server, /OWNER_CSRF_REJECTED/);
+});
+
+test('remote operational routes stay behind the owner-session boundary', () => {
+  assert.match(server, /if \(ownerAuth\)/);
+  assert.match(server, /OWNER_AUTH_REQUIRED/);
+  assert.match(server, /OWNER_ORIGIN_REJECTED/);
+  assert.match(server, /OWNER_CSRF_REJECTED/);
+});
