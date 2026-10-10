@@ -37,3 +37,33 @@ test('planner does not let a model-selected runtime identity broaden workspace a
   });
   assert.equal(plan.agentId, 'PROJECT_BUILDER_AGENT');
 });
+
+
+test('deterministic planner confidence is explicitly marked as a heuristic, not a probability', async () => {
+  const planner = new PlannerService();
+  const plan = await planner.plan('ابحث داخل ملفات المشروع عن NeedleValue');
+
+  assert.equal(plan.confidence, 0.99);
+  assert.equal(plan.confidenceBasis, 'rule-match-heuristic');
+});
+
+test('model planner confidence is explicitly marked as uncalibrated model output', async () => {
+  const planner = new PlannerService();
+  const plan = await planner.plan('find something', {
+    modelRouter: {
+      list: () => [{ id: 'ollama.local' }],
+      complete: async () => ({
+        text: JSON.stringify({
+          intent: 'memory.search',
+          confidence: 0.9,
+          reason: 'local model',
+          steps: [{ tool: 'memory.search', input: 'something', dependsOn: null }]
+        }),
+        routing: { providerId: 'ollama.local' }
+      })
+    }
+  });
+
+  assert.equal(plan.confidence, 0.9);
+  assert.equal(plan.confidenceBasis, 'model-reported-uncalibrated');
+});
