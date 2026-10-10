@@ -52,6 +52,8 @@ Creation validates authenticated scope, goal size, schema, rate/resource bounds,
 
 `GET /api/v1/tasks/{taskId}/events?after=<cursor>` returns ordered, cursor-paginated, privacy-filtered events. Event records include event ID, task ID, sequence, timestamp, type, step ID, outcome, and safe metadata. Never return raw secrets or unrestricted tool output. Detect and report gaps instead of silently presenting an incomplete trace.
 
+Current implementation slice: the server exposes this route behind the existing owner-session gate, and the Android companion has an authenticated cursor-client method. It currently pages within the newest 200 events available from the runtime; a cursor outside that retained window returns `409 EVENT_CURSOR_NOT_FOUND` rather than silently skipping history. This is not yet durable unbounded event archival or end-to-end device synchronization.
+
 ### Governed file operations (read-only first)
 
 `POST /api/v1/workspace/search` and `POST /api/v1/workspace/read` are available only after corresponding capabilities are registered. Requests must be confined to an authorized workspace root, enforce byte/line/result limits, reject path traversal and symlink escapes, and return truncation metadata. Treat file content as untrusted data, not policy.

@@ -78,6 +78,32 @@ internal class OwnerSessionClient(
         prettyJson(response.body)
     }
 
+    suspend fun fetchTaskEvents(
+        taskId: String,
+        afterCursor: String? = null,
+        limit: Int = 50
+    ): String = withContext(Dispatchers.IO) {
+        require(taskId.matches(Regex("[A-Za-z0-9_-]{1,200}"))) {
+            "معرّف المهمة غير صالح."
+        }
+        require(limit in 1..100) { "حجم صفحة الأحداث يجب أن يكون من 1 إلى 100." }
+        if (afterCursor != null) {
+            require(afterCursor.matches(Regex("[A-Za-z0-9_-]{1,200}"))) {
+                "مؤشر الأحداث غير صالح."
+            }
+        }
+        val query = buildString {
+            append("limit=")
+            append(limit)
+            if (afterCursor != null) {
+                append("&after=")
+                append(afterCursor)
+            }
+        }
+        val response = request("GET", "/api/v1/tasks/$taskId/events?$query")
+        prettyJson(response.body)
+    }
+
     suspend fun fetchTask(taskId: String): String = withContext(Dispatchers.IO) {
         require(taskId.matches(Regex("[A-Za-z0-9_-]{1,200}"))) {
             "معرّف المهمة غير صالح."
