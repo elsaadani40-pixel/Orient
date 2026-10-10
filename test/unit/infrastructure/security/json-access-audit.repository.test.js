@@ -88,7 +88,7 @@ test('owner audit view detects tampering after repository initialization', async
     await repository.initialize();
     const record = JSON.parse(await fs.readFile(file, 'utf8'));
     record.sourceIp = '203.0.113.88';
-    await fs.writeFile(file, JSON.stringify(record) + '\\n', 'utf8');
+    await fs.writeFile(file, JSON.stringify(record) + '\n', 'utf8');
     await assert.rejects(
       () => repository.listRecent(10),
       error => error.code === 'ACCESS_AUDIT_INTEGRITY_FAILED'
