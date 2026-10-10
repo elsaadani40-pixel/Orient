@@ -40,7 +40,7 @@ Future device adapters must request only permissions needed for user-requested f
 
 ## Next gates
 
-1. Add audit retention/rotation and durable owner sessions on the server.
+1. Add durable owner sessions and bounded login-failure state on the server.
 2. Implement real tool capabilities only behind the canonical runtime's authorization, risk, approval, and audit gates.
 3. Add permission-state and API-contract tests for each Android adapter.
 4. Add emulator/instrumentation smoke tests before claiming device readiness.
