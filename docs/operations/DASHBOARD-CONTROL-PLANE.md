@@ -50,6 +50,10 @@ The dashboard uses same-origin HTTP requests and introduces no CDN, external ana
 | GET | `/dashboard` | Serve the local dashboard |
 | GET | `/command-scene.js` | Serve the local WebGL renderer |
 | POST | `/agent` | Submit a task to the canonical runtime |
+| POST | `/api/v1/tasks` | Create a task using the canonical runtime; send a stable `Idempotency-Key` header to prevent duplicate execution on retries |
+| GET | `/api/v1/tasks?limit=20&offset=0` | Read a bounded page of cross-device task summaries |
+| GET | `/api/v1/tasks/:id` | Read a summary-only task status; tenant identifiers and raw execution results are omitted |
+| GET | `/api/v1/tasks/:id/events?limit=50&after=:cursor` | Read bounded task-event history after an event cursor; unknown cursors return `409` instead of silently skipping history |
 | GET | `/executions?limit=50&offset=0` | Read a bounded page of execution summaries |
 | GET | `/executions/:id` | Read tenant-scoped durable execution status |
 | GET | `/executions/:id/approvals` | Read pending approvals for one execution |
