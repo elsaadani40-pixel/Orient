@@ -393,3 +393,43 @@ test('owner HTTP decision is durably authorized and bound to the exact execution
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('owner resume reports an expired approved challenge as a conflict after reconciliation', async () => {
+  const agentRoutes = {
+    async recordApprovalDecision({ decision }) {
+      assert.equal(decision, 'approved');
+      return { decision: { status: 'approved' } };
+    },
+    async resume(_req, _res, executionId, body) {
+      throw Object.assign(new Error('Approved decision expired before execution resume'), {
+        code: 'APPROVAL_EXPIRED',
+        executionId,
+        approvalId: body?.approval?.approvalId
+      });
+    }
+  };
+
+  await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
+    const login = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ password: PASSWORD })
+    });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const { csrfToken } = await login.json();
+    const response = await request(origin, '/owner/executions/exec-expired/resume', {
+      method: 'POST',
+      headers: { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken },
+      body: JSON.stringify({ approval: { approvalId: 'approval-expired' } })
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      code: 'APPROVAL_EXPIRED',
+      executionId: 'exec-expired',
+      approvalId: 'approval-expired',
+      message: 'انتهت صلاحية الموافقة؛ تم إيقاف التنفيذ وتحديث حالته.'
+    });
+  }, agentRoutes);
+});
