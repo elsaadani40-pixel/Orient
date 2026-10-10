@@ -234,7 +234,24 @@ class OrientRuntime {
   }
 
   async resume(executionId, options = {}) {
-    return this.requestExecutionCoordinator.resume(executionId, options);
+    try {
+      const result = await this.requestExecutionCoordinator.resume(executionId, options);
+      await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result);
+      return result;
+    } catch (error) {
+      if (error?.code === 'APPROVAL_REQUIRED' && error.executionContext?.approvalId) {
+        await this.workflowExecutionCoordinator.updateApprovalChallenge(
+          executionId,
+          error.executionContext.approvalId
+        );
+      } else if (typeof this.persistence?.executions?.findById === 'function') {
+        const durable = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
+        if (durable && ['completed', 'failed', 'cancelled'].includes(String(durable.status || '').toLowerCase())) {
+          await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, { execution: durable });
+        }
+      }
+      throw error;
+    }
   }
 
   async decideApproval(options = {}) {
@@ -254,7 +271,7 @@ class OrientRuntime {
       throw Object.assign(new Error('executionId is required'), { code: 'EXECUTION_ID_REQUIRED' });
     }
 
-    const requested = this.persistence.executions.requestCancellation(
+    const requested = await this.persistence.executions.requestCancellation(
       executionId,
       reason,
       { tenantId: this.tenantId }
@@ -265,6 +282,8 @@ class OrientRuntime {
         code: 'EXECUTION_NOT_FOUND'
       });
     }
+
+    await this.workflowExecutionCoordinator.cancelApprovalWorkflow(executionId, reason);
 
     return {
       executionId: requested.executionId,
