@@ -186,7 +186,9 @@ jobs:
       - name: Run PostgreSQL integration suite
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
-        run: node --test test/integration/postgres-persistence.integration.test.js
+        run: |
+          node --test --test-timeout=120000 test/integration/postgres-persistence.integration.test.js
+          node --test --test-timeout=120000 test/integration/postgres-task-idempotency.integration.test.js
 
   full-repository-suite:
     name: Full Repository Test Suite (Node 24 + PostgreSQL)
