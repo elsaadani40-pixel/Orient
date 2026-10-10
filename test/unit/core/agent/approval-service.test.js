@@ -329,3 +329,69 @@ test('pending and rejected approvals cannot authorize tools or be recovered for 
     tenantId: 'tenant-approval-gate'
   }), null);
 });
+
+
+test('malformed approval expiry timestamps fail closed across validation, decisions, recovery, and consumption', async () => {
+  const malformed = {
+    approvalId: 'approval-malformed-expiry',
+    executionId: 'exec-malformed-expiry',
+    step: 1,
+    planRevision: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: {},
+    issuedAt: new Date(1000).toISOString(),
+    expiresAt: 'not-a-timestamp',
+    used: false,
+    tenantId: 'tenant-malformed'
+  };
+  const repository = {
+    async findById(id) { return id === malformed.approvalId ? { ...malformed } : null; },
+    async findByExecution() { return [{ ...malformed }]; },
+    async findPending() { return [{ ...malformed }]; },
+    async consume() { throw new Error('malformed expiry must not reach consume'); }
+  };
+  const service = new ApprovalService({
+    repository,
+    tenantId: 'tenant-malformed',
+    clock: () => 2000,
+    decisionAuthorizer: async () => true
+  });
+
+  const checked = await service.validate({
+    approval: { approvalId: malformed.approvalId },
+    executionId: malformed.executionId,
+    step: malformed.step,
+    tool: malformed.tool,
+    capability: malformed.capability,
+    tenantId: 'tenant-malformed'
+  });
+  assert.equal(checked.allowed, false);
+  assert.equal(checked.reason, 'APPROVAL_EXPIRED');
+  assert.equal(await service.findReusable({
+    executionId: malformed.executionId,
+    step: malformed.step,
+    tool: malformed.tool,
+    tenantId: 'tenant-malformed'
+  }), null);
+  assert.deepEqual(await service.listPending({ tenantId: 'tenant-malformed' }), []);
+  assert.equal(await service.consume(malformed.approvalId, 'tenant-malformed'), false);
+  await assert.rejects(
+    () => service.decide({
+      approvalId: malformed.approvalId,
+      executionId: malformed.executionId,
+      decision: 'approved',
+      actorId: 'owner-malformed',
+      tenantId: 'tenant-malformed'
+    }),
+    error => error.code === 'APPROVAL_EXPIRED'
+  );
+  await assert.rejects(
+    () => service.getApprovedForExecution({
+      approvalId: malformed.approvalId,
+      executionId: malformed.executionId,
+      tenantId: 'tenant-malformed'
+    }),
+    error => error.code === 'APPROVAL_EXPIRED'
+  );
+});
