@@ -450,9 +450,9 @@ class PlannerService {
 
   extractWorkspaceSearch(text) {
     const value = String(text || '').trim();
-    const arabic = value.match(/(?:ابحث|فتش|دور|دوّر)\\s+(?:داخل|في)\\s+(?:ملفات|الملفات|المشروع|المستودع)\\s+(?:عن\\s+)?(.+)/i);
-    const english = value.match(/(?:search|find|grep)\\s+(?:for\\s+)?(.+?)\\s+(?:in|inside)\\s+(?:the\\s+)?(?:files|workspace|repository|project)\\b/i)
-      || value.match(/(?:search|find|grep)\\s+(?:in|inside)\\s+(?:the\\s+)?(?:files|workspace|repository|project)\\s+(?:for\\s+)?(.+)/i);
+    const arabic = value.match(/(?:ابحث|فتش|دور|دوّر)\s+(?:داخل|في)\s+(?:ملفات|الملفات|المشروع|المستودع)\s+(?:عن\s+)?(.+)/i);
+    const english = value.match(/(?:search|find|grep)\s+(?:for\s+)?(.+?)\s+(?:in|inside)\s+(?:the\s+)?(?:files|workspace|repository|project)\b/i)
+      || value.match(/(?:search|find|grep)\s+(?:in|inside)\s+(?:the\s+)?(?:files|workspace|repository|project)\s+(?:for\s+)?(.+)/i);
     const query = (arabic?.[1] || english?.[1] || '').trim();
     if (query.length < 2) return null;
     return {
@@ -468,9 +468,9 @@ class PlannerService {
 
   extractWorkspaceRead(text) {
     const value = String(text || '').trim();
-    const arabic = value.match(/(?:اقرأ|اعرض\\s+محتوى|افتح)\\s+(?:(?:ال)?ملف\\s+)?[\\"'\x60]?([^\\s\\"'\x60،,؟]+)/i);
-    const english = value.match(/(?:read|open|show)\\s+(?:the\\s+)?file\\s+[\\"'\x60]?([^\\s\\"'\x60,?]+)/i);
-    const relativePath = (arabic?.[1] || english?.[1] || '').trim();
+    const arabic = value.match(/(?:اقرأ|اعرض\s+محتوى|افتح)\s+(?:(?:ال)?ملف\s+)?([^\s،,؟]+)/i);
+    const english = value.match(/(?:read|open|show)\s+(?:the\s+)?file\s+([^\s,?]+)/i);
+    const relativePath = (arabic?.[1] || english?.[1] || '').replace(/^["']|["']$/g, '').trim();
     if (!relativePath || relativePath === 'الملف' || relativePath === 'file') return null;
     return {
       intent: 'workspace.read',
@@ -485,10 +485,10 @@ class PlannerService {
 
   extractWorkspaceList(text) {
     const value = String(text || '').trim();
-    const arabic = value.match(/(?:اعرض|استعرض|سرد)\\s+(?:ملفات|الملفات|محتويات\\s+المجلد)(?:\\s+(?:في|داخل)\\s+([^\\s]+))?/i);
-    const english = value.match(/(?:list|show)\\s+(?:the\\s+)?(?:files|directory|contents)(?:\\s+(?:in|of)\\s+([^\\s]+))?/i);
+    const arabic = value.match(/(?:اعرض|استعرض|سرد)\s+(?:ملفات|الملفات|محتويات\s+المجلد)(?:\s+(?:في|داخل)\s+([^\s]+))?/i);
+    const english = value.match(/(?:list|show)\s+(?:the\s+)?(?:files|directory|contents)(?:\s+(?:in|of)\s+([^\s]+))?/i);
     if (!arabic && !english) return null;
-    const relativePath = (arabic?.[1] || english?.[1] || '.').trim();
+    const relativePath = (arabic?.[1] || english?.[1] || '.').replace(/^["']|["']$/g, '').trim();
     return {
       intent: 'workspace.list',
       tool: 'workspace.list',
