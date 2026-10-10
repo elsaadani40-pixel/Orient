@@ -254,3 +254,106 @@ test('lease loss after a verified project side effect does not duplicate the wri
     await fs.rm(receiptDirectory, { recursive: true, force: true });
   }
 });
+
+
+test('concurrent resume during a workspace write fails closed until its receipt is durable', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-project-inflight-recovery-'));
+  const receiptDirectory = path.join(os.tmpdir(), 'orient-project-inflight-receipts-' + crypto.randomUUID());
+  const tenantId = 'tenant-project-inflight';
+  const operationRepository = durableIdempotencyRepository();
+  const receiptStore = new ProjectOperationReceiptStore({ directory: receiptDirectory });
+  let workspaceWrites = 0;
+  let releaseFirstWrite;
+  let signalWriteStarted;
+  const firstWriteBarrier = new Promise(resolve => { releaseFirstWrite = resolve; });
+  const writeStarted = new Promise(resolve => { signalWriteStarted = resolve; });
+
+  try {
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    const original = "const marker = 'before-inflight';\\nmodule.exports = marker;\\n";
+    const proposed = "const marker = 'after-inflight';\\nmodule.exports = marker;\\n";
+    await fs.writeFile(path.join(root, 'src', 'main.js'), original, 'utf8');
+
+    const builder = new ProjectBuilderAgent({
+      projectRoot: root,
+      policy: { allowRead: true, allowWrite: true, allowCommands: false, allowGit: false }
+    });
+    const writeText = builder.workspace.writeText.bind(builder.workspace);
+    builder.workspace.writeText = async (...args) => {
+      workspaceWrites += 1;
+      const result = await writeText(...args);
+      if (workspaceWrites === 1) {
+        signalWriteStarted();
+        await firstWriteBarrier;
+      }
+      return result;
+    };
+
+    const projectTool = createWorkspaceTools(builder, { operationReceiptStore: receiptStore })
+      .find(tool => tool.name === 'project.execute_change');
+    assert.ok(projectTool);
+    const plan = makePlan(original, proposed);
+    const firstLoop = makeAgentLoop(projectTool, operationRepository);
+    const executionId = 'execution-project-inflight';
+    const firstContext = new ExecutionContext({
+      requestId: 'request-project-inflight-first',
+      input: 'apply the project change',
+      executionId,
+      tenantId
+    });
+    firstContext.start();
+    firstContext.setPlan(plan);
+
+    const firstRun = firstLoop.run({
+      plan,
+      context: firstContext,
+      runtimeContext: { tenantId, planRevision: 1 }
+    });
+    await writeStarted;
+
+    assert.equal(await fs.readFile(path.join(root, 'src', 'main.js'), 'utf8'), proposed);
+    assert.equal(workspaceWrites, 1);
+    const operationId = crypto.createHash('sha256').update(JSON.stringify({
+      tenantId,
+      executionId,
+      planRevision: 1,
+      step: 1,
+      tool: 'project.execute_change',
+      input: plan.steps[0].input
+    }), 'utf8').digest('hex');
+    assert.equal(receiptStore.read({ operationId, tenantId }), null, 'receipt must not exist before verification completes');
+
+    const concurrentLoop = makeAgentLoop(projectTool, operationRepository);
+    const concurrentContext = new ExecutionContext({
+      requestId: 'request-project-inflight-recovery',
+      input: 'resume the same project change',
+      executionId,
+      tenantId
+    });
+    concurrentContext.start();
+    concurrentContext.setPlan(plan);
+
+    await assert.rejects(
+      () => concurrentLoop.run({
+        plan,
+        context: concurrentContext,
+        runtimeContext: { tenantId, planRevision: 1 }
+      }),
+      error => error.code === 'IDEMPOTENCY_RECONCILIATION_CONFLICT'
+    );
+    assert.equal(workspaceWrites, 1, 'concurrent recovery must not replay the in-flight write');
+    assert.equal(operationRepository.records.size, 1);
+
+    releaseFirstWrite();
+    const completed = await firstRun;
+    assert.equal(completed.status, 'done');
+    assert.equal(workspaceWrites, 1);
+    assert.equal(await fs.readFile(path.join(root, 'src', 'main.js'), 'utf8'), proposed);
+    assert.equal(operationRepository.records.values().next().value.status, 'completed');
+    assert.equal(receiptStore.read({ operationId, tenantId }).result.status, 'verified');
+  } finally {
+    releaseFirstWrite?.();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(receiptDirectory, { recursive: true, force: true });
+  }
+});
