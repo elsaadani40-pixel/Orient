@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const SqlitePersistence =
   require('../../../src/infrastructure/persistence/sqlite/sqlite-persistence');
@@ -178,7 +179,7 @@ test('SQLite checkpoint sequencing remains monotonic and schema migration marker
   first.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 2 });
 
   const migrationRows = first.db.query('SELECT version FROM schema_migrations ORDER BY version ASC;');
-  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1]);
+  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1, 2]);
   assert.equal(first.checkpoints.findLatest('exec-seq-1').sequence, 2);
 
   const second = new SqlitePersistence({ filePath });
@@ -231,6 +232,106 @@ test('SQLite approval consumption rejects pending, rejected, expired and malform
       assert.equal(persistence.approvals.consume(record.approvalId, requestedAt, 'tenant-a'), false, record.approvalId);
       assert.equal(persistence.approvals.findById(record.approvalId, { tenantId: 'tenant-a' }).used, false);
     }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite idempotency keys are tenant-scoped across begin, completion, failure, and deletion', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-idempotency-tenants-'));
+  const filePath = path.join(directory, 'orient.db');
+  try {
+    const first = new SqlitePersistence({ filePath });
+    const common = { executionId: 'exec-shared', step: 1, tool: 'test.write', operationId: 'shared-operation' };
+    const a = first.idempotency.begin({ ...common, tenantId: 'tenant-a' });
+    const b = first.idempotency.begin({ ...common, tenantId: 'tenant-b' });
+    assert.equal(a.created, true);
+    assert.equal(b.created, true);
+    assert.equal(first.idempotency.begin({ ...common, tenantId: 'tenant-a' }).created, false);
+    assert.equal(first.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).tenantId, 'tenant-a');
+    assert.equal(first.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).tenantId, 'tenant-b');
+    assert.equal(first.idempotency.findByKey(a.key, { tenantId: 'tenant-c' }), null);
+    assert.equal(first.idempotency.findByKey(a.key), null, 'tenant-scoped records must not leak into the default local scope');
+    assert.equal(first.idempotency.complete(a.key, { owner: 'wrong-default-scope' }), null);
+    assert.equal(first.idempotency.fail(b.key, { code: 'WRONG_SCOPE' }), null);
+    assert.equal(first.idempotency.delete(a.key), false);
+    assert.equal(first.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).status, 'running');
+
+    first.idempotency.complete(a.key, { owner: 'tenant-a' }, { tenantId: 'tenant-a' });
+    assert.deepEqual(first.idempotency.complete(a.key, { owner: 'tenant-a' }, { tenantId: 'tenant-a' }).result, { owner: 'tenant-a' });
+    assert.throws(
+      () => first.idempotency.complete(a.key, { owner: 'overwritten' }, { tenantId: 'tenant-a' }),
+      error => error.code === 'IDEMPOTENCY_TERMINAL_CONFLICT'
+    );
+    assert.throws(
+      () => first.idempotency.fail(a.key, new Error('late failure'), { tenantId: 'tenant-a' }),
+      error => error.code === 'IDEMPOTENCY_TERMINAL_CONFLICT'
+    );
+    assert.equal(first.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).status, 'running');
+    const failedB = first.idempotency.fail(b.key, { code: 'TEST', message: 'tenant b failure' }, { tenantId: 'tenant-b' });
+    assert.equal(failedB.status, 'failed');
+    assert.equal(first.idempotency.fail(b.key, new Error('duplicate failure'), { tenantId: 'tenant-b' }).status, 'failed');
+    assert.throws(
+      () => first.idempotency.complete(b.key, { late: true }, { tenantId: 'tenant-b' }),
+      error => error.code === 'IDEMPOTENCY_TERMINAL_CONFLICT'
+    );
+
+    const restarted = new SqlitePersistence({ filePath });
+    assert.equal(restarted.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).result.owner, 'tenant-a');
+    assert.equal(restarted.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).status, 'failed');
+    assert.equal(restarted.idempotency.delete(a.key, { tenantId: 'tenant-c' }), false);
+    assert.equal(restarted.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).status, 'completed');
+    assert.equal(restarted.idempotency.delete(a.key, { tenantId: 'tenant-a' }), true);
+    assert.equal(restarted.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).status, 'failed');
+    assert.deepEqual(
+      restarted.db.query('PRAGMA table_info(idempotency);').filter(column => Number(column.pk) > 0).map(column => column.name),
+      ['tenant_id', 'key']
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite idempotency migration preserves legacy rows and assigns tenant scope', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-idempotency-v1-'));
+  const filePath = path.join(directory, 'orient.db');
+  try {
+    execFileSync('sqlite3', ['-batch', filePath, `
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-01-01T00:00:00.000Z');
+      CREATE TABLE idempotency (
+        key TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO idempotency(key,payload,status,updated_at) VALUES (
+        'legacy-tenant-operation',
+        '{"id":"legacy-1","key":"legacy-tenant-operation","executionId":"legacy-exec","step":1,"tool":"test.write","tenantId":"tenant-legacy","status":"running","result":null,"error":null}',
+        'running',
+        '2026-01-01T00:00:00.000Z'
+      );
+      INSERT INTO idempotency(key,payload,status,updated_at) VALUES (
+        'legacy-local-operation',
+        '{"id":"legacy-2","key":"legacy-local-operation","executionId":"legacy-local-exec","step":1,"tool":"test.write","status":"running","result":null,"error":null}',
+        'running',
+        '2026-01-01T00:00:00.000Z'
+      );
+    `]);
+    const persistence = new SqlitePersistence({ filePath });
+    assert.equal(persistence.idempotency.findByKey('legacy-tenant-operation', { tenantId: 'tenant-legacy' }).id, 'legacy-1');
+    assert.equal(persistence.idempotency.findByKey('legacy-tenant-operation', { tenantId: 'tenant-other' }), null);
+    assert.equal(persistence.idempotency.findByKey('legacy-local-operation').id, 'legacy-2');
+    assert.deepEqual(
+      persistence.db.query('SELECT version FROM schema_migrations ORDER BY version;').map(row => Number(row.version)),
+      [1, 2]
+    );
+    assert.deepEqual(
+      persistence.db.query('PRAGMA table_info(idempotency);').filter(column => Number(column.pk) > 0).map(column => column.name),
+      ['tenant_id', 'key']
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

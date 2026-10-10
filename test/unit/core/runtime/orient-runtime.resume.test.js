@@ -311,3 +311,434 @@ test('expired stale approval does not cancel a workflow waiting on a newer chall
   );
   assert.deepEqual(calls, [], 'stale approval expiry must not cancel the newer active challenge');
 });
+
+
+test('real runtime restart reconciles a durable terminal execution without replaying tools', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-terminal-restart-'));
+  try {
+    const JsonPersistence = require('../../../../src/infrastructure/persistence/json/json-persistence');
+    const persistence = new JsonPersistence({ rootDir: directory });
+    const context = new ExecutionContext({
+      requestId: 'request-terminal-restart',
+      input: 'do not replay completed work',
+      executionId: 'execution-terminal-restart',
+      tenantId: 'local',
+      userId: 'local',
+      workspaceId: 'local'
+    });
+    context.start();
+    const plan = {
+      intent: 'restart.recovery',
+      confidence: 1,
+      steps: [{ step: 1, tool: 'test.side-effect', input: 'charge once', dependsOn: null }]
+    };
+    context.transitionAgentTo('planning');
+    context.transitionAgentTo('validating');
+    context.setPlan(plan);
+    context.metadata.planRevision = 1;
+    context.metadata.replans = 0;
+    context.transitionAgentTo('executing');
+    context.startStep({ step: 1, tool: 'test.side-effect', planRevision: 1 });
+    context.completeStep({
+      step: 1,
+      tool: 'test.side-effect',
+      result: { receipt: 'already-committed' },
+      planRevision: 1
+    });
+    context.addObservation({
+      step: 1,
+      tool: 'test.side-effect',
+      success: true,
+      result: { receipt: 'already-committed' }
+    });
+
+    await persistence.executions.insert({
+      ...context.snapshot(),
+      status: 'completed',
+      result: { receipt: 'already-committed' },
+      completedAt: new Date().toISOString()
+    }, { tenantId: 'local' });
+    await persistence.checkpoints.save(context.snapshot(), {
+      reason: 'crash-window-stale-checkpoint',
+      tenantId: 'local'
+    });
+
+    // A newly constructed runtime represents a process restart. The persisted
+    // terminal execution must override the older active checkpoint.
+    let toolCalls = 0;
+    const runtimeAfterRestart = new OrientRuntime({
+      toolRegistry: {
+        has: tool => tool === 'test.side-effect',
+        get: tool => ({ name: tool }),
+        async execute() {
+          toolCalls += 1;
+          return { receipt: 'duplicate' };
+        }
+      },
+      agentOrchestrator: {
+        decideReplanning() {
+          return { nextAction: null, toJSON: () => ({ outcome: 'done', nextAction: null }) };
+        },
+        async recover(error) { throw error; }
+      },
+      persistence
+    });
+
+    const result = await runtimeAfterRestart.resume('execution-terminal-restart');
+
+    assert.equal(result.resumed, false);
+    assert.equal(result.reason, 'execution_already_terminal');
+    assert.equal(result.reconciled, true);
+    assert.equal(result.execution.status, 'completed');
+    assert.deepEqual(result.execution.result, { receipt: 'already-committed' });
+    assert.equal(toolCalls, 0, 'terminal recovery must not replay the external side effect');
+
+    const repairedCheckpoint = await persistence.checkpoints.findLatest('execution-terminal-restart', {
+      tenantId: 'local'
+    });
+    assert.equal(repairedCheckpoint.snapshot.status, 'completed');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('real runtime restart reconciles an approval-blocked workflow from a durable terminal execution', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-workflow-restart-'));
+  try {
+    const JsonPersistence = require('../../../../src/infrastructure/persistence/json/json-persistence');
+    const persistence = new JsonPersistence({ rootDir: directory });
+    const executionId = 'execution-approval-restart';
+    const workflowId = 'workflow-approval-restart';
+
+    const context = new ExecutionContext({
+      requestId: 'request-approval-restart',
+      input: 'resume the already committed approved operation',
+      executionId,
+      tenantId: 'tenant-restart',
+      userId: 'owner-session',
+      workspaceId: 'workspace-restart'
+    });
+    context.start();
+    const plan = {
+      intent: 'approval.restart.reconciliation',
+      confidence: 1,
+      steps: [{ step: 1, tool: 'test.approved-side-effect', input: { operationId: 'operation-1' }, dependsOn: null }]
+    };
+    context.transitionAgentTo('planning');
+    context.transitionAgentTo('validating');
+    context.setPlan(plan);
+    context.metadata.planRevision = 1;
+    context.metadata.replans = 0;
+    context.metadata.pendingStepInputs = { 1: { operationId: 'operation-1' } };
+    context.transitionAgentTo('executing');
+
+    const completedSnapshot = {
+      ...context.snapshot(),
+      status: 'completed',
+      result: { receipt: 'durably-committed' },
+      completedAt: new Date().toISOString()
+    };
+    await persistence.executions.insert(completedSnapshot, { tenantId: 'tenant-restart' });
+    await persistence.checkpoints.save(context.snapshot(), {
+      reason: 'stale-approval-checkpoint-before-terminal-commit',
+      tenantId: 'tenant-restart'
+    });
+
+    let toolCalls = 0;
+    const runtimeAfterRestart = new OrientRuntime({
+      tenantId: 'tenant-restart',
+      userId: 'owner-session',
+      workspaceId: 'workspace-restart',
+      toolRegistry: {
+        has: tool => tool === 'test.approved-side-effect',
+        get: tool => ({ name: tool }),
+        async execute() {
+          toolCalls += 1;
+          return { receipt: 'duplicate-side-effect' };
+        }
+      },
+      agentOrchestrator: {
+        decideReplanning() {
+          return { nextAction: null, toJSON: () => ({ outcome: 'done', nextAction: null }) };
+        },
+        async recover(error) { throw error; }
+      },
+      persistence
+    });
+
+    const created = runtimeAfterRestart.workflowExecutionCoordinator.createInstance(
+      'resume the approved operation',
+      { workflowId }
+    );
+    assert.ok(created.instance);
+    const workflow = created.instance;
+    workflow.transition('QUEUED');
+    workflow.transition('RUNNING');
+    workflow.transition('WAITING');
+    workflow.metadata = {
+      ...workflow.metadata,
+      taskId: workflowId,
+      approvalBlocked: true,
+      approvalExecutionId: executionId,
+      approvalId: 'approval-durable-restart'
+    };
+    await persistence.workflows.save(workflow, 'tenant-restart');
+
+    const result = await runtimeAfterRestart.resume(executionId);
+
+    assert.equal(result.resumed, false);
+    assert.equal(result.reason, 'execution_already_terminal');
+    assert.equal(result.execution.status, 'completed');
+    assert.equal(result.execution.result.receipt, 'durably-committed');
+    assert.equal(toolCalls, 0, 'the real Runtime resume path must not replay the committed tool');
+
+    const reconciled = await persistence.workflows.findById(workflowId, 'tenant-restart');
+    assert.equal(reconciled.state, 'COMPLETED');
+    assert.equal(reconciled.metadata.approvalBlocked, false);
+    assert.equal(reconciled.metadata.approvalDecisionStatus, 'approved');
+    assert.equal(reconciled.steps['agent-runtime'].state, 'COMPLETED');
+
+    const repairedCheckpoint = await persistence.checkpoints.findLatest(executionId, {
+      tenantId: 'tenant-restart'
+    });
+    assert.equal(repairedCheckpoint.snapshot.status, 'completed');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('durable approval decision survives ApprovalService reconstruction and remains scope-bound', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approved-decision-restart-'));
+  try {
+    const JsonPersistence = require('../../../../src/infrastructure/persistence/json/json-persistence');
+    const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
+    const persistence = new JsonPersistence({ rootDir: directory });
+    const tenantId = 'tenant-approval-restart';
+    const executionId = 'execution-approval-decision-restart';
+    const ownerActorId = 'owner-session-restart';
+
+    const approvalServiceBeforeRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId,
+      decisionAuthorizer: async ({ actorId }) => actorId === ownerActorId
+    });
+    const issued = await approvalServiceBeforeRestart.issue({
+      executionId,
+      step: 2,
+      planRevision: 3,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { resourceId: 'resource-42' },
+      tenantId,
+      ttlMs: 60000
+    });
+
+    const decision = await approvalServiceBeforeRestart.decide({
+      approvalId: issued.approvalId,
+      executionId,
+      decision: 'approved',
+      actorId: ownerActorId,
+      tenantId
+    });
+    assert.equal(decision.decision.status, 'approved');
+
+    // Reconstruct the service against the same durable repository as after a process restart.
+    const approvalServiceAfterRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId,
+      decisionAuthorizer: async ({ actorId }) => actorId === ownerActorId
+    });
+    const restored = await approvalServiceAfterRestart.getApprovedForExecution({
+      approvalId: issued.approvalId,
+      executionId,
+      tenantId
+    });
+    assert.equal(restored.decision.status, 'approved');
+    assert.equal(restored.decision.actorId, ownerActorId);
+
+    const valid = await approvalServiceAfterRestart.validate({
+      approval: { approvalId: issued.approvalId },
+      executionId,
+      step: 2,
+      planRevision: 3,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { resourceId: 'resource-42' },
+      tenantId
+    });
+    assert.equal(valid.allowed, true);
+
+    const wrongScope = await approvalServiceAfterRestart.validate({
+      approval: { approvalId: issued.approvalId },
+      executionId,
+      step: 2,
+      planRevision: 3,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { resourceId: 'resource-other' },
+      tenantId
+    });
+    assert.equal(wrongScope.allowed, false);
+    assert.equal(wrongScope.reason, 'APPROVAL_SCOPE_MISMATCH');
+
+    assert.equal(await approvalServiceAfterRestart.consume(issued.approvalId, tenantId), true);
+    assert.equal(await approvalServiceAfterRestart.getApprovedForExecution({
+      approvalId: issued.approvalId,
+      executionId,
+      tenantId
+    }), null, 'consumed approvals must not be reusable after restart');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('real OrientRuntime resumes a durably approved pending step after service reconstruction', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-real-approved-resume-restart-'));
+  try {
+    const JsonPersistence = require('../../../../src/infrastructure/persistence/json/json-persistence');
+    const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
+    const persistence = new JsonPersistence({ rootDir: directory });
+    const tenantId = 'tenant-real-resume';
+    const executionId = 'execution-real-resume';
+    const ownerActorId = 'owner-real-resume';
+    const plan = {
+      intent: 'resume.approved.operation',
+      confidence: 1,
+      agentId: 'ORIENT_RUNTIME',
+      steps: [{
+        step: 1,
+        tool: 'danger.write',
+        input: { resourceId: 'resource-42' },
+        dependsOn: null
+      }]
+    };
+
+    const context = new ExecutionContext({
+      requestId: 'request-real-resume',
+      input: 'perform the approved operation',
+      executionId,
+      tenantId,
+      userId: 'user-real-resume',
+      workspaceId: 'workspace-real-resume'
+    });
+    context.start();
+    context.transitionAgentTo('planning');
+    context.transitionAgentTo('validating');
+    context.setPlan(plan);
+    context.metadata.planRevision = 1;
+    context.metadata.replans = 0;
+    context.metadata.pendingStepInputs = {
+      1: { tool: 'danger.write', operationId: null }
+    };
+    context.transitionAgentTo('executing');
+    await persistence.checkpoints.save(context.snapshot(), {
+      reason: 'approval_waiting',
+      tenantId
+    });
+
+    const approvalServiceBeforeRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId,
+      decisionAuthorizer: async ({ actorId }) => actorId === ownerActorId
+    });
+    const issued = await approvalServiceBeforeRestart.issue({
+      executionId,
+      step: 1,
+      planRevision: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { planRevision: 1 },
+      tenantId,
+      ttlMs: 60000
+    });
+    const decision = await approvalServiceBeforeRestart.decide({
+      approvalId: issued.approvalId,
+      executionId,
+      decision: 'approved',
+      actorId: ownerActorId,
+      tenantId
+    });
+    assert.equal(decision.decision.status, 'approved');
+
+    // Rebuild both Runtime and ApprovalService against the durable store.
+    let sideEffects = 0;
+    const approvalServiceAfterRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId,
+      decisionAuthorizer: async ({ actorId }) => actorId === ownerActorId
+    });
+    const authorizationService = {
+      approvalService: approvalServiceAfterRestart,
+      async assertAuthorized(tool, request) {
+        const validation = await approvalServiceAfterRestart.validate({
+          approval: request.approval,
+          executionId: request.executionId,
+          step: request.step,
+          planRevision: request.planRevision,
+          tool,
+          capability: 'external.write',
+          scope: { planRevision: request.planRevision },
+          tenantId: request.tenantId
+        });
+        if (!validation.allowed) {
+          throw Object.assign(new Error('Durable approval validation failed'), {
+            code: validation.reason
+          });
+        }
+        return {
+          allowed: true,
+          authorized: true,
+          capability: 'external.write',
+          risk: 'high',
+          requiresApproval: true,
+          approval: validation.approval
+        };
+      }
+    };
+    const runtimeAfterRestart = new OrientRuntime({
+      tenantId,
+      userId: 'user-real-resume',
+      workspaceId: 'workspace-real-resume',
+      persistence,
+      approvalService: approvalServiceAfterRestart,
+      authorizationService,
+      toolRegistry: {
+        has: tool => tool === 'danger.write',
+        get: tool => ({ name: tool }),
+        async execute(tool, input) {
+          assert.equal(tool, 'danger.write');
+          assert.deepEqual(input, { resourceId: 'resource-42' });
+          sideEffects += 1;
+          return { receipt: 'provider-accepted-once' };
+        }
+      },
+      agentOrchestrator: {
+        decideReplanning() {
+          return { nextAction: null, toJSON: () => ({ outcome: 'done', nextAction: null }) };
+        },
+        async recover(error) { throw error; }
+      }
+    });
+
+    const result = await runtimeAfterRestart.resume(executionId);
+    assert.equal(result.resumed, true);
+    assert.equal(result.execution.status, 'completed');
+    assert.equal(sideEffects, 1);
+    assert.equal(result.execution.steps.find(step => step.step === 1).result.receipt, 'provider-accepted-once');
+
+    const consumedApproval = await persistence.approvals.findById(issued.approvalId, { tenantId });
+    assert.equal(consumedApproval.used, true);
+    assert.equal(consumedApproval.decision.status, 'approved');
+
+    const duplicateResume = await runtimeAfterRestart.resume(executionId);
+    assert.equal(duplicateResume.resumed, false);
+    assert.equal(duplicateResume.reason, 'execution_not_resumable');
+    assert.equal(duplicateResume.execution.status, 'completed');
+    assert.equal(sideEffects, 1, 'a repeated resume must not replay the committed side effect');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

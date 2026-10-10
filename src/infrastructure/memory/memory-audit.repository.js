@@ -1,25 +1,85 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 class MemoryAuditRepository {
   constructor(filePath, { eventSink = null } = {}) {
+    if (!filePath) throw new TypeError('filePath is required');
     this.filePath = filePath;
     this.eventSink = eventSink;
     this.ensureStorage();
   }
 
   ensureStorage() {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    if (!fs.existsSync(this.filePath)) {
-      fs.writeFileSync(this.filePath, '[]\n', 'utf8');
+    const directory = path.dirname(this.filePath);
+    fs.mkdirSync(directory, { recursive: true });
+    if (fs.existsSync(this.filePath)) return;
+
+    // Publish a complete initial document without exposing an empty file or
+    // overwriting a concurrently-created audit log.
+    const temporaryFile = `${this.filePath}.init.${process.pid}.${crypto.randomUUID()}`;
+    let fd = null;
+    try {
+      fd = fs.openSync(temporaryFile, 'wx', 0o600);
+      fs.writeFileSync(fd, '[]\n', 'utf8');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = null;
+      try {
+        fs.linkSync(temporaryFile, this.filePath);
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+      this.syncDirectory(directory);
+    } catch (error) {
+      throw new Error(`Memory audit initialization failed: ${error.message}`);
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      try { fs.unlinkSync(temporaryFile); } catch (error) {
+        if (error.code !== 'ENOENT') {
+          throw new Error(`Memory audit initialization cleanup failed: ${error.message}`);
+        }
+      }
+    }
+  }
+
+  syncDirectory(directory) {
+    let fd;
+    try {
+      fd = fs.openSync(directory, 'r');
+      fs.fsyncSync(fd);
+    } catch (error) {
+      // Some supported platforms/filesystems do not allow directory fsync.
+      if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(error.code)) throw error;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
     }
   }
 
   read() {
     const raw = fs.readFileSync(this.filePath, 'utf8');
-    if (!raw.trim()) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!raw.trim()) {
+      throw Object.assign(new Error('Memory audit storage file is empty'), {
+        code: 'MEMORY_AUDIT_CORRUPT'
+      });
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (cause) {
+      const error = new Error(`Memory audit storage JSON is invalid: ${cause.message}`);
+      error.code = 'MEMORY_AUDIT_CORRUPT';
+      error.cause = cause;
+      throw error;
+    }
+    if (!Array.isArray(parsed)) {
+      throw Object.assign(new Error('Memory audit storage root must be an array'), {
+        code: 'MEMORY_AUDIT_CORRUPT'
+      });
+    }
+    return parsed;
   }
 
   setEventSink(eventSink) {
@@ -35,19 +95,28 @@ class MemoryAuditRepository {
     };
     events.push(record);
 
-    const temporaryFile = `${this.filePath}.${process.pid}.tmp`;
+    const directory = path.dirname(this.filePath);
+    const temporaryFile = `${this.filePath}.tmp.${process.pid}.${crypto.randomUUID()}`;
+    let fd = null;
     try {
-      fs.writeFileSync(
-        temporaryFile,
-        JSON.stringify(events, null, 2) + '\n',
-        'utf8'
-      );
+      fd = fs.openSync(temporaryFile, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify(events, null, 2) + '\n', 'utf8');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = null;
       fs.renameSync(temporaryFile, this.filePath);
+      this.syncDirectory(directory);
     } catch (error) {
-      try {
-        if (fs.existsSync(temporaryFile)) fs.unlinkSync(temporaryFile);
-      } catch {}
       throw new Error(`Memory audit write failed: ${error.message}`);
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      try { fs.unlinkSync(temporaryFile); } catch (error) {
+        if (error.code !== 'ENOENT') {
+          throw new Error(`Memory audit temporary-file cleanup failed: ${error.message}`);
+        }
+      }
     }
 
     if (this.eventSink) {
@@ -59,10 +128,17 @@ class MemoryAuditRepository {
         'memory.consolidated': 'memory.consolidated',
         'memory.archived': 'memory.archived'
       };
-      this.eventSink({
-        ...record,
-        type: record.type || eventTypeByAction[record.action] || 'memory.updated'
-      });
+      try {
+        this.eventSink({
+          ...record,
+          type: record.type || eventTypeByAction[record.action] || 'memory.updated'
+        });
+        this.lastEventSinkError = null;
+      } catch (error) {
+        // The audit record is already committed. Keep downstream delivery
+        // failure observable without misreporting the durable append.
+        this.lastEventSinkError = error;
+      }
     }
 
     return record;
@@ -72,6 +148,20 @@ class MemoryAuditRepository {
     return this.read().filter(event =>
       event.tenantId === tenantId &&
       event.memoryId === memoryId &&
+      (!scope || event.scope === scope || (!event.scope && scope === 'personal'))
+    );
+  }
+
+  // Operation receipts are derived from the same durable audit file that is
+  // committed/rolled back with the memory store by MemoryTransactionCoordinator.
+  // Always scope by tenant; operation IDs are not an authorization boundary.
+  findByOperationId(operationId, tenantId = 'local', scope = null) {
+    if (typeof operationId !== 'string' || !operationId.trim()) {
+      throw new TypeError('operationId is required');
+    }
+    return this.read().filter(event =>
+      event.operationId === operationId &&
+      event.tenantId === tenantId &&
       (!scope || event.scope === scope || (!event.scope && scope === 'personal'))
     );
   }

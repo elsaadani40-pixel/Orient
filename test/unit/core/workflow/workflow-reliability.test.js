@@ -454,28 +454,23 @@ test('JSON durable writes reject cross-tenant workflow and checkpoint collisions
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('SQLite idempotency rejects cross-tenant key reuse explicitly', () => {
+test('SQLite idempotency permits the same key independently across tenants', () => {
   const SqlitePersistence = require('../../../../src/infrastructure/persistence/sqlite/sqlite-persistence');
   const persistence = new SqlitePersistence({ filePath: ':memory:' });
-
-  persistence.idempotency.begin({
+  const shared = {
     executionId: 'shared-execution-key',
     step: 1,
     tool: 'test',
-    operationId: 'shared-operation',
-    tenantId: 'tenant-a'
-  });
+    operationId: 'shared-operation'
+  };
 
-  assert.throws(
-    () => persistence.idempotency.begin({
-      executionId: 'shared-execution-key',
-      step: 1,
-      tool: 'test',
-      operationId: 'shared-operation',
-      tenantId: 'tenant-b'
-    }),
-    /Idempotency tenant mismatch/
-  );
+  const tenantA = persistence.idempotency.begin({ ...shared, tenantId: 'tenant-a' });
+  const tenantB = persistence.idempotency.begin({ ...shared, tenantId: 'tenant-b' });
+  assert.equal(tenantA.created, true);
+  assert.equal(tenantB.created, true);
+  assert.equal(persistence.idempotency.begin({ ...shared, tenantId: 'tenant-a' }).created, false);
+  assert.equal(persistence.idempotency.findByKey(tenantA.key, { tenantId: 'tenant-a' }).tenantId, 'tenant-a');
+  assert.equal(persistence.idempotency.findByKey(tenantA.key, { tenantId: 'tenant-b' }).tenantId, 'tenant-b');
 });
 
 

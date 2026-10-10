@@ -52,7 +52,7 @@ function crashableIdempotencyRepository() {
 
   return {
     records,
-    begin(args) {
+    async begin(args) {
       const key = args.operationId;
       const existing = records.get(key);
       if (existing) {
@@ -75,11 +75,11 @@ function crashableIdempotencyRepository() {
       records.set(key, record);
       return { created: true, key, record: { ...record } };
     },
-    findByKey(key) {
+    async findByKey(key) {
       const record = records.get(key);
       return record ? { ...record } : null;
     },
-    complete(key, result) {
+    async complete(key, result) {
       const record = records.get(key);
       if (!record) return null;
 
@@ -96,7 +96,7 @@ function crashableIdempotencyRepository() {
       records.set(key, record);
       return { ...record };
     },
-    fail() {
+    async fail() {
       // The simulated crash happens before the process can durably mark
       // the operation failed, leaving the authoritative operation as RUNNING.
       return records.values().next().value || null;

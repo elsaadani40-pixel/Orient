@@ -1,5 +1,8 @@
 const config = require('./src/core/config');
 const logger = require('./src/core/logging/logger');
+const path = require('path');
+const MemoryTransactionCoordinator =
+  require('./src/infrastructure/memory/memory-transaction-coordinator');
 
 const JsonMemoryRepository =
   require('./src/infrastructure/memory/json-memory.repository');
@@ -36,8 +39,14 @@ const ProjectBuilderAgent =
 const createWorkspaceTools =
   require('./src/application/tools/workspace.tools');
 
+const ProjectOperationReceiptStore =
+  require('./src/infrastructure/execution/project-operation-receipt-store');
+
 const OrientRuntime =
   require('./src/core/runtime/orient-runtime');
+
+const createProductionShutdownCoordinator =
+  require('./src/core/runtime/production-shutdown-composition');
 
 const AgentService =
   require('./src/application/agent/agent.service');
@@ -108,6 +117,17 @@ const createAgentRoutes =
 const createServer =
   require('./src/interfaces/http/server');
 
+const memoryAuditFile = path.join(config.agentDataDirectory, 'memory-audit.json');
+const memoryTransactionCoordinator = new MemoryTransactionCoordinator({
+  memoryFile: config.dataFile,
+  auditFile: memoryAuditFile,
+  journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
+});
+
+// Recovery must run before either repository reads or migrates its file and
+// before the HTTP server is constructed/listened on.
+memoryTransactionCoordinator.recover();
+
 const repository =
   new JsonMemoryRepository(config.dataFile);
 
@@ -127,9 +147,7 @@ const agentInvocationService =
   });
 
 const memoryAuditRepository =
-  new MemoryAuditRepository(
-    require('path').join(config.agentDataDirectory, 'memory-audit.json')
-  );
+  new MemoryAuditRepository(memoryAuditFile);
 
 const accessAuditRepository =
   new JsonAccessAuditRepository(
@@ -144,7 +162,8 @@ const memoryService =
   new MemoryService(repository, {
     memoryAccessPolicy,
     defaultScope: 'personal',
-    auditRepository: memoryAuditRepository
+    auditRepository: memoryAuditRepository,
+    transactionCoordinator: memoryTransactionCoordinator
   });
 
 const toolRegistry =
@@ -166,7 +185,12 @@ const projectBuilderAgent = new ProjectBuilderAgent({
     maxOutput: 30000
   }
 });
-const workspaceTools = createWorkspaceTools(projectBuilderAgent);
+const projectOperationReceiptStore = new ProjectOperationReceiptStore({
+  directory: path.join(config.agentDataDirectory, 'project-operation-receipts')
+});
+const workspaceTools = createWorkspaceTools(projectBuilderAgent, {
+  operationReceiptStore: projectOperationReceiptStore
+});
 
 for (const tool of [...memoryTools, ...workspaceTools]) {
   toolRegistry.register(tool);
@@ -395,40 +419,47 @@ start().catch((error) => {
   process.exitCode = 1;
 });
 
-function shutdown(signal) {
-  logger.info(
-    'Server shutting down',
-    { signal }
-  );
-
-  eventStoreSubscriber.stop();
-
-  try {
-    runtime.shutdown({ cancelQueued: false });
-  } catch (error) {
-    logger.error('Runtime shutdown failed', {
-      code: error?.code || 'RUNTIME_SHUTDOWN_FAILED',
+const shutdownCoordinator = createProductionShutdownCoordinator({
+  server,
+  runtime,
+  persistenceRuntime,
+  eventStoreSubscriber,
+  // Production remains synchronous by default. Keep this null until all async
+  // side-effect adapter gates are proven and the worker is deliberately enabled.
+  workerService: null,
+  onError: (error, stage) => {
+    logger.error('Graceful shutdown stage failed', {
+      stage,
+      code: error?.code || 'SHUTDOWN_STAGE_FAILED',
       message: error?.message || String(error)
     });
   }
+});
+
+let shutdownStarted = false;
+function shutdown(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  logger.info('Server shutting down', { signal });
 
   const forceExit = setTimeout(() => {
     process.exit(1);
   }, config.shutdownGraceMs);
   forceExit.unref();
 
-  server.close(() => {
-    clearTimeout(forceExit);
-    Promise.resolve()
-      .then(() => persistenceRuntime.close())
-      .catch((error) => {
-        logger.error('Persistence shutdown failed', {
-          code: error?.code || 'PERSISTENCE_SHUTDOWN_FAILED',
-          message: error?.message || String(error)
-        });
-      })
-      .finally(() => process.exit(0));
-  });
+  shutdownCoordinator.shutdown({ runtimeOptions: { cancelQueued: false } })
+    .then(result => {
+      clearTimeout(forceExit);
+      process.exit(result.completed ? 0 : 1);
+    })
+    .catch(error => {
+      clearTimeout(forceExit);
+      logger.error('ORIENT ONE shutdown failed', {
+        code: error?.code || 'SHUTDOWN_FAILED',
+        message: error?.message || String(error)
+      });
+      process.exit(1);
+    });
 }
 
 process.on(
