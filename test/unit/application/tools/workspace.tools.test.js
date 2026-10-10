@@ -93,3 +93,14 @@ test('change execution is explicitly high-risk and refuses empty or unbound chan
     );
   });
 });
+
+test('workspace read rejects symlinks even when their target is inside the root', async () => {
+  await withWorkspace(async ({ root, tools }) => {
+    await fs.symlink(path.join(root, '.env'), path.join(root, 'src', 'env-alias.js'));
+    const read = tools.find(tool => tool.name === 'workspace.read');
+    await assert.rejects(
+      () => read.execute({ path: 'src/env-alias.js' }, {}),
+      error => error.code === 'WORKSPACE_PATH_FORBIDDEN'
+    );
+  });
+});
