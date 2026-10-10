@@ -76,7 +76,7 @@ class MemoryTransactionCoordinator {
     }
   }
 
-  recover() {
+  _recoverUnlocked() {
     const journal = this.readJournal();
     if (!journal) return { recovered: false, phase: null };
     if (journal.phase === 'prepared') {
@@ -95,6 +95,17 @@ class MemoryTransactionCoordinator {
     fs.unlinkSync(this.journalFile);
     syncDirectory(path.dirname(this.journalFile));
     return { recovered: true, phase: journal.phase };
+  }
+
+  // Startup recovery must participate in the same inter-process lock as writes;
+  // otherwise a second process could roll back a transaction that is still live.
+  recover() {
+    const owner = this.acquireLock();
+    try {
+      return this._recoverUnlocked();
+    } finally {
+      this.releaseLock(owner);
+    }
   }
 
   acquireLock() {
@@ -162,7 +173,7 @@ class MemoryTransactionCoordinator {
     if (typeof operation !== 'function') throw new TypeError('operation must be a function');
     const owner = this.acquireLock();
     try {
-      this.recover();
+      this._recoverUnlocked();
       const snapshots = this.files.map(filePath => {
         try { return { path: filePath, exists: true, content: fs.readFileSync(filePath, 'utf8') }; }
         catch (error) {
@@ -180,7 +191,7 @@ class MemoryTransactionCoordinator {
       try {
         result = operation();
       } catch (operationError) {
-        try { this.recover(); }
+        try { this._recoverUnlocked(); }
         catch (recoveryError) {
           const fatal = new Error('Memory transaction failed and rollback recovery is incomplete');
           fatal.code = 'MEMORY_TRANSACTION_RECOVERY_FAILED';
@@ -194,7 +205,7 @@ class MemoryTransactionCoordinator {
       journal.phase = 'committed';
       journal.committedAt = new Date().toISOString();
       this.writeJournal(journal);
-      this.recover();
+      this._recoverUnlocked();
       return result;
     } finally {
       this.releaseLock(owner);

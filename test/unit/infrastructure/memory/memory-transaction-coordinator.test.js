@@ -126,3 +126,17 @@ test('MemoryService add crash after durable audit append is rolled back on resta
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
+
+test('startup recovery refuses to race a live transaction owner', () => {
+  const f = fixture();
+  try {
+    const owner = f.coordinator.acquireLock();
+    assert.throws(
+      () => f.coordinator.recover(),
+      error => error.code === 'MEMORY_TRANSACTION_LOCKED'
+    );
+    f.coordinator.releaseLock(owner);
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
