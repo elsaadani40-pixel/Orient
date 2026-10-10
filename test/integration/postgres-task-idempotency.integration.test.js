@@ -43,7 +43,8 @@ test('PostgreSQL task idempotency is durable, tenant-scoped, and terminal-state 
       executionId: keyArgs.executionId + '-other'
     });
     assert.equal(otherTenant.created, true);
-    assert.equal(await persistence.idempotency.findByKey(reservation.key, { tenantId: otherTenantId }), null);
+    assert.equal((await persistence.idempotency.findByKey(reservation.key, { tenantId: otherTenantId })).tenantId, otherTenantId);
+    assert.equal(await persistence.idempotency.findByKey(reservation.key, { tenantId: tenantId + '-unauthorized' }), null);
 
     const taskSummary = {
       id: 'task-' + suffix,
