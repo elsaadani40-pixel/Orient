@@ -113,3 +113,20 @@ test('execution status, event-stream, approval, cancel, and resume routes stay b
     assert.ok(routeIndex > guard, `protected route marker ${marker} must remain after owner authentication`);
   }
 });
+
+test('WebGL renderer degrades safely and bounds work on mobile devices', () => {
+  const renderer = read('src/interfaces/http/command-scene.js');
+  assert.match(renderer, /getContext\('webgl'/, 'renderer must use the supported WebGL fallback path');
+  assert.match(renderer, /if \(!gl\) \{ useFallback\(\); return; \}/,
+    'unavailable WebGL must switch to the CSS fallback');
+  assert.match(renderer, /webglcontextlost/,
+    'a context loss after initialization must stop rendering and reveal the fallback');
+  assert.match(renderer, /eventNodes\.length > 6/,
+    'the rendered execution graph must stay bounded to six event nodes');
+  assert.match(renderer, /Math\.min\(window\.devicePixelRatio \|\| 1, 1\.5\)/,
+    'device pixel ratio must be capped to reduce mobile GPU cost');
+  assert.match(renderer, /document\.hidden/,
+    'animation must pause while the page is in the background');
+  assert.match(renderer, /prefers-reduced-motion|matchMedia\('\(prefers-reduced-motion: reduce\)'\)/,
+    'reduced-motion preference must be respected');
+});
