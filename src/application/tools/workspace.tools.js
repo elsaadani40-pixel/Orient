@@ -82,12 +82,22 @@ async function statAllowed(projectBuilder, relativePath) {
   let absolutePath;
   try {
     absolutePath = projectBuilder.policy.assertRead(relativePath);
+    if (typeof projectBuilder.policy._assertNoSymlinkComponents === 'function') {
+      projectBuilder.policy._assertNoSymlinkComponents(absolutePath);
+    }
   } catch (_) {
-    fail('المسار غير مسموح به ضمن مساحة العمل', 403, 'WORKSPACE_PATH_FORBIDDEN');
+    fail('المسار غير مسموح به ضمن مساحة العمل أو يحتوي رابطًا رمزيًا', 403, 'WORKSPACE_PATH_FORBIDDEN');
   }
 
   try {
-    return { absolutePath, stats: await fs.stat(absolutePath) };
+    const realPath = await fs.realpath(absolutePath);
+    const realRoot = projectBuilder.policy.realAllowedRoot;
+    const realRelative = path.relative(realRoot, realPath).split(path.sep).join('/');
+    if (realRelative === '..' || realRelative.startsWith('../') || path.isAbsolute(realRelative)) {
+      fail('المسار يتجاوز مساحة العمل المسموحة', 403, 'WORKSPACE_PATH_FORBIDDEN');
+    }
+    assertAllowedPath(realRelative || '.');
+    return { absolutePath, realPath, stats: await fs.stat(absolutePath) };
   } catch (error) {
     if (error.code === 'ENOENT') fail('الملف أو المجلد غير موجود', 404, 'WORKSPACE_PATH_NOT_FOUND');
     throw error;
@@ -134,6 +144,8 @@ function createWorkspaceTools(projectBuilder) {
       const payload = inputObject(input);
       const relativePath = normalizeRelativePath(typeof input === 'string' ? input : payload.path);
       assertAllowedPath(relativePath);
+      const { stats } = await statAllowed(projectBuilder, relativePath);
+      if (!stats.isDirectory()) fail('المسار ليس مجلدًا', 400, 'WORKSPACE_NOT_A_DIRECTORY');
       const entries = await projectBuilder.workspace.list(relativePath);
       const visible = entries
         .filter(entry => !entry.isSymbolicLink())
@@ -173,6 +185,14 @@ function createWorkspaceTools(projectBuilder) {
         if (depth > MAX_SEARCH_DEPTH || results.length >= MAX_SEARCH_RESULTS || visitedFiles >= MAX_SEARCH_FILES) {
           truncated = true;
           return;
+        }
+
+        try {
+          const { stats } = await statAllowed(projectBuilder, directory);
+          if (!stats.isDirectory()) return;
+        } catch (error) {
+          if (['WORKSPACE_PATH_FORBIDDEN', 'WORKSPACE_SENSITIVE_PATH_DENIED', 'WORKSPACE_PATH_NOT_FOUND'].includes(error.code)) return;
+          throw error;
         }
 
         let entries;
