@@ -71,9 +71,9 @@ class OwnerSessionClientTest {
             val client = OwnerSessionClient(server.address.port)
             assertTrue(runBlocking { client.login("0123456789abcdef") }.contains("успешно"))
             assertTrue(client.isAuthenticated)
-            assertTrue(runBlocking { client.fetchExecutions() }.contains("executions"))
-            assertTrue(runBlocking { client.executeTask("test task") }.contains("completed"))
-            runBlocking { client.logout() }
+            assertTrue(withApiDiagnostics("fetchExecutions") { runBlocking { client.fetchExecutions() } }.contains("executions"))
+            assertTrue(withApiDiagnostics("executeTask") { runBlocking { client.executeTask("test task") } }.contains("completed"))
+            withApiDiagnostics("logout") { runBlocking { client.logout() } }
 
             assertEquals(1, executionRequests.get())
             assertEquals(1, taskRequests.get())
@@ -150,6 +150,12 @@ class OwnerSessionClientTest {
         assertFalse(client.isAuthenticated)
     }
 
+    private fun <T> withApiDiagnostics(operation: String, block: () -> T): T = try {
+        block()
+    } catch (error: OwnerApiException) {
+        throw AssertionError("$operation failed: HTTP ${error.statusCode} ${error.errorCode}: ${error.message}", error)
+    }
+
     private fun startServer(handler: (HttpExchange) -> Unit): HttpServer {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
@@ -158,7 +164,7 @@ class OwnerSessionClientTest {
             } catch (error: Throwable) {
                 val diagnostic = JSONObject()
                     .put("code", "TEST_SERVER_ERROR")
-                    .put("message", error.message ?: error.javaClass.simpleName)
+                    .put("message", "${error.javaClass.simpleName}: ${error.message ?: "no message"} at ${exchange.requestMethod} ${exchange.requestURI.path}")
                     .toString()
                 try { respond(exchange, 500, diagnostic) } catch (_: Exception) {}
             }
