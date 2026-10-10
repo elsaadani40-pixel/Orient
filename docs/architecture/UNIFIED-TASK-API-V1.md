@@ -58,6 +58,10 @@ Creation validates authenticated scope, goal size, schema, rate/resource bounds,
 
 Write/edit endpoints are intentionally **not** specified as generally available in v1. Before enabling writes, implement diff preview, exact target confirmation, path confinement, authorization, risk/approval gates, durable checkpoint/backup, atomic replacement where possible, post-write verification, and rollback tests.
 
+## Optional device permissions
+
+Android and other device permissions are optional, feature-scoped user choices; they are never a blanket prerequisite for using ORIENT. Clients request a permission only when the user invokes a feature that needs it, explain the purpose, and preserve unrelated functionality after denial. A missing/revoked permission must produce an explicit blocked or needs_user_input state and may offer a safe alternative; it must never produce a fabricated success. OS permission grants do not replace runtime capability authorization, risk checks, or human approval. See docs/security/OPTIONAL-DEVICE-PERMISSIONS.md for the required policy and acceptance tests.
+
 ## Task lifecycle
 
 `accepted → scoped → discovering_capabilities → researching → planned → preflight → awaiting_approval → executing → verifying → completed`
