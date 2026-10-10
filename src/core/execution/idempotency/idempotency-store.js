@@ -19,6 +19,16 @@ class IdempotencyStore {
     return error;
   }
 
+  requireRepositoryRecord(result) {
+    const validate = record => {
+      if (!record) throw new Error('Idempotency record not found');
+      return record;
+    };
+    return result && typeof result.then === 'function'
+      ? result.then(validate)
+      : validate(result);
+  }
+
   buildKey({
     executionId,
     step,
@@ -83,9 +93,9 @@ class IdempotencyStore {
 
   complete(key, result, tenantId = null) {
     if (this.repository) {
-      const record = this.repository.complete(key, result, { tenantId });
-      if (!record) throw new Error('Idempotency record not found');
-      return record;
+      return this.requireRepositoryRecord(
+        this.repository.complete(key, result, { tenantId })
+      );
     }
 
     const record = this.get(key, tenantId);
@@ -108,9 +118,9 @@ class IdempotencyStore {
 
   fail(key, error, tenantId = null) {
     if (this.repository) {
-      const record = this.repository.fail(key, error, { tenantId });
-      if (!record) throw new Error('Idempotency record not found');
-      return record;
+      return this.requireRepositoryRecord(
+        this.repository.fail(key, error, { tenantId })
+      );
     }
 
     const record = this.get(key, tenantId);
