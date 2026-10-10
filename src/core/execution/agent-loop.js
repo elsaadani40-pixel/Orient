@@ -411,7 +411,7 @@ class AgentLoop {
       // and idempotency ledger disagree, fail closed before authorization,
       // reservation, or tool invocation rather than treating it as a fresh run.
       const persistedOperation = hasPersistedRunningStep
-        ? this.idempotencyStore.get(operationId, operationTenantId)
+        ? await this.idempotencyStore.get(operationId, operationTenantId)
         : null;
 
       if (hasPersistedRunningStep && !persistedOperation) {
@@ -639,7 +639,7 @@ class AgentLoop {
       });
 
       const idempotency =
-        this.idempotencyStore.begin({
+        await this.idempotencyStore.begin({
           executionId:
             context.executionId,
           step: stepNumber,
@@ -835,7 +835,7 @@ class AgentLoop {
 
           if (reconciliation?.status === 'completed') {
             const reconciledResult = reconciliation.result;
-            this.idempotencyStore.complete(
+            await this.idempotencyStore.complete(
               idempotency.key,
               reconciledResult,
               operationTenantId
@@ -969,7 +969,7 @@ class AgentLoop {
         const result =
           execution.result;
 
-        this.idempotencyStore.complete(
+        await this.idempotencyStore.complete(
           idempotency.key,
           result,
           operationTenantId
@@ -1078,7 +1078,7 @@ class AgentLoop {
           throw error;
         }
 
-        this.idempotencyStore.fail(
+        await this.idempotencyStore.fail(
           idempotency.key,
           error,
           operationTenantId
