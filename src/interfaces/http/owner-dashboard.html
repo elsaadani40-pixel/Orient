@@ -33,8 +33,14 @@
       <div id="audit-status" class="muted" role="status">جارٍ تحميل السجل…</div>
       <div class="table-wrap"><table><thead><tr><th>الوقت</th><th>عنوان IP</th><th>المسار</th><th>الطريقة</th><th>HTTP</th><th>المصادقة</th><th>المدة</th></tr></thead><tbody id="audit-rows"></tbody></table></div>
     </div>
+    <div class="card">
+      <div class="row"><h2 style="margin:0">الموافقات المطلوبة</h2><button id="refresh-approvals" class="btn secondary">تحديث الموافقات</button></div>
+      <p class="muted">لن ينفذ ORIENT ONE تغييرًا عالي الخطورة دون موافقتك الصريحة. راجع الأداة والصلاحية والتنفيذ قبل الموافقة.</p>
+      <div id="approval-status" class="muted" role="status">جارٍ تحميل الموافقات…</div>
+      <div id="approval-items"></div>
+    </div>
   </section>
-  <p class="muted">تنبيه: لوحة المالك الحالية أولية؛ إدارة الجلسات المتعددة والسياسات والتنفيذ والتحكم في القدرات ستضاف بعد اختبارها. لا يعني تسجيل الحدث أن العملية المطلوبة اكتملت بنجاح.</p>
+  <p class="muted">إجراءات الموافقة والاستئناف والإلغاء محمية بجلسة المالك وفحص المصدر ورمز CSRF. لا تعني الموافقة أن التغيير نجح؛ تُعرض النتيجة التي يعيدها Runtime فقط.</p>
 </main>
 <script src="/owner-dashboard.js" defer></script>
 </body>
