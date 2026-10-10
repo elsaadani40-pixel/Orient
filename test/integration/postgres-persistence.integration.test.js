@@ -499,7 +499,8 @@ test('PostgreSQL approval authorization is durable, tenant-scoped and replay-saf
   });
   const approvals = new ApprovalService({
     repository: persistence.approvals,
-    tenantId: 'tenant-approval-service'
+    tenantId: 'tenant-approval-service',
+    decisionAuthorizer: async () => true
   });
   const auth = new AuthorizationService({
     capabilityMapper: mapper,
@@ -515,6 +516,8 @@ test('PostgreSQL approval authorization is durable, tenant-scoped and replay-saf
     scope: { planRevision: 1 },
     tenantId: 'tenant-approval-service'
   });
+
+  await approvals.decide({ approvalId: approval.approvalId, executionId: 'exec-approval-service', decision: 'approved', actorId: 'owner-test', tenantId: 'tenant-approval-service' });
 
   const allowed = await auth.authorize('danger.write', {
     executionId: 'exec-approval-service',
