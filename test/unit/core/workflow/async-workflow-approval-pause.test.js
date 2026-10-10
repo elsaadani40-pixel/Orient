@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const AsyncWorkflowWorker = require('../../../../src/core/workflow/async-workflow-worker');
+const AsyncWorkflowScheduler = require('../../../../src/core/workflow/async-workflow-scheduler');
 const { WorkflowDefinition, WorkflowInstance } = require('../../../../src/core/workflow');
 
 test('approval-required pauses a workflow durably without retrying or failing the step', async () => {
@@ -68,4 +69,29 @@ test('approval-required pauses a workflow durably without retrying or failing th
   assert.equal(persisted.length, 1);
   assert.ok(events.some(event => event.type === 'workflow.approval.required'));
   assert.ok(events.some(event => event.type === 'workflow.state.changed' && event.payload.to === 'WAITING'));
+});
+
+
+test('recovery never re-enqueues a persisted approval-blocked workflow', async () => {
+  const scheduler = Object.create(AsyncWorkflowScheduler.prototype);
+  scheduler.workflowRepository = {
+    async findAll() {
+      return [{
+        workflowId: 'approval-blocked-after-restart',
+        state: 'WAITING',
+        metadata: { approvalBlocked: true, approvalExecutionId: 'execution-1', approvalId: 'approval-1' }
+      }];
+    }
+  };
+  scheduler.tenantId = 'tenant-a';
+  scheduler.queue = [];
+  scheduler.active = new Map();
+  scheduler.maxQueueDepth = 10;
+  scheduler.dispatchWindow = 1;
+
+  const recovered = await scheduler.recoverPersisted('worker-1', []);
+
+  assert.equal(recovered, 0);
+  assert.equal(scheduler.queue.length, 0);
+  assert.equal(scheduler.active.size, 0);
 });
