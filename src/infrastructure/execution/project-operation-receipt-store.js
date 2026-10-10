@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const os = require('node:os');
 
 function fail(message, code) {
   const error = new Error(message);
@@ -56,8 +57,9 @@ class ProjectOperationReceiptStore {
   ensureDirectory() {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     const stats = fs.lstatSync(this.directory);
-    if (!stats.isDirectory() || stats.isSymbolicLink()) {
-      fail('Operation receipt directory is not a real directory', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID');
+    if (!stats.isDirectory() || stats.isSymbolicLink() ||
+        fs.realpathSync(this.directory) !== this.directory) {
+      fail('Operation receipt directory is not a real, canonical directory', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID');
     }
   }
 
@@ -114,18 +116,56 @@ class ProjectOperationReceiptStore {
     const lockPath = filePath + '.lock';
     const token = crypto.randomUUID();
     let lockFd;
+    let acquired = false;
 
-    try {
-      lockFd = fs.openSync(lockPath, 'wx', 0o600);
-      fs.writeFileSync(lockFd, JSON.stringify({ token, pid: process.pid }) + '\n', 'utf8');
-      fs.fsyncSync(lockFd);
-    } catch (error) {
-      if (error.code === 'EEXIST') {
-        fail('Project operation receipt is locked; refusing concurrent write', 'PROJECT_OPERATION_RECEIPT_LOCKED');
+    for (let attempt = 0; attempt < 2 && !acquired; attempt += 1) {
+      try {
+        lockFd = fs.openSync(lockPath, 'wx', 0o600);
+        fs.writeFileSync(lockFd, JSON.stringify({
+          token,
+          pid: process.pid,
+          hostname: os.hostname(),
+          acquiredAt: new Date().toISOString()
+        }) + '\n', 'utf8');
+        fs.fsyncSync(lockFd);
+        fs.closeSync(lockFd);
+        lockFd = undefined;
+        syncDirectory(this.directory);
+        acquired = true;
+      } catch (error) {
+        if (lockFd !== undefined) {
+          try { fs.closeSync(lockFd); } catch {}
+          lockFd = undefined;
+        }
+        if (error.code !== 'EEXIST') throw error;
+
+        let current;
+        try { current = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch {}
+        let staleLocalOwner = false;
+        if (current?.hostname === os.hostname() &&
+            Number.isInteger(current.pid) && current.pid > 0) {
+          try {
+            process.kill(current.pid, 0);
+          } catch (probeError) {
+            if (probeError.code === 'ESRCH') staleLocalOwner = true;
+            else if (probeError.code !== 'EPERM') throw probeError;
+          }
+        }
+        if (!staleLocalOwner || attempt > 0) {
+          fail('Project operation receipt is locked; refusing concurrent write', 'PROJECT_OPERATION_RECEIPT_LOCKED');
+        }
+        const quarantine = lockPath + '.stale.' + crypto.randomUUID();
+        try {
+          fs.renameSync(lockPath, quarantine);
+          try { fs.unlinkSync(quarantine); } catch {}
+          syncDirectory(this.directory);
+        } catch (renameError) {
+          if (renameError.code !== 'ENOENT') throw renameError;
+        }
       }
-      throw error;
-    } finally {
-      if (lockFd !== undefined) fs.closeSync(lockFd);
+    }
+    if (!acquired) {
+      fail('Project operation receipt lock could not be acquired', 'PROJECT_OPERATION_RECEIPT_LOCKED');
     }
 
     try {
