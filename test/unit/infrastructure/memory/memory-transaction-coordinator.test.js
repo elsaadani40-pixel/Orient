@@ -90,3 +90,36 @@ test('failed operation restores memory and audit before-images', () => {
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
+
+test('MemoryService add crash after durable audit append is rolled back on restart', () => {
+  const f = fixture();
+  try {
+    const script = [
+      `const MemoryRepository = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/json-memory.repository'))});`,
+      `const AuditRepository = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/memory-audit.repository'))});`,
+      `const MemoryService = require(${JSON.stringify(require.resolve('../../../../src/application/memory/memory.service'))});`,
+      `const Coordinator = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/memory-transaction-coordinator'))});`,
+      `const coordinator = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
+      `coordinator.recover();`,
+      `const memoryRepository = new MemoryRepository(process.env.MEMORY_FILE);`,
+      `const auditRepository = new AuditRepository(process.env.AUDIT_FILE);`,
+      `const originalAppend = auditRepository.append.bind(auditRepository);`,
+      `auditRepository.append = event => { const result = originalAppend(event); process.exit(74); };`,
+      `const service = new MemoryService(memoryRepository, {auditRepository, transactionCoordinator: coordinator});`,
+      `service.add('crash during audit commit', {}, {tenantId: 'tenant-crash-test'});`
+    ].join('\n');
+    const child = spawnSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      env: { ...process.env, MEMORY_FILE: f.memoryFile, AUDIT_FILE: f.auditFile, JOURNAL_FILE: f.journalFile }
+    });
+    assert.equal(child.status, 74, child.stderr);
+    assert.notEqual(JSON.parse(fs.readFileSync(f.memoryFile, 'utf8')).length, 0);
+    assert.notEqual(JSON.parse(fs.readFileSync(f.auditFile, 'utf8')).length, 0);
+
+    f.coordinator.recover();
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.memoryFile, 'utf8')), [{ id: 'before' }]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.auditFile, 'utf8')), [{ action: 'before' }]);
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
