@@ -10,6 +10,8 @@ const MemoryAuditRepository =
   require('./src/infrastructure/memory/memory-audit.repository');
 const JsonAccessAuditRepository =
   require('./src/infrastructure/security/json-access-audit.repository');
+const OwnerAuthService =
+  require('./src/core/security/owner-auth-service');
 
 const AgentRegistry =
   require('./src/core/agent/boundary/agent-registry');
@@ -128,6 +130,8 @@ const accessAuditRepository =
   new JsonAccessAuditRepository(
     require('path').join(config.agentDataDirectory, 'access-audit.jsonl')
   );
+
+const ownerAuthService = new OwnerAuthService();
 
 const memoryService =
   new MemoryService(repository, {
@@ -295,7 +299,8 @@ const server =
   createServer({
     memoryRoutes,
     agentRoutes,
-    accessAudit: accessAuditRepository
+    accessAudit: accessAuditRepository,
+    ownerAuth: ownerAuthService
   });
 
 async function start() {
