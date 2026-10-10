@@ -28,7 +28,9 @@ npm test
 node app.js
 \`\`\`
 
-Open \`http://127.0.0.1:8080/dashboard\`. The default server binding is loopback-only (\`127.0.0.1\`). The root path \`/\` remains the existing memory interface.
+Before starting the server, set \`ORIENT_OWNER_PASSWORD\` to a unique secret of at least 16 characters. Plain \`node app.js\` does not automatically load \`.env\`; if you store the secret in your ignored local \`.env\` file, load it into the shell with \`set -a; . ./.env; set +a\`. Without this setting, \`/owner\` displays a configuration error and the protected dashboard and operational APIs fail closed.
+
+Open \`http://127.0.0.1:8080/owner\`, sign in, then follow the link to \`/dashboard\`. The default server binding is loopback-only (\`127.0.0.1\`). The root path \`/\` remains the existing memory interface.
 
 The dashboard uses same-origin HTTP requests and introduces no CDN, external analytics, or new frontend package dependency. Task input fields are capped at 5,000 characters to match the runtime service's current input limit.
 
