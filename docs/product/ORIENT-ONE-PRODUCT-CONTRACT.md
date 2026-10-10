@@ -1,10 +1,10 @@
-# ORIENT ONE — Product Contract and Cross-Device Roadmap
+# ORIENT — Product Contract and Cross-Device Roadmap
 
 **Status:** product contract / implementation roadmap, not a claim of completed functionality.
 
 ## Product promise
 
-ORIENT ONE is intended to be one coherent personal AI operating system that a user can access from a phone, tablet, and computer. It must preserve the user's authorized identity, tasks, preferences, plans, durable memories, and execution history across devices where synchronization is enabled. It is not a collection of unrelated demos and not an Android-only phone utility.
+ORIENT is intended to be one coherent personal AI operating system that a user can access from a phone, tablet, and computer. It must preserve the user's authorized identity, tasks, preferences, plans, durable memories, and execution history across devices where synchronization is enabled. It is not a collection of unrelated demos and not an Android-only phone utility.
 
 The system must be honest about what is implemented, what it can currently execute, what needs setup or permission, and what remains unsupported. It must never claim that a task was completed without verifiable evidence.
 
@@ -115,4 +115,4 @@ Immediate priorities:
 
 ## Definition of done
 
-ORIENT ONE may claim a user task is complete only when its stated acceptance checks pass and evidence is recorded. A product capability may be marked released only when it works through the canonical runtime, enforces policy, persists/recoverably reports state, passes automated and relevant device/viewport tests, documents limitations, and does not depend on unverified assumptions. A roadmap item or passing CI suite alone is never proof that the entire product is finished.
+ORIENT may claim a user task is complete only when its stated acceptance checks pass and evidence is recorded. A product capability may be marked released only when it works through the canonical runtime, enforces policy, persists/recoverably reports state, passes automated and relevant device/viewport tests, documents limitations, and does not depend on unverified assumptions. A roadmap item or passing CI suite alone is never proof that the entire product is finished.
