@@ -78,21 +78,40 @@ class JsonAccessAuditRepository {
       if (error.code === 'ENOENT') return [];
       throw error;
     }
-    return contents.split('\n').filter(Boolean).slice(-boundedLimit).reverse().map((line) => {
-      const { integrity, ...event } = JSON.parse(line);
-      return {
-        eventId: event.eventId,
-        requestId: event.requestId,
-        timestamp: event.timestamp,
-        sourceIp: event.sourceIp,
-        method: event.method,
-        route: event.route,
-        statusCode: event.statusCode,
-        userAgent: event.userAgent,
-        durationMs: event.durationMs,
-        authenticationOutcome: event.authenticationOutcome
-      };
-    });
+    const lines = contents.split('\\n').filter(Boolean);
+    const verifiedEvents = [];
+    let expectedPreviousHash = null;
+    for (const line of lines) {
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch (_) {
+        throw integrityFailure();
+      }
+      const { integrity, ...event } = record;
+      const expectedHash = hashEvent(expectedPreviousHash, event);
+      if (
+        integrity?.algorithm !== 'sha256-chain-v1' ||
+        integrity.previousHash !== expectedPreviousHash ||
+        integrity.hash !== expectedHash
+      ) {
+        throw integrityFailure();
+      }
+      expectedPreviousHash = expectedHash;
+      verifiedEvents.push(event);
+    }
+    return verifiedEvents.slice(-boundedLimit).reverse().map((event) => ({
+      eventId: event.eventId,
+      requestId: event.requestId,
+      timestamp: event.timestamp,
+      sourceIp: event.sourceIp,
+      method: event.method,
+      route: event.route,
+      statusCode: event.statusCode,
+      userAgent: event.userAgent,
+      durationMs: event.durationMs,
+      authenticationOutcome: event.authenticationOutcome
+    }));
   }
 
   record(event) {
