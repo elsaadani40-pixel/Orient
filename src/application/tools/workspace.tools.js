@@ -53,6 +53,7 @@ function isSensitivePath(relativePath) {
   const segments = relativePath.split('/').filter(Boolean);
   const lowerSegments = segments.map(segment => segment.toLowerCase());
   if (lowerSegments.some(segment => BLOCKED_DIRECTORY_NAMES.has(segment))) return true;
+  if (segments.some(segment => /(secret|credential|private[-_]?key)/i.test(segment))) return true;
 
   const basename = (segments.at(-1) || '').toLowerCase();
   if (basename === '.env') return true;
