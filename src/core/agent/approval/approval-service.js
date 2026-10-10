@@ -82,12 +82,12 @@ class ApprovalService {
     if (!stored) return { allowed: false, reason: 'APPROVAL_NOT_FOUND' };
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return { allowed: false, reason: 'APPROVAL_TENANT_MISMATCH' };
     if (stored.used) return { allowed: false, reason: 'APPROVAL_ALREADY_USED' };
-    if (stored.decision?.status !== 'approved') return { allowed: false, reason: stored.decision?.status === 'rejected' ? 'APPROVAL_REJECTED' : 'APPROVAL_NOT_APPROVED' };
     if (this.clock() >= Date.parse(stored.expiresAt)) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
     if (stored.executionId !== String(executionId) || stored.step !== step || stored.planRevision !== planRevision || stored.tool !== tool || stored.capability !== capability) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     if (agentId && stored.metadata?.agentId !== agentId) return { allowed: false, reason: 'APPROVAL_AGENT_MISMATCH' };
     if (operationId && stored.metadata?.operationId !== operationId) return { allowed: false, reason: 'APPROVAL_OPERATION_MISMATCH' };
     if (!Object.entries(stored.scope || {}).every(([key, value]) => scope[key] === value)) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
+    if (stored.decision?.status !== 'approved') return { allowed: false, reason: stored.decision?.status === 'rejected' ? 'APPROVAL_REJECTED' : 'APPROVAL_NOT_APPROVED' };
     return { allowed: true, approval: { ...stored } };
   }
 
