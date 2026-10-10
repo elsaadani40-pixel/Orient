@@ -20,17 +20,26 @@ It does **not** yet provide a global live graph across all executions, an all-te
 
 ## Start locally
 
-From the repository root:
+From the repository root, install dependencies and run the automated tests:
 
 \`\`\`bash
 npm ci
 npm test
+npm run check:syntax
+\`\`\`
+
+Before starting the server, set \`ORIENT_OWNER_PASSWORD\` to a unique secret of at least 16 characters. Plain \`node app.js\` does not automatically load \`.env\`. If you store the secret in your ignored local \`.env\` file, copy \`.env.example\` to \`.env\`, edit the secret locally, and load it into the shell before starting Node:
+
+\`\`\`bash
+cp .env.example .env
+# Edit .env and set ORIENT_OWNER_PASSWORD to your own private 16+ character secret.
+set -a
+. ./.env
+set +a
 node app.js
 \`\`\`
 
-Before starting the server, set \`ORIENT_OWNER_PASSWORD\` to a unique secret of at least 16 characters. Plain \`node app.js\` does not automatically load \`.env\`; if you store the secret in your ignored local \`.env\` file, load it into the shell with \`set -a; . ./.env; set +a\`. Without this setting, \`/owner\` displays a configuration error and the protected dashboard and operational APIs fail closed.
-
-Open \`http://127.0.0.1:8080/owner\`, sign in, then follow the link to \`/dashboard\`. The default server binding is loopback-only (\`127.0.0.1\`). The root path \`/\` remains the existing memory interface.
+Without this setting, \`/owner\` displays a configuration error and the protected dashboard and operational APIs fail closed. Open \`http://127.0.0.1:8080/owner\`, sign in, then follow the link to \`/dashboard\`. The default server binding is loopback-only (\`127.0.0.1\`). The root path \`/\` remains the existing memory interface.
 
 The dashboard uses same-origin HTTP requests and introduces no CDN, external analytics, or new frontend package dependency. Task input fields are capped at 5,000 characters to match the runtime service's current input limit.
 
