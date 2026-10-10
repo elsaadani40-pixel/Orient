@@ -50,6 +50,25 @@ async function saveApprovalBlockedWorkflow(repository, { workflowId, executionId
   return instance;
 }
 
+test('new durable workflows persist a stable taskId alias before any worker starts', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-workflow-task-identity-'));
+  try {
+    const { repository, coordinator } = createCoordinator(root);
+    const created = coordinator.createInstance('persist task identity', {
+      workflowId: 'task-identity-1'
+    });
+    assert.equal(created.instance.metadata.taskId, 'task-identity-1');
+    assert.equal(created.instance.workflowId, 'task-identity-1');
+    await repository.save(created.instance, 'tenant-a');
+    const persisted = await repository.findById('task-identity-1', 'tenant-a');
+    assert.equal(persisted.metadata.taskId, persisted.workflowId);
+    assert.equal(persisted.metadata.executionId, undefined);
+    assert.equal(persisted.metadata.approvalId, undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('approved execution reconciles its blocked workflow to a durable completed state', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-workflow-approval-resume-'));
   try {
