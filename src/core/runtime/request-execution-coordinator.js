@@ -545,32 +545,48 @@ class RequestExecutionCoordinator {
       // After a real process restart the caller may not resend the approval;
       // recover the still-valid approval that was issued for this exact
       // execution/step/tool/revision before entering AgentLoop.
-      let durableApproval = approval;
-      if (!durableApproval && this.approvalService?.findReusable) {
-        const pending = context.metadata?.pendingStepInputs || {};
-        const pendingSteps = Object.keys(pending)
-          .map(Number)
-          .filter(Number.isInteger)
-          .sort((a, b) => a - b);
-        const pendingStep = pendingSteps[0];
-        const pendingPlanStep = pendingStep ? plan.steps[pendingStep - 1] : null;
-        if (pendingStep && pendingPlanStep?.tool) {
-          durableApproval = await this.approvalService.findReusable({
-            executionId,
-            step: pendingStep,
-            tool: pendingPlanStep.tool,
-            planRevision,
-            tenantId: this.tenantId
+      const pending = context.metadata?.pendingStepInputs || {};
+      const pendingSteps = Object.keys(pending)
+        .map(Number)
+        .filter(Number.isInteger)
+        .sort((a, b) => a - b);
+      const pendingStep = pendingSteps[0];
+      const pendingPlanStep = pendingStep ? plan.steps[pendingStep - 1] : null;
+      let durableApproval = null;
+
+      if (approval?.approvalId) {
+        durableApproval = await this.approvalService?.getApprovedForExecution?.({
+          approvalId: approval.approvalId,
+          executionId,
+          tenantId: this.tenantId
+        }) || null;
+        if (!durableApproval) {
+          throw Object.assign(new Error('A durable approved decision for this exact execution is required'), {
+            code: 'APPROVAL_NOT_APPROVED'
           });
-          if (durableApproval) {
-            context.record('approval.recovered', {
-              step: pendingStep,
-              planRevision,
-              approvalId: durableApproval.approvalId,
-              source: 'durable_approval_store'
-            });
-          }
         }
+      } else if (pendingStep && pendingPlanStep?.tool && this.approvalService?.findReusable) {
+        durableApproval = await this.approvalService.findReusable({
+          executionId,
+          step: pendingStep,
+          tool: pendingPlanStep.tool,
+          planRevision,
+          tenantId: this.tenantId
+        });
+        if (durableApproval) {
+          context.record('approval.recovered', {
+            step: pendingStep,
+            planRevision,
+            approvalId: durableApproval.approvalId,
+            source: 'durable_approved_decision_store'
+          });
+        }
+      }
+
+      if (pendingStep && !durableApproval) {
+        throw Object.assign(new Error('Execution is waiting for an explicit durable approval decision'), {
+          code: 'APPROVAL_NOT_APPROVED'
+        });
       }
 
       const approvalReference = durableApproval?.approvalId
