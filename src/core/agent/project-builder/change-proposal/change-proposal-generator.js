@@ -16,7 +16,10 @@ class ChangeProposalGenerator {
       proposals: proposals.map((proposal) => ({
         action: proposal.action,
         path: proposal.path,
-        content: proposal.content ?? ''
+        content: proposal.content ?? '',
+        ...(typeof proposal.expectedContentSha256 === 'string'
+          ? { expectedContentSha256: proposal.expectedContentSha256.toLowerCase() }
+          : {})
       })),
       requiresApproval: proposals.length > 0,
       generated: false
