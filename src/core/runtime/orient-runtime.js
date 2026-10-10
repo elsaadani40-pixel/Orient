@@ -41,7 +41,8 @@ class OrientRuntime {
     quotaService = null,
     agentRegistry = null,
     agentInvocationService = null,
-    capabilityGovernance = null
+    capabilityGovernance = null,
+    approvalDecisionAuthorizer = null
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -73,9 +74,14 @@ class OrientRuntime {
       (persistence?.approvals
         ? new ApprovalService({
             repository: persistence.approvals,
-            tenantId: tenantId || 'local'
+            tenantId: tenantId || 'local',
+            decisionAuthorizer: approvalDecisionAuthorizer
           })
         : null);
+
+    if (this.approvalService && approvalDecisionAuthorizer && !this.approvalService.decisionAuthorizer) {
+      this.approvalService.decisionAuthorizer = approvalDecisionAuthorizer;
+    }
 
     if (this.authorizationService && !this.authorizationService.approvalService) {
       this.authorizationService.approvalService = this.approvalService;
@@ -229,6 +235,13 @@ class OrientRuntime {
 
   async resume(executionId, options = {}) {
     return this.requestExecutionCoordinator.resume(executionId, options);
+  }
+
+  async decideApproval(options = {}) {
+    if (!this.approvalService?.decide) {
+      throw Object.assign(new Error('Durable approval service is required'), { code: 'APPROVAL_SERVICE_REQUIRED' });
+    }
+    return this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId });
   }
 
   async cancelExecution(executionId, { reason = 'Execution cancellation requested' } = {}) {
