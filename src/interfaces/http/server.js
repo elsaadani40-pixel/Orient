@@ -352,6 +352,32 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         return;
       }
 
+      if (req.method === 'GET' && requestUrl.pathname === '/workbench.js') {
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
+          'Content-Security-Policy': "default-src 'none'; script-src 'self'; base-uri 'none'"
+        });
+        res.end(require('fs').readFileSync(require('path').join(__dirname, 'workbench.js'), 'utf8'));
+        return;
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/workbench') {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+          'Pragma': 'no-cache',
+          'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+          'Referrer-Policy': 'no-referrer',
+          'X-Frame-Options': 'DENY'
+        });
+        res.end(require('fs').readFileSync(require('path').join(__dirname, 'workbench.html'), 'utf8'));
+        return;
+      }
+
       if (
         req.method === 'GET' &&
         requestUrl.pathname === '/dashboard'
