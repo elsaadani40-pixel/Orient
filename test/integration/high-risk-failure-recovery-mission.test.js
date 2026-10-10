@@ -89,7 +89,7 @@ function createRuntime(root, { approvalService = null, persistence: persisted = 
   });
 }
 
-async function approveChallenge(runtime, approvals, root) {
+async function approveChallenge(runtime, approvals, root, { decide = true } = {}) {
   let challenge;
   await assert.rejects(
     runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه'),
@@ -113,16 +113,18 @@ async function approveChallenge(runtime, approvals, root) {
   assert.equal(approval.executionId, challenge.executionId);
   assert.equal(approval.operationId || approval.metadata?.operationId, challenge.operationId);
 
-  if (typeof approvals.decisionAuthorizer !== 'function') {
-    approvals.decisionAuthorizer = async () => true;
+  if (decide) {
+    if (typeof approvals.decisionAuthorizer !== 'function') {
+      approvals.decisionAuthorizer = async () => true;
+    }
+    await approvals.decide({
+      approvalId: approval.approvalId,
+      executionId: challenge.executionId,
+      decision: 'approved',
+      actorId: 'test-owner',
+      tenantId: challenge.tenantId
+    });
   }
-  await approvals.decide({
-    approvalId: approval.approvalId,
-    executionId: challenge.executionId,
-    decision: 'approved',
-    actorId: 'test-owner',
-    tenantId: challenge.tenantId
-  });
 
   return { challenge, approval };
 }
