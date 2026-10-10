@@ -1,8 +1,8 @@
 {
-  "name": "orient-one",
+  "name": "orient",
   "version": "0.12.0",
   "private": true,
-  "description": "ORIENT ONE — autonomous personal AI runtime and durable agent execution platform",
+  "description": "ORIENT — governed personal AI runtime and durable agent execution platform",
   "type": "commonjs",
   "engines": {
     "node": ">=20"
