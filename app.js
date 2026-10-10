@@ -298,12 +298,7 @@ const runtime =
     agentRegistry,
     agentInvocationService,
     capabilityGovernance,
-    approvalDecisionAuthorizer: ({ actorId }) => Boolean(
-      typeof actorId === 'string' &&
-      [...ownerAuthService.sessions.values()].some(session =>
-        session.id === actorId && session.expiresAt > Date.now()
-      )
-    )
+    approvalDecisionAuthorizer: ({ actorId }) => ownerAuthService.isActiveSession(actorId)
   });
 
 const agentService =
