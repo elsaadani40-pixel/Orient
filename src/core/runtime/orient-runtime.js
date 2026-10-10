@@ -233,6 +233,14 @@ class OrientRuntime {
     return this.requestExecutionCoordinator.execute(input, options);
   }
 
+  async isCurrentApprovalChallenge(executionId, approvalId) {
+    if (!executionId || !approvalId ||
+        typeof this.workflowExecutionCoordinator?.findApprovalBlockedWorkflow !== 'function') return true;
+    const workflow = await this.workflowExecutionCoordinator.findApprovalBlockedWorkflow(executionId);
+    if (!workflow) return true;
+    return workflow.metadata?.approvalId === approvalId;
+  }
+
   async resume(executionId, options = {}) {
     try {
       const result = await this.requestExecutionCoordinator.resume(executionId, options);
@@ -241,6 +249,9 @@ class OrientRuntime {
     } catch (error) {
       if (error?.code === 'APPROVAL_EXPIRED' && error.approvalId) {
         try {
+          if (!(await this.isCurrentApprovalChallenge(executionId, error.approvalId))) {
+            throw error;
+          }
           if (typeof this.persistence?.executions?.requestCancellation !== 'function') {
             throw Object.assign(new Error('Durable execution cancellation storage is required'), {
               code: 'EXECUTION_CANCELLATION_STORAGE_REQUIRED'
@@ -287,6 +298,9 @@ class OrientRuntime {
       return await this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId });
     } catch (error) {
       if (error?.code === 'APPROVAL_EXPIRED' && options.executionId && options.approvalId) {
+        if (!(await this.isCurrentApprovalChallenge(options.executionId, options.approvalId))) {
+          throw error;
+        }
         try {
           if (typeof this.persistence?.executions?.requestCancellation === 'function') {
             await this.persistence.executions.requestCancellation(
