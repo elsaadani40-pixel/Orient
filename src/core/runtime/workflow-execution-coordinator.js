@@ -57,7 +57,6 @@ class WorkflowExecutionCoordinator {
       input: { text }
     });
     instance.metadata.priority = priority;
-    instance.setDeadline(deadlineAt);
     return { instance, text };
   }
 
