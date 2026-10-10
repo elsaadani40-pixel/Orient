@@ -210,3 +210,37 @@ test('approval repository rechecks expiry at decision and consumption commit tim
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('approval repository cannot overwrite an existing durable decision through save', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-immutable-save-'));
+  const repo = new ApprovalRepository(path.join(dir, 'approvals.json'));
+  const now = Date.now();
+  const approval = {
+    approvalId: 'immutable-approval',
+    executionId: 'immutable-execution',
+    step: 1,
+    planRevision: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: {},
+    issuedAt: new Date(now - 1000).toISOString(),
+    expiresAt: new Date(now + 60000).toISOString(),
+    used: false,
+    tenantId: 'tenant-a',
+    metadata: { tenantId: 'tenant-a' }
+  };
+  try {
+    await repo.save(approval, { tenantId: 'tenant-a' });
+    await repo.recordDecision('immutable-approval', {
+      status: 'approved', actorId: 'owner-a', decidedAt: new Date(now).toISOString()
+    }, 'tenant-a', () => now);
+    await assert.rejects(
+      () => repo.save({ ...approval, decision: undefined }, { tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_ALREADY_EXISTS'
+    );
+    assert.equal((await repo.findById('immutable-approval', { tenantId: 'tenant-a' })).decision.status, 'approved');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
