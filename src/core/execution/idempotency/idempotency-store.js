@@ -50,7 +50,10 @@ class IdempotencyStore {
   }
 
   has(key, tenantId = null) {
-    return Boolean(this.get(key, tenantId));
+    const record = this.get(key, tenantId);
+    return record && typeof record.then === 'function'
+      ? record.then(Boolean)
+      : Boolean(record);
   }
 
   get(key, tenantId = null) {
