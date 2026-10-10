@@ -4,7 +4,7 @@ const ApprovalService = require('../../../../src/core/agent/approval/approval-se
 
 test('approval is single use, scoped and expires', async () => {
   let now = 1000;
-  const service = new ApprovalService({ clock: () => now });
+  const service = new ApprovalService({ clock: () => now, decisionAuthorizer: async () => true });
   const approval = await service.issue({
     executionId: 'exec-1',
     step: 1,
@@ -14,6 +14,10 @@ test('approval is single use, scoped and expires', async () => {
     ttlMs: 100
   });
 
+  await service.decide({
+    approvalId: approval.approvalId, executionId: 'exec-1',
+    decision: 'approved', actorId: 'owner-test'
+  });
   assert.equal((await service.validate({
     approval, executionId: 'exec-1', step: 1,
     tool: 'danger.write', capability: 'external.write',
@@ -180,14 +184,14 @@ test('approval decisions require authorization and persist one immutable tenant-
 
     authorized = false;
     await assert.rejects(
-      () => service.decide({ approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
+      () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
       error => error.code === 'APPROVAL_DECISION_FORBIDDEN'
     );
     assert.equal((await repository.findById(approval.approvalId, { tenantId: 'tenant-a' })).decision, undefined);
 
     authorized = true;
     const decided = await service.decide({
-      approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+      approvalId: approval.approvalId, executionId: 'exec-no-authorizer', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
     });
     assert.equal(decided.decision.status, 'approved');
     assert.equal(decided.decision.actorId, 'owner-a');
@@ -199,11 +203,11 @@ test('approval decisions require authorization and persist one immutable tenant-
     assert.equal(replay.idempotent, true);
 
     await assert.rejects(
-      () => service.decide({ approvalId: approval.approvalId, decision: 'rejected', actorId: 'owner-a', tenantId: 'tenant-a' }),
+      () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'rejected', actorId: 'owner-a', tenantId: 'tenant-a' }),
       error => error.code === 'APPROVAL_DECISION_CONFLICT'
     );
     await assert.rejects(
-      () => service.decide({ approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-b', tenantId: 'tenant-b' }),
+      () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-b', tenantId: 'tenant-b' }),
       error => error.code === 'APPROVAL_NOT_FOUND' || error.code === 'APPROVAL_TENANT_MISMATCH'
     );
 
