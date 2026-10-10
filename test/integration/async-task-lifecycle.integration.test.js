@@ -290,10 +290,10 @@ test('public async task is paused by the real worker and resumed by reconstructe
     assert.equal((await persistence.workflows.findById(taskId, TENANT_ID)).state, 'WAITING');
     assert.equal(workerExecutions, 1);
 
-    // Simulate process restart: drain the worker, close HTTP ingress, shut down
-    // the old runtime, and reconstruct Runtime/ApprovalService on the same store.
-    await workerService.stopAndDrain();
+    // Match the required graceful-shutdown order: stop accepting HTTP requests,
+    // drain the worker, shut down the old Runtime, then reconstruct over the same store.
     await closeServer();
+    await workerService.stopAndDrain();
     await runtimeBeforeRestart.shutdown();
     approvalService = new ApprovalService({
       repository: persistence.approvals,
@@ -335,8 +335,9 @@ test('public async task is paused by the real worker and resumed by reconstructe
     assert.equal(sideEffects, 1, 'repeated resume must not replay the external side effect');
     assert.equal(workerExecutions, 1);
   } finally {
-    if (workerService) await workerService.stopAndDrain().catch(() => {});
+    // Cleanup follows the same ingress -> worker -> Runtime ordering as production.
     await closeServer().catch(() => {});
+    if (workerService) await workerService.stopAndDrain().catch(() => {});
     if (runtimeAfterRestart) await Promise.resolve().then(() => runtimeAfterRestart.shutdown()).catch(() => {});
     if (runtimeBeforeRestart) await Promise.resolve().then(() => runtimeBeforeRestart.shutdown()).catch(() => {});
     fs.rmSync(rootDir, { recursive: true, force: true });
