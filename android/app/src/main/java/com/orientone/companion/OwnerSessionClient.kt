@@ -20,11 +20,15 @@ internal class OwnerApiException(
  * Same-device client for the loopback-only ORIENT ONE service.
  * Credentials and session material are intentionally held in memory only.
  */
-internal class OwnerSessionClient(port: Int) {
+internal class OwnerSessionClient(
+    port: Int,
+    private val now: () -> Long = System::currentTimeMillis
+) {
     private val origin: String
     private val baseUrl: String
     private var sessionCookie: String? = null
     private var csrfToken: String? = null
+    private var sessionExpiresAt: Long? = null
 
     init {
         require(port in 1..65535) { "Port must be between 1 and 65535" }
@@ -33,7 +37,16 @@ internal class OwnerSessionClient(port: Int) {
     }
 
     val isAuthenticated: Boolean
-        get() = !sessionCookie.isNullOrBlank() && !csrfToken.isNullOrBlank()
+        get() {
+            val expiry = sessionExpiresAt
+            if (expiry != null && now() >= expiry) {
+                clearSession()
+                return false
+            }
+            return !sessionCookie.isNullOrBlank() &&
+                !csrfToken.isNullOrBlank() &&
+                expiry != null
+        }
 
     suspend fun login(password: String): String = withContext(Dispatchers.IO) {
         require(password.length in 16..1024) { "كلمة المرور يجب أن تكون 16 حرفًا على الأقل." }
@@ -50,8 +63,13 @@ internal class OwnerSessionClient(port: Int) {
             ?: throw IllegalStateException("الخادم لم يُصدر جلسة مالك صالحة.")
         val token = json.optString("csrfToken").takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("الخادم لم يُصدر رمز حماية الجلسة.")
+        val expiresAt = json.optLong("expiresAt", -1L)
+        if (expiresAt <= now()) {
+            throw IllegalStateException("انتهت صلاحية الجلسة أو لم يحدد الخادم وقت انتهائها.")
+        }
         sessionCookie = cookie
         csrfToken = token
+        sessionExpiresAt = expiresAt
         "تم تسجيل الدخول إلى ORIENT ONE بنجاح."
     }
 
@@ -90,6 +108,7 @@ internal class OwnerSessionClient(port: Int) {
     fun clearSession() {
         sessionCookie = null
         csrfToken = null
+        sessionExpiresAt = null
     }
 
     private fun request(
