@@ -295,3 +295,29 @@ test('Postgres approval decisions evaluate expiry through the injected clock and
   );
   assert.equal(expiredDb.calls.length, 1);
 });
+
+
+test('Postgres approval rows normalize native timestamp values for the shared service contract', () => {
+  const repo = new PostgresApprovalRepository(fakeDb());
+  const issuedAt = new Date('2026-10-10T10:00:00.000Z');
+  const expiresAt = new Date('2026-10-10T11:00:00.000Z');
+  const usedAt = new Date('2026-10-10T10:30:00.000Z');
+  const mapped = repo.mapRow({
+    approval_id: 'approval-date-pg',
+    execution_id: 'exec-date-pg',
+    step: 1,
+    plan_revision: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: {},
+    issued_at: issuedAt,
+    expires_at: expiresAt,
+    used: true,
+    used_at: usedAt,
+    metadata: { tenantId: 'tenant-a' },
+    tenant_id: 'tenant-a'
+  });
+  assert.equal(mapped.issuedAt, issuedAt.toISOString());
+  assert.equal(mapped.expiresAt, expiresAt.toISOString());
+  assert.equal(mapped.usedAt, usedAt.toISOString());
+});
