@@ -76,6 +76,32 @@ class WorkflowWorker {
           instance.markStepCompleted(step.id, result);
           this.emit('workflow.step.completed', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id });
         } catch (error) {
+          if (error?.code === 'APPROVAL_REQUIRED') {
+            // Approval is a durable pause, not a failed step or a retryable error.
+            // Keep the step pending so a scheduler retry cannot repeat the request
+            // before the owner records an explicit decision.
+            instance.resetStepForRetry(step.id);
+            instance.metadata = {
+              ...instance.metadata,
+              taskId: instance.metadata.taskId || instance.workflowId,
+              executionId: error.executionContext?.executionId || null,
+              approvalBlocked: true,
+              approvalExecutionId: error.executionContext?.executionId || null,
+              approvalId: error.executionContext?.approvalId || null,
+              approvalRequiredAt: new Date(this.now()).toISOString()
+            };
+            const from = instance.state;
+            if (instance.state !== 'WAITING') instance.transition('WAITING');
+            this.emit('workflow.approval.required', {
+              workflowId: instance.workflowId,
+              leaseId: lease.leaseId,
+              stepId: step.id,
+              executionId: instance.metadata.approvalExecutionId,
+              approvalId: instance.metadata.approvalId
+            });
+            this.emitState(instance, from, instance.state, lease);
+            break;
+          }
           instance.markStepFailed(step.id, error); instance.metadata.failedStepId = step.id;
           this.emit('workflow.step.failed', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id, error: { message: error?.message, code: error?.code } });
           const retryable = this.retryClassifier(error, { instance, step, lease });

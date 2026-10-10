@@ -249,6 +249,14 @@ test('high-risk project execution requires a real approval, then executes throug
     operationId: challenge.operationId,
     scope: { planRevision: challenge.planRevision }
   });
+  approvals.decisionAuthorizer = async () => true;
+  await approvals.decide({
+    approvalId: approval.approvalId,
+    executionId: challenge.executionId,
+    decision: 'approved',
+    actorId: 'test-owner',
+    tenantId: challenge.tenantId
+  });
 
   const resumed = await runtime.resume(challenge.executionId, { approval });
   assert.equal(resumed.resumed, true);

@@ -41,7 +41,8 @@ class OrientRuntime {
     quotaService = null,
     agentRegistry = null,
     agentInvocationService = null,
-    capabilityGovernance = null
+    capabilityGovernance = null,
+    approvalDecisionAuthorizer = null
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -73,9 +74,14 @@ class OrientRuntime {
       (persistence?.approvals
         ? new ApprovalService({
             repository: persistence.approvals,
-            tenantId: tenantId || 'local'
+            tenantId: tenantId || 'local',
+            decisionAuthorizer: approvalDecisionAuthorizer
           })
         : null);
+
+    if (this.approvalService && approvalDecisionAuthorizer && !this.approvalService.decisionAuthorizer) {
+      this.approvalService.decisionAuthorizer = approvalDecisionAuthorizer;
+    }
 
     if (this.authorizationService && !this.authorizationService.approvalService) {
       this.authorizationService.approvalService = this.approvalService;
@@ -227,8 +233,96 @@ class OrientRuntime {
     return this.requestExecutionCoordinator.execute(input, options);
   }
 
+  async isCurrentApprovalChallenge(executionId, approvalId) {
+    if (!executionId || !approvalId ||
+        typeof this.workflowExecutionCoordinator?.findApprovalBlockedWorkflow !== 'function') return true;
+    const workflow = await this.workflowExecutionCoordinator.findApprovalBlockedWorkflow(executionId);
+    if (!workflow) return true;
+    return workflow.metadata?.approvalId === approvalId;
+  }
+
   async resume(executionId, options = {}) {
-    return this.requestExecutionCoordinator.resume(executionId, options);
+    try {
+      const result = await this.requestExecutionCoordinator.resume(executionId, options);
+      await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result);
+      return result;
+    } catch (error) {
+      if (error?.code === 'APPROVAL_EXPIRED' && error.approvalId) {
+        if (!(await this.isCurrentApprovalChallenge(executionId, error.approvalId))) {
+          throw error;
+        }
+        try {
+          if (typeof this.persistence?.executions?.requestCancellation !== 'function') {
+            throw Object.assign(new Error('Durable execution cancellation storage is required'), {
+              code: 'EXECUTION_CANCELLATION_STORAGE_REQUIRED'
+            });
+          }
+          const requested = await this.persistence.executions.requestCancellation(
+            executionId,
+            'approval_expired',
+            { tenantId: this.tenantId }
+          );
+          if (!requested) {
+            throw Object.assign(new Error('Expired approval execution was not found'), {
+              code: 'EXECUTION_NOT_FOUND'
+            });
+          }
+          await this.workflowExecutionCoordinator.expireApprovalWorkflow(executionId, error.approvalId);
+        } catch (reconciliationError) {
+          throw Object.assign(new Error('Expired approval could not be reconciled safely'), {
+            code: 'APPROVAL_EXPIRY_RECONCILIATION_FAILED',
+            cause: reconciliationError,
+            approvalError: error
+          });
+        }
+      } else if (error?.code === 'APPROVAL_REQUIRED' && error.executionContext?.approvalId) {
+        await this.workflowExecutionCoordinator.updateApprovalChallenge(
+          executionId,
+          error.executionContext.approvalId
+        );
+      } else if (typeof this.persistence?.executions?.findById === 'function') {
+        const durable = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
+        if (durable && ['completed', 'failed', 'cancelled'].includes(String(durable.status || '').toLowerCase())) {
+          await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, { execution: durable });
+        }
+      }
+      throw error;
+    }
+  }
+
+  async decideApproval(options = {}) {
+    if (!this.approvalService?.decide) {
+      throw Object.assign(new Error('Durable approval service is required'), { code: 'APPROVAL_SERVICE_REQUIRED' });
+    }
+    try {
+      return await this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId });
+    } catch (error) {
+      if (error?.code === 'APPROVAL_EXPIRED' && options.executionId && options.approvalId) {
+        if (!(await this.isCurrentApprovalChallenge(options.executionId, options.approvalId))) {
+          throw error;
+        }
+        try {
+          if (typeof this.persistence?.executions?.requestCancellation === 'function') {
+            await this.persistence.executions.requestCancellation(
+              options.executionId,
+              'approval_expired',
+              { tenantId: options.tenantId || this.tenantId }
+            );
+          }
+          await this.workflowExecutionCoordinator.expireApprovalWorkflow(
+            options.executionId,
+            options.approvalId
+          );
+        } catch (reconciliationError) {
+          throw Object.assign(new Error('Expired approval could not be reconciled safely'), {
+            code: 'APPROVAL_EXPIRY_RECONCILIATION_FAILED',
+            cause: reconciliationError,
+            approvalError: error
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   async cancelExecution(executionId, { reason = 'Execution cancellation requested' } = {}) {
@@ -241,7 +335,7 @@ class OrientRuntime {
       throw Object.assign(new Error('executionId is required'), { code: 'EXECUTION_ID_REQUIRED' });
     }
 
-    const requested = this.persistence.executions.requestCancellation(
+    const requested = await this.persistence.executions.requestCancellation(
       executionId,
       reason,
       { tenantId: this.tenantId }
@@ -252,6 +346,8 @@ class OrientRuntime {
         code: 'EXECUTION_NOT_FOUND'
       });
     }
+
+    await this.workflowExecutionCoordinator.cancelApprovalWorkflow(executionId, reason);
 
     return {
       executionId: requested.executionId,

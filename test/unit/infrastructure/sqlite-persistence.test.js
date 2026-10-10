@@ -9,6 +9,45 @@ const SqlitePersistence =
 
 const ApprovalService =
   require('../../../src/core/agent/approval/approval-service');
+const WorkflowDefinition = require('../../../src/core/workflow/workflow-definition');
+const WorkflowInstance = require('../../../src/core/workflow/workflow-instance');
+
+test('SQLite workflow repository resolves the durable approval-to-workflow mapping', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-approval-workflow-'));
+  try {
+    const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+    const definition = new WorkflowDefinition({
+      id: 'approval-mapping',
+      version: 1,
+      name: 'Approval mapping',
+      steps: [{ id: 'agent-runtime', agent: 'ORIENT_RUNTIME' }]
+    });
+    const instance = new WorkflowInstance({
+      definition,
+      workflowId: 'workflow-sqlite-approval-map',
+      tenantId: 'tenant-a',
+      input: { text: 'guarded operation' }
+    });
+    instance.transition('QUEUED');
+    instance.transition('RUNNING');
+    instance.transition('WAITING');
+    instance.metadata = { approvalBlocked: true, approvalExecutionId: 'execution-sqlite-approval-map', approvalId: 'approval-sqlite-map' };
+    persistence.workflows.save(instance, 'tenant-a');
+
+    const found = persistence.workflows.findByApprovalExecutionId({
+      executionId: 'execution-sqlite-approval-map',
+      tenantId: 'tenant-a'
+    });
+    assert.equal(found.workflowId, 'workflow-sqlite-approval-map');
+    assert.equal(found.metadata.approvalId, 'approval-sqlite-map');
+    assert.equal(persistence.workflows.findByApprovalExecutionId({
+      executionId: 'execution-sqlite-approval-map',
+      tenantId: 'tenant-other'
+    }), null);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('SQLite persistence survives repository recreation and preserves execution state', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-'));
@@ -86,7 +125,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
   const firstPersistence = new SqlitePersistence({ filePath });
   const firstApproval = new ApprovalService({
     repository: firstPersistence.approvals,
-    tenantId: 'tenant-a'
+    tenantId: 'tenant-a',
+    decisionAuthorizer: async () => true
   });
 
   const issued = await firstApproval.issue({
@@ -97,6 +137,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
     capability: 'sensitive.execute',
     scope: { planRevision: 2 }
   });
+
+  await firstApproval.decide({ approvalId: issued.approvalId, executionId: 'exec-approval-1', decision: 'approved', actorId: 'owner-test', tenantId: 'tenant-a' });
 
   const secondPersistence = new SqlitePersistence({ filePath });
   const secondApproval = new ApprovalService({
@@ -119,8 +161,7 @@ test('SQLite approval storage survives restart and remains single-use', async ()
   assert.equal(durableExecutionApprovals.length, 1);
   assert.equal(durableExecutionApprovals[0].approvalId, issued.approvalId);
   const durablePending = await secondApproval.listPending({ tenantId: 'tenant-a' });
-  assert.equal(durablePending.length, 1);
-  assert.equal(durablePending[0].approvalId, issued.approvalId);
+  assert.equal(durablePending.length, 0, 'a decided approval must no longer appear in the pending inbox');
   assert.equal(await secondApproval.consume(issued.approvalId), true);
   assert.equal(await secondApproval.consume(issued.approvalId), false);
 
@@ -160,4 +201,37 @@ test('sqlite transactions roll back all statements after an injected failure', (
   );
 
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
+});
+
+
+test('SQLite approval consumption rejects pending, rejected, expired and malformed challenges', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-approval-gates-'));
+  try {
+    const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+    const now = Date.now();
+    const base = {
+      step: 1,
+      planRevision: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      issuedAt: new Date(now - 1000).toISOString(),
+      used: false,
+      tenantId: 'tenant-a',
+      metadata: { tenantId: 'tenant-a' }
+    };
+    const records = [
+      { ...base, approvalId: 'sqlite-pending', executionId: 'exec-pending', expiresAt: new Date(now + 60000).toISOString() },
+      { ...base, approvalId: 'sqlite-rejected', executionId: 'exec-rejected', expiresAt: new Date(now + 60000).toISOString(), decision: { status: 'rejected', actorId: 'owner', decidedAt: new Date(now).toISOString() } },
+      { ...base, approvalId: 'sqlite-expired', executionId: 'exec-expired', expiresAt: new Date(now - 1000).toISOString(), decision: { status: 'approved', actorId: 'owner', decidedAt: new Date(now - 2000).toISOString() } },
+      { ...base, approvalId: 'sqlite-malformed', executionId: 'exec-malformed', expiresAt: 'not-a-date', decision: { status: 'approved', actorId: 'owner', decidedAt: new Date(now).toISOString() } }
+    ];
+    for (const record of records) persistence.approvals.save(record, { tenantId: 'tenant-a' });
+    const requestedAt = new Date(now).toISOString();
+    for (const record of records) {
+      assert.equal(persistence.approvals.consume(record.approvalId, requestedAt, 'tenant-a'), false, record.approvalId);
+      assert.equal(persistence.approvals.findById(record.approvalId, { tenantId: 'tenant-a' }).used, false);
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

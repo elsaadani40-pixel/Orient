@@ -61,6 +61,8 @@ test('approval-required pauses a workflow durably without retrying or failing th
 
   assert.equal(result.state, 'WAITING');
   assert.equal(result.steps.write.state, 'PENDING');
+  assert.equal(result.metadata.taskId, 'approval-pause-workflow');
+  assert.equal(result.metadata.executionId, 'execution-1');
   assert.equal(result.metadata.approvalBlocked, true);
   assert.equal(result.metadata.approvalExecutionId, 'execution-1');
   assert.equal(result.metadata.approvalId, 'approval-1');
@@ -71,6 +73,56 @@ test('approval-required pauses a workflow durably without retrying or failing th
   assert.ok(events.some(event => event.type === 'workflow.state.changed' && event.payload.to === 'WAITING'));
 });
 
+
+test('successful async workflow persists taskId to canonical executionId mapping', async () => {
+  const definition = new WorkflowDefinition({
+    id: 'execution-identity-regression',
+    version: 1,
+    name: 'Execution identity regression',
+    steps: [{ id: 'run', tool: 'runtime.execute' }]
+  });
+  const instance = new WorkflowInstance({
+    definition,
+    workflowId: 'task-workflow-2',
+    tenantId: 'tenant-a',
+    input: { goal: 'run canonical execution' }
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  const persisted = [];
+  const scheduler = {
+    tenantId: 'tenant-a',
+    leaseDurationMs: 5000,
+    async leaseAsync() {
+      return {
+        workflowId: instance.workflowId,
+        instance,
+        leaseId: 'lease-2',
+        workerId: 'worker-2',
+        fencingToken: 2,
+        previousState: 'QUEUED',
+        cancelled: false
+      };
+    },
+    async renewAsync() {},
+    async persistAsync(value) { persisted.push(value.toJSON()); },
+    async releaseAsync() {},
+    async assertCurrentAsync() {}
+  };
+  const worker = new AsyncWorkflowWorker({
+    scheduler,
+    workerId: 'worker-2',
+    executor: async () => ({ execution: { executionId: 'canonical-execution-2', status: 'completed' } })
+  });
+
+  const result = await worker.tick();
+
+  assert.equal(result.state, 'COMPLETED');
+  assert.equal(result.metadata.taskId, 'task-workflow-2');
+  assert.equal(result.metadata.executionId, 'canonical-execution-2');
+  assert.equal(persisted.at(-1).metadata.taskId, 'task-workflow-2');
+  assert.equal(persisted.at(-1).metadata.executionId, 'canonical-execution-2');
+});
 
 test('recovery never re-enqueues a persisted approval-blocked workflow', async () => {
   const scheduler = Object.create(AsyncWorkflowScheduler.prototype);

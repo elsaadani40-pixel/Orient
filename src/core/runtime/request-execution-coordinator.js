@@ -349,6 +349,76 @@ class RequestExecutionCoordinator {
         throw error;
       }
 
+      if (error?.code === 'APPROVAL_REQUIRED') {
+        const approvalContext = error.executionContext || {};
+        const step = Number(approvalContext.step);
+        const planRevision = Number(approvalContext.planRevision || 1);
+        const tool = typeof approvalContext.tool === 'string' ? approvalContext.tool : null;
+        const capability = typeof approvalContext.capability === 'string' ? approvalContext.capability : null;
+        const tenantId = approvalContext.tenantId || context.tenantId || this.tenantId;
+        const agentId = approvalContext.agentId || context.metadata?.agentId || context.plan?.agentId || 'ORIENT_RUNTIME';
+        const operationId = approvalContext.operationId || null;
+        const approvalSummary = createApprovalSummary(tool, approvalContext.input);
+
+        try {
+          if (Number.isInteger(step) && step > 0) {
+            context.metadata.pendingStepInputs = {
+              ...(context.metadata.pendingStepInputs || {}),
+              [step]: { tool, operationId }
+            };
+          }
+          context.record('approval.challenge.requested', {
+            executionId: context.executionId,
+            step: Number.isInteger(step) ? step : null,
+            planRevision,
+            operationId,
+            tool,
+            capability,
+            source: 'resume',
+            summaryKind: approvalSummary.kind,
+            changeCount: approvalSummary.changeCount || 0
+          });
+          await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_required_after_resume');
+          await this.persistenceCoordinator.persistEvents(context);
+
+          if (this.approvalService?.issue && Number.isInteger(step) && step > 0 && tool && capability) {
+            const issued = await this.approvalService.issue({
+              executionId: context.executionId,
+              step,
+              tool,
+              capability,
+              planRevision,
+              scope: { planRevision },
+              tenantId,
+              agentId,
+              operationId,
+              ttlMs: 5 * 60 * 1000,
+              metadata: { approvalSummary }
+            });
+            error.executionContext = { ...approvalContext, approvalId: issued.approvalId };
+            context.record('approval.challenge.persisted', {
+              executionId: context.executionId,
+              step,
+              planRevision,
+              operationId,
+              approvalId: issued.approvalId,
+              tool,
+              capability,
+              source: 'resume',
+              summaryKind: approvalSummary.kind,
+              changeCount: approvalSummary.changeCount || 0
+            });
+            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issued_after_resume');
+            await this.persistenceCoordinator.persistEvents(context);
+          }
+        } finally {
+          if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+            await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          }
+        }
+        throw error;
+      }
+
       const activeSnapshot = this.snapshotActiveContext(context);
       const cancellationBeforeRecovery = await this.reconcileCancellationAfterFailure(
         context,
@@ -545,32 +615,64 @@ class RequestExecutionCoordinator {
       // After a real process restart the caller may not resend the approval;
       // recover the still-valid approval that was issued for this exact
       // execution/step/tool/revision before entering AgentLoop.
-      let durableApproval = approval;
-      if (!durableApproval && this.approvalService?.findReusable) {
-        const pending = context.metadata?.pendingStepInputs || {};
-        const pendingSteps = Object.keys(pending)
-          .map(Number)
-          .filter(Number.isInteger)
-          .sort((a, b) => a - b);
-        const pendingStep = pendingSteps[0];
-        const pendingPlanStep = pendingStep ? plan.steps[pendingStep - 1] : null;
-        if (pendingStep && pendingPlanStep?.tool) {
-          durableApproval = await this.approvalService.findReusable({
-            executionId,
-            step: pendingStep,
-            tool: pendingPlanStep.tool,
-            planRevision,
-            tenantId: this.tenantId
+      const pending = context.metadata?.pendingStepInputs || {};
+      const pendingSteps = Object.keys(pending)
+        .map(Number)
+        .filter(Number.isInteger)
+        .sort((a, b) => a - b);
+      const pendingStep = pendingSteps[0];
+      const pendingPlanStep = pendingStep ? plan.steps[pendingStep - 1] : null;
+      let durableApproval = null;
+
+      if (approval?.approvalId) {
+        durableApproval = await this.approvalService?.getApprovedForExecution?.({
+          approvalId: approval.approvalId,
+          executionId,
+          tenantId: this.tenantId
+        }) || null;
+        if (!durableApproval) {
+          throw Object.assign(new Error('A durable approved decision for this exact execution is required'), {
+            code: 'APPROVAL_NOT_APPROVED'
           });
-          if (durableApproval) {
-            context.record('approval.recovered', {
-              step: pendingStep,
-              planRevision,
-              approvalId: durableApproval.approvalId,
-              source: 'durable_approval_store'
-            });
-          }
         }
+      } else if (pendingStep && pendingPlanStep?.tool && this.approvalService?.findReusable) {
+        durableApproval = await this.approvalService.findReusable({
+          executionId,
+          step: pendingStep,
+          tool: pendingPlanStep.tool,
+          planRevision,
+          tenantId: this.tenantId
+        });
+        if (durableApproval) {
+          context.record('approval.recovered', {
+            step: pendingStep,
+            planRevision,
+            approvalId: durableApproval.approvalId,
+            source: 'durable_approved_decision_store'
+          });
+        }
+      }
+
+      // A checkpoint can still show a pending approval input after the
+      // approved tool step was marked running and its idempotency reservation
+      // was persisted. Let AgentLoop reconcile that exact operation; it verifies
+      // the tenant-scoped idempotency record before bypassing a fresh approval
+      // check and fails closed if the record is missing.
+      const pendingOperationAlreadyStarted = Boolean(
+        pendingStep &&
+        pendingPlanStep?.tool &&
+        Array.isArray(context.steps) &&
+        context.steps.some(persistedStep =>
+          persistedStep?.status === 'running' &&
+          Number(persistedStep.step) === pendingStep &&
+          Number(persistedStep.planRevision || 1) === planRevision &&
+          persistedStep.tool === pendingPlanStep.tool
+        )
+      );
+      if (pendingStep && !durableApproval && !pendingOperationAlreadyStarted) {
+        throw Object.assign(new Error('Execution is waiting for an explicit durable approval decision'), {
+          code: 'APPROVAL_NOT_APPROVED'
+        });
       }
 
       const approvalReference = durableApproval?.approvalId
@@ -678,7 +780,9 @@ class RequestExecutionCoordinator {
       // Preserve the resumable checkpoint rather than committing a terminal
       // failure after another worker may have acquired ownership.
       if (error?.code === 'CHECKPOINT_RESUME_LEASE_RENEWAL_UNSUPPORTED' ||
-          error?.code === 'CHECKPOINT_RESUME_LEASE_LOST') {
+          error?.code === 'CHECKPOINT_RESUME_LEASE_LOST' ||
+          error?.code === 'APPROVAL_NOT_APPROVED' ||
+          error?.code === 'APPROVAL_EXPIRED') {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
           await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }

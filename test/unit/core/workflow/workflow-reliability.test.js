@@ -501,6 +501,7 @@ test('capability risk policy requires approval for high-risk capabilities', () =
 test('sqlite approval consumption is single-use and tenant-scoped', () => {
   const SqlitePersistence = require('../../../../src/infrastructure/persistence/sqlite/sqlite-persistence');
   const persistence = new SqlitePersistence({ filePath: ':memory:' });
+  const now = Date.now();
   const approval = {
     approvalId: 'approval-tenant-a',
     executionId: 'execution-tenant-a',
@@ -509,8 +510,9 @@ test('sqlite approval consumption is single-use and tenant-scoped', () => {
     tool: 'external.write',
     capability: 'external.write',
     scope: { planRevision: 1 },
-    issuedAt: new Date(1000).toISOString(),
-    expiresAt: new Date(100000).toISOString(),
+    issuedAt: new Date(now - 1000).toISOString(),
+    expiresAt: new Date(now + 60000).toISOString(),
+    decision: { status: 'approved', actorId: 'owner-test', decidedAt: new Date(now).toISOString() },
     used: false,
     metadata: { tenantId: 'tenant-a' },
     tenantId: 'tenant-a'
@@ -519,9 +521,9 @@ test('sqlite approval consumption is single-use and tenant-scoped', () => {
   persistence.approvals.save(approval, { tenantId: 'tenant-a' });
 
   assert.equal(persistence.approvals.findById(approval.approvalId, { tenantId: 'tenant-b' }), null);
-  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(2000).toISOString(), 'tenant-b'), false);
-  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(2000).toISOString(), 'tenant-a'), true);
-  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(3000).toISOString(), 'tenant-a'), false);
+  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(now).toISOString(), 'tenant-b'), false);
+  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(now).toISOString(), 'tenant-a'), true);
+  assert.equal(persistence.approvals.consume(approval.approvalId, new Date(now + 1).toISOString(), 'tenant-a'), false);
 });
 
 

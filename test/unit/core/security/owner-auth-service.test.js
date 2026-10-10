@@ -223,3 +223,20 @@ test('owner auth rejects persisted sessions beyond configured capacity', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('owner session validity check rejects missing and expired session identifiers', async () => {
+  let now = 1000;
+  const password = 'a-strong-owner-password-2026';
+  const auth = new OwnerAuthService({ password, sessionTtlMs: 1000, now: () => now });
+  assert.equal(auth.isActiveSession(''), false);
+  assert.equal(auth.isActiveSession('not-a-session'), false);
+
+  const login = await auth.login({ password, sourceIp: '192.0.2.101' });
+  assert.equal(login.ok, true);
+  assert.equal(auth.isActiveSession(login.sessionId), true);
+
+  now += 1001;
+  assert.equal(auth.isActiveSession(login.sessionId), false);
+  assert.equal(auth.sessions.size, 0, 'expired session should be pruned');
+});

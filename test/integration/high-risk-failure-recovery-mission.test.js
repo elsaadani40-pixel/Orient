@@ -62,7 +62,7 @@ function createRuntime(root, { approvalService = null, persistence: persisted = 
     recoveryEngine: new RecoveryEngine()
   });
 
-  const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission-8', repository: persistence.approvals });
   const authorizationService = new AuthorizationService({
     capabilityMapper: new CapabilityMapper({
       mappings: {
@@ -89,7 +89,7 @@ function createRuntime(root, { approvalService = null, persistence: persisted = 
   });
 }
 
-async function approveChallenge(runtime, approvals, root) {
+async function approveChallenge(runtime, approvals, root, { decide = true } = {}) {
   let challenge;
   await assert.rejects(
     runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه'),
@@ -105,17 +105,26 @@ async function approveChallenge(runtime, approvals, root) {
   assert.equal(challenge.agentId, 'PROJECT_BUILDER_AGENT');
   assert.match(challenge.operationId, /^[a-f0-9]{64}$/);
 
-  const approval = await approvals.issue({
-    executionId: challenge.executionId,
-    step: challenge.step,
-    tool: challenge.tool,
-    capability: challenge.capability,
-    planRevision: challenge.planRevision,
-    tenantId: challenge.tenantId,
-    agentId: challenge.agentId,
-    operationId: challenge.operationId,
-    scope: { planRevision: challenge.planRevision }
-  });
+  assert.equal(typeof challenge.approvalId, 'string', 'runtime must persist and return the approval challenge identity');
+  const approval = approvals.repository?.findById
+    ? await approvals.repository.findById(challenge.approvalId, { tenantId: challenge.tenantId })
+    : approvals.approvals.get(challenge.approvalId);
+  assert.ok(approval, 'the approval ID returned by the runtime must resolve to its durable challenge record');
+  assert.equal(approval.executionId, challenge.executionId);
+  assert.equal(approval.operationId || approval.metadata?.operationId, challenge.operationId);
+
+  if (decide) {
+    if (typeof approvals.decisionAuthorizer !== 'function') {
+      approvals.decisionAuthorizer = async () => true;
+    }
+    await approvals.decide({
+      approvalId: approval.approvalId,
+      executionId: challenge.executionId,
+      decision: 'approved',
+      actorId: 'test-owner',
+      tenantId: challenge.tenantId
+    });
+  }
 
   return { challenge, approval };
 }
@@ -166,7 +175,11 @@ test('high-risk crash after side effect does not execute the side effect twice',
 
   const persistenceRoot = path.join(root, '.orient-state');
   const persistence = new JsonPersistence({ rootDir: persistenceRoot });
-  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const approvals = new ApprovalService({
+    tenantId: 'tenant-mission-8',
+    repository: persistence.approvals,
+    decisionAuthorizer: async () => true
+  });
   let runtime = createRuntime(root, { approvalService: approvals, persistence });
   const { challenge, approval } = await approveChallenge(runtime, approvals, root);
 
@@ -309,6 +322,99 @@ test('concurrent resume attempts are serialized by the durable lease', async t =
     releaseRun();
     runtimeA.shutdown({ cancelQueued: false });
     runtimeB.shutdown({ cancelQueued: false });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('owner HTTP approval decision resumes the same canonical execution', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-approval-runtime-'));
+  if (await skipIfOsSandboxUnavailable(t, root)) {
+    fs.rmSync(root, { recursive: true, force: true });
+    return;
+  }
+  fs.mkdirSync(path.join(root, 'test'));
+  fs.writeFileSync(
+    path.join(root, 'test', 'smoke.test.js'),
+    "const test = require('node:test'); const assert = require('node:assert/strict'); test('smoke', () => assert.equal(1, 1));\n"
+  );
+  fs.writeFileSync(path.join(root, 'package.json'), '{"name":"owner-approval-runtime"}\n');
+
+  const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
+  const OwnerAuthService = require('../../src/core/security/owner-auth-service');
+  const createServer = require('../../src/interfaces/http/server');
+  const createAgentRoutes = require('../../src/interfaces/http/routes/agent.routes');
+  const AgentService = require('../../src/application/agent/agent.service');
+  const password = 'correct-horse-battery-staple-2026';
+  const ownerAuth = new OwnerAuthService({
+    password,
+    stateFile: path.join(root, '.orient-state', 'owner-auth-state.json')
+  });
+  const approvals = new ApprovalService({
+    tenantId: 'tenant-mission-8',
+    repository: persistence.approvals,
+    decisionAuthorizer: async ({ actorId, tenantId }) =>
+      tenantId === 'tenant-mission-8' &&
+      [...ownerAuth.sessions.values()].some(session =>
+        session.id === actorId && session.expiresAt > Date.now()
+      )
+  });
+  let runtime;
+  let server;
+  try {
+    runtime = createRuntime(root, { approvalService: approvals, persistence });
+    const { challenge, approval } = await approveChallenge(runtime, approvals, root, { decide: false });
+    assert.equal((await persistence.approvals.findById(approval.approvalId, {
+      tenantId: 'tenant-mission-8'
+    })).decision, undefined);
+
+    server = createServer({
+      memoryRoutes: {},
+      agentRoutes: createAgentRoutes(new AgentService(runtime)),
+      ownerAuth
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const origin = 'http://127.0.0.1:' + server.address().port;
+
+    const login = await fetch(origin + '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const cookieToken = cookie.slice(cookie.indexOf('=') + 1);
+    const ownerSession = ownerAuth.authenticate(cookieToken);
+    const { csrfToken } = await login.json();
+
+    const response = await fetch(origin + '/owner/executions/' + encodeURIComponent(challenge.executionId) + '/resume', {
+      method: 'POST',
+      headers: {
+        Origin: origin,
+        Cookie: cookie,
+        'X-ORIENT-CSRF': csrfToken,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ approval: { approvalId: approval.approvalId } })
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.resumed, true);
+    assert.equal(result.execution.executionId, challenge.executionId);
+    assert.equal(result.execution.status, 'completed');
+
+    const durableApproval = await persistence.approvals.findById(approval.approvalId, {
+      tenantId: 'tenant-mission-8'
+    });
+    assert.equal(durableApproval.decision.status, 'approved');
+    assert.equal(durableApproval.decision.actorId, ownerSession.sessionId);
+    const durableExecution = await persistence.executions.findById(challenge.executionId, {
+      tenantId: 'tenant-mission-8'
+    });
+    assert.equal(durableExecution.status, 'completed');
+  } finally {
+    if (server?.listening) await new Promise(resolve => server.close(resolve));
+    if (runtime) runtime.shutdown({ cancelQueued: false });
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

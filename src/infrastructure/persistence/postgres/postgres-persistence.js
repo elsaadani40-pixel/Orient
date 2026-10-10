@@ -629,6 +629,23 @@ class PostgresWorkflowRepository {
     return result.rows.length ? result.rows[0].payload : null;
   }
 
+  async findByApprovalExecutionId({ executionId, tenantId = null } = {}) {
+    if (!executionId) return null;
+    const values = [String(executionId)];
+    let tenantClause = '';
+    if (tenantId) {
+      values.push(tenantId);
+      tenantClause = ' AND tenant_id=$' + values.length;
+    }
+    const result = await this.db.query(
+      "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
+      "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
+      ' ORDER BY updated_at DESC LIMIT 1',
+      values
+    );
+    return result.rows.length ? result.rows[0].payload : null;
+  }
+
   async findAll({ tenantId = null } = {}) {
     const result = tenantId
       ? await this.db.query('SELECT payload FROM workflows WHERE tenant_id=$1 ORDER BY updated_at DESC', [tenantId])
@@ -774,12 +791,14 @@ class PostgresApprovalRepository {
   constructor(db) { this.db = db; }
 
   mapRow(row) {
+    const timestamp = value => value instanceof Date ? value.toISOString() : value;
     return {
       approvalId: row.approval_id, executionId: row.execution_id, step: Number(row.step),
       planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
-      scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
-      used: Boolean(row.used), usedAt: row.used_at || undefined,
-      metadata: row.metadata, tenantId: row.tenant_id
+      scope: row.scope, issuedAt: timestamp(row.issued_at), expiresAt: timestamp(row.expires_at),
+      used: Boolean(row.used), usedAt: row.used_at ? timestamp(row.used_at) : undefined,
+      metadata: row.metadata, tenantId: row.tenant_id,
+      ...(row.metadata?.decision ? { decision: row.metadata.decision } : {})
     };
   }
 
@@ -810,7 +829,7 @@ class PostgresApprovalRepository {
     await this.db.query(
       `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
+      [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),...(approval.decision ? { decision: approval.decision } : {}),tenantId:effectiveTenant}]
     );
     return { ...approval, tenantId: effectiveTenant };
   }
@@ -825,16 +844,64 @@ class PostgresApprovalRepository {
     return this.mapRow(row);
   }
 
-  async consume(approvalId, usedAt, tenantId = null) {
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now()) {
+    const invalid = () => Object.assign(new TypeError('Invalid approval decision record'), { code: 'APPROVAL_DECISION_INVALID' });
+    if (!approvalId || !decision || !['approved', 'rejected'].includes(decision.status) ||
+        typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
+        typeof decision.decidedAt !== 'string') throw invalid();
+
+    const current = await this.findById(approvalId, { tenantId });
+    if (!current) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+    if (current.decision) {
+      if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+      throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+    }
+    if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    const decisionNow = typeof now === 'function' ? now() : now;
+    const expiresAt = typeof current.expiresAt === 'string' ? Date.parse(current.expiresAt) : NaN;
+    if (!Number.isFinite(decisionNow) || !Number.isFinite(expiresAt) || decisionNow >= expiresAt) {
+      throw Object.assign(new Error('Approval expired or has an invalid expiry timestamp'), { code: 'APPROVAL_EXPIRED' });
+    }
+
+    const nowIso = new Date(decisionNow).toISOString();
+    const values = [JSON.stringify(decision), nowIso, approvalId];
+    let tenantClause = '';
+    if (tenantId) { values.push(tenantId); tenantClause = ' AND tenant_id=$' + String(values.length); }
     const result = await this.db.query(
-      tenantId
-        ? 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND tenant_id=$3 AND used=FALSE AND expires_at>$1'
-        : 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND used=FALSE AND expires_at>$1',
-      tenantId ? [usedAt, approvalId, tenantId] : [usedAt, approvalId]
+      "UPDATE approvals SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('decision',$1::jsonb) " +
+      "WHERE approval_id=$3" + tenantClause +
+      " AND used=FALSE AND expires_at>$2 AND expires_at>clock_timestamp() " +
+      "AND NOT (COALESCE(metadata,'{}'::jsonb) ? 'decision')",
+      values
+    );
+    if (result.rowCount === 1) return this.findById(approvalId, { tenantId });
+
+    const latest = await this.findById(approvalId, { tenantId });
+    if (latest?.decision?.status === decision.status && latest.decision.actorId === decision.actorId) return latest;
+    if (latest?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    const latestNow = typeof now === 'function' ? now() : now;
+    const latestExpiry = typeof latest?.expiresAt === 'string' ? Date.parse(latest.expiresAt) : NaN;
+    if (latest && (!Number.isFinite(latestExpiry) || !Number.isFinite(latestNow) || latestNow >= latestExpiry)) {
+      throw Object.assign(new Error('Approval expired or has an invalid expiry timestamp'), { code: 'APPROVAL_EXPIRED' });
+    }
+    throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+  }
+
+  async consume(approvalId, usedAt, tenantId = null, now = () => Date.now()) {
+    const requestedAt = typeof usedAt === 'string' ? Date.parse(usedAt) : NaN;
+    const commitNow = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(requestedAt) || !Number.isFinite(commitNow)) return false;
+    const commitAt = new Date(commitNow).toISOString();
+    const tenantClause = tenantId ? ' AND tenant_id=$4' : '';
+    const values = tenantId ? [usedAt, commitAt, approvalId, tenantId] : [usedAt, commitAt, approvalId];
+    const result = await this.db.query(
+      "UPDATE approvals SET used=TRUE,used_at=$2 WHERE approval_id=$3" + tenantClause +
+      " AND used=FALSE AND metadata->'decision'->>'status'='approved' " +
+      "AND expires_at>$1::timestamptz AND expires_at>$2::timestamptz AND expires_at>clock_timestamp()",
+      values
     );
     return result.rowCount === 1;
   }
-
   async count({ tenantId = null } = {}) {
     const result = tenantId
       ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])

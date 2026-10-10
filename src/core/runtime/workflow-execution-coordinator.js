@@ -56,7 +56,10 @@ class WorkflowExecutionCoordinator {
       workspaceId: this.workspaceId,
       input: { text }
     });
-    instance.metadata.priority = priority;
+    // The public task identifier intentionally aliases the durable workflow ID.
+    // This gives task idempotency a stable target without introducing a second
+    // identifier store that could drift from the workflow record.
+    instance.metadata = { ...instance.metadata, taskId: instance.workflowId, priority };
     return { instance, text };
   }
 
@@ -80,12 +83,156 @@ class WorkflowExecutionCoordinator {
     }
 
     return {
+      taskId: instance.metadata.taskId || instance.workflowId,
       workflowId: instance.workflowId,
       state: instance.state,
       tenantId: instance.tenantId,
       createdAt: instance.createdAt,
       updatedAt: instance.updatedAt
     };
+  }
+
+  async findApprovalBlockedWorkflow(executionId) {
+    if (!executionId || typeof this.workflowRepository?.findAll !== 'function') return null;
+    const payload = typeof this.workflowRepository.findByApprovalExecutionId === 'function'
+      ? await this.workflowRepository.findByApprovalExecutionId({ executionId: String(executionId), tenantId: this.tenantId })
+      : (await this.workflowRepository.findAll({ tenantId: this.tenantId })).find(record =>
+          record?.tenantId === this.tenantId &&
+          record?.metadata?.approvalBlocked === true &&
+          String(record.metadata.approvalExecutionId || '') === String(executionId)
+        );
+    return payload ? WorkflowInstance.fromJSON(payload) : null;
+  }
+
+  async persistApprovalWorkflow(instance, fromState = instance.state) {
+    if (typeof this.workflowRepository?.save !== 'function') {
+      throw Object.assign(new Error('Durable workflow storage is required to reconcile approval'), {
+        code: 'WORKFLOW_STORAGE_REQUIRED'
+      });
+    }
+    // The workflow worker releases its lease while awaiting human approval.
+    // Never reuse the old fencing token for this owner-authorized resolution write.
+    if (instance.metadata?.fencingToken !== undefined) {
+      instance.metadata = { ...instance.metadata };
+      delete instance.metadata.fencingToken;
+    }
+    await this.workflowRepository.save(instance, this.tenantId);
+    if (this.missionEventSink && fromState !== instance.state) {
+      await this.missionEventSink.recordState(instance, fromState, instance.state);
+    }
+    return instance.toJSON();
+  }
+
+  async updateApprovalChallenge(executionId, approvalId) {
+    if (typeof approvalId !== 'string' || !approvalId) return false;
+    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    if (!instance) return false;
+    instance.metadata = {
+      ...instance.metadata,
+      approvalBlocked: true,
+      taskId: instance.metadata.taskId || instance.workflowId,
+      executionId: String(executionId),
+      approvalExecutionId: String(executionId),
+      approvalId,
+      approvalRequiredAt: new Date().toISOString()
+    };
+    await this.persistApprovalWorkflow(instance);
+    return true;
+  }
+
+  async reconcileApprovalResume(executionId, resumeResult) {
+    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    if (!instance) return false;
+    const execution = resumeResult?.execution || null;
+    const status = String(execution?.status || '').toLowerCase();
+    if (!['completed', 'failed', 'cancelled'].includes(status)) return false;
+
+    const fromState = instance.state;
+    const stepId = instance.definition.steps[0]?.id;
+    if (!stepId || !instance.steps[stepId]) {
+      throw Object.assign(new Error('Approval-blocked workflow has no resumable step'), {
+        code: 'WORKFLOW_APPROVAL_STEP_MISSING'
+      });
+    }
+
+    if (status === 'completed') {
+      if (instance.state === WorkflowInstance.STATES.WAITING) instance.transition(WorkflowInstance.STATES.RUNNING);
+      if (instance.steps[stepId].state !== WorkflowDefinition.STEP_STATES.COMPLETED) {
+        if (instance.steps[stepId].state !== WorkflowDefinition.STEP_STATES.PENDING) {
+          throw Object.assign(new Error('Approval-blocked workflow step is not pending'), {
+            code: 'WORKFLOW_APPROVAL_STEP_NOT_PENDING'
+          });
+        }
+        instance.markStepRunning(stepId);
+        instance.markStepCompleted(stepId, {
+          executionId: String(executionId),
+          result: resumeResult?.result ?? null,
+          executionStatus: status
+        });
+      }
+      instance.transition(WorkflowInstance.STATES.COMPLETED);
+      instance.metadata.approvalDecisionStatus = 'approved';
+    } else if (status === 'cancelled') {
+      instance.transition(WorkflowInstance.STATES.CANCELLED);
+      instance.metadata.approvalDecisionStatus = 'rejected';
+    } else {
+      instance.steps[stepId].state = WorkflowDefinition.STEP_STATES.FAILED;
+      instance.steps[stepId].error = {
+        code: execution?.metadata?.failureCode || 'EXECUTION_FAILED',
+        message: 'The approved execution failed during resume'
+      };
+      instance.transition(WorkflowInstance.STATES.FAILED);
+      instance.metadata.approvalDecisionStatus = 'approved_execution_failed';
+    }
+
+    instance.metadata = {
+      ...instance.metadata,
+      approvalBlocked: false,
+      approvalResolvedAt: new Date().toISOString()
+    };
+    await this.persistApprovalWorkflow(instance, fromState);
+    return instance.toJSON();
+  }
+
+  async expireApprovalWorkflow(executionId, approvalId) {
+    if (!executionId || typeof approvalId !== 'string' || !approvalId) return false;
+    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    if (!instance || instance.metadata?.approvalId !== approvalId) return false;
+    if ([WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
+      return instance.toJSON();
+    }
+
+    const fromState = instance.state;
+    instance.requestCancel();
+    instance.transition(WorkflowInstance.STATES.CANCELLED);
+    instance.metadata = {
+      ...instance.metadata,
+      approvalBlocked: false,
+      approvalDecisionStatus: 'expired',
+      approvalResolvedAt: new Date().toISOString(),
+      cancellationReason: 'approval_expired'
+    };
+    await this.persistApprovalWorkflow(instance, fromState);
+    return instance.toJSON();
+  }
+
+  async cancelApprovalWorkflow(executionId, reason = 'owner_rejected') {
+    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    if (!instance) return false;
+    const fromState = instance.state;
+    if (![WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
+      instance.requestCancel();
+      instance.transition(WorkflowInstance.STATES.CANCELLED);
+    }
+    instance.metadata = {
+      ...instance.metadata,
+      approvalBlocked: false,
+      approvalDecisionStatus: 'rejected',
+      approvalResolvedAt: new Date().toISOString(),
+      cancellationReason: String(reason).slice(0, 300)
+    };
+    await this.persistApprovalWorkflow(instance, fromState);
+    return instance.toJSON();
   }
 
   async execute(input, {

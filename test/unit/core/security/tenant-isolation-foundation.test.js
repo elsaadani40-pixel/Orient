@@ -39,7 +39,8 @@ test('execution identity is durable and rejects conflicting metadata', () => {
 test('approval authorization is isolated by tenant and remains single-use', async () => {
   const approvalService = new ApprovalService({
     tenantId: 'tenant-a',
-    clock: () => 1000
+    clock: () => 1000,
+    decisionAuthorizer: async () => true
   });
 
   const approval = await approvalService.issue({
@@ -49,6 +50,8 @@ test('approval authorization is isolated by tenant and remains single-use', asyn
     capability: 'communication.send',
     tenantId: 'tenant-a'
   });
+
+  await approvalService.decide({ approvalId: approval.approvalId, executionId: 'execution-a', decision: 'approved', actorId: 'owner-test', tenantId: 'tenant-a' });
 
   const authorization = new AuthorizationService({
     capabilityMapper: {

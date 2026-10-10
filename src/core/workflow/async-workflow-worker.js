@@ -33,7 +33,7 @@ class AsyncWorkflowWorker{
      try{result=await this.executor({instance,step,lease});if(heartbeatError)throw heartbeatError;if(lease.fencingToken!==undefined&&typeof this.scheduler.assertCurrentAsync==='function')await this.scheduler.assertCurrentAsync(instance.workflowId,lease.leaseId,lease.fencingToken);}finally{clearInterval(heartbeat);}
      if(workerHeartbeatError){leaseLost=true;break;}
      if(instance.cancelRequested){const from=instance.state;instance.cancelStep(step.id);instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
-     instance.markStepCompleted(step.id,result);this.emit('workflow.step.completed',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id});
+     const executionId=result?.execution?.executionId||result?.executionId||null;if(typeof executionId==='string'&&executionId)instance.metadata={...instance.metadata,taskId:instance.metadata.taskId||instance.workflowId,executionId};instance.markStepCompleted(step.id,result);this.emit('workflow.step.completed',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id,executionId});
     }catch(error){
      if(error?.code==='WORKFLOW_LEASE_NOT_OWNER'||error?.code==='WORKFLOW_LEASE_EXPIRED'||error?.code==='WORKFLOW_FENCING_REJECTED'){leaseLost=true;break;}
      if(workerHeartbeatError){leaseLost=true;break;}
@@ -41,7 +41,7 @@ class AsyncWorkflowWorker{
       // Approval is a durable pause, not a failed step or a retryable tool error.
       // Keep the step pending and block recovery until an explicit resume path exists.
       instance.resetStepForRetry(step.id);
-      instance.metadata={...instance.metadata,approvalBlocked:true,approvalExecutionId:error.executionContext?.executionId||null,approvalId:error.executionContext?.approvalId||null,approvalRequiredAt:new Date(this.now()).toISOString()};
+      instance.metadata={...instance.metadata,taskId:instance.metadata.taskId||instance.workflowId,executionId:error.executionContext?.executionId||null,approvalBlocked:true,approvalExecutionId:error.executionContext?.executionId||null,approvalId:error.executionContext?.approvalId||null,approvalRequiredAt:new Date(this.now()).toISOString()};
       const from=instance.state;if(instance.state!=='WAITING')instance.transition('WAITING');
       this.emit('workflow.approval.required',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id,executionId:instance.metadata.approvalExecutionId,approvalId:instance.metadata.approvalId});
       this.emitState(instance,from,instance.state,lease);
