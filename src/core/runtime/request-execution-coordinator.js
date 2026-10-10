@@ -28,7 +28,7 @@ function createApprovalSummary(tool, input) {
         : null,
       proposedContentSha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
       contentBytes: Buffer.byteLength(content, 'utf8'),
-      lineCount: content.length ? content.split(/\\r?\\n/).length : 0,
+      lineCount: content.length ? content.split(/\r?\n/).length : 0,
       proposedContent: content.slice(0, 32000),
       contentTruncated: content.length > 32000
     };
