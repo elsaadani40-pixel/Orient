@@ -90,12 +90,13 @@ class WorkflowExecutionCoordinator {
 
   async findApprovalBlockedWorkflow(executionId) {
     if (!executionId || typeof this.workflowRepository?.findAll !== 'function') return null;
-    const records = await this.workflowRepository.findAll({ tenantId: this.tenantId });
-    const payload = records.find(record =>
-      record?.tenantId === this.tenantId &&
-      record?.metadata?.approvalBlocked === true &&
-      String(record.metadata.approvalExecutionId || '') === String(executionId)
-    );
+    const payload = typeof this.workflowRepository.findByApprovalExecutionId === 'function'
+      ? await this.workflowRepository.findByApprovalExecutionId({ executionId: String(executionId), tenantId: this.tenantId })
+      : (await this.workflowRepository.findAll({ tenantId: this.tenantId })).find(record =>
+          record?.tenantId === this.tenantId &&
+          record?.metadata?.approvalBlocked === true &&
+          String(record.metadata.approvalExecutionId || '') === String(executionId)
+        );
     return payload ? WorkflowInstance.fromJSON(payload) : null;
   }
 
@@ -104,6 +105,12 @@ class WorkflowExecutionCoordinator {
       throw Object.assign(new Error('Durable workflow storage is required to reconcile approval'), {
         code: 'WORKFLOW_STORAGE_REQUIRED'
       });
+    }
+    // The workflow worker releases its lease while awaiting human approval.
+    // Never reuse the old fencing token for this owner-authorized resolution write.
+    if (instance.metadata?.fencingToken !== undefined) {
+      instance.metadata = { ...instance.metadata };
+      delete instance.metadata.fencingToken;
     }
     await this.workflowRepository.save(instance, this.tenantId);
     if (this.missionEventSink && fromState !== instance.state) {
