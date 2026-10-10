@@ -13,8 +13,7 @@ class AgentService {
     if (clean.length > 5000) {
       throw new AppError('الهدف طويل جدًا', 400, 'AGENT_INPUT_TOO_LONG');
     }
-    if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8 || idempotencyKey.length > 200 ||
-        /[\\r\\n\\0]/.test(idempotencyKey)) {
+    if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8 || idempotencyKey.length > 200) {
       throw new AppError('مفتاح منع التكرار غير صالح', 400, 'IDEMPOTENCY_KEY_REQUIRED');
     }
 
