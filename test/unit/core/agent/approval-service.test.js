@@ -183,6 +183,14 @@ test('approval decisions require authorization and persist one immutable tenant-
       ttlMs: 10000
     });
 
+    assert.equal(await service.getApprovedForExecution({
+      approvalId: approval.approvalId, executionId: 'exec-decision', tenantId: 'tenant-a'
+    }), null);
+    await assert.rejects(
+      () => service.decide({ approvalId: approval.approvalId, executionId: 'different-execution', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_EXECUTION_MISMATCH'
+    );
+
     authorized = false;
     await assert.rejects(
       () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
@@ -196,6 +204,8 @@ test('approval decisions require authorization and persist one immutable tenant-
     });
     assert.equal(decided.decision.status, 'approved');
     assert.equal(decided.decision.actorId, 'owner-a');
+    assert.equal((await service.getApprovedForExecution({ approvalId: approval.approvalId, executionId: 'exec-decision', tenantId: 'tenant-a' })).decision.status, 'approved');
+    assert.equal(await service.getApprovedForExecution({ approvalId: approval.approvalId, executionId: 'wrong-execution', tenantId: 'tenant-a' }), null);
 
     const replay = await service.decide({
       approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
