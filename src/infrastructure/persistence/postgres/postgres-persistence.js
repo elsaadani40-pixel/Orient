@@ -791,11 +791,12 @@ class PostgresApprovalRepository {
   constructor(db) { this.db = db; }
 
   mapRow(row) {
+    const timestamp = value => value instanceof Date ? value.toISOString() : value;
     return {
       approvalId: row.approval_id, executionId: row.execution_id, step: Number(row.step),
       planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
-      scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
-      used: Boolean(row.used), usedAt: row.used_at || undefined,
+      scope: row.scope, issuedAt: timestamp(row.issued_at), expiresAt: timestamp(row.expires_at),
+      used: Boolean(row.used), usedAt: row.used_at ? timestamp(row.used_at) : undefined,
       metadata: row.metadata, tenantId: row.tenant_id,
       ...(row.metadata?.decision ? { decision: row.metadata.decision } : {})
     };
