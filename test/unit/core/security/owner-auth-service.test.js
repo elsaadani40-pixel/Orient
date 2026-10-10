@@ -180,3 +180,12 @@ test('owner auth rolls back a newly issued in-memory session when persistence fa
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('owner auth rejects unsafe session and lockout configuration', () => {
+  const password = 'a-strong-owner-password-2026';
+  assert.throws(() => new OwnerAuthService({ password, sessionTtlMs: 0 }), RangeError);
+  assert.throws(() => new OwnerAuthService({ password, sessionTtlMs: 25 * 60 * 60 * 1000 }), RangeError);
+  assert.throws(() => new OwnerAuthService({ password, maxFailures: 0 }), RangeError);
+  assert.throws(() => new OwnerAuthService({ password, lockoutMs: 0 }), RangeError);
+});
