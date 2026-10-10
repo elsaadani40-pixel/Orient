@@ -362,44 +362,94 @@ class MemoryService {
       );
 
       let memory = candidate;
+      let conflictSnapshot = null;
+      let conflictWasUpdated = false;
+      let inserted = null;
 
-      if (conflict && conflict.text !== candidate.text) {
-        const resolution = compareConflictCandidates(candidate, conflict);
-        const candidateScore = conflictResolutionScore(candidate);
-        const conflictScore = conflictResolutionScore(conflict);
-        const candidateWins = resolution.id === candidate.id;
-
-        if (candidateWins) {
-          this.repository.update(conflict.id, {
-            state: 'superseded',
-            supersededById: candidate.id,
-            updatedAt: new Date().toISOString()
-          }, tenantId, scope);
-          memory = { ...candidate, supersedesId: conflict.id };
-        } else {
-          memory = { ...candidate, state: 'contradicted', supersededById: null, supersedesId: null };
-        }
-
-        this.audit({
-          action: 'memory.conflict.resolved',
-          tenantId,
-          memoryId: candidate.id,
-          relatedMemoryId: conflict.id,
-          resolution: candidateWins
-            ? 'candidate_wins_evidence_policy'
-            : 'existing_memory_wins_evidence_policy',
-          rationale: {
-            policy: 'confidence_source_evidence_verification_recency_importance',
-            candidate: candidateScore,
-            existing: conflictScore,
-            winnerId: resolution.id
+      const compensateConflictOperation = originalError => {
+        const rollbackErrors = [];
+        if (inserted && typeof this.repository.deleteById === 'function') {
+          try {
+            this.repository.deleteById(inserted.id, tenantId, scope);
+          } catch (rollbackError) {
+            rollbackErrors.push({ operation: 'delete-inserted-memory', message: rollbackError.message });
           }
-        }, context);
-      }
-
-      const inserted = this.repository.insert(memory, tenantId, scope);
+        }
+        if (conflictWasUpdated && conflictSnapshot) {
+          try {
+            const restored = this.repository.update(
+              conflictSnapshot.id,
+              conflictSnapshot,
+              tenantId,
+              scope
+            );
+            if (!restored) {
+              throw new Error(`Memory ${conflictSnapshot.id} disappeared during conflict rollback`);
+            }
+          } catch (rollbackError) {
+            rollbackErrors.push({ operation: 'restore-conflicting-memory', message: rollbackError.message });
+          }
+        }
+        if (rollbackErrors.length) {
+          const rollbackError = new AppError(
+            'Memory conflict resolution failed and rollback was incomplete',
+            500,
+            'MEMORY_CONFLICT_ROLLBACK_FAILED'
+          );
+          rollbackError.cause = originalError;
+          rollbackError.details = { rollbackErrors };
+          throw rollbackError;
+        }
+        throw originalError;
+      };
 
       try {
+        if (conflict && conflict.text !== candidate.text) {
+          const resolution = compareConflictCandidates(candidate, conflict);
+          const candidateScore = conflictResolutionScore(candidate);
+          const conflictScore = conflictResolutionScore(conflict);
+          const candidateWins = resolution.id === candidate.id;
+
+          if (candidateWins) {
+            conflictSnapshot = conflict;
+            const updatedConflict = this.repository.update(conflict.id, {
+              state: 'superseded',
+              supersededById: candidate.id,
+              updatedAt: new Date().toISOString()
+            }, tenantId, scope);
+            if (!updatedConflict) {
+              throw new Error(`Memory ${conflict.id} disappeared during conflict resolution`);
+            }
+            conflictWasUpdated = true;
+            memory = { ...candidate, supersedesId: conflict.id };
+          } else {
+            memory = { ...candidate, state: 'contradicted', supersededById: null, supersedesId: null };
+          }
+
+          // The durable audit store and memory store are not transactional.
+          // This protects handled repository/audit exceptions, not process crashes
+          // or a crash between a successful audit append and a later failure.
+          inserted = this.repository.insert(memory, tenantId, scope);
+
+          this.audit({
+            action: 'memory.conflict.resolved',
+            tenantId,
+            memoryId: inserted.id,
+            relatedMemoryId: conflict.id,
+            resolution: candidateWins
+              ? 'candidate_wins_evidence_policy'
+              : 'existing_memory_wins_evidence_policy',
+            rationale: {
+              policy: 'confidence_source_evidence_verification_recency_importance',
+              candidate: candidateScore,
+              existing: conflictScore,
+              winnerId: resolution.id
+            }
+          }, context);
+        } else {
+          inserted = this.repository.insert(memory, tenantId, scope);
+        }
+
         this.audit({
           action: 'memory.created',
           tenantId,
@@ -407,19 +457,11 @@ class MemoryService {
           source: inserted.source,
           confidence: inserted.confidence
         }, context);
-      } catch (auditError) {
-        // The JSON repository and audit log are separate durable stores. If the
-        // audit append fails synchronously, compensate the committed insert so
-        // callers are not told the operation failed while the new memory remains.
-        // This is not crash-atomic; async execution stays gated until a durable
-        // operation journal/outbox exists for every supported repository.
-        if (typeof this.repository.deleteById === 'function') {
-          this.repository.deleteById(inserted.id, tenantId, scope);
-        }
-        throw auditError;
-      }
 
-      return inserted;
+        return inserted;
+      } catch (error) {
+        return compensateConflictOperation(error);
+      }
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError(error.message, 400, 'INVALID_MEMORY');
