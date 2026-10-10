@@ -9,6 +9,8 @@ const {
   timingSafeEqual
 } = require('node:crypto');
 const { promisify } = require('node:util');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const scryptAsync = promisify(scrypt);
 const KEY_LENGTH = 64;
@@ -31,6 +33,7 @@ class OwnerAuthService {
     maxFailures = 5,
     maxSessions = 64,
     lockoutMs = 15 * 60 * 1000,
+    stateFile = null,
     now = () => Date.now()
   } = {}) {
     if (password && (typeof password !== 'string' || password.length < 16)) {
@@ -48,8 +51,10 @@ class OwnerAuthService {
     this.maxSessions = maxSessions;
     this.lockoutMs = lockoutMs;
     this.now = now;
+    this.stateFile = stateFile ? path.resolve(stateFile) : null;
     this.sessions = new Map();
     this.failures = new Map();
+    this.loadState();
     this.passwordSalt = this.enabled ? randomBytes(16) : null;
     this.passwordVerifier = this.enabled
       ? scryptSync(password, this.passwordSalt, KEY_LENGTH, SCRYPT_OPTIONS)
@@ -91,6 +96,7 @@ class OwnerAuthService {
       expiresAt: now + this.sessionTtlMs
     };
     this.sessions.set(digestToken(token), session);
+    this.persistState();
     return {
       ok: true,
       token,
@@ -112,12 +118,63 @@ class OwnerAuthService {
       windowStartedAt: withinWindow ? existing.windowStartedAt : now,
       blockedUntil: count >= this.maxFailures ? now + this.lockoutMs : 0
     });
+    this.persistState();
+  }
+
+  loadState() {
+    if (!this.stateFile) return;
+    let raw;
+    try { raw = fs.readFileSync(this.stateFile, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    let state;
+    try { state = JSON.parse(raw); }
+    catch (_) { throw Object.assign(new Error('Owner authentication state is corrupt'), { code: 'OWNER_AUTH_STATE_CORRUPT' }); }
+    if (state?.version !== 1 || !Array.isArray(state.sessions) || !Array.isArray(state.failures)) {
+      throw Object.assign(new Error('Owner authentication state has an unsupported schema'), { code: 'OWNER_AUTH_STATE_CORRUPT' });
+    }
+    for (const item of state.sessions) {
+      if (!item || typeof item.digest !== 'string' || !/^[a-f0-9]{64}$/.test(item.digest) || typeof item.id !== 'string' || typeof item.csrfToken !== 'string' || !Number.isFinite(item.createdAt) || !Number.isFinite(item.expiresAt)) {
+        throw Object.assign(new Error('Owner authentication session state is invalid'), { code: 'OWNER_AUTH_STATE_CORRUPT' });
+      }
+      if (item.expiresAt > this.now()) this.sessions.set(item.digest, { id: item.id, csrfToken: item.csrfToken, createdAt: item.createdAt, expiresAt: item.expiresAt });
+    }
+    for (const item of state.failures) {
+      if (!item || typeof item.ip !== 'string' || !Number.isInteger(item.count) || !Number.isFinite(item.windowStartedAt) || !Number.isFinite(item.blockedUntil)) {
+        throw Object.assign(new Error('Owner authentication failure state is invalid'), { code: 'OWNER_AUTH_STATE_CORRUPT' });
+      }
+      this.failures.set(item.ip, { count: item.count, windowStartedAt: item.windowStartedAt, blockedUntil: item.blockedUntil });
+    }
+    this.pruneExpiredSessions(this.now());
+  }
+
+  persistState() {
+    if (!this.stateFile) return;
+    const directory = path.dirname(this.stateFile);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(directory, 0o700); } catch (_) { /* Platform permissions require deployment review. */ }
+    const state = {
+      version: 1,
+      sessions: [...this.sessions.entries()].map(([digest, session]) => ({ digest, ...session })),
+      failures: [...this.failures.entries()].map(([ip, failure]) => ({ ip, ...failure }))
+    };
+    const temporary = this.stateFile + '.' + randomBytes(8).toString('hex') + '.tmp';
+    try {
+      fs.writeFileSync(temporary, JSON.stringify(state), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      try { fs.chmodSync(temporary, 0o600); } catch (_) { /* Platform permissions require deployment review. */ }
+      fs.renameSync(temporary, this.stateFile);
+      try { fs.chmodSync(this.stateFile, 0o600); } catch (_) { /* Platform permissions require deployment review. */ }
+    } catch (error) {
+      try { fs.rmSync(temporary, { force: true }); } catch (_) { /* Preserve original error. */ }
+      throw Object.assign(new Error('Could not persist owner authentication state'), { code: 'OWNER_AUTH_STATE_PERSIST_FAILED', cause: error });
+    }
   }
 
   pruneExpiredSessions(now = this.now()) {
+    let changed = false;
     for (const [key, session] of this.sessions) {
-      if (session.expiresAt <= now) this.sessions.delete(key);
+      if (session.expiresAt <= now) changed = this.sessions.delete(key) || changed;
     }
+    if (changed) this.persistState();
   }
 
   authenticate(token) {
@@ -143,12 +200,15 @@ class OwnerAuthService {
 
   logout(token) {
     if (typeof token !== 'string' || token.length < 40 || token.length > 100) return false;
-    return this.sessions.delete(digestToken(token));
+    const removed = this.sessions.delete(digestToken(token));
+    if (removed) this.persistState();
+    return removed;
   }
 
   revokeAllSessions() {
     const count = this.sessions.size;
     this.sessions.clear();
+    this.persistState();
     return count;
   }
 }
