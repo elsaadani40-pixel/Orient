@@ -76,7 +76,8 @@ class OwnerAuthService {
       return { ok: false, code: 'OWNER_LOGIN_FAILED' };
     }
 
-    this.failures.delete(ip);
+    const clearedFailure = this.failures.delete(ip);
+    if (clearedFailure) this.persistState();
     this.pruneExpiredSessions(now);
     if (this.sessions.size >= this.maxSessions) {
       return { ok: false, code: 'OWNER_SESSION_LIMIT_REACHED' };
