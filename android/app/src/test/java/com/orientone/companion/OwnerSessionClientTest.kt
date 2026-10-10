@@ -69,7 +69,7 @@ class OwnerSessionClientTest {
 
         try {
             val client = OwnerSessionClient(server.address.port)
-            assertTrue(runBlocking { client.login("0123456789abcdef") }.contains("успешно"))
+            assertTrue(withApiDiagnostics("login") { runBlocking { client.login("0123456789abcdef") } }.contains("успешно"))
             assertTrue(client.isAuthenticated)
             assertTrue(withApiDiagnostics("fetchExecutions") { runBlocking { client.fetchExecutions() } }.contains("executions"))
             assertTrue(withApiDiagnostics("executeTask") { runBlocking { client.executeTask("test task") } }.contains("completed"))
