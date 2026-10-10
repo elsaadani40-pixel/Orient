@@ -117,6 +117,17 @@ async function approveChallenge(runtime, approvals, root) {
     scope: { planRevision: challenge.planRevision }
   });
 
+  if (typeof approvals.decisionAuthorizer !== 'function') {
+    approvals.decisionAuthorizer = async () => true;
+  }
+  await approvals.decide({
+    approvalId: approval.approvalId,
+    executionId: challenge.executionId,
+    decision: 'approved',
+    actorId: 'test-owner',
+    tenantId: challenge.tenantId
+  });
+
   return { challenge, approval };
 }
 
