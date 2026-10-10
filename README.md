@@ -6,6 +6,10 @@ ORIENT ONE is being built around a canonical runtime that coordinates planning, 
 
 > **Project status:** active engineering / pre-release. This repository is not a claim that every planned capability is production-ready. Read the source, tests, and architecture notes to distinguish implemented behavior from future work.
 
+## Product direction
+
+ORIENT ONE is intended to become one coherent personal AI operating system across Android phones, tablets, and computers—not a collection of device-specific demos. Its product contract, cross-device architecture, research-to-plan-to-verify lifecycle, validated learning model, security boundaries, and staged delivery roadmap are documented in [`docs/product/ORIENT-ONE-PRODUCT-CONTRACT.md`](docs/product/ORIENT-ONE-PRODUCT-CONTRACT.md). This is a target contract, not a claim that all listed capabilities already exist.
+
 ## Current engineering focus
 
 - A canonical runtime and governed tool/capability execution path.
