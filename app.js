@@ -30,6 +30,11 @@ const PlannerService =
 
 const createMemoryTools =
   require('./src/application/tools/memory.tools');
+const ProjectBuilderAgent =
+  require('./src/core/agent/project-builder/project-builder-agent');
+
+const createWorkspaceTools =
+  require('./src/application/tools/workspace.tools');
 
 const OrientRuntime =
   require('./src/core/runtime/orient-runtime');
@@ -149,7 +154,19 @@ const planner =
 const memoryTools =
   createMemoryTools(memoryService);
 
-for (const tool of memoryTools) {
+const projectBuilderAgent = new ProjectBuilderAgent({
+  projectRoot: __dirname,
+  policy: {
+    allowRead: true,
+    allowWrite: true,
+    allowCommands: false,
+    allowGit: false,
+    maxOutput: 30000
+  }
+});
+const workspaceTools = createWorkspaceTools(projectBuilderAgent);
+
+for (const tool of [...memoryTools, ...workspaceTools]) {
   toolRegistry.register(tool);
 }
 
