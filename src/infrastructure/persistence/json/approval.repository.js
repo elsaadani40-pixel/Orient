@@ -192,7 +192,7 @@ class ApprovalRepository {
   }
 
 
-  async recordDecision(approvalId, decision, tenantId = null) {
+  async recordDecision(approvalId, decision, tenantId = null, now = Date.now()) {
     if (!approvalId) throw new TypeError('approvalId is required');
     if (!decision || !['approved', 'rejected'].includes(decision.status) ||
         typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
@@ -208,7 +208,7 @@ class ApprovalRepository {
         throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
       }
       if (record.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
-      if (!record.expiresAt || Date.now() >= Date.parse(record.expiresAt)) {
+      if (!record.expiresAt || now >= Date.parse(record.expiresAt)) {
         throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
       }
       if (record.decision) {
