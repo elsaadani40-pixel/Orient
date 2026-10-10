@@ -450,7 +450,7 @@ class PlannerService {
 
   extractWorkspaceSearch(text) {
     const value = String(text || '').trim();
-    const arabic = value.match(/(?:ابحث|فتش|دور|دوّر)\s+(?:داخل|في)\s+(?:ملفات|الملفات|المشروع|المستودع)\s+(?:عن\s+)?(.+)/i);
+    const arabic = value.match(/(?:ابحث|فتش|دور|دوّر)\s+(?:داخل|في)\s+(?:ملفات\s+(?:المشروع|المستودع)|الملفات\s+(?:المشروع|المستودع)|المشروع|المستودع|الملفات|ملفات)\s+(?:عن\s+)?(.+)/i);
     const english = value.match(/(?:search|find|grep)\s+(?:for\s+)?(.+?)\s+(?:in|inside)\s+(?:the\s+)?(?:files|workspace|repository|project)\b/i)
       || value.match(/(?:search|find|grep)\s+(?:in|inside)\s+(?:the\s+)?(?:files|workspace|repository|project)\s+(?:for\s+)?(.+)/i);
     const query = (arabic?.[1] || english?.[1] || '').trim();
