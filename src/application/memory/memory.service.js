@@ -472,51 +472,103 @@ class MemoryService {
 
     const seen = new Map();
     const changes = [];
+    const beforeById = new Map();
 
-    for (const memory of memories) {
-      if (memory.state !== 'active') continue;
-      const key = `${memory.type}::${memory.text.toLowerCase().trim()}`;
-      const previous = seen.get(key);
+    // This is best-effort compensation for handled exceptions only. The JSON
+    // repository and audit log are separate durable stores, so a process crash
+    // between writes still requires a shared operation journal/transaction.
+    const rememberBefore = memory => {
+      if (!beforeById.has(memory.id)) {
+        beforeById.set(memory.id, memory);
+      }
+    };
+    const restoreChanges = originalError => {
+      const snapshots = [...beforeById.values()].reverse();
+      const rollbackErrors = [];
+      for (const snapshot of snapshots) {
+        try {
+          const restored = this.repository.update(
+            snapshot.id,
+            snapshot,
+            tenantId,
+            scope
+          );
+          if (!restored) {
+            throw new Error(`Memory ${snapshot.id} disappeared during consolidation rollback`);
+          }
+        } catch (rollbackError) {
+          rollbackErrors.push({ memoryId: snapshot.id, message: rollbackError.message });
+        }
+      }
+      if (rollbackErrors.length) {
+        const error = new AppError(
+          'Memory consolidation failed and rollback was incomplete',
+          500,
+          'MEMORY_CONSOLIDATION_ROLLBACK_FAILED'
+        );
+        error.cause = originalError;
+        error.details = { rollbackErrors };
+        throw error;
+      }
+      throw originalError;
+    };
 
-      if (!previous) {
-        seen.set(key, memory);
-        continue;
+    try {
+      for (const memory of memories) {
+        if (memory.state !== 'active') continue;
+        const key = `${memory.type}::${memory.text.toLowerCase().trim()}`;
+        const previous = seen.get(key);
+
+        if (!previous) {
+          seen.set(key, memory);
+          continue;
+        }
+
+        const winner =
+          previous.confidence >= memory.confidence ? previous : memory;
+        const loser = winner.id === previous.id ? memory : previous;
+
+        rememberBefore(winner);
+        rememberBefore(loser);
+
+        const updatedWinner = this.repository.update(
+          winner.id,
+          {
+            confidence: Math.max(winner.confidence, loser.confidence),
+            importance: Math.max(winner.importance, loser.importance),
+            evidence: [...winner.evidence, ...loser.evidence].slice(-50),
+            updatedAt: new Date().toISOString()
+          },
+          tenantId,
+          scope
+        );
+        if (!updatedWinner) {
+          throw new Error(`Memory ${winner.id} disappeared during consolidation`);
+        }
+
+        const updatedLoser = this.repository.update(
+          loser.id,
+          {
+            state: 'superseded',
+            supersededById: winner.id,
+            updatedAt: new Date().toISOString()
+          },
+          tenantId,
+          scope
+        );
+        if (!updatedLoser) {
+          throw new Error(`Memory ${loser.id} disappeared during consolidation`);
+        }
+
+        seen.set(key, updatedWinner);
+        changes.push({ winnerId: winner.id, supersededId: loser.id });
       }
 
-      const winner =
-        previous.confidence >= memory.confidence ? previous : memory;
-      const loser = winner.id === previous.id ? memory : previous;
-
-      this.repository.update(
-        winner.id,
-        {
-          confidence: Math.max(winner.confidence, loser.confidence),
-          importance: Math.max(winner.importance, loser.importance),
-          evidence: [...winner.evidence, ...loser.evidence].slice(-50),
-          updatedAt: new Date().toISOString()
-        },
-        tenantId,
-        scope
-      );
-
-      this.repository.update(
-        loser.id,
-        {
-          state: 'superseded',
-          supersededById: winner.id,
-          updatedAt: new Date().toISOString()
-        },
-        tenantId,
-        scope
-      );
-
-      seen.set(key, winner);
-      changes.push({ winnerId: winner.id, supersededId: loser.id });
+      this.audit({ action: 'memory.consolidated', tenantId, changes }, context);
+      return { tenantId, scope, consolidated: changes.length, changes };
+    } catch (error) {
+      return restoreChanges(error);
     }
-
-    this.audit({ action: 'memory.consolidated', tenantId, changes }, context);
-
-    return { tenantId, scope, consolidated: changes.length, changes };
   }
 
   delete(id, context = {}) {
