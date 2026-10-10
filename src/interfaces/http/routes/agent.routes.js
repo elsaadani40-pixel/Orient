@@ -44,7 +44,9 @@ function createAgentRoutes(agentService) {
         throw new AppError('Invalid task pagination', 400, 'VALIDATION_ERROR');
       }
 
-      const result = await agentService.listExecutionSummaries({ limit, offset });
+      const result = await (typeof agentService.listTasks === 'function'
+        ? agentService.listTasks({ limit, offset })
+        : agentService.listExecutionSummaries({ limit, offset }));
       const tasks = (result.executions || []).map(execution => ({
         id: execution.executionId,
         status: execution.status,
@@ -53,6 +55,11 @@ function createAgentRoutes(agentService) {
         updatedAt: execution.updatedAt || null,
         completedAt: execution.completedAt || null,
         cancellationRequested: Boolean(execution.cancellationRequested),
+        ...(execution.workflowId ? {
+          workflowId: execution.workflowId,
+          executionId: execution.canonicalExecutionId || null,
+          approvalRequired: Boolean(execution.approvalRequired)
+        } : {}),
         version: 1
       }));
 
@@ -70,10 +77,12 @@ function createAgentRoutes(agentService) {
     },
 
     async task(req, res, executionId) {
-      const result = await agentService.getExecutionStatus(executionId);
+      const result = typeof agentService.getTaskStatus === 'function'
+        ? await agentService.getTaskStatus(executionId)
+        : await agentService.getExecutionStatus(executionId);
       // Deliberately omit tenant identifiers and raw execution results from the
       // cross-device task summary. Detailed output requires a separately governed API.
-      const task = {
+      const task = result.id ? result : {
         id: result.executionId,
         status: result.status,
         currentStep: result.currentStep ?? null,
@@ -108,7 +117,9 @@ function createAgentRoutes(agentService) {
       // The service scopes the execution and its events to the runtime tenant.
       // Only the newest 200 events are currently retrievable; if a cursor falls
       // outside that window, report a gap instead of silently skipping history.
-      const events = await agentService.getExecutionEvents(executionId, { limit: 200 });
+      const events = await (typeof agentService.getTaskEvents === 'function'
+        ? agentService.getTaskEvents(executionId, { limit: 200 })
+        : agentService.getExecutionEvents(executionId, { limit: 200 }));
       let startIndex = 0;
       if (after !== null) {
         const cursorIndex = events.findIndex(event => String(event.id) === after);
