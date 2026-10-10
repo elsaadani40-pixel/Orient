@@ -254,3 +254,44 @@ test('Postgres approval consume requires an approved decision and checks expiry 
     'tenant-a'
   ]);
 });
+
+
+test('Postgres approval decisions evaluate expiry through the injected clock and SQL commit guard', async () => {
+  const now = Date.now();
+  const expiresAt = new Date(now + 60000).toISOString();
+  const row = {
+    approval_id: 'approval-decision-pg',
+    execution_id: 'exec-pg',
+    step: 1,
+    plan_revision: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: {},
+    issued_at: new Date(now - 1000).toISOString(),
+    expires_at: expiresAt,
+    used: false,
+    used_at: null,
+    metadata: { tenantId: 'tenant-a' },
+    tenant_id: 'tenant-a'
+  };
+  const decision = { status: 'approved', actorId: 'owner-a', decidedAt: new Date(now).toISOString() };
+  const updated = { ...row, metadata: { ...row.metadata, decision } };
+  const db = fakeDb([
+    { rows: [row], rowCount: 1 },
+    { rows: [], rowCount: 1 },
+    { rows: [updated], rowCount: 1 }
+  ]);
+  const repo = new PostgresApprovalRepository(db);
+  const result = await repo.recordDecision('approval-decision-pg', decision, 'tenant-a', () => now);
+  assert.equal(result.decision.status, 'approved');
+  assert.ok(db.calls[1].text.includes('expires_at>clock_timestamp()'));
+  assert.equal(db.calls[1].values[1], new Date(now).toISOString());
+
+  const expiredDb = fakeDb([{ rows: [row], rowCount: 1 }]);
+  const expiredRepo = new PostgresApprovalRepository(expiredDb);
+  await assert.rejects(
+    () => expiredRepo.recordDecision('approval-decision-pg', decision, 'tenant-a', () => Date.parse(expiresAt)),
+    error => error.code === 'APPROVAL_EXPIRED'
+  );
+  assert.equal(expiredDb.calls.length, 1);
+});
