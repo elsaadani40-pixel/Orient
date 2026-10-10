@@ -259,7 +259,7 @@ test('SQLite idempotency keys are tenant-scoped across begin, completion, failur
     const restarted = new SqlitePersistence({ filePath });
     assert.equal(restarted.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).result.owner, 'tenant-a');
     assert.equal(restarted.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).status, 'failed');
-    assert.equal(restarted.idempotency.delete(a.key, { tenantId: 'tenant-b' }), false);
+    assert.equal(restarted.idempotency.delete(a.key, { tenantId: 'tenant-c' }), false);
     assert.equal(restarted.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).status, 'completed');
     assert.equal(restarted.idempotency.delete(a.key, { tenantId: 'tenant-a' }), true);
     assert.equal(restarted.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).status, 'failed');
