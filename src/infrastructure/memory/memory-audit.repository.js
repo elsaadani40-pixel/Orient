@@ -21,7 +21,7 @@ class MemoryAuditRepository {
     let fd = null;
     try {
       fd = fs.openSync(temporaryFile, 'wx', 0o600);
-      fs.writeFileSync(fd, '[]\\n', 'utf8');
+      fs.writeFileSync(fd, '[]\n', 'utf8');
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = null;
@@ -100,7 +100,7 @@ class MemoryAuditRepository {
     let fd = null;
     try {
       fd = fs.openSync(temporaryFile, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify(events, null, 2) + '\\n', 'utf8');
+      fs.writeFileSync(fd, JSON.stringify(events, null, 2) + '\n', 'utf8');
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = null;
