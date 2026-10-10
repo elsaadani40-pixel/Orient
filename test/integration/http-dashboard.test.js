@@ -206,3 +206,77 @@ test('dashboard does not replace the existing memory home route', async (t) => {
   assert.equal(response.status, 200);
   assert.equal(await response.text(), 'existing-memory-home');
 });
+
+
+test('task workbench serves a responsive Arabic task console and same-origin API client', async t => {
+  const server = createServer({
+    memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('memory'); }, add() {}, delete() {} },
+    agentRoutes: {}
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+  }));
+
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const page = await fetch(origin + '/workbench');
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-type') || '', /text\\/html; charset=utf-8/);
+  assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.equal(page.headers.get('x-frame-options'), 'DENY');
+  assert.match(page.headers.get('content-security-policy') || '', /connect-src 'self'/);
+  assert.match(page.headers.get('content-security-policy') || '', /script-src 'self'/);
+  assert.match(html, /مساحة اختبار المهام/);
+  assert.match(html, /id="taskForm"/);
+  assert.match(html, /id="taskList"/);
+  assert.match(html, /id="taskEvents"/);
+  assert.match(html, /src="\\/workbench.js"/);
+
+  const script = await fetch(origin + '/workbench.js');
+  const source = await script.text();
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get('content-type') || '', /application\\/javascript; charset=utf-8/);
+  assert.match(script.headers.get('content-security-policy') || '', /default-src 'none'/);
+  assert.match(source, /POST/);
+  assert.match(source, /\\/api\\/v1\\/tasks/);
+  assert.match(source, /Idempotency-Key/);
+  assert.match(source, /textContent/);
+  assert.doesNotMatch(source, /innerHTML/);
+});
+
+test('task workbench and its API remain behind the configured owner session gate', async t => {
+  const server = createServer({
+    memoryRoutes: { home() {}, add() {}, delete() {} },
+    agentRoutes: {},
+    ownerAuth: {
+      enabled: true,
+      authenticate(token) {
+        return token === 'valid-session'
+          ? { sessionId: 'session-1', csrfToken: 'csrf-1', expiresAt: Date.now() + 60000 }
+          : null;
+      }
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+  }));
+
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const deniedPage = await fetch(origin + '/workbench');
+  assert.equal(deniedPage.status, 401);
+  assert.equal((await deniedPage.json()).code, 'OWNER_AUTH_REQUIRED');
+
+  const allowedPage = await fetch(origin + '/workbench', {
+    headers: { Cookie: 'orient_owner_session=valid-session' }
+  });
+  assert.equal(allowedPage.status, 200);
+
+  const deniedScript = await fetch(origin + '/workbench.js');
+  assert.equal(deniedScript.status, 401);
+  const allowedScript = await fetch(origin + '/workbench.js', {
+    headers: { Cookie: 'orient_owner_session=valid-session' }
+  });
+  assert.equal(allowedScript.status, 200);
+});
