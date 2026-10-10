@@ -31,10 +31,10 @@ The manifest grants only `INTERNET`. Network Security Config disables cleartext 
 
 ## Security boundary
 
-- The client calls `/owner/login`, `/agent`, and `/executions`; runtime authorization and tool governance remain on the server.
+- The client calls `/owner/login`, `/agent`, and `/executions`; authorization and tool governance remain on the canonical server runtime.
+- The runtime registers bounded local workspace listing, file reading, literal text search, and project audit tools. File changes are available only as a high-risk, approval-gated change set with precondition checks and verification; the deterministic no-model planner does not invent file contents.
 - A task result is displayed only when the HTTP service returns a response. Connection failures are shown as failures, not fabricated success.
-- The service remains loopback-bound. Secure LAN/remote transport and a dedicated Android token flow are not implemented.
-- Search, filesystem read/write/edit, caller identification, call actions, notifications, and microphone capture are not implemented in this release.
+- The service remains loopback-bound. External web search, secure LAN/remote transport, caller identification, call actions, notifications, and microphone capture are not implemented in this release.
 
 Future device adapters must request only permissions needed for user-requested features, explain why access is needed, handle denial/revocation, and never capture audio or device activity covertly. Caller lookup is not equivalent to unrestricted call-log access; Android and distribution policies may require supported APIs and user-selected/default-handler roles.
 
