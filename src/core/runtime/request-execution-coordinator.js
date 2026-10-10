@@ -349,6 +349,76 @@ class RequestExecutionCoordinator {
         throw error;
       }
 
+      if (error?.code === 'APPROVAL_REQUIRED') {
+        const approvalContext = error.executionContext || {};
+        const step = Number(approvalContext.step);
+        const planRevision = Number(approvalContext.planRevision || 1);
+        const tool = typeof approvalContext.tool === 'string' ? approvalContext.tool : null;
+        const capability = typeof approvalContext.capability === 'string' ? approvalContext.capability : null;
+        const tenantId = approvalContext.tenantId || context.tenantId || this.tenantId;
+        const agentId = approvalContext.agentId || context.metadata?.agentId || context.plan?.agentId || 'ORIENT_RUNTIME';
+        const operationId = approvalContext.operationId || null;
+        const approvalSummary = createApprovalSummary(tool, approvalContext.input);
+
+        try {
+          if (Number.isInteger(step) && step > 0) {
+            context.metadata.pendingStepInputs = {
+              ...(context.metadata.pendingStepInputs || {}),
+              [step]: { tool, operationId }
+            };
+          }
+          context.record('approval.challenge.requested', {
+            executionId: context.executionId,
+            step: Number.isInteger(step) ? step : null,
+            planRevision,
+            operationId,
+            tool,
+            capability,
+            source: 'resume',
+            summaryKind: approvalSummary.kind,
+            changeCount: approvalSummary.changeCount || 0
+          });
+          await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_required_after_resume');
+          await this.persistenceCoordinator.persistEvents(context);
+
+          if (this.approvalService?.issue && Number.isInteger(step) && step > 0 && tool && capability) {
+            const issued = await this.approvalService.issue({
+              executionId: context.executionId,
+              step,
+              tool,
+              capability,
+              planRevision,
+              scope: { planRevision },
+              tenantId,
+              agentId,
+              operationId,
+              ttlMs: 5 * 60 * 1000,
+              metadata: { approvalSummary }
+            });
+            error.executionContext = { ...approvalContext, approvalId: issued.approvalId };
+            context.record('approval.challenge.persisted', {
+              executionId: context.executionId,
+              step,
+              planRevision,
+              operationId,
+              approvalId: issued.approvalId,
+              tool,
+              capability,
+              source: 'resume',
+              summaryKind: approvalSummary.kind,
+              changeCount: approvalSummary.changeCount || 0
+            });
+            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issued_after_resume');
+            await this.persistenceCoordinator.persistEvents(context);
+          }
+        } finally {
+          if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+            await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          }
+        }
+        throw error;
+      }
+
       const activeSnapshot = this.snapshotActiveContext(context);
       const cancellationBeforeRecovery = await this.reconcileCancellationAfterFailure(
         context,
