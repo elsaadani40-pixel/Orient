@@ -866,7 +866,42 @@ class PostgresApprovalRepository {
     const nowIso = new Date(decisionNow).toISOString();
     const values = [JSON.stringify(decision), nowIso, approvalId];
     let tenantClause = '';
-    if (tenantId) { values.push(tenantId); tenantClause = ' AND tenant_id=
+    if (tenantId) { values.push(tenantId); tenantClause = ' AND tenant_id=$' + String(values.length); }
+    const result = await this.db.query(
+      "UPDATE approvals SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('decision',$1::jsonb) " +
+      "WHERE approval_id=$3" + tenantClause +
+      " AND used=FALSE AND expires_at>$2 AND expires_at>clock_timestamp() " +
+      "AND NOT (COALESCE(metadata,'{}'::jsonb) ? 'decision')",
+      values
+    );
+    if (result.rowCount === 1) return this.findById(approvalId, { tenantId });
+
+    const latest = await this.findById(approvalId, { tenantId });
+    if (latest?.decision?.status === decision.status && latest.decision.actorId === decision.actorId) return latest;
+    if (latest?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    const latestNow = typeof now === 'function' ? now() : now;
+    const latestExpiry = typeof latest?.expiresAt === 'string' ? Date.parse(latest.expiresAt) : NaN;
+    if (latest && (!Number.isFinite(latestExpiry) || !Number.isFinite(latestNow) || latestNow >= latestExpiry)) {
+      throw Object.assign(new Error('Approval expired or has an invalid expiry timestamp'), { code: 'APPROVAL_EXPIRED' });
+    }
+    throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+  }
+
+  async consume(approvalId, usedAt, tenantId = null, now = () => Date.now()) {
+    const requestedAt = typeof usedAt === 'string' ? Date.parse(usedAt) : NaN;
+    const commitNow = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(requestedAt) || !Number.isFinite(commitNow)) return false;
+    const commitAt = new Date(commitNow).toISOString();
+    const tenantClause = tenantId ? ' AND tenant_id=$4' : '';
+    const values = tenantId ? [usedAt, commitAt, approvalId, tenantId] : [usedAt, commitAt, approvalId];
+    const result = await this.db.query(
+      "UPDATE approvals SET used=TRUE,used_at=$2 WHERE approval_id=$3" + tenantClause +
+      " AND used=FALSE AND metadata->'decision'->>'status'='approved' " +
+      "AND expires_at>$1::timestamptz AND expires_at>$2::timestamptz AND expires_at>clock_timestamp()",
+      values
+    );
+    return result.rowCount === 1;
+  }
   async count({ tenantId = null } = {}) {
     const result = tenantId
       ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])
