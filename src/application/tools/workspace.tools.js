@@ -320,7 +320,7 @@ function createWorkspaceTools(projectBuilder) {
       });
 
       const changeSet = { changes };
-      const definitionOfDone = payload.definitionOfDone || {
+      const definitionOfDone = {
         required: ['Every changed file matches the approved proposed content.'],
         satisfied: false
       };
