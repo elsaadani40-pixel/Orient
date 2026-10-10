@@ -111,7 +111,7 @@ test('project change reconciliation recognizes an already-applied change without
   await withWorkspace(async ({ root, tools }) => {
     const execute = tools.find(tool => tool.name === 'project.execute_change');
     const original = await fs.readFile(path.join(root, 'src', 'main.js'), 'utf8');
-    const proposed = "const marker = 'recovered';\\nmodule.exports = marker;\\n";
+    const proposed = "const marker = 'recovered';\nmodule.exports = marker;\n";
     const expectedContentSha256 = crypto.createHash('sha256').update(original, 'utf8').digest('hex');
 
     // Model a crash after the filesystem commit but before the idempotency ledger
@@ -140,14 +140,14 @@ test('project change reconciliation fails closed on partial or unproven applicat
     const execute = tools.find(tool => tool.name === 'project.execute_change');
     const original = await fs.readFile(path.join(root, 'src', 'main.js'), 'utf8');
     const expectedContentSha256 = crypto.createHash('sha256').update(original, 'utf8').digest('hex');
-    const proposed = "const marker = 'partially-recovered';\\nmodule.exports = marker;\\n";
+    const proposed = "const marker = 'partially-recovered';\nmodule.exports = marker;\n";
 
     await fs.writeFile(path.join(root, 'src', 'main.js'), proposed, 'utf8');
     const partial = await execute.reconcile({
       changeSet: {
         changes: [
           { action: 'update', path: 'src/main.js', content: proposed, expectedContentSha256 },
-          { action: 'create', path: 'src/new.js', content: 'module.exports = true;\\n' }
+          { action: 'create', path: 'src/new.js', content: 'module.exports = true;\n' }
         ]
       }
     }, {});
