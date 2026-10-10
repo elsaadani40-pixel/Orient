@@ -64,7 +64,17 @@ curl -sS -X POST http://127.0.0.1:8080/agent \
 
 The default planner is deterministic and does not require a paid model API. The example uses local JSON persistence. Check the returned execution status and verify the saved memory in the local interface; do not treat an HTTP response alone as proof that every future tool or integration is available.
 
-The default configuration uses local JSON persistence and binds the HTTP server to `127.0.0.1:8080`. Review `src/core/config/index.js` and the security documentation before exposing any service to a network.
+The default configuration uses local JSON persistence and binds the HTTP server to `127.0.0.1:8080`. The owner console and protected dashboard/API routes require `ORIENT_OWNER_PASSWORD` to be set to a unique secret of at least 16 characters; without it, those routes fail closed. After copying `.env.example` to `.env`, set that value locally and load the file into the current shell before starting Node (plain `node app.js` does not automatically load `.env`):
+
+```bash
+# Edit .env first; set ORIENT_OWNER_PASSWORD to your own private 16+ character secret.
+set -a
+. ./.env
+set +a
+node app.js
+```
+
+Then open `http://127.0.0.1:8080/owner`, sign in with that password, and use the link to the operational dashboard. Review `src/core/config/index.js` and the security documentation before exposing any service to a network.
 
 ### Optional PostgreSQL persistence
 
