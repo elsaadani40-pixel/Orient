@@ -593,3 +593,150 @@ test('durable approval decision survives ApprovalService reconstruction and rema
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('real OrientRuntime resumes a durably approved pending step after service reconstruction', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-real-approved-resume-restart-'));
+  try {
+    const JsonPersistence = require('../../../../src/infrastructure/persistence/json/json-persistence');
+    const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
+    const persistence = new JsonPersistence({ rootDir: directory });
+    const tenantId = 'tenant-real-resume';
+    const executionId = 'execution-real-resume';
+    const ownerActorId = 'owner-real-resume';
+    const plan = {
+      intent: 'resume.approved.operation',
+      confidence: 1,
+      agentId: 'ORIENT_RUNTIME',
+      steps: [{
+        step: 1,
+        tool: 'danger.write',
+        input: { resourceId: 'resource-42' },
+        dependsOn: null
+      }]
+    };
+
+    const context = new ExecutionContext({
+      requestId: 'request-real-resume',
+      input: 'perform the approved operation',
+      executionId,
+      tenantId,
+      userId: 'user-real-resume',
+      workspaceId: 'workspace-real-resume'
+    });
+    context.start();
+    context.transitionAgentTo('planning');
+    context.transitionAgentTo('validating');
+    context.setPlan(plan);
+    context.metadata.planRevision = 1;
+    context.metadata.replans = 0;
+    context.metadata.pendingStepInputs = {
+      1: { tool: 'danger.write', operationId: null }
+    };
+    context.transitionAgentTo('executing');
+    await persistence.checkpoints.save(context.snapshot(), {
+      reason: 'approval_waiting',
+      tenantId
+    });
+
+    const approvalServiceBeforeRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId,
+      decisionAuthorizer: async ({ actorId }) => actorId === ownerActorId
+    });
+    const issued = await approvalServiceBeforeRestart.issue({
+      executionId,
+      step: 1,
+      planRevision: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { planRevision: 1 },
+      tenantId,
+      ttlMs: 60000
+    });
+    const decision = await approvalServiceBeforeRestart.decide({
+      approvalId: issued.approvalId,
+      executionId,
+      decision: 'approved',
+      actorId: ownerActorId,
+      tenantId
+    });
+    assert.equal(decision.decision.status, 'approved');
+
+    // Rebuild both Runtime and ApprovalService against the durable store.
+    let sideEffects = 0;
+    const approvalServiceAfterRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId,
+      decisionAuthorizer: async ({ actorId }) => actorId === ownerActorId
+    });
+    const authorizationService = {
+      approvalService: approvalServiceAfterRestart,
+      async assertAuthorized(tool, request) {
+        const validation = await approvalServiceAfterRestart.validate({
+          approval: request.approval,
+          executionId: request.executionId,
+          step: request.step,
+          planRevision: request.planRevision,
+          tool,
+          capability: 'external.write',
+          scope: { planRevision: request.planRevision },
+          tenantId: request.tenantId
+        });
+        if (!validation.allowed) {
+          throw Object.assign(new Error('Durable approval validation failed'), {
+            code: validation.reason
+          });
+        }
+        return {
+          authorized: true,
+          capability: 'external.write',
+          risk: 'high',
+          requiresApproval: true,
+          approval: validation.approval
+        };
+      }
+    };
+    const runtimeAfterRestart = new OrientRuntime({
+      tenantId,
+      userId: 'user-real-resume',
+      workspaceId: 'workspace-real-resume',
+      persistence,
+      approvalService: approvalServiceAfterRestart,
+      authorizationService,
+      toolRegistry: {
+        has: tool => tool === 'danger.write',
+        get: tool => ({ name: tool }),
+        async execute(tool, input) {
+          assert.equal(tool, 'danger.write');
+          assert.deepEqual(input, { resourceId: 'resource-42' });
+          sideEffects += 1;
+          return { receipt: 'provider-accepted-once' };
+        }
+      },
+      agentOrchestrator: {
+        decideReplanning() {
+          return { nextAction: null, toJSON: () => ({ outcome: 'done', nextAction: null }) };
+        },
+        async recover(error) { throw error; }
+      }
+    });
+
+    const result = await runtimeAfterRestart.resume(executionId);
+    assert.equal(result.resumed, true);
+    assert.equal(result.execution.status, 'completed');
+    assert.equal(sideEffects, 1);
+    assert.equal(result.execution.steps.find(step => step.step === 1).result.receipt, 'provider-accepted-once');
+
+    const consumedApproval = await persistence.approvals.findById(issued.approvalId, { tenantId });
+    assert.equal(consumedApproval.used, true);
+    assert.equal(consumedApproval.decision.status, 'approved');
+
+    const duplicateResume = await runtimeAfterRestart.resume(executionId);
+    assert.equal(duplicateResume.resumed, false);
+    assert.equal(duplicateResume.reason, 'execution_already_terminal');
+    assert.equal(sideEffects, 1, 'a repeated resume must not replay the committed side effect');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
