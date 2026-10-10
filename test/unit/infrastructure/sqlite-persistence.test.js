@@ -259,8 +259,23 @@ test('SQLite idempotency keys are tenant-scoped across begin, completion, failur
     assert.equal(first.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).status, 'running');
 
     first.idempotency.complete(a.key, { owner: 'tenant-a' }, { tenantId: 'tenant-a' });
+    assert.deepEqual(first.idempotency.complete(a.key, { owner: 'tenant-a' }, { tenantId: 'tenant-a' }).result, { owner: 'tenant-a' });
+    assert.throws(
+      () => first.idempotency.complete(a.key, { owner: 'overwritten' }, { tenantId: 'tenant-a' }),
+      error => error.code === 'IDEMPOTENCY_TERMINAL_CONFLICT'
+    );
+    assert.throws(
+      () => first.idempotency.fail(a.key, new Error('late failure'), { tenantId: 'tenant-a' }),
+      error => error.code === 'IDEMPOTENCY_TERMINAL_CONFLICT'
+    );
     assert.equal(first.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).status, 'running');
-    assert.equal(first.idempotency.fail(b.key, { code: 'TEST', message: 'tenant b failure' }, { tenantId: 'tenant-b' }).status, 'failed');
+    const failedB = first.idempotency.fail(b.key, { code: 'TEST', message: 'tenant b failure' }, { tenantId: 'tenant-b' });
+    assert.equal(failedB.status, 'failed');
+    assert.equal(first.idempotency.fail(b.key, new Error('duplicate failure'), { tenantId: 'tenant-b' }).status, 'failed');
+    assert.throws(
+      () => first.idempotency.complete(b.key, { late: true }, { tenantId: 'tenant-b' }),
+      error => error.code === 'IDEMPOTENCY_TERMINAL_CONFLICT'
+    );
 
     const restarted = new SqlitePersistence({ filePath });
     assert.equal(restarted.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).result.owner, 'tenant-a');
