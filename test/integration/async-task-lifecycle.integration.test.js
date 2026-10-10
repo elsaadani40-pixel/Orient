@@ -288,3 +288,220 @@ test('public async task API survives restart, pauses for approval, and resumes t
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
 });
+
+
+test('owner HTTP approval resume uses reconstructed real Runtime and executes the approved step once', async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-real-resume-e2e-'));
+  const persistence = new JsonPersistence({ rootDir });
+  const ownerAuth = new OwnerAuthService({ password: OWNER_PASSWORD });
+  const approvalServiceBeforeRestart = new ApprovalService({
+    repository: persistence.approvals,
+    tenantId: TENANT_ID,
+    decisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId)
+  });
+  const executionId = 'execution-http-real-resume';
+  const workflowId = 'workflow-http-real-resume';
+  const plan = {
+    intent: 'resume.approved.operation',
+    confidence: 1,
+    agentId: 'ORIENT_RUNTIME',
+    steps: [{
+      step: 1,
+      tool: 'danger.write',
+      input: { resourceId: 'resource-http-42' },
+      dependsOn: null
+    }]
+  };
+
+  let sideEffects = 0;
+  const makeToolRegistry = () => ({
+    has: tool => tool === 'danger.write',
+    get: tool => ({ name: tool }),
+    async execute(tool, input, executionContext) {
+      assert.equal(tool, 'danger.write');
+      assert.deepEqual(input, { resourceId: 'resource-http-42' });
+      assert.match(executionContext.idempotencyKey, /^[a-f0-9]{64}$/);
+      assert.equal(executionContext.tenantId, TENANT_ID);
+      sideEffects += 1;
+      return { receipt: 'owner-approved-provider-operation' };
+    }
+  });
+  const agentOrchestrator = {
+    decideReplanning() {
+      return { nextAction: null, toJSON: () => ({ outcome: 'done', nextAction: null }) };
+    },
+    async recover(error) { throw error; }
+  };
+
+  let runtimeBeforeRestart;
+  let runtimeAfterRestart;
+  let server;
+  try {
+    const issued = await approvalServiceBeforeRestart.issue({
+      executionId,
+      step: 1,
+      planRevision: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { planRevision: 1 },
+      tenantId: TENANT_ID,
+      ttlMs: 60000
+    });
+
+    const context = new (require('../../src/core/execution/execution-context'))({
+      requestId: 'request-http-real-resume',
+      input: 'perform the owner-approved operation',
+      executionId,
+      tenantId: TENANT_ID,
+      userId: 'owner-user',
+      workspaceId: 'owner-workspace'
+    });
+    context.start();
+    context.transitionAgentTo('planning');
+    context.transitionAgentTo('validating');
+    context.setPlan(plan);
+    context.metadata.planRevision = 1;
+    context.metadata.replans = 0;
+    context.metadata.pendingStepInputs = {
+      1: { tool: 'danger.write', operationId: null }
+    };
+    context.transitionAgentTo('executing');
+    await persistence.checkpoints.save(context.snapshot(), {
+      reason: 'approval_waiting',
+      tenantId: TENANT_ID
+    });
+
+    // Persist the corresponding waiting workflow, then reconstruct Runtime as a process restart.
+    runtimeBeforeRestart = new (require('../../src/core/runtime/orient-runtime'))({
+      tenantId: TENANT_ID,
+      userId: 'owner-user',
+      workspaceId: 'owner-workspace',
+      persistence,
+      toolRegistry: makeToolRegistry(),
+      agentOrchestrator
+    });
+    const created = runtimeBeforeRestart.workflowExecutionCoordinator.createInstance(
+      'perform the owner-approved operation',
+      { workflowId }
+    );
+    const workflow = created.instance;
+    workflow.transition('QUEUED');
+    workflow.transition('RUNNING');
+    workflow.transition('WAITING');
+    workflow.metadata = {
+      ...workflow.metadata,
+      taskId: workflowId,
+      approvalBlocked: true,
+      approvalExecutionId: executionId,
+      approvalId: issued.approvalId
+    };
+    await persistence.workflows.save(workflow, TENANT_ID);
+    await runtimeBeforeRestart.shutdown();
+
+    const approvalServiceAfterRestart = new ApprovalService({
+      repository: persistence.approvals,
+      tenantId: TENANT_ID,
+      decisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId)
+    });
+    const authorizationService = {
+      approvalService: approvalServiceAfterRestart,
+      async assertAuthorized(tool, requestContext) {
+        const validation = await approvalServiceAfterRestart.validate({
+          approval: requestContext.approval,
+          executionId: requestContext.executionId,
+          step: requestContext.step,
+          planRevision: requestContext.planRevision,
+          tool,
+          capability: 'external.write',
+          scope: { planRevision: requestContext.planRevision },
+          tenantId: requestContext.tenantId
+        });
+        if (!validation.allowed) {
+          throw Object.assign(new Error('Approval validation failed'), { code: validation.reason });
+        }
+        return {
+          allowed: true,
+          capability: 'external.write',
+          risk: 'high',
+          requiresApproval: true,
+          approval: validation.approval
+        };
+      }
+    };
+    runtimeAfterRestart = new (require('../../src/core/runtime/orient-runtime'))({
+      tenantId: TENANT_ID,
+      userId: 'owner-user',
+      workspaceId: 'owner-workspace',
+      persistence,
+      approvalService: approvalServiceAfterRestart,
+      approvalDecisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId),
+      authorizationService,
+      toolRegistry: makeToolRegistry(),
+      agentOrchestrator
+    });
+    const agentService = new AgentService(runtimeAfterRestart);
+    server = createServer({ agentRoutes: createAgentRoutes(agentService), ownerAuth });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const origin = 'http://127.0.0.1:' + server.address().port;
+    const loginResponse = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: { password: OWNER_PASSWORD }
+    });
+    assert.equal(loginResponse.status, 200);
+    const cookie = loginResponse.headers.get('set-cookie').split(';')[0];
+    const loginPayload = await loginResponse.json();
+    const ownerHeaders = {
+      Origin: origin,
+      Cookie: cookie,
+      'X-ORIENT-CSRF': loginPayload.csrfToken
+    };
+
+    const resumeResponse = await request(
+      origin,
+      '/owner/executions/' + encodeURIComponent(executionId) + '/resume',
+      {
+        method: 'POST',
+        headers: ownerHeaders,
+        body: { approval: { approvalId: issued.approvalId } }
+      }
+    );
+    const resumeText = await resumeResponse.text();
+    assert.equal(resumeResponse.status, 200, 'real Runtime resume failed: ' + resumeText);
+    const payload = JSON.parse(resumeText);
+    assert.equal(payload.execution.status, 'completed');
+    assert.equal(sideEffects, 1);
+
+    const storedApproval = await persistence.approvals.findById(issued.approvalId, { tenantId: TENANT_ID });
+    assert.equal(storedApproval.decision.status, 'approved');
+    assert.equal(storedApproval.used, true);
+
+    const reconciledWorkflow = await persistence.workflows.findById(workflowId, TENANT_ID);
+    assert.equal(reconciledWorkflow.state, 'COMPLETED');
+    assert.equal(reconciledWorkflow.metadata.approvalBlocked, false);
+    assert.equal(reconciledWorkflow.metadata.approvalDecisionStatus, 'approved');
+
+    const replayResponse = await request(
+      origin,
+      '/owner/executions/' + encodeURIComponent(executionId) + '/resume',
+      {
+        method: 'POST',
+        headers: ownerHeaders,
+        body: { approval: { approvalId: issued.approvalId } }
+      }
+    );
+    assert.equal(replayResponse.status, 200);
+    assert.equal(sideEffects, 1, 'repeated owner resume must not replay the external side effect');
+  } finally {
+    if (server) {
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+    }
+    if (runtimeAfterRestart) await runtimeAfterRestart.shutdown().catch(() => {});
+    if (runtimeBeforeRestart) await runtimeBeforeRestart.shutdown().catch(() => {});
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
