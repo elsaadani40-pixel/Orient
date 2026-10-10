@@ -313,14 +313,9 @@ test('concurrent resume during a workspace write fails closed until its receipt 
 
     assert.equal(await fs.readFile(path.join(root, 'src', 'main.js'), 'utf8'), proposed);
     assert.equal(workspaceWrites, 1);
-    const operationId = crypto.createHash('sha256').update(JSON.stringify({
-      tenantId,
-      executionId,
-      planRevision: 1,
-      step: 1,
-      tool: 'project.execute_change',
-      input: plan.steps[0].input
-    }), 'utf8').digest('hex');
+    const runningRecord = [...operationRepository.records.values()][0];
+    assert.ok(runningRecord, 'the operation must be reserved before the write begins');
+    const operationId = runningRecord.operationId;
     assert.equal(receiptStore.read({ operationId, tenantId }), null, 'receipt must not exist before verification completes');
 
     const concurrentLoop = makeAgentLoop(projectTool, operationRepository);
