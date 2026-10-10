@@ -70,7 +70,7 @@ function createAgentRoutes(agentService) {
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
         throw new AppError('Invalid task event pagination', 400, 'VALIDATION_ERROR');
       }
-      if (after !== null && (after.length < 1 || after.length > 200 || /[\\r\\n\\0]/.test(after))) {
+      if (after !== null && (after.length < 1 || after.length > 200 || /[\r\n\0]/.test(after))) {
         throw new AppError('Invalid task event cursor', 400, 'VALIDATION_ERROR');
       }
 
@@ -92,7 +92,7 @@ function createAgentRoutes(agentService) {
           ? event.data
           : {};
         const safeString = (value, max = 100) =>
-          typeof value === 'string' ? value.replace(/[\\r\\n\\0]/g, '').slice(0, max) : null;
+          typeof value === 'string' ? value.replace(/[\r\n\0]/g, '').slice(0, max) : null;
         const sequence = event?.sequence == null ? null : Number(event.sequence);
         return {
           id: safeString(String(event?.id || ''), 200),
@@ -106,7 +106,7 @@ function createAgentRoutes(agentService) {
             ['step', 'stepId', 'tool', 'status', 'errorCode']
               .map(key => [key, data[key]])
               .filter(([, value]) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))
-              .map(([key, value]) => [key, typeof value === 'string' ? value.replace(/[\\r\\n\\0]/g, '').slice(0, 100) : value])
+          typeof value === 'string' ? value.replace(/[\r\n\0]/g, '').slice(0, max) : null;
           )
         };
       });
