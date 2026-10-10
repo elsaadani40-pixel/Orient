@@ -301,6 +301,12 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         authenticationOutcome = 'authenticated';
       }
 
+      if (req.method === 'POST' && requestUrl.pathname === '/api/v1/tasks') {
+        const rawBody = await readBody(req, 8192);
+        await agentRoutes.createTask(req, res, rawBody);
+        return;
+      }
+
       // Unified v1 task reads deliberately reuse the existing AgentService/runtime
       // and sit after the shared owner-session and origin protections above.
       if (req.method === 'GET' && requestUrl.pathname === '/api/v1/tasks') {

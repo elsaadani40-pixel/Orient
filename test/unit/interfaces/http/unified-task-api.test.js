@@ -224,3 +224,125 @@ test('v1 task read endpoints remain behind the shared owner-session gate', async
   assert.equal(detail.status, 200);
   assert.equal((await detail.json()).task.id, 'exec-3');
 });
+
+
+test('v1 task creation forwards the idempotency key and marks replay responses', async () => {
+  const calls = [];
+  const routes = createAgentRoutes({
+    async createTask(input) {
+      calls.push(input);
+      return {
+        replayed: calls.length > 1,
+        task: {
+          id: 'exec-created',
+          status: 'completed',
+          currentStep: 1,
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-10T10:00:01.000Z',
+          completedAt: '2026-10-10T10:00:01.000Z',
+          cancellationRequested: false,
+          agentLifecycle: 'completed',
+          version: 1
+        }
+      };
+    }
+  });
+
+  const first = responseRecorder();
+  await routes.createTask({
+    headers: { 'idempotency-key': 'route-key-0001' }
+  }, first, JSON.stringify({ goal: 'run one task' }));
+  assert.equal(first.status, 201);
+  assert.equal(first.headers.Location, '/api/v1/tasks/exec-created');
+  assert.equal(first.body.replayed, false);
+  assert.equal(calls[0].goal, 'run one task');
+  assert.equal(calls[0].idempotencyKey, 'route-key-0001');
+
+  const replay = responseRecorder();
+  await routes.createTask({
+    headers: { 'idempotency-key': 'route-key-0001' }
+  }, replay, JSON.stringify({ goal: 'run one task' }));
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.replayed, true);
+  assert.equal(calls.length, 2);
+});
+
+test('v1 task creation rejects malformed JSON before calling the service', async () => {
+  const routes = createAgentRoutes({
+    async createTask() {
+      assert.fail('malformed JSON must not reach task creation');
+    }
+  });
+  await assert.rejects(
+    routes.createTask({ headers: {} }, responseRecorder(), '{'),
+    error => error.code === 'INVALID_JSON'
+  );
+});
+
+
+test('POST v1 task creation requires the owner session and same-origin request', async t => {
+  let created = 0;
+  const server = createServer({
+    memoryRoutes: { home() {}, add() {}, delete() {} },
+    agentRoutes: {
+      async createTask(_req, res, body) {
+        created += 1;
+        const payload = JSON.parse(body);
+        assert.equal(payload.goal, 'authorized task');
+        res.writeHead(201, { 'Content-Type': 'application/json', Location: '/api/v1/tasks/exec-created' });
+        res.end(JSON.stringify({ apiVersion: 'v1', task: { id: 'exec-created' }, replayed: false }));
+      }
+    },
+    ownerAuth: {
+      enabled: true,
+      authenticate(token) {
+        return token === 'valid-session'
+          ? { sessionId: 'session-1', csrfToken: 'csrf-1', expiresAt: Date.now() + 60000 }
+          : null;
+      }
+    }
+  });
+
+  t.after(async () => {
+    if (server.listening) {
+      await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const payload = JSON.stringify({ goal: 'authorized task', idempotencyKey: 'api-key-0001' });
+
+  const unauthenticated = await fetch(`${origin}/api/v1/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: payload
+  });
+  assert.equal(unauthenticated.status, 401);
+
+  const wrongOrigin = await fetch(`${origin}/api/v1/tasks`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'http://attacker.invalid',
+      Cookie: 'orient_owner_session=valid-session'
+    },
+    body: payload
+  });
+  assert.equal(wrongOrigin.status, 403);
+  assert.equal(created, 0);
+
+  const authorized = await fetch(`${origin}/api/v1/tasks`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: origin,
+      Cookie: 'orient_owner_session=valid-session'
+    },
+    body: payload
+  });
+  assert.equal(authorized.status, 201);
+  assert.equal((await authorized.json()).task.id, 'exec-created');
+  assert.equal(created, 1);
+});

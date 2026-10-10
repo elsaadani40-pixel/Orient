@@ -2,6 +2,37 @@ const AppError = require('../../../core/errors/AppError');
 
 function createAgentRoutes(agentService) {
   return {
+    async createTask(req, res, body) {
+      let payload;
+      try {
+        payload = typeof body === 'string' ? JSON.parse(body || '{}') : body;
+      } catch (_) {
+        throw new AppError('Invalid JSON body', 400, 'INVALID_JSON');
+      }
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new AppError('Task request must be a JSON object', 400, 'VALIDATION_ERROR');
+      }
+
+      const idempotencyKey = req.headers?.['idempotency-key'] || payload.idempotencyKey;
+      const result = await agentService.createTask({
+        goal: payload.goal,
+        idempotencyKey
+      });
+      const statusCode = result.replayed ? 200 : 201;
+      res.writeHead(statusCode, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+        'X-ORIENT-API-Version': 'v1',
+        'Location': '/api/v1/tasks/' + encodeURIComponent(result.task.id)
+      });
+      res.end(JSON.stringify({
+        apiVersion: 'v1',
+        task: result.task,
+        replayed: result.replayed
+      }));
+    },
+
     async tasks(req, res) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
