@@ -653,6 +653,12 @@ class RequestExecutionCoordinator {
         }
       }
 
+      if (pendingStep && !durableApproval) {
+        throw Object.assign(new Error('Execution is waiting for an explicit durable approval decision'), {
+          code: 'APPROVAL_NOT_APPROVED'
+        });
+      }
+
       const approvalReference = durableApproval?.approvalId
         ? { approvalId: durableApproval.approvalId }
         : null;
