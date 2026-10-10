@@ -1,4 +1,4 @@
-# ORIENT ONE Capability and Evidence Matrix
+# ORIENT Capability and Evidence Matrix
 
 This matrix deliberately separates repository evidence from product intent. "Present" means the capability is described in the current product contract or known project baseline; it does **not** by itself prove that every route, client, permission boundary, or end-to-end path passes acceptance tests. Do not change a row to Released without linking code and test evidence.
 
