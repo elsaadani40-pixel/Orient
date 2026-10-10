@@ -401,3 +401,109 @@ test('real runtime restart reconciles a durable terminal execution without repla
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('real runtime restart reconciles an approval-blocked workflow from a durable terminal execution', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-workflow-restart-'));
+  try {
+    const JsonPersistence = require('../../../../src/infrastructure/persistence/json/json-persistence');
+    const persistence = new JsonPersistence({ rootDir: directory });
+    const executionId = 'execution-approval-restart';
+    const workflowId = 'workflow-approval-restart';
+
+    const context = new ExecutionContext({
+      requestId: 'request-approval-restart',
+      input: 'resume the already committed approved operation',
+      executionId,
+      tenantId: 'tenant-restart',
+      userId: 'owner-session',
+      workspaceId: 'workspace-restart'
+    });
+    context.start();
+    const plan = {
+      intent: 'approval.restart.reconciliation',
+      confidence: 1,
+      steps: [{ step: 1, tool: 'test.approved-side-effect', input: { operationId: 'operation-1' }, dependsOn: null }]
+    };
+    context.transitionAgentTo('planning');
+    context.transitionAgentTo('validating');
+    context.setPlan(plan);
+    context.metadata.planRevision = 1;
+    context.metadata.replans = 0;
+    context.metadata.pendingStepInputs = { 1: { operationId: 'operation-1' } };
+    context.transitionAgentTo('executing');
+
+    const completedSnapshot = {
+      ...context.snapshot(),
+      status: 'completed',
+      result: { receipt: 'durably-committed' },
+      completedAt: new Date().toISOString()
+    };
+    await persistence.executions.insert(completedSnapshot, { tenantId: 'tenant-restart' });
+    await persistence.checkpoints.save(context.snapshot(), {
+      reason: 'stale-approval-checkpoint-before-terminal-commit',
+      tenantId: 'tenant-restart'
+    });
+
+    let toolCalls = 0;
+    const runtimeAfterRestart = new OrientRuntime({
+      tenantId: 'tenant-restart',
+      userId: 'owner-session',
+      workspaceId: 'workspace-restart',
+      toolRegistry: {
+        has: tool => tool === 'test.approved-side-effect',
+        get: tool => ({ name: tool }),
+        async execute() {
+          toolCalls += 1;
+          return { receipt: 'duplicate-side-effect' };
+        }
+      },
+      agentOrchestrator: {
+        decideReplanning() {
+          return { nextAction: null, toJSON: () => ({ outcome: 'done', nextAction: null }) };
+        },
+        async recover(error) { throw error; }
+      },
+      persistence
+    });
+
+    const created = runtimeAfterRestart.workflowExecutionCoordinator.createInstance(
+      'resume the approved operation',
+      { workflowId }
+    );
+    assert.ok(created.instance);
+    const workflow = created.instance;
+    workflow.transition('QUEUED');
+    workflow.transition('RUNNING');
+    workflow.transition('WAITING');
+    workflow.metadata = {
+      ...workflow.metadata,
+      taskId: workflowId,
+      approvalBlocked: true,
+      approvalExecutionId: executionId,
+      approvalId: 'approval-durable-restart'
+    };
+    await persistence.workflows.save(workflow, 'tenant-restart');
+
+    const result = await runtimeAfterRestart.resume(executionId);
+
+    assert.equal(result.resumed, false);
+    assert.equal(result.reason, 'execution_already_terminal');
+    assert.equal(result.execution.status, 'completed');
+    assert.equal(result.execution.result.receipt, 'durably-committed');
+    assert.equal(toolCalls, 0, 'the real Runtime resume path must not replay the committed tool');
+
+    const reconciled = await persistence.workflows.findById(workflowId, 'tenant-restart');
+    assert.equal(reconciled.state, 'COMPLETED');
+    assert.equal(reconciled.metadata.approvalBlocked, false);
+    assert.equal(reconciled.metadata.approvalDecisionStatus, 'approved');
+    assert.equal(reconciled.steps['agent-runtime'].state, 'COMPLETED');
+
+    const repairedCheckpoint = await persistence.checkpoints.findLatest(executionId, {
+      tenantId: 'tenant-restart'
+    });
+    assert.equal(repairedCheckpoint.snapshot.status, 'completed');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
