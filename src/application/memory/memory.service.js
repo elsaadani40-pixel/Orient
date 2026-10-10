@@ -392,13 +392,25 @@ class MemoryService {
 
       const inserted = this.repository.insert(memory, tenantId, scope);
 
-      this.audit({
-        action: 'memory.created',
-        tenantId,
-        memoryId: inserted.id,
-        source: inserted.source,
-        confidence: inserted.confidence
-      }, context);
+      try {
+        this.audit({
+          action: 'memory.created',
+          tenantId,
+          memoryId: inserted.id,
+          source: inserted.source,
+          confidence: inserted.confidence
+        }, context);
+      } catch (auditError) {
+        // The JSON repository and audit log are separate durable stores. If the
+        // audit append fails synchronously, compensate the committed insert so
+        // callers are not told the operation failed while the new memory remains.
+        // This is not crash-atomic; async execution stays gated until a durable
+        // operation journal/outbox exists for every supported repository.
+        if (typeof this.repository.deleteById === 'function') {
+          this.repository.deleteById(inserted.id, tenantId, scope);
+        }
+        throw auditError;
+      }
 
       return inserted;
     } catch (error) {
@@ -512,6 +524,10 @@ class MemoryService {
       throw new AppError('الذاكرة غير موجودة', 404, 'MEMORY_NOT_FOUND');
     }
 
+    const previousState = {
+      state: memory.state,
+      updatedAt: memory.updatedAt
+    };
     this.repository.update(
       id,
       {
@@ -522,12 +538,25 @@ class MemoryService {
       authorization.scope
     );
 
-    this.audit({
-      action: 'memory.archived',
-      tenantId: authorization.tenantId,
-      memoryId: id,
-      reason: context.reason || 'manual'
-    }, context);
+    try {
+      this.audit({
+        action: 'memory.archived',
+        tenantId: authorization.tenantId,
+        memoryId: id,
+        reason: context.reason || 'manual'
+      }, context);
+    } catch (auditError) {
+      // Compensate a reported audit failure. This closes the ordinary
+      // exception path, not a process-crash window; async activation remains
+      // blocked until the mutation and audit result share a durable protocol.
+      this.repository.update(
+        id,
+        previousState,
+        authorization.tenantId,
+        authorization.scope
+      );
+      throw auditError;
+    }
 
     return true;
   }
