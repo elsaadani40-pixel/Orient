@@ -478,6 +478,7 @@ test('PostgreSQL approval consumption is single-use under concurrency', async ()
     scope: { tenant: 'tenant-approval' },
     issuedAt: new Date(Date.now() - 1000).toISOString(),
     expiresAt: new Date(Date.now() + 60000).toISOString(),
+    decision: { status: 'approved', actorId: 'owner-test', decidedAt: new Date().toISOString() },
     used: false,
     metadata: { tenantId: 'tenant-approval' }
   }, { tenantId: 'tenant-approval' });
