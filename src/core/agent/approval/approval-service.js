@@ -150,7 +150,7 @@ class ApprovalService {
         .sort((a, b) => Date.parse(a.issuedAt || 0) - Date.parse(b.issuedAt || 0));
     return candidates
       .filter(record => record && !record.used && !record.decision)
-      .filter(record => !record.expiresAt || this.clock() < Date.parse(record.expiresAt))
+      .filter(record => !isApprovalExpired(record.expiresAt, this.clock()))
       .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
       .slice(0, boundedLimit)
       .map(record => ({
@@ -249,8 +249,8 @@ class ApprovalService {
     if (!stored || stored.executionId !== String(executionId)) return null;
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return null;
     if (stored.used) return null;
-    if (!stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) {
-      throw Object.assign(new Error('Approved decision expired before execution resume'), {
+    if (isApprovalExpired(stored.expiresAt, this.clock())) {
+      throw Object.assign(new Error('Approved decision expired or has an invalid expiry timestamp before execution resume'), {
         code: 'APPROVAL_EXPIRED',
         approvalId,
         executionId: String(executionId)
@@ -266,7 +266,7 @@ class ApprovalService {
       : this.approvals.get(approvalId);
     if (!stored || stored.used) return false;
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return false;
-    if (!stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) return false;
+    if (isApprovalExpired(stored.expiresAt, this.clock())) return false;
     const usedAt = new Date(this.clock()).toISOString();
     if (this.repository?.consume) {
       const consumed = await this.repository.consume(approvalId, usedAt, tenantId);
