@@ -111,12 +111,14 @@ test('WorkflowExecutionCoordinator accepts a durable workflow without executing 
   });
 
   assert.deepEqual(accepted, {
+    taskId: 'workflow-accepted-1',
     workflowId: 'workflow-accepted-1',
     state: 'QUEUED',
     tenantId: 'tenant-a',
     createdAt: accepted.createdAt,
     updatedAt: accepted.updatedAt
   });
+  assert.equal(accepted.taskId, accepted.workflowId);
   assert.equal(typeof accepted.createdAt, 'string');
   assert.equal(typeof accepted.updatedAt, 'string');
   assert.equal(executed, false);
