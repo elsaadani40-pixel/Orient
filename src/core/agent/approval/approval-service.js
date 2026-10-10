@@ -187,15 +187,27 @@ class ApprovalService {
     if (executionId === undefined || executionId === null || String(executionId) !== stored.executionId) {
       throw Object.assign(new Error('Approval execution does not match the requested execution'), { code: 'APPROVAL_EXECUTION_MISMATCH' });
     }
+    if (typeof this.decisionAuthorizer !== 'function' ||
+        await this.decisionAuthorizer({ actorId, tenantId, decision, approval: { ...stored } }) !== true) {
+      throw Object.assign(new Error('Approval decision is not authorized'), { code: 'APPROVAL_DECISION_FORBIDDEN' });
+    }
+    if (stored.decision) {
+      if (stored.decision.status === decision && stored.decision.actorId === actorId) {
+        return {
+          approvalId,
+          executionId: stored.executionId,
+          tenantId: stored.tenantId || tenantId || null,
+          decision: { ...stored.decision },
+          idempotent: true
+        };
+      }
+      throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+    }
     if (stored.used) {
       throw Object.assign(new Error('Approval has already been consumed'), { code: 'APPROVAL_ALREADY_USED' });
     }
     if (!stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) {
       throw Object.assign(new Error('Approval has expired'), { code: 'APPROVAL_EXPIRED' });
-    }
-    if (typeof this.decisionAuthorizer !== 'function' ||
-        await this.decisionAuthorizer({ actorId, tenantId, decision, approval: { ...stored } }) !== true) {
-      throw Object.assign(new Error('Approval decision is not authorized'), { code: 'APPROVAL_DECISION_FORBIDDEN' });
     }
 
     const decisionRecord = {
@@ -220,7 +232,7 @@ class ApprovalService {
       executionId: updated.executionId,
       tenantId: updated.tenantId || tenantId || null,
       decision: { ...updated.decision },
-      idempotent: Boolean(stored.decision)
+      idempotent: Boolean(stored.decision || updated.decision?.decidedAt !== decisionRecord.decidedAt)
     };
   }
 
