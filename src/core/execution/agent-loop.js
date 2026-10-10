@@ -487,7 +487,8 @@ class AgentLoop {
               tool: step.tool,
               capability: error.capability || agentAuthorization?.capability || null,
               agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
-              tenantId: runtimeContext.tenantId || context.tenantId
+              tenantId: runtimeContext.tenantId || context.tenantId,
+              input: resolvedInput
             };
           }
 
