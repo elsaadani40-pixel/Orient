@@ -37,7 +37,7 @@ function syncDirectory(directory) {
 /**
  * Durable, tenant-scoped receipts for verified project changes.
  * The receipt directory belongs to application data, never to the workspace.
- * A stale lock intentionally blocks writes instead of risking concurrent overwrite.
+ * Writers use exclusive locks; stale local-owner locks are quarantined only when the process is gone.
  */
 class ProjectOperationReceiptStore {
   constructor({ directory } = {}) {
@@ -65,6 +65,17 @@ class ProjectOperationReceiptStore {
 
   read({ operationId, tenantId }) {
     const filePath = this.receiptPath(operationId, tenantId);
+    let fileStats;
+    try {
+      fileStats = fs.lstatSync(filePath);
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+    if (!fileStats.isFile() || fileStats.isSymbolicLink()) {
+      fail('Project operation receipt is not a regular file', 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+    }
+
     let raw;
     try {
       raw = fs.readFileSync(filePath, 'utf8');
