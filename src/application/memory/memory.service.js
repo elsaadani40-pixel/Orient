@@ -338,12 +338,19 @@ class MemoryService {
           scope
         );
 
-        this.audit({
-          action: 'memory.reinforced',
-          tenantId,
-          memoryId: exact.id,
-          evidence: candidate.evidence
-        }, context);
+        try {
+          this.audit({
+            action: 'memory.reinforced',
+            tenantId,
+            memoryId: exact.id,
+            evidence: candidate.evidence
+          }, context);
+        } catch (auditError) {
+          // Restore the pre-operation snapshot when the audit append fails on
+          // the handled exception path. This does not make two files crash-atomic.
+          this.repository.update(exact.id, exact, tenantId, scope);
+          throw auditError;
+        }
 
         return updated;
       }
