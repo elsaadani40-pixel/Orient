@@ -1,4 +1,4 @@
-name: ORIENT ONE — Strict CI
+name: ORIENT — Strict CI
 
 # Strict gate: every branch change must pass through PR CI; main is also validated directly.
 # Keep one active CI generation per PR/branch so stale runs cannot consume the queue.
