@@ -252,6 +252,11 @@ test('SQLite idempotency keys are tenant-scoped across begin, completion, failur
     assert.equal(first.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).tenantId, 'tenant-a');
     assert.equal(first.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).tenantId, 'tenant-b');
     assert.equal(first.idempotency.findByKey(a.key, { tenantId: 'tenant-c' }), null);
+    assert.equal(first.idempotency.findByKey(a.key), null, 'tenant-scoped records must not leak into the default local scope');
+    assert.equal(first.idempotency.complete(a.key, { owner: 'wrong-default-scope' }), null);
+    assert.equal(first.idempotency.fail(b.key, { code: 'WRONG_SCOPE' }), null);
+    assert.equal(first.idempotency.delete(a.key), false);
+    assert.equal(first.idempotency.findByKey(a.key, { tenantId: 'tenant-a' }).status, 'running');
 
     first.idempotency.complete(a.key, { owner: 'tenant-a' }, { tenantId: 'tenant-a' });
     assert.equal(first.idempotency.findByKey(b.key, { tenantId: 'tenant-b' }).status, 'running');
