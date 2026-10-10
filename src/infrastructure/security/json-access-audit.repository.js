@@ -4,6 +4,20 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 
+function hashEvent(previousHash, event) {
+  return createHash('sha256')
+    .update(previousHash || '')
+    .update('\n')
+    .update(JSON.stringify(event))
+    .digest('hex');
+}
+
+function integrityFailure() {
+  return Object.assign(new Error('Access audit integrity check failed'), {
+    code: 'ACCESS_AUDIT_INTEGRITY_FAILED'
+  });
+}
+
 class JsonAccessAuditRepository {
   constructor(filePath) {
     if (!filePath || typeof filePath !== 'string') {
@@ -27,12 +41,26 @@ class JsonAccessAuditRepository {
     try {
       const contents = await fs.readFile(this.filePath, 'utf8');
       const lines = contents.split('\n').filter(Boolean);
-      if (lines.length > 0) {
-        const last = JSON.parse(lines[lines.length - 1]);
-        this.previousHash = typeof last.integrity?.hash === 'string'
-          ? last.integrity.hash
-          : null;
+      let expectedPreviousHash = null;
+      for (const line of lines) {
+        let record;
+        try {
+          record = JSON.parse(line);
+        } catch (_) {
+          throw integrityFailure();
+        }
+        const { integrity, ...event } = record;
+        const expectedHash = hashEvent(expectedPreviousHash, event);
+        if (
+          integrity?.algorithm !== 'sha256-chain-v1' ||
+          integrity.previousHash !== expectedPreviousHash ||
+          integrity.hash !== expectedHash
+        ) {
+          throw integrityFailure();
+        }
+        expectedPreviousHash = expectedHash;
       }
+      this.previousHash = expectedPreviousHash;
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
@@ -42,13 +70,8 @@ class JsonAccessAuditRepository {
   record(event) {
     const operation = this.queue.then(async () => {
       await this.initialize();
-      const payload = JSON.stringify(event);
       const previousHash = this.previousHash;
-      const hash = createHash('sha256')
-        .update(previousHash || '')
-        .update('\n')
-        .update(payload)
-        .digest('hex');
+      const hash = hashEvent(previousHash, event);
       const record = JSON.stringify({
         ...event,
         integrity: { algorithm: 'sha256-chain-v1', previousHash, hash }
