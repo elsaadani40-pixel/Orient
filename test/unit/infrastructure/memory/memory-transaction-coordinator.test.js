@@ -94,6 +94,9 @@ test('failed operation restores memory and audit before-images', () => {
 test('MemoryService add crash after durable audit append is rolled back on restart', () => {
   const f = fixture();
   try {
+    // Empty valid stores avoid a legacy-data migration before the transaction starts.
+    fs.writeFileSync(f.memoryFile, '[]\\n');
+    fs.writeFileSync(f.auditFile, '[]\\n');
     const script = [
       `const MemoryRepository = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/json-memory.repository'))});`,
       `const AuditRepository = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/memory-audit.repository'))});`,
@@ -117,8 +120,8 @@ test('MemoryService add crash after durable audit append is rolled back on resta
     assert.notEqual(JSON.parse(fs.readFileSync(f.auditFile, 'utf8')).length, 0);
 
     f.coordinator.recover();
-    assert.deepEqual(JSON.parse(fs.readFileSync(f.memoryFile, 'utf8')), [{ id: 'before' }]);
-    assert.deepEqual(JSON.parse(fs.readFileSync(f.auditFile, 'utf8')), [{ action: 'before' }]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.memoryFile, 'utf8')), []);
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.auditFile, 'utf8')), []);
   } finally {
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
