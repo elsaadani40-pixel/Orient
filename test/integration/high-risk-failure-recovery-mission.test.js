@@ -177,7 +177,11 @@ test('high-risk crash after side effect does not execute the side effect twice',
 
   const persistenceRoot = path.join(root, '.orient-state');
   const persistence = new JsonPersistence({ rootDir: persistenceRoot });
-  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const approvals = new ApprovalService({
+    tenantId: 'tenant-mission-8',
+    repository: persistence.approvals,
+    decisionAuthorizer: async () => true
+  });
   let runtime = createRuntime(root, { approvalService: approvals, persistence });
   const { challenge, approval } = await approveChallenge(runtime, approvals, root);
 
