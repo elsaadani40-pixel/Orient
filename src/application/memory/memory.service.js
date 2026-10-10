@@ -151,13 +151,25 @@ class MemoryService {
   constructor(repository, {
     memoryAccessPolicy = null,
     defaultScope = 'personal',
-    auditRepository = null
+    auditRepository = null,
+    transactionCoordinator = null
   } = {}) {
     if (!repository) throw new TypeError('repository is required');
     this.repository = repository;
     this.memoryAccessPolicy = memoryAccessPolicy;
     this.defaultScope = defaultScope;
     this.auditRepository = auditRepository;
+    this.transactionCoordinator = transactionCoordinator;
+
+    // Every public operation that mutates memory or its audit trail shares one
+    // durable before-image journal. Nested calls (forget -> delete) enter only
+    // the wrapped leaf operation, avoiding nested journal transactions.
+    if (transactionCoordinator) {
+      for (const method of ['add', 'get', 'consolidate', 'delete']) {
+        const original = this[method].bind(this);
+        this[method] = (...args) => transactionCoordinator.run(() => original(...args));
+      }
+    }
   }
 
   resolveTenant(context = {}) {

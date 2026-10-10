@@ -1,5 +1,8 @@
 const config = require('./src/core/config');
 const logger = require('./src/core/logging/logger');
+const path = require('path');
+const MemoryTransactionCoordinator =
+  require('./src/infrastructure/memory/memory-transaction-coordinator');
 
 const JsonMemoryRepository =
   require('./src/infrastructure/memory/json-memory.repository');
@@ -111,6 +114,17 @@ const createAgentRoutes =
 const createServer =
   require('./src/interfaces/http/server');
 
+const memoryAuditFile = path.join(config.agentDataDirectory, 'memory-audit.json');
+const memoryTransactionCoordinator = new MemoryTransactionCoordinator({
+  memoryFile: config.dataFile,
+  auditFile: memoryAuditFile,
+  journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
+});
+
+// Recovery must run before either repository reads or migrates its file and
+// before the HTTP server is constructed/listened on.
+memoryTransactionCoordinator.recover();
+
 const repository =
   new JsonMemoryRepository(config.dataFile);
 
@@ -130,9 +144,7 @@ const agentInvocationService =
   });
 
 const memoryAuditRepository =
-  new MemoryAuditRepository(
-    require('path').join(config.agentDataDirectory, 'memory-audit.json')
-  );
+  new MemoryAuditRepository(memoryAuditFile);
 
 const accessAuditRepository =
   new JsonAccessAuditRepository(
@@ -147,7 +159,8 @@ const memoryService =
   new MemoryService(repository, {
     memoryAccessPolicy,
     defaultScope: 'personal',
-    auditRepository: memoryAuditRepository
+    auditRepository: memoryAuditRepository,
+    transactionCoordinator: memoryTransactionCoordinator
   });
 
 const toolRegistry =
