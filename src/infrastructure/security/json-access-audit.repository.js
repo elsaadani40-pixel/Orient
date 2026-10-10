@@ -67,6 +67,31 @@ class JsonAccessAuditRepository {
     this.initialized = true;
   }
 
+  async listRecent(limit = 50) {
+    await this.initialize();
+    const boundedLimit = Number.isInteger(Number(limit))
+      ? Math.max(1, Math.min(Number(limit), 100))
+      : 50;
+    let contents;
+    try {
+      contents = await fs.readFile(this.filePath, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+    return contents.split('\n').filter(Boolean).slice(-boundedLimit).reverse().map(line => {
+      const record = JSON.parse(line);
+      const { integrity, ...event } = record;
+      return {
+        ...event,
+        integrity: {
+          algorithm: integrity.algorithm,
+          hash: integrity.hash
+        }
+      };
+    });
+  }
+
   record(event) {
     const operation = this.queue.then(async () => {
       await this.initialize();
