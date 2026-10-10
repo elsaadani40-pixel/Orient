@@ -122,8 +122,7 @@ test('SQLite approval storage survives restart and remains single-use', async ()
   assert.equal(durableExecutionApprovals.length, 1);
   assert.equal(durableExecutionApprovals[0].approvalId, issued.approvalId);
   const durablePending = await secondApproval.listPending({ tenantId: 'tenant-a' });
-  assert.equal(durablePending.length, 1);
-  assert.equal(durablePending[0].approvalId, issued.approvalId);
+  assert.equal(durablePending.length, 0, 'a decided approval must no longer appear in the pending inbox');
   assert.equal(await secondApproval.consume(issued.approvalId), true);
   assert.equal(await secondApproval.consume(issued.approvalId), false);
 
