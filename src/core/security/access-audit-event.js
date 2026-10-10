@@ -6,6 +6,12 @@ const SAFE_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', '
 const ROUTES = [
   [/^\/$/, '/'],
   [/^\/dashboard$/, '/dashboard'],
+  [/^\/owner$/, '/owner'],
+  [/^\/owner-dashboard\.js$/, '/owner-dashboard.js'],
+  [/^\/owner\/login$/, '/owner/login'],
+  [/^\/owner\/session$/, '/owner/session'],
+  [/^\/owner\/audit$/, '/owner/audit'],
+  [/^\/owner\/logout$/, '/owner/logout'],
   [/^\/command-scene\.js$/, '/command-scene.js'],
   [/^\/agent$/, '/agent'],
   [/^\/memory\/(add|delete)$/, '/memory/:operation'],
