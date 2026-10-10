@@ -735,7 +735,8 @@ test('real OrientRuntime resumes a durably approved pending step after service r
 
     const duplicateResume = await runtimeAfterRestart.resume(executionId);
     assert.equal(duplicateResume.resumed, false);
-    assert.equal(duplicateResume.reason, 'execution_already_terminal');
+    assert.equal(duplicateResume.reason, 'execution_not_resumable');
+    assert.equal(duplicateResume.execution.status, 'completed');
     assert.equal(sideEffects, 1, 'a repeated resume must not replay the committed side effect');
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
