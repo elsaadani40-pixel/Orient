@@ -175,18 +175,47 @@ class SqliteIdempotencyRepository {
     }
     return { created: true, key, record: actual };
   }
+  terminalConflict(message) {
+    const error = new Error(message);
+    error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT';
+    error.status = 409;
+    return error;
+  }
   complete(key, result, { tenantId = 'local' } = {}) {
     const record = this.findByKey(key, { tenantId }); if (!record) return null;
-    record.status = 'completed'; record.result = result ?? null; record.completedAt = new Date().toISOString();
+    const normalizedResult = result ?? null;
+    if (record.status === 'completed') {
+      if (JSON.stringify(record.result) !== JSON.stringify(normalizedResult)) {
+        throw this.terminalConflict('Idempotency record is already completed with a different result');
+      }
+      return record;
+    }
+    if (record.status !== 'running') {
+      throw this.terminalConflict('Idempotency record is not running');
+    }
+    record.status = 'completed'; record.result = normalizedResult; record.completedAt = new Date().toISOString();
     const tenant = SqliteDatabase.literal(this.scope(tenantId));
-    this.db.run(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='completed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant};`);
+    const updated = this.db.query(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='completed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant} AND status='running'; SELECT changes() AS changes;`);
+    if (Number(updated[updated.length - 1]?.changes) !== 1) {
+      throw this.terminalConflict('Idempotency terminal transition lost a race');
+    }
     return record;
   }
   fail(key, error, { tenantId = 'local' } = {}) {
     const record = this.findByKey(key, { tenantId }); if (!record) return null;
+    if (record.status === 'failed') return record;
+    if (record.status === 'completed') {
+      throw this.terminalConflict('Completed idempotency record cannot be failed');
+    }
+    if (record.status !== 'running') {
+      throw this.terminalConflict('Idempotency record is not running');
+    }
     record.status = 'failed'; record.error = { code: error?.code || 'EXECUTION_FAILED', message: error?.message || String(error || '') }; record.completedAt = new Date().toISOString();
     const tenant = SqliteDatabase.literal(this.scope(tenantId));
-    this.db.run(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='failed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant};`);
+    const updated = this.db.query(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='failed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant} AND status='running'; SELECT changes() AS changes;`);
+    if (Number(updated[updated.length - 1]?.changes) !== 1) {
+      throw this.terminalConflict('Idempotency terminal transition lost a race');
+    }
     return record;
   }
   delete(key, { tenantId = 'local' } = {}) {
