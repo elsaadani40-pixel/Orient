@@ -88,6 +88,118 @@ class WorkflowExecutionCoordinator {
     };
   }
 
+  async findApprovalBlockedWorkflow(executionId) {
+    if (!executionId || typeof this.workflowRepository?.findAll !== 'function') return null;
+    const records = await this.workflowRepository.findAll({ tenantId: this.tenantId });
+    const payload = records.find(record =>
+      record?.tenantId === this.tenantId &&
+      record?.metadata?.approvalBlocked === true &&
+      String(record.metadata.approvalExecutionId || '') === String(executionId)
+    );
+    return payload ? WorkflowInstance.fromJSON(payload) : null;
+  }
+
+  async persistApprovalWorkflow(instance, fromState = instance.state) {
+    if (typeof this.workflowRepository?.save !== 'function') {
+      throw Object.assign(new Error('Durable workflow storage is required to reconcile approval'), {
+        code: 'WORKFLOW_STORAGE_REQUIRED'
+      });
+    }
+    await this.workflowRepository.save(instance, this.tenantId);
+    if (this.missionEventSink && fromState !== instance.state) {
+      await this.missionEventSink.recordState(instance, fromState, instance.state);
+    }
+    return instance.toJSON();
+  }
+
+  async updateApprovalChallenge(executionId, approvalId) {
+    if (typeof approvalId !== 'string' || !approvalId) return false;
+    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    if (!instance) return false;
+    instance.metadata = {
+      ...instance.metadata,
+      approvalBlocked: true,
+      approvalExecutionId: String(executionId),
+      approvalId,
+      approvalRequiredAt: new Date().toISOString()
+    };
+    await this.persistApprovalWorkflow(instance);
+    return true;
+  }
+
+  async reconcileApprovalResume(executionId, resumeResult) {
+    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    if (!instance) return false;
+    const execution = resumeResult?.execution || null;
+    const status = String(execution?.status || '').toLowerCase();
+    if (!['completed', 'failed', 'cancelled'].includes(status)) return false;
+
+    const fromState = instance.state;
+    const stepId = instance.definition.steps[0]?.id;
+    if (!stepId || !instance.steps[stepId]) {
+      throw Object.assign(new Error('Approval-blocked workflow has no resumable step'), {
+        code: 'WORKFLOW_APPROVAL_STEP_MISSING'
+      });
+    }
+
+    if (status === 'completed') {
+      if (instance.state === WorkflowInstance.STATES.WAITING) instance.transition(WorkflowInstance.STATES.RUNNING);
+      if (instance.steps[stepId].state !== WorkflowDefinition.STEP_STATES.COMPLETED) {
+        if (instance.steps[stepId].state !== WorkflowDefinition.STEP_STATES.PENDING) {
+          throw Object.assign(new Error('Approval-blocked workflow step is not pending'), {
+            code: 'WORKFLOW_APPROVAL_STEP_NOT_PENDING'
+          });
+        }
+        instance.markStepRunning(stepId);
+        instance.markStepCompleted(stepId, {
+          executionId: String(executionId),
+          result: resumeResult?.result ?? null,
+          executionStatus: status
+        });
+      }
+      instance.transition(WorkflowInstance.STATES.COMPLETED);
+      instance.metadata.approvalDecisionStatus = 'approved';
+    } else if (status === 'cancelled') {
+      instance.transition(WorkflowInstance.STATES.CANCELLED);
+      instance.metadata.approvalDecisionStatus = 'rejected';
+    } else {
+      instance.steps[stepId].state = WorkflowDefinition.STEP_STATES.FAILED;
+      instance.steps[stepId].error = {
+        code: execution?.metadata?.failureCode || 'EXECUTION_FAILED',
+        message: 'The approved execution failed during resume'
+      };
+      instance.transition(WorkflowInstance.STATES.FAILED);
+      instance.metadata.approvalDecisionStatus = 'approved_execution_failed';
+    }
+
+    instance.metadata = {
+      ...instance.metadata,
+      approvalBlocked: false,
+      approvalResolvedAt: new Date().toISOString()
+    };
+    await this.persistApprovalWorkflow(instance, fromState);
+    return instance.toJSON();
+  }
+
+  async cancelApprovalWorkflow(executionId, reason = 'owner_rejected') {
+    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    if (!instance) return false;
+    const fromState = instance.state;
+    if (![WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
+      instance.requestCancel();
+      instance.transition(WorkflowInstance.STATES.CANCELLED);
+    }
+    instance.metadata = {
+      ...instance.metadata,
+      approvalBlocked: false,
+      approvalDecisionStatus: 'rejected',
+      approvalResolvedAt: new Date().toISOString(),
+      cancellationReason: String(reason).slice(0, 300)
+    };
+    await this.persistApprovalWorkflow(instance, fromState);
+    return instance.toJSON();
+  }
+
   async execute(input, {
     approval = null,
     approvals = {},
