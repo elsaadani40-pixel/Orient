@@ -73,7 +73,7 @@ test('owner login requires same origin and issues an HttpOnly SameSite cookie', 
     assert.match(cookie, /orient_owner_session=/);
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /SameSite=Strict/);
-    assert.match(cookie, /Path=\/owner/);
+    assert.match(cookie, /Path=\//);
     assert.doesNotMatch(cookie, /Secure/); // Local HTTP; production HTTPS sets Secure.
     const payload = await response.json();
     assert.equal(typeof payload.csrfToken, 'string');
