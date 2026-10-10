@@ -234,7 +234,10 @@ class ApprovalRepository {
       const record = records[approvalId];
       if (!record) return false;
       if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) return false;
-      if (record.used) return false;
+      if (record.used || record.decision?.status !== 'approved') return false;
+      const consumedAt = typeof usedAt === 'string' ? Date.parse(usedAt) : NaN;
+      const expiresAt = typeof record.expiresAt === 'string' ? Date.parse(record.expiresAt) : NaN;
+      if (!Number.isFinite(consumedAt) || !Number.isFinite(expiresAt) || consumedAt >= expiresAt) return false;
 
       records[approvalId] = {
         ...record,
