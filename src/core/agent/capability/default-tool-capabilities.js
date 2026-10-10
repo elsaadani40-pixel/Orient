@@ -8,7 +8,10 @@ function registerDefaultToolCapabilities(mapper) {
     'memory.delete': 'memory.delete',
     'project.audit': 'workspace.read',
     'project.propose_changes': 'workspace.read',
-    'project.execute_change': 'workspace.write'
+    'project.execute_change': 'workspace.write',
+    'workspace.read': 'workspace.read',
+    'workspace.list': 'workspace.read',
+    'workspace.search': 'workspace.read'
   };
 
   for (const [tool, capability] of Object.entries(mappings)) {
