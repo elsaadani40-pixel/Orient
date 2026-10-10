@@ -6,16 +6,24 @@ function publicApprovalSummary(value) {
     return {
       kind: 'file_change',
       changeCount: Number.isInteger(value.changeCount) ? Math.max(0, Math.min(value.changeCount, 1000)) : value.changes.length,
-      changes: value.changes.slice(0, 10).map(change => ({
-        action: ['create', 'update'].includes(change?.action) ? change.action : 'invalid',
-        path: typeof change?.path === 'string' ? change.path.slice(0, 512) : '',
-        expectedContentSha256: typeof change?.expectedContentSha256 === 'string' ? change.expectedContentSha256.slice(0, 64) : null,
-        proposedContentSha256: typeof change?.proposedContentSha256 === 'string' ? change.proposedContentSha256.slice(0, 64) : null,
-        contentBytes: Number.isFinite(change?.contentBytes) ? Math.max(0, Math.min(change.contentBytes, 10_000_000)) : 0,
-        lineCount: Number.isFinite(change?.lineCount) ? Math.max(0, Math.min(change.lineCount, 1_000_000)) : 0,
-        proposedContent: typeof change?.proposedContent === 'string' ? change.proposedContent.slice(0, 32000) : '',
-        contentTruncated: Boolean(change?.contentTruncated)
-      })),
+      changes: value.changes.slice(0, 10).map(change => {
+        const proposedContent = typeof change?.proposedContent === 'string' ? change.proposedContent.slice(0, 32000) : '';
+        const proposedContentSha256 = typeof change?.proposedContentSha256 === 'string' ? change.proposedContentSha256.slice(0, 64) : null;
+        const contentTruncated = Boolean(change?.contentTruncated);
+        const contentHashValid = !contentTruncated && Boolean(proposedContentSha256) &&
+          crypto.createHash('sha256').update(proposedContent, 'utf8').digest('hex') === proposedContentSha256;
+        return {
+          action: ['create', 'update'].includes(change?.action) ? change.action : 'invalid',
+          path: typeof change?.path === 'string' ? change.path.slice(0, 512) : '',
+          expectedContentSha256: typeof change?.expectedContentSha256 === 'string' ? change.expectedContentSha256.slice(0, 64) : null,
+          proposedContentSha256,
+          contentHashValid,
+          contentBytes: Number.isFinite(change?.contentBytes) ? Math.max(0, Math.min(change.contentBytes, 10_000_000)) : 0,
+          lineCount: Number.isFinite(change?.lineCount) ? Math.max(0, Math.min(change.lineCount, 1_000_000)) : 0,
+          proposedContent,
+          contentTruncated
+        };
+      }),
       reviewNotice: typeof value.reviewNotice === 'string' ? value.reviewNotice.slice(0, 500) : ''
     };
   }
