@@ -39,6 +39,9 @@ const createWorkspaceTools =
 const OrientRuntime =
   require('./src/core/runtime/orient-runtime');
 
+const RuntimeShutdownCoordinator =
+  require('./src/core/runtime/runtime-shutdown-coordinator');
+
 const AgentService =
   require('./src/application/agent/agent.service');
 
@@ -395,40 +398,48 @@ start().catch((error) => {
   process.exitCode = 1;
 });
 
-function shutdown(signal) {
-  logger.info(
-    'Server shutting down',
-    { signal }
-  );
-
-  eventStoreSubscriber.stop();
-
-  try {
-    runtime.shutdown({ cancelQueued: false });
-  } catch (error) {
-    logger.error('Runtime shutdown failed', {
-      code: error?.code || 'RUNTIME_SHUTDOWN_FAILED',
+const shutdownCoordinator = new RuntimeShutdownCoordinator({
+  server,
+  runtime,
+  persistenceRuntime,
+  eventStoreSubscriber,
+  // Production remains synchronous by default. If async workers are wired into
+  // this composition later, they must be injected here so they drain before
+  // runtime shutdown and persistence close.
+  workerService: null,
+  onError: (error, stage) => {
+    logger.error('Graceful shutdown stage failed', {
+      stage,
+      code: error?.code || 'SHUTDOWN_STAGE_FAILED',
       message: error?.message || String(error)
     });
   }
+});
+
+let shutdownStarted = false;
+function shutdown(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  logger.info('Server shutting down', { signal });
 
   const forceExit = setTimeout(() => {
     process.exit(1);
   }, config.shutdownGraceMs);
   forceExit.unref();
 
-  server.close(() => {
-    clearTimeout(forceExit);
-    Promise.resolve()
-      .then(() => persistenceRuntime.close())
-      .catch((error) => {
-        logger.error('Persistence shutdown failed', {
-          code: error?.code || 'PERSISTENCE_SHUTDOWN_FAILED',
-          message: error?.message || String(error)
-        });
-      })
-      .finally(() => process.exit(0));
-  });
+  shutdownCoordinator.shutdown({ runtimeOptions: { cancelQueued: false } })
+    .then(result => {
+      clearTimeout(forceExit);
+      process.exit(result.completed ? 0 : 1);
+    })
+    .catch(error => {
+      clearTimeout(forceExit);
+      logger.error('ORIENT ONE shutdown failed', {
+        code: error?.code || 'SHUTDOWN_FAILED',
+        message: error?.message || String(error)
+      });
+      process.exit(1);
+    });
 }
 
 process.on(
