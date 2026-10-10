@@ -182,6 +182,7 @@ test('authenticated dashboard request completes a harmless mission through the r
   assert.equal(taskListResponse.status, 200);
   const taskList = await taskListResponse.json();
   assert.ok(taskList.items.some(item => item.id === created.task.id));
+  assert.ok(taskList.items.every(item => !Object.hasOwn(item, 'tenantId')), 'task list summaries must not disclose tenant identifiers');
 
   const deniedTaskDetail = await fetch(origin + '/api/v1/tasks/' + encodeURIComponent(created.task.id));
   assert.equal(deniedTaskDetail.status, 401, 'task detail must require an owner session');
@@ -211,6 +212,7 @@ test('authenticated dashboard request completes a harmless mission through the r
   const firstEvent = firstEventPage.items[0];
   assert.ok(firstEvent.id);
   assert.equal(firstEvent.taskId, created.task.id);
+  assert.deepEqual(Object.keys(firstEvent).sort(), ['details', 'id', 'outcome', 'sequence', 'stepId', 'taskId', 'timestamp', 'type'], 'task events must expose only the documented allowlisted envelope');
   assert.equal(Object.hasOwn(firstEvent, 'tenantId'), false, 'public task events must not disclose tenant identifiers');
   assert.equal(firstEventPage.page.nextCursor, firstEvent.id);
   assert.equal(firstEventPage.page.hasMore, true, 'runtime mission should expose multiple events for cursor pagination');
