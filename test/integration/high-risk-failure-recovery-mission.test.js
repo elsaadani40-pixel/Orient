@@ -105,17 +105,13 @@ async function approveChallenge(runtime, approvals, root) {
   assert.equal(challenge.agentId, 'PROJECT_BUILDER_AGENT');
   assert.match(challenge.operationId, /^[a-f0-9]{64}$/);
 
-  const approval = await approvals.issue({
-    executionId: challenge.executionId,
-    step: challenge.step,
-    tool: challenge.tool,
-    capability: challenge.capability,
-    planRevision: challenge.planRevision,
-    tenantId: challenge.tenantId,
-    agentId: challenge.agentId,
-    operationId: challenge.operationId,
-    scope: { planRevision: challenge.planRevision }
-  });
+  assert.equal(typeof challenge.approvalId, 'string', 'runtime must persist and return the approval challenge identity');
+  const approval = approvals.repository?.findById
+    ? await approvals.repository.findById(challenge.approvalId, { tenantId: challenge.tenantId })
+    : approvals.approvals.get(challenge.approvalId);
+  assert.ok(approval, 'the approval ID returned by the runtime must resolve to its durable challenge record');
+  assert.equal(approval.executionId, challenge.executionId);
+  assert.equal(approval.operationId || approval.metadata?.operationId, challenge.operationId);
 
   if (typeof approvals.decisionAuthorizer !== 'function') {
     approvals.decisionAuthorizer = async () => true;
