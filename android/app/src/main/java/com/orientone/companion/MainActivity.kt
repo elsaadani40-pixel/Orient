@@ -184,6 +184,7 @@ private fun OrientCompanionApp() {
                         }
                     }
                 } else {
+                    item { PhoneToolsCard() }
                     item {
                         Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -286,7 +287,7 @@ private fun OrientCompanionApp() {
                             Text("حدود القدرات الحالية", fontWeight = FontWeight.Bold)
                             Text("• تنفيذ المهام وسجل التنفيذات: عبر Runtime بعد المصادقة.", color = muted, fontSize = 13.sp)
                             Text("• البحث الخارجي وقراءة/كتابة الملفات: لا تُعرض كقدرات جاهزة ما لم تكن أدواتها مسجلة ومصرحًا بها في الخادم.", color = muted, fontSize = 13.sp)
-                            Text("• جهات الاتصال، معرفة المتصل، المكالمات، الميكروفون والإشعارات: غير مفعّلة في هذه النسخة؛ لا توجد مراقبة خفية أو صلاحيات حساسة تلقائية.", color = muted, fontSize = 13.sp)
+                            Text("• جهات الاتصال: بحث محلي بإذن واضح، وفتح شاشة الاتصال للتأكيد اليدوي. التعرف التلقائي على المكالمات الواردة وتسجيل المكالمات غير مفعّلين.", color = muted, fontSize = 13.sp)
                         }
                     }
                 }
