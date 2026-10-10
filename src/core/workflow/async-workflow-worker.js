@@ -41,7 +41,7 @@ class AsyncWorkflowWorker{
       // Approval is a durable pause, not a failed step or a retryable tool error.
       // Keep the step pending and block recovery until an explicit resume path exists.
       instance.resetStepForRetry(step.id);
-      instance.metadata={...instance.metadata,approvalBlocked:true,approvalExecutionId:error.executionContext?.executionId||null,approvalId:error.executionContext?.approvalId||null,approvalRequiredAt:new Date(this.now()).toISOString()};
+      instance.metadata={...instance.metadata,taskId:instance.metadata.taskId||instance.workflowId,executionId:error.executionContext?.executionId||null,approvalBlocked:true,approvalExecutionId:error.executionContext?.executionId||null,approvalId:error.executionContext?.approvalId||null,approvalRequiredAt:new Date(this.now()).toISOString()};
       const from=instance.state;if(instance.state!=='WAITING')instance.transition('WAITING');
       this.emit('workflow.approval.required',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id,executionId:instance.metadata.approvalExecutionId,approvalId:instance.metadata.approvalId});
       this.emitState(instance,from,instance.state,lease);
