@@ -1,3 +1,7 @@
+function persistedDecisionForReplay(record) {
+  return { ...record.decision };
+}
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
@@ -212,6 +216,21 @@ test('approval decisions require authorization and persist one immutable tenant-
     });
     assert.equal(replay.decision.status, 'approved');
     assert.equal(replay.idempotent, true);
+
+    assert.equal(await service.consume(approval.approvalId, 'tenant-a'), true);
+    const replayAfterConsume = await service.decide({
+      approvalId: approval.approvalId, executionId: 'exec-decision',
+      decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+    });
+    assert.equal(replayAfterConsume.idempotent, true);
+    assert.equal(replayAfterConsume.decision.status, 'approved');
+    const repositoryReplay = await repository.recordDecision(
+      approval.approvalId,
+      persistedDecisionForReplay(await repository.findById(approval.approvalId, { tenantId: 'tenant-a' })),
+      'tenant-a',
+      20000
+    );
+    assert.equal(repositoryReplay.decision.status, 'approved');
 
     await assert.rejects(
       () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'rejected', actorId: 'owner-a', tenantId: 'tenant-a' }),
