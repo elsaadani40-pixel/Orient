@@ -99,6 +99,7 @@
           'الخطوة: ' + String(approval.step || ''),
           'تنتهي: ' + String(approval.expiresAt || '')
         ].join(' · ');
+        card.append(heading, details);
         const summary = approval.summary;
         let canApprove = Boolean(summary && summary.kind === 'file_change' && Array.isArray(summary.changes) &&
           summary.changes.length > 0 && summary.changes.length === summary.changeCount);
@@ -127,7 +128,7 @@
               warning.textContent = 'المراجعة غير مكتملة؛ لا يمكن الموافقة على هذا التغيير من لوحة المالك.';
               changeCard.append(warning);
             }
-            approvalItems.append(changeCard);
+            card.append(changeCard);
           }
         } else {
           canApprove = false;
@@ -204,7 +205,7 @@
         });
 
         actions.append(approve, cancel);
-        card.append(heading, details, actions);
+        card.append(actions);
         approvalItems.append(card);
       }
 
