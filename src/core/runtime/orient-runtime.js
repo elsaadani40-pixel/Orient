@@ -248,10 +248,10 @@ class OrientRuntime {
       return result;
     } catch (error) {
       if (error?.code === 'APPROVAL_EXPIRED' && error.approvalId) {
+        if (!(await this.isCurrentApprovalChallenge(executionId, error.approvalId))) {
+          throw error;
+        }
         try {
-          if (!(await this.isCurrentApprovalChallenge(executionId, error.approvalId))) {
-            throw error;
-          }
           if (typeof this.persistence?.executions?.requestCancellation !== 'function') {
             throw Object.assign(new Error('Durable execution cancellation storage is required'), {
               code: 'EXECUTION_CANCELLATION_STORAGE_REQUIRED'
