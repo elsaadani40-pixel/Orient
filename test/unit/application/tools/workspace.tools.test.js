@@ -308,5 +308,33 @@ test('verified project execution persists a receipt and same-operation retry reu
       }, context),
       error => error.code === 'PROJECT_OPERATION_RECEIPT_IDENTITY_CONFLICT'
     );
+
+    await fs.writeFile(path.join(root, 'src/main.js'), 'changed by another writer', 'utf8');
+    await assert.rejects(
+      () => execute.execute(input, context),
+      error => error.code === 'PROJECT_OPERATION_RECEIPT_POST_STATE_CONFLICT'
+    );
+  }, { allowWrite: true });
+});
+
+test('project execution requires runtime operation identity before mutating the workspace', async () => {
+  await withWorkspace(async ({ root, tools }) => {
+    const execute = tools.find(tool => tool.name === 'project.execute_change');
+    const original = await fs.readFile(path.join(root, 'src/main.js'), 'utf8');
+    const input = {
+      changeSet: {
+        changes: [{
+          action: 'update',
+          path: 'src/main.js',
+          content: 'must not be written',
+          expectedContentSha256: crypto.createHash('sha256').update(original, 'utf8').digest('hex')
+        }]
+      }
+    };
+    await assert.rejects(
+      () => execute.execute(input, {}),
+      error => error.code === 'PROJECT_OPERATION_RECEIPT_IDENTITY_REQUIRED'
+    );
+    assert.equal(await fs.readFile(path.join(root, 'src/main.js'), 'utf8'), original);
   }, { allowWrite: true });
 });
