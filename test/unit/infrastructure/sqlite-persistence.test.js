@@ -202,3 +202,36 @@ test('sqlite transactions roll back all statements after an injected failure', (
 
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
 });
+
+
+test('SQLite approval consumption rejects pending, rejected, expired and malformed challenges', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-approval-gates-'));
+  try {
+    const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+    const now = Date.now();
+    const base = {
+      step: 1,
+      planRevision: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      issuedAt: new Date(now - 1000).toISOString(),
+      used: false,
+      tenantId: 'tenant-a',
+      metadata: { tenantId: 'tenant-a' }
+    };
+    const records = [
+      { ...base, approvalId: 'sqlite-pending', executionId: 'exec-pending', expiresAt: new Date(now + 60000).toISOString() },
+      { ...base, approvalId: 'sqlite-rejected', executionId: 'exec-rejected', expiresAt: new Date(now + 60000).toISOString(), decision: { status: 'rejected', actorId: 'owner', decidedAt: new Date(now).toISOString() } },
+      { ...base, approvalId: 'sqlite-expired', executionId: 'exec-expired', expiresAt: new Date(now - 1000).toISOString(), decision: { status: 'approved', actorId: 'owner', decidedAt: new Date(now - 2000).toISOString() } },
+      { ...base, approvalId: 'sqlite-malformed', executionId: 'exec-malformed', expiresAt: 'not-a-date', decision: { status: 'approved', actorId: 'owner', decidedAt: new Date(now).toISOString() } }
+    ];
+    for (const record of records) persistence.approvals.save(record, { tenantId: 'tenant-a' });
+    const requestedAt = new Date(now).toISOString();
+    for (const record of records) {
+      assert.equal(persistence.approvals.consume(record.approvalId, requestedAt, 'tenant-a'), false, record.approvalId);
+      assert.equal(persistence.approvals.findById(record.approvalId, { tenantId: 'tenant-a' }).used, false);
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
