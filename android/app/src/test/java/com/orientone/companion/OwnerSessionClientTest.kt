@@ -8,11 +8,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicInteger
 
+@RunWith(RobolectricTestRunner::class)
 class OwnerSessionClientTest {
     @Test
     fun sessionStartsUnauthenticatedAndRejectsInvalidPorts() {
