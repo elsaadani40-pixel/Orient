@@ -200,7 +200,7 @@ test('public async task API survives restart, pauses for approval, and resumes t
 
     const replayResponse = await request(origin, '/api/v1/tasks', {
       method: 'POST',
-      headers: { 'Idempotency-Key': 'async-e2e-request-0001' },
+      headers: { ...ownerHeaders, 'Idempotency-Key': 'async-e2e-request-0001' },
       body: { goal: 'perform the protected operation' }
     });
     assert.equal(replayResponse.status, 200);
