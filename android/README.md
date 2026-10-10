@@ -1,8 +1,8 @@
 # ORIENT ONE Android Companion
 
-**Status: foundation only; not yet connected to the runtime.**
+**Status: authenticated local runtime client implemented; device capability adapters remain disabled.**
 
-This is a Kotlin/Jetpack Compose Android application module, separate from the platform-neutral Node.js runtime. It builds a local status dashboard that deliberately reports the runtime and all planned capabilities as disconnected.
+This Kotlin/Jetpack Compose app connects to an ORIENT ONE service running on the same Android device, typically from Termux. It supports owner login, task submission through the canonical runtime, and execution-history refresh. It does not pretend that unimplemented search, file, phone, contact, notification, or microphone tools are available.
 
 ## Toolchain
 
@@ -21,26 +21,27 @@ From the repository root, use an installed Gradle 9.6.0 and Android SDK with API
 gradle --no-daemon -p android testDebugUnitTest assembleDebug
 ```
 
-The GitHub Actions workflow `.github/workflows/android-companion.yml` installs the pinned Gradle/JDK toolchain and runs the same tasks.
+The GitHub Actions workflow `.github/workflows/strict-ci.yml` runs Android unit tests and assembles a debug APK.
+
+## Connect locally
+
+See [the owner console security guide](../docs/security/owner-console.md). Start the Node service with `ORIENT_OWNER_PASSWORD` configured, then enter that same password and the service port (default `8080`) in the Android app. The client only connects to `127.0.0.1`; it does not accept remote hosts. Password, session cookie, and CSRF token are kept in memory only. Reopen the app and sign in again after process restart.
+
+The manifest grants only `INTERNET`. Network Security Config disables cleartext traffic by default and allows it only for loopback. No contacts, call-log, phone-state, microphone, notification-listener, accessibility, or background-service permissions are requested.
 
 ## Security boundary
 
-The initial manifest intentionally declares no contacts, call-log, phone-state, microphone, notification-listener, accessibility, or background-service permissions. It also does not enable cleartext traffic. No network client is wired yet.
+- The client calls `/owner/login`, `/agent`, and `/executions`; runtime authorization and tool governance remain on the server.
+- A task result is displayed only when the HTTP service returns a response. Connection failures are shown as failures, not fabricated success.
+- The service remains loopback-bound. Secure LAN/remote transport and a dedicated Android token flow are not implemented.
+- Search, filesystem read/write/edit, caller identification, call actions, notifications, and microphone capture are not implemented in this release.
 
-Future capability adapters must:
-- request only the permission needed for a user-requested feature;
-- explain why access is needed and handle denial/revocation;
-- never capture audio or device activity covertly;
-- report unavailable/unknown results honestly;
-- communicate with a versioned, authenticated runtime API;
-- keep authorization, risk checks, approval, and durable audit in the canonical runtime.
-
-Caller lookup is not equivalent to unrestricted call-log access. Android and distribution policies restrict call-log/SMS permissions; implement only through legitimate supported APIs and the relevant user-selected/default-handler requirements where applicable.
+Future device adapters must request only permissions needed for user-requested features, explain why access is needed, handle denial/revocation, and never capture audio or device activity covertly. Caller lookup is not equivalent to unrestricted call-log access; Android and distribution policies may require supported APIs and user-selected/default-handler roles.
 
 ## Next gates
 
-1. Add Android unit tests for permission-state and API-contract models.
-2. Implement authenticated API client only after the server auth boundary exists.
-3. Add explicit, just-in-time permission flows and revocation tests for each adapter.
+1. Add audit retention/rotation and durable owner sessions on the server.
+2. Implement real tool capabilities only behind the canonical runtime's authorization, risk, approval, and audit gates.
+3. Add permission-state and API-contract tests for each Android adapter.
 4. Add emulator/instrumentation smoke tests before claiming device readiness.
 5. Produce a signed release artifact only after security review; no signing secrets belong in the repository.
