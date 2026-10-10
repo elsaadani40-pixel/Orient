@@ -194,6 +194,28 @@ class WorkflowExecutionCoordinator {
     return instance.toJSON();
   }
 
+  async expireApprovalWorkflow(executionId, approvalId) {
+    if (!executionId || typeof approvalId !== 'string' || !approvalId) return false;
+    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    if (!instance || instance.metadata?.approvalId !== approvalId) return false;
+    if ([WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
+      return instance.toJSON();
+    }
+
+    const fromState = instance.state;
+    instance.requestCancel();
+    instance.transition(WorkflowInstance.STATES.CANCELLED);
+    instance.metadata = {
+      ...instance.metadata,
+      approvalBlocked: false,
+      approvalDecisionStatus: 'expired',
+      approvalResolvedAt: new Date().toISOString(),
+      cancellationReason: 'approval_expired'
+    };
+    await this.persistApprovalWorkflow(instance, fromState);
+    return instance.toJSON();
+  }
+
   async cancelApprovalWorkflow(executionId, reason = 'owner_rejected') {
     const instance = await this.findApprovalBlockedWorkflow(executionId);
     if (!instance) return false;
