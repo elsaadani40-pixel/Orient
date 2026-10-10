@@ -170,7 +170,9 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
     expiresAt: new Date(Date.now() + 60000).toISOString()
   };
   const calls = [];
+  const decisionCalls = [];
   const agentRoutes = {
+    async recordApprovalDecision(decision) { decisionCalls.push(decision); return { decision: { status: decision.decision } }; },
     async pendingApprovals(_req, res) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify([approval]));
@@ -222,13 +224,22 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
     assert.equal(calls[0].action, 'resume');
     assert.deepEqual(calls[0].body, { approval: { approvalId: 'approval-123' } });
 
+    assert.equal(decisionCalls.length, 1);
+    assert.equal(decisionCalls[0].decision, 'approved');
+    assert.equal(decisionCalls[0].approvalId, 'approval-123');
+    assert.equal(decisionCalls[0].executionId, 'exec-123');
+    assert.equal(typeof decisionCalls[0].actorId, 'string');
+
     const cancelled = await request(origin, '/owner/executions/exec-123/cancel', {
       method: 'POST',
       headers: { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken },
-      body: JSON.stringify({ reason: 'owner_rejected' })
+      body: JSON.stringify({ reason: 'owner_rejected', approval: { approvalId: 'approval-123' } })
     });
     assert.equal(cancelled.status, 200);
     assert.equal(calls[1].action, 'cancel');
     assert.equal(calls[1].body.reason, 'owner_rejected');
+    assert.equal(decisionCalls.length, 2);
+    assert.equal(decisionCalls[1].decision, 'rejected');
+    assert.equal(decisionCalls[1].executionId, 'exec-123');
   }, agentRoutes);
 });
