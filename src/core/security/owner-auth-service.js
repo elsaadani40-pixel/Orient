@@ -168,7 +168,7 @@ class OwnerAuthService {
           !Number.isInteger(item.count) || item.count < 1 || item.count > 100000 ||
           !Number.isSafeInteger(item.windowStartedAt) || item.windowStartedAt < 0 || item.windowStartedAt > now ||
           !Number.isSafeInteger(item.blockedUntil) || item.blockedUntil < 0 ||
-          item.blockedUntil > item.windowStartedAt + this.lockoutMs ||
+          item.blockedUntil > now + this.lockoutMs ||
           this.failures.has(item.ip)) {
         throw corrupt('Owner authentication failure state is invalid');
       }
