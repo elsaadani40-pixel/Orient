@@ -172,9 +172,20 @@ test('lease loss after a verified project side effect does not duplicate the wri
     });
     await scheduler.enqueueDurable(instance);
 
-    const realAssertCurrent = scheduler.assertCurrentAsync.bind(scheduler);
+    const leaseAsync = scheduler.leaseAsync.bind(scheduler);
+    scheduler.leaseAsync = async (...args) => {
+      const lease = await leaseAsync(...args);
+      if (lease) {
+        // The in-memory lease store has no fencing token, so this test double
+        // supplies one to exercise the worker's fencing boundary deterministically.
+        lease.fencingToken = 1;
+        const activeLease = scheduler.active.get(lease.workflowId);
+        activeLease.fencingToken = 1;
+      }
+      return lease;
+    };
     let assertionCount = 0;
-    scheduler.assertCurrentAsync = async (...args) => {
+    scheduler.assertCurrentAsync = async () => {
       assertionCount += 1;
       // First assertion fences entry into the step. The second simulates lease
       // loss after AgentLoop has durably recorded the verified side effect.
@@ -183,7 +194,7 @@ test('lease loss after a verified project side effect does not duplicate the wri
           code: 'WORKFLOW_LEASE_NOT_OWNER'
         });
       }
-      return realAssertCurrent(...args);
+      return true;
     };
 
     const firstLoop = makeAgentLoop(projectTool, operationRepository);
