@@ -78,7 +78,7 @@ class JsonAccessAuditRepository {
       if (error.code === 'ENOENT') return [];
       throw error;
     }
-    const lines = contents.split('\\n').filter(Boolean);
+    const lines = contents.split('\n').filter(Boolean);
     const verifiedEvents = [];
     let expectedPreviousHash = null;
     for (const line of lines) {
