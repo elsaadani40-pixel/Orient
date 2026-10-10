@@ -232,3 +232,46 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
     assert.equal(calls[1].body.reason, 'owner_rejected');
   }, agentRoutes);
 });
+
+
+test('authenticated owner can submit a same-origin task through the protected dashboard route', async () => {
+  const dispatched = [];
+  const agentRoutes = {
+    async execute(_req, res, body) {
+      dispatched.push(body);
+      res.writeHead(202, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ accepted: true, executionId: 'exec-smoke-1' }));
+    }
+  };
+
+  await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
+    const denied = await request(origin, '/agent', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ input: 'must not reach the runtime without a session' })
+    });
+    assert.equal(denied.status, 401);
+    assert.equal(dispatched.length, 0, 'unauthenticated requests must never dispatch');
+
+    const login = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ password: PASSWORD })
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+
+    const dashboard = await request(origin, '/dashboard', { headers: { Cookie: cookie } });
+    assert.equal(dashboard.status, 200);
+    assert.match(await dashboard.text(), /fetch\('\/agent'/);
+
+    const submitted = await request(origin, '/agent', {
+      method: 'POST',
+      headers: { Origin: origin, Cookie: cookie },
+      body: JSON.stringify({ input: 'run a harmless smoke-test task' })
+    });
+    assert.equal(submitted.status, 202);
+    assert.deepEqual(await submitted.json(), { accepted: true, executionId: 'exec-smoke-1' });
+    assert.deepEqual(dispatched, ['{"input":"run a harmless smoke-test task"}']);
+  });
+});
