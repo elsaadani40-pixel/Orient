@@ -47,6 +47,9 @@ test('operational dashboard is responsive and exposes real runtime controls', ()
   assert.match(dashboard, /\/agent/);
   assert.match(dashboard, /\/executions/);
   assert.match(dashboard, /\/approvals\/pending/);
+  assert.match(dashboard, /href="\/owner"/);
+  assert.match(dashboard, /id="healthText" role="status" aria-live="polite"/);
+  assert.match(server, /requestUrl\.pathname === '\/owner'/);
   assert.match(dashboard, /EventSource|text\/event-stream|addEventListener\(['"]message['"]/);
   assert.doesNotMatch(dashboard, /<script[^>]+src=["']https?:\/\//i,
     'dashboard scripts must remain same-origin; no third-party script CDN');
