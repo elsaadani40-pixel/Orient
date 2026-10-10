@@ -50,3 +50,25 @@ test('memory audit repository fails closed on an empty existing file', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('memory audit repository round-trips initialized and appended JSON records', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-audit-roundtrip-'));
+  const file = path.join(directory, 'audit.json');
+  try {
+    const repository = new MemoryAuditRepository(file);
+    assert.deepEqual(repository.read(), []);
+    const event = repository.append({
+      action: 'memory.created',
+      tenantId: 'tenant-a',
+      memoryId: 'memory-1'
+    });
+    const persisted = repository.read();
+    assert.equal(persisted.length, 1);
+    assert.equal(persisted[0].action, event.action);
+    assert.equal(persisted[0].tenantId, event.tenantId);
+    assert.equal(persisted[0].memoryId, event.memoryId);
+    assert.ok(persisted[0].occurredAt);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
