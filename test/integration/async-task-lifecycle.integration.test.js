@@ -174,7 +174,7 @@ test('public async task API survives restart, pauses for approval, and resumes t
       tenantId: TENANT_ID
     });
     if (!validation.allowed) throw Object.assign(new Error('Approval validation failed'), { code: validation.reason });
-    const consumed = await approvalService.consume(approval.approvalId, new Date().toISOString(), TENANT_ID);
+    const consumed = await approvalService.consume(approval.approvalId, TENANT_ID);
     if (!consumed) throw Object.assign(new Error('Approval consume failed'), { code: 'APPROVAL_CONSUME_FAILED' });
     sideEffects += 1;
     completedExecutions.add(executionId);
