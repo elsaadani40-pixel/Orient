@@ -110,3 +110,28 @@ test('memory.add restores the original record when duplicate reinforcement audit
     fixture.cleanup();
   }
 });
+
+test('a downstream event sink failure does not contradict an already committed audit record', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-audit-sink-failure-'));
+  try {
+    const repository = new JsonMemoryRepository(path.join(directory, 'memories.json'));
+    const audit = new MemoryAuditRepository(path.join(directory, 'audit.json'), {
+      eventSink() {
+        throw new Error('injected event sink failure');
+      }
+    });
+    const service = new MemoryService(repository, { auditRepository: audit });
+    const context = { agentId: 'ORIENT_RUNTIME', tenantId: 'tenant-a' };
+
+    const memory = service.add('durable audit must remain consistent', { type: 'note' }, context);
+    assert.equal(repository.findById(memory.id, 'tenant-a', 'personal').text, memory.text);
+    assert.equal(
+      audit.findByMemoryId(memory.id, 'tenant-a', 'personal').some(event => event.action === 'memory.created'),
+      true,
+      'the committed audit event must remain present'
+    );
+    assert.match(audit.lastEventSinkError.message, /injected event sink failure/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
