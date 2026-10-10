@@ -251,7 +251,7 @@ test('task workbench and its API remain behind the configured owner session gate
     agentRoutes: {
       async tasks(_req, res) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ items: [], page: { limit: 20, offset: 0, total: 0 } }));
+        res.end(JSON.stringify({ apiVersion: 'v1', items: [], page: { limit: 20, offset: 0, total: 0 } }));
       }
     },
     ownerAuth: {
