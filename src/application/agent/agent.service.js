@@ -56,6 +56,15 @@ class AgentService {
           await repository.complete(begun.key, recoveredTask, { tenantId });
           return { task: recoveredTask, replayed: true };
         }
+        const coordinator = this.runtime.workflowExecutionCoordinator;
+        if (coordinator && typeof coordinator.enqueue === 'function') {
+          const accepted = await coordinator.enqueue(clean, { workflowId: begun.record.executionId });
+          if (accepted && !accepted.error && accepted.workflowId && accepted.taskId) {
+            const recoveredTask = this.summarizeWorkflow(accepted);
+            await repository.complete(begun.key, recoveredTask, { tenantId });
+            return { task: recoveredTask, replayed: true };
+          }
+        }
       }
       throw new AppError(
         'هذا الطلب قيد التنفيذ أو استُخدم مفتاحه مع طلب سابق غير مكتمل',
@@ -97,14 +106,19 @@ class AgentService {
         };
       }
     } catch (error) {
-      try {
-        await repository.fail(begun.key, {
-          code: error?.code || 'TASK_CREATION_FAILED',
-          message: error?.message || 'Task creation failed'
-        }, { tenantId });
-      } catch (_) {
-        // Preserve the original runtime error; the durable running record still
-        // prevents a retry from silently executing the same key a second time.
+      // For async acceptance, enqueue may have committed the workflow before a
+      // transport/storage error surfaced. Keep the idempotency record recoverable:
+      // a retry looks up the reserved workflowId before attempting the same enqueue.
+      if (this.taskAcceptanceMode !== 'async') {
+        try {
+          await repository.fail(begun.key, {
+            code: error?.code || 'TASK_CREATION_FAILED',
+            message: error?.message || 'Task creation failed'
+          }, { tenantId });
+        } catch (_) {
+          // Preserve the original runtime error; the durable running record still
+          // prevents a retry from silently executing the same key a second time.
+        }
       }
       throw error;
     }
