@@ -206,6 +206,62 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
+        if (req.method === 'GET' && requestUrl.pathname === '/owner/approvals') {
+          if (!agentRoutes || typeof agentRoutes.pendingApprovals !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'APPROVAL_INBOX_UNAVAILABLE', message: 'صندوق الموافقات غير متاح.' });
+            return;
+          }
+          await agentRoutes.pendingApprovals(req, res);
+          return;
+        }
+
+        const ownerResumeMatch = requestUrl.pathname.match(/^\\/owner\\/executions\\/([A-Za-z0-9_-]{1,200})\\/resume$/);
+        if (req.method === 'POST' && ownerResumeMatch) {
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          if (!agentRoutes || typeof agentRoutes.resume !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'EXECUTION_RESUME_UNAVAILABLE', message: 'استئناف التنفيذ غير متاح.' });
+            return;
+          }
+          const rawBody = await readBody(req, 8192);
+          let payload;
+          try { payload = JSON.parse(rawBody || '{}'); } catch (_) {
+            sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
+            return;
+          }
+          const approvalId = payload?.approval?.approvalId;
+          if (typeof approvalId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(approvalId)) {
+            sendJson(res, 400, { ok: false, code: 'APPROVAL_ID_REQUIRED', message: 'معرّف الموافقة غير صالح.' });
+            return;
+          }
+          await agentRoutes.resume(req, res, ownerResumeMatch[1], { approval: { approvalId } });
+          return;
+        }
+
+        const ownerCancelMatch = requestUrl.pathname.match(/^\\/owner\\/executions\\/([A-Za-z0-9_-]{1,200})\\/cancel$/);
+        if (req.method === 'POST' && ownerCancelMatch) {
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          if (!agentRoutes || typeof agentRoutes.cancel !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'EXECUTION_CANCEL_UNAVAILABLE', message: 'إلغاء التنفيذ غير متاح.' });
+            return;
+          }
+          const rawBody = await readBody(req, 8192);
+          let payload;
+          try { payload = JSON.parse(rawBody || '{}'); } catch (_) {
+            sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
+            return;
+          }
+          await agentRoutes.cancel(req, res, ownerCancelMatch[1], { reason: 'owner_rejected', ...payload });
+          return;
+        }
+
         if (req.method === 'POST' && requestUrl.pathname === '/owner/logout') {
           if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
             authenticationOutcome = 'csrf_rejected';
