@@ -72,6 +72,7 @@ test('public async task API survives restart, pauses for approval, and resumes t
   let sideEffects = 0;
   const completedExecutions = new Set();
   const workerErrors = [];
+  const resumeErrors = [];
 
   const runtime = {
     tenantId: TENANT_ID,
@@ -148,7 +149,7 @@ test('public async task API survives restart, pauses for approval, and resumes t
     return service;
   };
 
-  runtime.resume = async (executionId, options = {}) => {
+  const resumeRuntime = async (executionId, options = {}) => {
     if (executionId !== canonicalExecutionId) {
       throw Object.assign(new Error('Resume must target the canonical execution'), {
         code: 'APPROVAL_EXECUTION_MISMATCH'
@@ -184,6 +185,14 @@ test('public async task API survives restart, pauses for approval, and resumes t
     };
     await coordinator.reconcileApprovalResume(executionId, result);
     return result;
+  };
+  runtime.resume = async (...args) => {
+    try {
+      return await resumeRuntime(...args);
+    } catch (error) {
+      resumeErrors.push({ code: error?.code || null, message: error?.message || String(error), stack: error?.stack || null });
+      throw error;
+    }
   };
 
     const acceptedResponse = await request(origin, '/api/v1/tasks', {
@@ -253,7 +262,7 @@ test('public async task API survives restart, pauses for approval, and resumes t
       body: { approval: { approvalId } }
     });
     const resumeResponseText = await resumeResponse.text();
-    assert.equal(resumeResponse.status, 200, 'owner resume failed: ' + resumeResponseText);
+    assert.equal(resumeResponse.status, 200, 'owner resume failed: ' + resumeResponseText + '; runtime errors: ' + JSON.stringify(resumeErrors));
     const resumePayload = JSON.parse(resumeResponseText);
     assert.equal(resumePayload.execution.executionId, canonicalExecutionId);
     assert.equal(resumePayload.execution.status, 'completed');
