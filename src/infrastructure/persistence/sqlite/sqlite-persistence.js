@@ -148,14 +148,14 @@ class SqliteIdempotencyRepository {
     return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
   scope(tenantId) { return tenantId || 'local'; }
-  findByKey(key, { tenantId = null } = {}) {
-    const tenant = tenantId === null ? '' : ' AND tenant_id=' + SqliteDatabase.literal(this.scope(tenantId));
-    const rows = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)}${tenant} ORDER BY tenant_id LIMIT 1;`);
+  findByKey(key, { tenantId = 'local' } = {}) {
+    const tenant = ' AND tenant_id=' + SqliteDatabase.literal(this.scope(tenantId));
+    const rows = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)}${tenant} LIMIT 1;`);
     if (!rows.length) return null;
     const item = JSON.parse(rows[0].payload);
     return tenantId && item.tenantId !== tenantId && !(tenantId === 'local' && !item.tenantId) ? null : item;
   }
-  find(args) { return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || null }); }
+  find(args) { return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || 'local' }); }
   begin(args) {
     const key = this.buildKey(args);
     const tenantId = this.scope(args?.tenantId);
@@ -175,23 +175,23 @@ class SqliteIdempotencyRepository {
     }
     return { created: true, key, record: actual };
   }
-  complete(key, result, { tenantId = null } = {}) {
+  complete(key, result, { tenantId = 'local' } = {}) {
     const record = this.findByKey(key, { tenantId }); if (!record) return null;
     record.status = 'completed'; record.result = result ?? null; record.completedAt = new Date().toISOString();
-    const tenant = SqliteDatabase.literal(this.scope(tenantId ?? record.tenantId));
+    const tenant = SqliteDatabase.literal(this.scope(tenantId));
     this.db.run(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='completed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant};`);
     return record;
   }
-  fail(key, error, { tenantId = null } = {}) {
+  fail(key, error, { tenantId = 'local' } = {}) {
     const record = this.findByKey(key, { tenantId }); if (!record) return null;
     record.status = 'failed'; record.error = { code: error?.code || 'EXECUTION_FAILED', message: error?.message || String(error || '') }; record.completedAt = new Date().toISOString();
-    const tenant = SqliteDatabase.literal(this.scope(tenantId ?? record.tenantId));
+    const tenant = SqliteDatabase.literal(this.scope(tenantId));
     this.db.run(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='failed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant};`);
     return record;
   }
-  delete(key, { tenantId = null } = {}) {
+  delete(key, { tenantId = 'local' } = {}) {
     const found = this.findByKey(key, { tenantId }); if (!found) return false;
-    const tenant = SqliteDatabase.literal(this.scope(tenantId ?? found.tenantId));
+    const tenant = SqliteDatabase.literal(this.scope(tenantId));
     this.db.run(`DELETE FROM idempotency WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant};`);
     return true;
   }
