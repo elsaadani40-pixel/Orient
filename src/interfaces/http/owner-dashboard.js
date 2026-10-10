@@ -99,23 +99,66 @@
           'الخطوة: ' + String(approval.step || ''),
           'تنتهي: ' + String(approval.expiresAt || '')
         ].join(' · ');
+        const summary = approval.summary;
+        let canApprove = Boolean(summary && summary.kind === 'file_change' && Array.isArray(summary.changes) &&
+          summary.changes.length > 0 && summary.changes.length === summary.changeCount);
+        if (summary && summary.kind === 'file_change' && Array.isArray(summary.changes)) {
+          for (const change of summary.changes) {
+            const changeCard = document.createElement('section');
+            changeCard.className = 'approval-change';
+            const changeTitle = document.createElement('h4');
+            changeTitle.textContent = String(change.action || 'invalid') + ' · ' + String(change.path || '(مسار غير محدد)');
+            const hashes = document.createElement('p');
+            hashes.className = 'muted';
+            hashes.textContent = 'الحجم: ' + String(change.contentBytes || 0) + ' بايت · SHA-256 للمحتوى المقترح: ' + String(change.proposedContentSha256 || 'غير متاح') +
+              (change.action === 'update' ? ' · SHA-256 المتوقع للملف الحالي: ' + String(change.expectedContentSha256 || 'غير متاح') : '');
+            const contentDetails = document.createElement('details');
+            const contentSummary = document.createElement('summary');
+            contentSummary.textContent = 'مراجعة المحتوى المقترح كاملًا';
+            const preview = document.createElement('pre');
+            preview.className = 'code-preview';
+            preview.textContent = String(change.proposedContent || '');
+            contentDetails.append(contentSummary, preview);
+            changeCard.append(changeTitle, hashes, contentDetails);
+            if (change.contentTruncated || !change.path || !['create', 'update'].includes(change.action) || !change.proposedContentSha256) {
+              canApprove = false;
+              const warning = document.createElement('p');
+              warning.className = 'muted';
+              warning.textContent = 'المراجعة غير مكتملة؛ لا يمكن الموافقة على هذا التغيير من لوحة المالك.';
+              changeCard.append(warning);
+            }
+            approvalItems.append(changeCard);
+          }
+        } else {
+          canApprove = false;
+          const warning = document.createElement('p');
+          warning.className = 'muted';
+          warning.textContent = 'لا توجد تفاصيل مراجعة كافية لهذا الإجراء. لا توافق عليه من هذه الواجهة؛ يمكنك إلغاء التنفيذ.';
+          card.append(warning);
+        }
+
         const actions = document.createElement('div');
         actions.className = 'row';
         const approve = document.createElement('button');
         approve.className = 'btn';
         approve.type = 'button';
         approve.textContent = 'موافقة واستئناف';
+        approve.disabled = !canApprove;
         const cancel = document.createElement('button');
         cancel.className = 'btn secondary';
         cancel.type = 'button';
         cancel.textContent = 'رفض وإلغاء التنفيذ';
 
         approve.addEventListener('click', async () => {
-          const summary = 'الأداة: ' + String(approval.tool || '') +
+          const changePaths = Array.isArray(approval.summary?.changes)
+            ? approval.summary.changes.map(change => String(change.action || '') + ' ' + String(change.path || '')).join('\n')
+            : '';
+          const summaryText = 'الأداة: ' + String(approval.tool || '') +
             '\nالصلاحية: ' + String(approval.capability || '') +
             '\nالتنفيذ: ' + String(approval.executionId || '') +
-            '\nهل توافق على استئناف التنفيذ؟';
-          if (!window.confirm(summary)) return;
+            '\nالتغييرات:\n' + changePaths +
+            '\nهل راجعت المحتوى المقترح وتوافق على استئناف التنفيذ؟';
+          if (!window.confirm(summaryText)) return;
           approve.disabled = true;
           cancel.disabled = true;
           approvalStatus.textContent = 'جارٍ إرسال الموافقة…';
