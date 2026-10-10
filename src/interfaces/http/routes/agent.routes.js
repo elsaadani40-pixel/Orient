@@ -106,8 +106,8 @@ function createAgentRoutes(agentService) {
             ['step', 'stepId', 'tool', 'status', 'errorCode']
               .map(key => [key, data[key]])
               .filter(([, value]) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))
-          typeof value === 'string' ? value.replace(/[\r\n\0]/g, '').slice(0, max) : null;
-          )
+              .map(([key, value]) => [key, typeof value === 'string' ? value.replace(/[\r\n\0]/g, '').slice(0, 100) : value])
+          
         };
       });
 
