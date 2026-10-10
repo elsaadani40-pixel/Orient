@@ -248,7 +248,12 @@ test('task workbench serves a responsive Arabic task console and same-origin API
 test('task workbench and its API remain behind the configured owner session gate', async t => {
   const server = createServer({
     memoryRoutes: { home() {}, add() {}, delete() {} },
-    agentRoutes: {},
+    agentRoutes: {
+      async tasks(_req, res) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ items: [], page: { limit: 20, offset: 0, total: 0 } }));
+      }
+    },
     ownerAuth: {
       enabled: true,
       authenticate(token) {
@@ -279,4 +284,18 @@ test('task workbench and its API remain behind the configured owner session gate
     headers: { Cookie: 'orient_owner_session=valid-session' }
   });
   assert.equal(allowedScript.status, 200);
+
+  const deniedApi = await fetch(origin + '/api/v1/tasks');
+  assert.equal(deniedApi.status, 401);
+  assert.equal((await deniedApi.json()).code, 'OWNER_AUTH_REQUIRED');
+
+  const allowedApi = await fetch(origin + '/api/v1/tasks', {
+    headers: { Cookie: 'orient_owner_session=valid-session' }
+  });
+  assert.equal(allowedApi.status, 200);
+  assert.deepEqual(await allowedApi.json(), {
+    apiVersion: 'v1',
+    items: [],
+    page: { limit: 20, offset: 0, total: 0 }
+  });
 });
