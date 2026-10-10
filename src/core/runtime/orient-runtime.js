@@ -239,7 +239,32 @@ class OrientRuntime {
       await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result);
       return result;
     } catch (error) {
-      if (error?.code === 'APPROVAL_REQUIRED' && error.executionContext?.approvalId) {
+      if (error?.code === 'APPROVAL_EXPIRED' && error.approvalId) {
+        try {
+          if (typeof this.persistence?.executions?.requestCancellation !== 'function') {
+            throw Object.assign(new Error('Durable execution cancellation storage is required'), {
+              code: 'EXECUTION_CANCELLATION_STORAGE_REQUIRED'
+            });
+          }
+          const requested = await this.persistence.executions.requestCancellation(
+            executionId,
+            'approval_expired',
+            { tenantId: this.tenantId }
+          );
+          if (!requested) {
+            throw Object.assign(new Error('Expired approval execution was not found'), {
+              code: 'EXECUTION_NOT_FOUND'
+            });
+          }
+          await this.workflowExecutionCoordinator.expireApprovalWorkflow(executionId, error.approvalId);
+        } catch (reconciliationError) {
+          throw Object.assign(new Error('Expired approval could not be reconciled safely'), {
+            code: 'APPROVAL_EXPIRY_RECONCILIATION_FAILED',
+            cause: reconciliationError,
+            approvalError: error
+          });
+        }
+      } else if (error?.code === 'APPROVAL_REQUIRED' && error.executionContext?.approvalId) {
         await this.workflowExecutionCoordinator.updateApprovalChallenge(
           executionId,
           error.executionContext.approvalId
