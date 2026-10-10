@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const JsonMemoryRepository = require('../../../../src/infrastructure/memory/json-memory.repository');
 const MemoryAuditRepository = require('../../../../src/infrastructure/memory/memory-audit.repository');
@@ -53,6 +54,65 @@ test('memory.add reconciliation returns the committed memory from its tenant-sco
     fixture.auditRepository.findByOperationId('operation-add-a', 'tenant-b', 'personal').length,
     0
   );
+});
+
+
+test('memory.add reconciliation survives process exit after commit but before execution completion is recorded', t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
+  const root = path.resolve(__dirname, '../../../../');
+  const script = `
+    const root = ${JSON.stringify(root)};
+    const directory = ${JSON.stringify(fixture.directory)};
+    const path = require('node:path');
+    const Coordinator = require(path.join(root, 'src/infrastructure/memory/memory-transaction-coordinator'));
+    const Repository = require(path.join(root, 'src/infrastructure/memory/json-memory.repository'));
+    const AuditRepository = require(path.join(root, 'src/infrastructure/memory/memory-audit.repository'));
+    const Service = require(path.join(root, 'src/application/memory/memory.service'));
+    const coordinator = new Coordinator({
+      memoryFile: path.join(directory, 'memory.json'),
+      auditFile: path.join(directory, 'memory-audit.json'),
+      journalFile: path.join(directory, 'memory-transaction-journal.json')
+    });
+    coordinator.recover();
+    const service = new Service(
+      new Repository(path.join(directory, 'memory.json')),
+      { auditRepository: new AuditRepository(path.join(directory, 'memory-audit.json')), transactionCoordinator: coordinator }
+    );
+    service.add('crash-window reconciliation test', {}, {
+      tenantId: 'tenant-crash',
+      memoryScope: 'personal',
+      operationId: 'operation-crash-after-commit'
+    });
+    // Simulate a process crash after the transactional tool mutation committed,
+    // but before the AgentLoop could persist idempotency completion.
+    process.exit(23);
+  `;
+  const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  assert.equal(child.status, 23, child.stderr || child.stdout);
+
+  const coordinator = new MemoryTransactionCoordinator({
+    memoryFile: path.join(fixture.directory, 'memory.json'),
+    auditFile: path.join(fixture.directory, 'memory-audit.json'),
+    journalFile: path.join(fixture.directory, 'memory-transaction-journal.json')
+  });
+  assert.deepEqual(coordinator.recover(), { recovered: false, phase: null });
+  const repository = new JsonMemoryRepository(path.join(fixture.directory, 'memory.json'));
+  const auditRepository = new MemoryAuditRepository(path.join(fixture.directory, 'memory-audit.json'));
+  const restartedService = new MemoryService(repository, {
+    auditRepository,
+    transactionCoordinator: coordinator
+  });
+
+  const reconciled = restartedService.reconcileToolOperation('memory.add', {
+    text: 'crash-window reconciliation test'
+  }, {
+    tenantId: 'tenant-crash',
+    memoryScope: 'personal',
+    operationId: 'operation-crash-after-commit'
+  });
+  assert.equal(reconciled.status, 'completed');
+  assert.equal(reconciled.result.text, 'crash-window reconciliation test');
 });
 
 test('memory.delete reconciliation reports completion only when its durable archive receipt exists', t => {
