@@ -72,3 +72,22 @@ test('remote operational routes stay behind the owner-session boundary', () => {
   assert.match(server, /OWNER_ORIGIN_REJECTED/);
   assert.match(server, /OWNER_CSRF_REJECTED/);
 });
+
+
+test('owner-session guard is evaluated before operational API dispatch', () => {
+  const guard = server.indexOf('if (ownerAuth)');
+  assert.ok(guard >= 0, 'owner-session guard must exist');
+  for (const route of [
+    "requestUrl.pathname === '/api/v1/tasks'",
+    "requestUrl.pathname === '/executions'",
+    "requestUrl.pathname === '/approvals/pending'",
+    "requestUrl.pathname === '/agent'"
+  ]) {
+    const routeIndex = server.indexOf(route);
+    assert.ok(routeIndex > guard, `${route} must be dispatched after the owner-session guard`);
+  }
+  const guardEnd = server.indexOf("if (req.method === 'POST' && requestUrl.pathname === '/api/v1/tasks')", guard);
+  assert.ok(guardEnd > guard, 'operational routes must follow the shared guard');
+  const guardBody = server.slice(guard, guardEnd);
+  assert.match(guardBody, /if \(!ownerSession\)[\s\S]*OWNER_AUTH_REQUIRED[\s\S]*return;/);
+});
