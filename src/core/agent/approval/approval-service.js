@@ -82,6 +82,7 @@ class ApprovalService {
     if (!stored) return { allowed: false, reason: 'APPROVAL_NOT_FOUND' };
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return { allowed: false, reason: 'APPROVAL_TENANT_MISMATCH' };
     if (stored.used) return { allowed: false, reason: 'APPROVAL_ALREADY_USED' };
+    if (stored.decision?.status !== 'approved') return { allowed: false, reason: stored.decision?.status === 'rejected' ? 'APPROVAL_REJECTED' : 'APPROVAL_NOT_APPROVED' };
     if (this.clock() >= Date.parse(stored.expiresAt)) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
     if (stored.executionId !== String(executionId) || stored.step !== step || stored.planRevision !== planRevision || stored.tool !== tool || stored.capability !== capability) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     if (agentId && stored.metadata?.agentId !== agentId) return { allowed: false, reason: 'APPROVAL_AGENT_MISMATCH' };
@@ -98,7 +99,7 @@ class ApprovalService {
         .filter(record => record.executionId === String(executionId) && Number(record.step) === step && record.tool === tool && Number(record.planRevision || 1) === Number(planRevision))
         .sort((x, y) => Date.parse(y.issuedAt || 0) - Date.parse(x.issuedAt || 0));
     for (const candidate of candidates) {
-      if (!candidate || candidate.used) continue;
+      if (!candidate || candidate.used || candidate.decision?.status !== 'approved') continue;
       if (tenantId && candidate.tenantId !== tenantId && candidate.metadata?.tenantId !== tenantId) continue;
       if (!candidate.expiresAt || this.clock() >= Date.parse(candidate.expiresAt)) continue;
       return { ...candidate };
@@ -163,7 +164,7 @@ class ApprovalService {
   }
 
 
-  async decide({ approvalId, decision, actorId, tenantId = this.tenantId } = {}) {
+  async decide({ approvalId, decision, actorId, executionId, tenantId = this.tenantId } = {}) {
     if (typeof approvalId !== 'string' || !approvalId.trim()) {
       throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
     }
@@ -182,6 +183,9 @@ class ApprovalService {
     }
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) {
       throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
+    }
+    if (executionId === undefined || executionId === null || String(executionId) !== stored.executionId) {
+      throw Object.assign(new Error('Approval execution does not match the requested execution'), { code: 'APPROVAL_EXECUTION_MISMATCH' });
     }
     if (stored.used) {
       throw Object.assign(new Error('Approval has already been consumed'), { code: 'APPROVAL_ALREADY_USED' });
@@ -218,6 +222,18 @@ class ApprovalService {
       decision: { ...updated.decision },
       idempotent: Boolean(stored.decision)
     };
+  }
+
+  async getApprovedForExecution({ approvalId, executionId, tenantId = this.tenantId } = {}) {
+    if (typeof approvalId !== 'string' || !approvalId || !executionId) return null;
+    const stored = this.repository?.findById
+      ? await this.repository.findById(approvalId, { tenantId })
+      : this.approvals.get(approvalId);
+    if (!stored || stored.executionId !== String(executionId)) return null;
+    if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return null;
+    if (stored.used || !stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) return null;
+    if (stored.decision?.status !== 'approved') return null;
+    return { ...stored };
   }
 
   async consume(approvalId, tenantId = this.tenantId) {
