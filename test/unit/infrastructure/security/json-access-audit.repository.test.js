@@ -56,3 +56,44 @@ test('repository rejects tampered audit records instead of extending a broken ch
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('owner audit view returns bounded newest-first events without integrity internals', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-audit-view-'));
+  const file = path.join(dir, 'events.jsonl');
+  try {
+    const repository = new JsonAccessAuditRepository(file);
+    for (let index = 1; index <= 4; index += 1) {
+      await repository.record(createAccessAuditEvent({
+        requestId: 'request-' + index,
+        pathname: '/agent',
+        method: 'POST',
+        statusCode: 202
+      }));
+    }
+    const events = await repository.listRecent(2);
+    assert.deepEqual(events.map(event => event.requestId), ['request-4', 'request-3']);
+    assert.equal(events.some(event => Object.hasOwn(event, 'integrity')), false);
+    assert.equal((await repository.listRecent(999)).length, 4);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('owner audit view detects tampering after repository initialization', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-audit-view-tamper-'));
+  const file = path.join(dir, 'events.jsonl');
+  try {
+    const repository = new JsonAccessAuditRepository(file);
+    await repository.record(createAccessAuditEvent({ requestId: 'original', pathname: '/', method: 'GET', statusCode: 200 }));
+    await repository.initialize();
+    const record = JSON.parse(await fs.readFile(file, 'utf8'));
+    record.sourceIp = '203.0.113.88';
+    await fs.writeFile(file, JSON.stringify(record) + '\\n', 'utf8');
+    await assert.rejects(
+      () => repository.listRecent(10),
+      error => error.code === 'ACCESS_AUDIT_INTEGRITY_FAILED'
+    );
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
