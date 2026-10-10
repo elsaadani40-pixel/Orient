@@ -577,7 +577,7 @@ test('resume fails closed before tool execution when a pending approval has no d
     agentExecutionCoordinator: {
       run: async () => { executionAttempts += 1; }
     },
-    recoveryCoordinator: {},
+    recoveryCoordinator: { fail: async () => {} },
     persistence: {
       executions: { findById: async () => null },
       checkpoints: {
