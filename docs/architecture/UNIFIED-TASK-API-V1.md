@@ -30,11 +30,13 @@ Returns only capabilities actually registered and enabled in this runtime instan
 
 `POST /api/v1/tasks`
 
-Request: `{ "goal": "...", "constraints": {}, "client": { "platform": "android|web|desktop", "apiVersion": "v1" }, "idempotencyKey": "..." }`
+Request: `{ "goal": "...", "idempotencyKey": "..." }`; clients should send the key in the `Idempotency-Key` header. The server also accepts the body field for compatibility.
 
-Response: `{ "task": { "id": "...", "status": "accepted", "createdAt": "...", "version": 1 } }`
+Response: `{ "apiVersion": "v1", "task": { "id": "...", "status": "...", "createdAt": "...", "version": 1 }, "replayed": false }`
 
-Creation validates authenticated scope, goal size, schema, rate/resource bounds, and idempotency. Acceptance means queued/recorded, **not completed**.
+The implemented slice validates the owner session/origin, bounds the request body and goal, routes through the existing AgentService and canonical Runtime, and uses the durable idempotency repository. Repeating the same key and same normalized goal replays the stored task summary; reusing a key for a different goal returns `409 IDEMPOTENCY_KEY_REUSED`; an in-progress or previously failed key returns a conflict rather than rerunning side effects. Responses use `201` for the first request and `200` for a completed replay.
+
+**Important implementation limit:** this endpoint currently awaits the canonical runtime execution synchronously and returns the observed task state. It is not yet a queue-acceptance API, and it does not claim asynchronous dispatch. It fails closed when the configured persistence adapter does not provide durable idempotency storage. Async task acceptance, rate limiting, and a PostgreSQL idempotency repository remain follow-up work.
 
 `GET /api/v1/tasks` lists only the caller's authorized tasks, with cursor pagination and bounded page size.
 
