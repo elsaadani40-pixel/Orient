@@ -13,7 +13,7 @@ const MAX_SEARCH_FILES = 500;
 const MAX_SEARCH_RESULTS = 100;
 const MAX_SEARCH_DEPTH = 8;
 const MAX_CHANGES = 10;
-const MAX_CHANGE_BYTES = 128 * 1024;
+const MAX_CHANGE_BYTES = 32 * 1024;
 
 const BLOCKED_DIRECTORY_NAMES = new Set([
   '.git', 'node_modules', 'dist', 'build', '.next', '.gradle',
@@ -315,7 +315,7 @@ function createWorkspaceTools(projectBuilder) {
           action,
           path: relativePath,
           content: change.content,
-          ...(action === 'update' ? { expectedContentSha256: change.expectedContentSha256 } : {})
+          ...(action === 'update' ? { expectedContentSha256: change.expectedContentSha256.toLowerCase() } : {})
         };
       });
 
@@ -335,12 +335,24 @@ function createWorkspaceTools(projectBuilder) {
         }
       }];
 
-      return projectBuilder.execute({
+      const result = await projectBuilder.execute({
         plan: payload.buildPlan || null,
         changeSet,
         definitionOfDone,
         checks
       });
+      return {
+        status: result.status,
+        changes: changes.map(({ action, path: changePath }) => ({ action, path: changePath })),
+        verification: result.verification || null,
+        policy: result.policy || null,
+        rollback: result.rollback || null,
+        error: result.error ? {
+          name: result.error.name || 'Error',
+          code: result.error.code || null,
+          message: String(result.error.message || 'Change execution failed').slice(0, 500)
+        } : null
+      };
     }
   });
 
