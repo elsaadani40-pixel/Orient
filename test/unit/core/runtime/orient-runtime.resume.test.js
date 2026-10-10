@@ -689,6 +689,7 @@ test('real OrientRuntime resumes a durably approved pending step after service r
           });
         }
         return {
+          allowed: true,
           authorized: true,
           capability: 'external.write',
           risk: 'high',
