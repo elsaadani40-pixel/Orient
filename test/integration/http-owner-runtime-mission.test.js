@@ -174,7 +174,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     body: JSON.stringify({ goal: 'طلب مختلف لا يجوز تنفيذه بنفس المفتاح' })
   });
   assert.equal(conflictingReuse.status, 409);
-  assert.equal((await conflictingReuse.json()).code, 'IDEMPOTENCY_KEY_REUSED');
+  assert.match(await conflictingReuse.text(), /لا يمكن إعادة استخدام مفتاح منع التكرار لطلب مختلف/);
 
   const taskListResponse = await fetch(origin + '/api/v1/tasks?limit=20&offset=0', {
     headers: { Cookie: cookie }
