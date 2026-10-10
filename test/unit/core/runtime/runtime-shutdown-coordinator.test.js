@@ -42,11 +42,11 @@ test('RuntimeShutdownCoordinator closes HTTP ingress, drains workers, then shuts
 
   assert.equal(result.completed, true);
   assert.deepEqual(order, [
-    'subscriber-stop',
     'http-close-start',
     'worker-drain-start',
     'worker-drain-complete',
     'runtime-shutdown',
+    'subscriber-stop',
     'persistence-close'
   ]);
 });
