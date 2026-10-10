@@ -215,7 +215,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
-        const ownerResumeMatch = requestUrl.pathname.match(/^\\/owner\\/executions\\/([A-Za-z0-9_-]{1,200})\\/resume$/);
+        const ownerResumeMatch = requestUrl.pathname.match(/^\/owner\/executions\/([A-Za-z0-9_-]{1,200})\/resume$/);
         if (req.method === 'POST' && ownerResumeMatch) {
           if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
             authenticationOutcome = 'csrf_rejected';
@@ -241,7 +241,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
-        const ownerCancelMatch = requestUrl.pathname.match(/^\\/owner\\/executions\\/([A-Za-z0-9_-]{1,200})\\/cancel$/);
+        const ownerCancelMatch = requestUrl.pathname.match(/^\/owner\/executions\/([A-Za-z0-9_-]{1,200})\/cancel$/);
         if (req.method === 'POST' && ownerCancelMatch) {
           if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
             authenticationOutcome = 'csrf_rejected';
