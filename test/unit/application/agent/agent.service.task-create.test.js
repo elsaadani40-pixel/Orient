@@ -268,3 +268,34 @@ test('async task mode fails closed when the durable workflow coordinator is unav
     error => error.code === 'ASYNC_TASK_COORDINATOR_REQUIRED'
   );
 });
+
+
+test('async task submission recovers a reserved task identity after an interrupted enqueue', async () => {
+  const fixture = createAsyncRuntime();
+  const enqueue = fixture.runtime.workflowExecutionCoordinator.enqueue;
+  let failFirst = true;
+  fixture.runtime.workflowExecutionCoordinator.enqueue = async (...args) => {
+    if (failFirst) {
+      failFirst = false;
+      throw Object.assign(new Error('temporary scheduler transport failure'), { code: 'SCHEDULER_TEMPORARY_FAILURE' });
+    }
+    return enqueue(...args);
+  };
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'recover queued work', idempotencyKey: 'async-request-recovery' }),
+    error => error.code === 'SCHEDULER_TEMPORARY_FAILURE'
+  );
+  const reservation = [...fixture.records.values()][0];
+  assert.equal(reservation.status, 'running');
+  assert.equal(fixture.workflows.has(reservation.executionId), false);
+
+  const replay = await fixture.service.createTask({
+    goal: 'recover queued work',
+    idempotencyKey: 'async-request-recovery'
+  });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.task.id, reservation.executionId);
+  assert.equal(replay.task.status, 'queued');
+  assert.equal(fixture.enqueueCalls, 1);
+});
