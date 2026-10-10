@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const OwnerAuthService = require('../../../../src/core/security/owner-auth-service');
 
 test('owner auth denies unconfigured access and rejects weak configured passwords', async () => {
@@ -83,4 +86,97 @@ test('owner auth rejects invalid session capacity configuration', () => {
     () => new OwnerAuthService({ password: 'a-strong-owner-password-2026', maxSessions: 0 }),
     error => error instanceof RangeError
   );
+});
+
+
+test('owner auth persists sessions and IP lockouts across service restarts', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-'));
+  const stateFile = path.join(directory, 'owner-auth-state.json');
+  const password = 'a-strong-owner-password-2026';
+  try {
+    const first = new OwnerAuthService({ password, stateFile, maxFailures: 2, lockoutMs: 10000 });
+    const login = await first.login({ password, sourceIp: '192.0.2.50' });
+    assert.equal(login.ok, true);
+    await first.login({ password: 'wrong', sourceIp: '192.0.2.51' });
+    await first.login({ password: 'wrong', sourceIp: '192.0.2.51' });
+    assert.equal((fs.statSync(stateFile).mode & 0o777), 0o600);
+
+    const restarted = new OwnerAuthService({ password, stateFile, maxFailures: 2, lockoutMs: 10000 });
+    assert.ok(restarted.authenticate(login.token), 'session remains valid after restart');
+    assert.equal(
+      (await restarted.login({ password, sourceIp: '192.0.2.51' })).code,
+      'OWNER_LOGIN_RATE_LIMITED'
+    );
+    assert.equal(restarted.logout(login.token), true);
+    const afterLogout = new OwnerAuthService({ password, stateFile });
+    assert.equal(afterLogout.authenticate(login.token), null, 'revocation survives restart');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('owner auth fails closed when persisted state is corrupt', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-corrupt-'));
+  const stateFile = path.join(directory, 'owner-auth-state.json');
+  try {
+    fs.writeFileSync(stateFile, '{broken', { mode: 0o600 });
+    assert.throws(
+      () => new OwnerAuthService({ password: 'a-strong-owner-password-2026', stateFile }),
+      error => error.code === 'OWNER_AUTH_STATE_CORRUPT'
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('owner auth rejects oversized or malformed persisted state before loading entries', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-bounds-'));
+  const stateFile = path.join(directory, 'owner-auth-state.json');
+  try {
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1,
+      sessions: Array.from({ length: 4097 }, () => ({})),
+      failures: []
+    }), { mode: 0o600 });
+    assert.throws(
+      () => new OwnerAuthService({ password: 'a-strong-owner-password-2026', stateFile }),
+      error => error.code === 'OWNER_AUTH_STATE_CORRUPT'
+    );
+
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1,
+      sessions: [{
+        digest: 'a'.repeat(64),
+        id: '00000000-0000-4000-8000-000000000001',
+        csrfToken: 'not-a-valid-csrf-token',
+        createdAt: 1000,
+        expiresAt: 2000
+      }],
+      failures: []
+    }), { mode: 0o600 });
+    assert.throws(
+      () => new OwnerAuthService({ password: 'a-strong-owner-password-2026', stateFile, now: () => 1500 }),
+      error => error.code === 'OWNER_AUTH_STATE_CORRUPT'
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('owner auth rolls back a newly issued in-memory session when persistence fails', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-write-failure-'));
+  const stateFile = path.join(directory, 'owner-auth-state.json');
+  const password = 'a-strong-owner-password-2026';
+  try {
+    const auth = new OwnerAuthService({ password, stateFile });
+    fs.mkdirSync(stateFile);
+    await assert.rejects(
+      auth.login({ password, sourceIp: '192.0.2.90' }),
+      error => error.code === 'OWNER_AUTH_STATE_PERSIST_FAILED'
+    );
+    assert.equal(auth.sessions.size, 0, 'failed persistence must not leave an unreturned active session');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

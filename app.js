@@ -136,7 +136,9 @@ const accessAuditRepository =
     require('path').join(config.agentDataDirectory, 'access-audit.jsonl')
   );
 
-const ownerAuthService = new OwnerAuthService();
+const ownerAuthService = new OwnerAuthService({
+  stateFile: require('path').join(config.agentDataDirectory, 'owner-auth-state.json')
+});
 
 const memoryService =
   new MemoryService(repository, {

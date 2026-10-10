@@ -9,6 +9,8 @@ const {
   timingSafeEqual
 } = require('node:crypto');
 const { promisify } = require('node:util');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const scryptAsync = promisify(scrypt);
 const KEY_LENGTH = 64;
@@ -31,6 +33,7 @@ class OwnerAuthService {
     maxFailures = 5,
     maxSessions = 64,
     lockoutMs = 15 * 60 * 1000,
+    stateFile = null,
     now = () => Date.now()
   } = {}) {
     if (password && (typeof password !== 'string' || password.length < 16)) {
@@ -48,8 +51,10 @@ class OwnerAuthService {
     this.maxSessions = maxSessions;
     this.lockoutMs = lockoutMs;
     this.now = now;
+    this.stateFile = stateFile ? path.resolve(stateFile) : null;
     this.sessions = new Map();
     this.failures = new Map();
+    this.loadState();
     this.passwordSalt = this.enabled ? randomBytes(16) : null;
     this.passwordVerifier = this.enabled
       ? scryptSync(password, this.passwordSalt, KEY_LENGTH, SCRYPT_OPTIONS)
@@ -76,7 +81,8 @@ class OwnerAuthService {
       return { ok: false, code: 'OWNER_LOGIN_FAILED' };
     }
 
-    this.failures.delete(ip);
+    const clearedFailure = this.failures.delete(ip);
+    if (clearedFailure) this.persistState();
     this.pruneExpiredSessions(now);
     if (this.sessions.size >= this.maxSessions) {
       return { ok: false, code: 'OWNER_SESSION_LIMIT_REACHED' };
@@ -89,7 +95,14 @@ class OwnerAuthService {
       createdAt: now,
       expiresAt: now + this.sessionTtlMs
     };
-    this.sessions.set(digestToken(token), session);
+    const tokenDigest = digestToken(token);
+    this.sessions.set(tokenDigest, session);
+    try {
+      this.persistState();
+    } catch (error) {
+      this.sessions.delete(tokenDigest);
+      throw error;
+    }
     return {
       ok: true,
       token,
@@ -111,12 +124,76 @@ class OwnerAuthService {
       windowStartedAt: withinWindow ? existing.windowStartedAt : now,
       blockedUntil: count >= this.maxFailures ? now + this.lockoutMs : 0
     });
+    this.persistState();
+  }
+
+  loadState() {
+    if (!this.stateFile) return;
+    let raw;
+    try { raw = fs.readFileSync(this.stateFile, 'utf8'); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    const corrupt = message => Object.assign(new Error(message), { code: 'OWNER_AUTH_STATE_CORRUPT' });
+    if (raw.length > 2 * 1024 * 1024) throw corrupt('Owner authentication state exceeds the size limit');
+    let state;
+    try { state = JSON.parse(raw); }
+    catch (_) { throw corrupt('Owner authentication state is corrupt'); }
+    if (state?.version !== 1 || !Array.isArray(state.sessions) || !Array.isArray(state.failures) ||
+        state.sessions.length > 4096 || state.failures.length > 1024) {
+      throw corrupt('Owner authentication state has an unsupported schema or exceeds limits');
+    }
+    const now = this.now();
+    for (const item of state.sessions) {
+      if (!item || typeof item.digest !== 'string' || !/^[a-f0-9]{64}$/.test(item.digest) ||
+          typeof item.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.id) ||
+          typeof item.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(item.csrfToken) ||
+          !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 ||
+          !Number.isSafeInteger(item.expiresAt) || item.expiresAt <= item.createdAt ||
+          this.sessions.has(item.digest)) {
+        throw corrupt('Owner authentication session state is invalid');
+      }
+      if (item.expiresAt > now) this.sessions.set(item.digest, { id: item.id, csrfToken: item.csrfToken, createdAt: item.createdAt, expiresAt: item.expiresAt });
+    }
+    for (const item of state.failures) {
+      if (!item || typeof item.ip !== 'string' || item.ip.length < 1 || item.ip.length > 64 ||
+          !Number.isInteger(item.count) || item.count < 1 || item.count > 100000 ||
+          !Number.isSafeInteger(item.windowStartedAt) || item.windowStartedAt < 0 ||
+          !Number.isSafeInteger(item.blockedUntil) || item.blockedUntil < 0 ||
+          this.failures.has(item.ip)) {
+        throw corrupt('Owner authentication failure state is invalid');
+      }
+      this.failures.set(item.ip, { count: item.count, windowStartedAt: item.windowStartedAt, blockedUntil: item.blockedUntil });
+    }
+    this.pruneExpiredSessions(this.now());
+  }
+
+  persistState() {
+    if (!this.stateFile) return;
+    const directory = path.dirname(this.stateFile);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(directory, 0o700); } catch (_) { /* Platform permissions require deployment review. */ }
+    const state = {
+      version: 1,
+      sessions: [...this.sessions.entries()].map(([digest, session]) => ({ digest, ...session })),
+      failures: [...this.failures.entries()].map(([ip, failure]) => ({ ip, ...failure }))
+    };
+    const temporary = this.stateFile + '.' + randomBytes(8).toString('hex') + '.tmp';
+    try {
+      fs.writeFileSync(temporary, JSON.stringify(state), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      try { fs.chmodSync(temporary, 0o600); } catch (_) { /* Platform permissions require deployment review. */ }
+      fs.renameSync(temporary, this.stateFile);
+      try { fs.chmodSync(this.stateFile, 0o600); } catch (_) { /* Platform permissions require deployment review. */ }
+    } catch (error) {
+      try { fs.rmSync(temporary, { force: true }); } catch (_) { /* Preserve original error. */ }
+      throw Object.assign(new Error('Could not persist owner authentication state'), { code: 'OWNER_AUTH_STATE_PERSIST_FAILED', cause: error });
+    }
   }
 
   pruneExpiredSessions(now = this.now()) {
+    let changed = false;
     for (const [key, session] of this.sessions) {
-      if (session.expiresAt <= now) this.sessions.delete(key);
+      if (session.expiresAt <= now) changed = this.sessions.delete(key) || changed;
     }
+    if (changed) this.persistState();
   }
 
   authenticate(token) {
@@ -142,12 +219,15 @@ class OwnerAuthService {
 
   logout(token) {
     if (typeof token !== 'string' || token.length < 40 || token.length > 100) return false;
-    return this.sessions.delete(digestToken(token));
+    const removed = this.sessions.delete(digestToken(token));
+    if (removed) this.persistState();
+    return removed;
   }
 
   revokeAllSessions() {
     const count = this.sessions.size;
     this.sessions.clear();
+    this.persistState();
     return count;
   }
 }
