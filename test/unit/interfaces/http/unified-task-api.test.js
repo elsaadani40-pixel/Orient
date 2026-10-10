@@ -224,3 +224,57 @@ test('v1 task read endpoints remain behind the shared owner-session gate', async
   assert.equal(detail.status, 200);
   assert.equal((await detail.json()).task.id, 'exec-3');
 });
+
+
+test('v1 task creation forwards the idempotency key and marks replay responses', async () => {
+  const calls = [];
+  const routes = createAgentRoutes({
+    async createTask(input) {
+      calls.push(input);
+      return {
+        replayed: calls.length > 1,
+        task: {
+          id: 'exec-created',
+          status: 'completed',
+          currentStep: 1,
+          createdAt: '2026-10-10T10:00:00.000Z',
+          updatedAt: '2026-10-10T10:00:01.000Z',
+          completedAt: '2026-10-10T10:00:01.000Z',
+          cancellationRequested: false,
+          agentLifecycle: 'completed',
+          version: 1
+        }
+      };
+    }
+  });
+
+  const first = responseRecorder();
+  await routes.createTask({
+    headers: { 'idempotency-key': 'route-key-0001' }
+  }, first, JSON.stringify({ goal: 'run one task' }));
+  assert.equal(first.status, 201);
+  assert.equal(first.headers.Location, '/api/v1/tasks/exec-created');
+  assert.equal(first.body.replayed, false);
+  assert.equal(calls[0].goal, 'run one task');
+  assert.equal(calls[0].idempotencyKey, 'route-key-0001');
+
+  const replay = responseRecorder();
+  await routes.createTask({
+    headers: { 'idempotency-key': 'route-key-0001' }
+  }, replay, JSON.stringify({ goal: 'run one task' }));
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.replayed, true);
+  assert.equal(calls.length, 2);
+});
+
+test('v1 task creation rejects malformed JSON before calling the service', async () => {
+  const routes = createAgentRoutes({
+    async createTask() {
+      assert.fail('malformed JSON must not reach task creation');
+    }
+  });
+  await assert.rejects(
+    routes.createTask({ headers: {} }, responseRecorder(), '{'),
+    error => error.code === 'INVALID_JSON'
+  );
+});
