@@ -180,3 +180,46 @@ test('owner auth rolls back a newly issued in-memory session when persistence fa
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('owner auth rejects unsafe session and lockout configuration', () => {
+  const password = 'a-strong-owner-password-2026';
+  assert.throws(() => new OwnerAuthService({ password, sessionTtlMs: 0 }), RangeError);
+  assert.throws(() => new OwnerAuthService({ password, sessionTtlMs: 25 * 60 * 60 * 1000 }), RangeError);
+  assert.throws(() => new OwnerAuthService({ password, maxFailures: 0 }), RangeError);
+  assert.throws(() => new OwnerAuthService({ password, lockoutMs: 0 }), RangeError);
+});
+
+
+test('owner auth rejects persisted sessions beyond configured capacity', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-auth-cap-'));
+  const stateFile = path.join(directory, 'state.json');
+  const session = (digest, id) => ({
+    digest: digest.repeat(64),
+    id,
+    csrfToken: 'A'.repeat(43),
+    createdAt: 1000,
+    expiresAt: 2000
+  });
+  try {
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1,
+      sessions: [
+        session('a', '00000000-0000-4000-8000-000000000001'),
+        session('b', '00000000-0000-4000-8000-000000000002')
+      ],
+      failures: []
+    }), { mode: 0o600 });
+    assert.throws(
+      () => new OwnerAuthService({
+        password: 'a-strong-owner-password-2026',
+        stateFile,
+        maxSessions: 1,
+        now: () => 1500
+      }),
+      error => error.code === 'OWNER_AUTH_STATE_CORRUPT'
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

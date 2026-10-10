@@ -43,6 +43,15 @@ class OwnerAuthService {
       );
     }
     this.enabled = Boolean(password);
+    if (!Number.isSafeInteger(sessionTtlMs) || sessionTtlMs < 1000 || sessionTtlMs > 24 * 60 * 60 * 1000) {
+      throw new RangeError('sessionTtlMs must be from 1000 ms to 24 hours');
+    }
+    if (!Number.isInteger(maxFailures) || maxFailures < 1 || maxFailures > 1000) {
+      throw new RangeError('maxFailures must be an integer from 1 to 1000');
+    }
+    if (!Number.isSafeInteger(lockoutMs) || lockoutMs < 1000 || lockoutMs > 24 * 60 * 60 * 1000) {
+      throw new RangeError('lockoutMs must be from 1000 ms to 24 hours');
+    }
     this.sessionTtlMs = sessionTtlMs;
     if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > 4096) {
       throw new RangeError('maxSessions must be an integer from 1 to 4096');
@@ -138,7 +147,7 @@ class OwnerAuthService {
     try { state = JSON.parse(raw); }
     catch (_) { throw corrupt('Owner authentication state is corrupt'); }
     if (state?.version !== 1 || !Array.isArray(state.sessions) || !Array.isArray(state.failures) ||
-        state.sessions.length > 4096 || state.failures.length > 1024) {
+        state.sessions.length > this.maxSessions || state.failures.length > 1024) {
       throw corrupt('Owner authentication state has an unsupported schema or exceeds limits');
     }
     const now = this.now();
@@ -146,8 +155,9 @@ class OwnerAuthService {
       if (!item || typeof item.digest !== 'string' || !/^[a-f0-9]{64}$/.test(item.digest) ||
           typeof item.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.id) ||
           typeof item.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(item.csrfToken) ||
-          !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 ||
+          !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 || item.createdAt > now ||
           !Number.isSafeInteger(item.expiresAt) || item.expiresAt <= item.createdAt ||
+          item.expiresAt - item.createdAt > this.sessionTtlMs ||
           this.sessions.has(item.digest)) {
         throw corrupt('Owner authentication session state is invalid');
       }
@@ -156,8 +166,9 @@ class OwnerAuthService {
     for (const item of state.failures) {
       if (!item || typeof item.ip !== 'string' || item.ip.length < 1 || item.ip.length > 64 ||
           !Number.isInteger(item.count) || item.count < 1 || item.count > 100000 ||
-          !Number.isSafeInteger(item.windowStartedAt) || item.windowStartedAt < 0 ||
+          !Number.isSafeInteger(item.windowStartedAt) || item.windowStartedAt < 0 || item.windowStartedAt > now ||
           !Number.isSafeInteger(item.blockedUntil) || item.blockedUntil < 0 ||
+          item.blockedUntil > now + this.lockoutMs ||
           this.failures.has(item.ip)) {
         throw corrupt('Owner authentication failure state is invalid');
       }
