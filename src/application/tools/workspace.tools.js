@@ -393,6 +393,102 @@ function createWorkspaceTools(projectBuilder) {
           message: String(result.error.message || 'Change execution failed').slice(0, 500)
         } : null
       };
+    },
+    reconcile: async (input) => {
+      // This is read-after-crash reconciliation only. It never mutates files:
+      // all proposed contents must already be present to claim completion.
+      const payload = inputObject(input);
+      const rawChanges = Array.isArray(payload.changeSet?.changes)
+        ? payload.changeSet.changes
+        : Array.isArray(payload.proposals)
+          ? payload.proposals
+          : [];
+      if (rawChanges.length === 0 || rawChanges.length > MAX_CHANGES) {
+        return { status: 'conflict', reason: 'invalid_change_set' };
+      }
+
+      const changes = [];
+      for (const change of rawChanges) {
+        if (!change || typeof change !== 'object' ||
+            (change.action !== 'create' && change.action !== 'update') ||
+            typeof change.content !== 'string' ||
+            Buffer.byteLength(change.content, 'utf8') > MAX_CHANGE_BYTES) {
+          return { status: 'conflict', reason: 'invalid_change' };
+        }
+        let relativePath;
+        try {
+          relativePath = normalizeRelativePath(change.path);
+          assertAllowedPath(relativePath);
+        } catch {
+          return { status: 'conflict', reason: 'path_not_allowed' };
+        }
+        if (change.action === 'update' &&
+            !/^[a-f0-9]{64}$/i.test(String(change.expectedContentSha256 || ''))) {
+          return { status: 'conflict', reason: 'missing_update_precondition' };
+        }
+        changes.push({
+          action: change.action,
+          path: relativePath,
+          content: change.content,
+          ...(change.action === 'update'
+            ? { expectedContentSha256: change.expectedContentSha256.toLowerCase() }
+            : {})
+        });
+      }
+
+      let alreadyApplied = 0;
+      let notApplied = 0;
+      for (const change of changes) {
+        const exists = await projectBuilder.workspace.exists(change.path);
+        if (change.action === 'create') {
+          if (!exists) {
+            notApplied += 1;
+            continue;
+          }
+          if ((await projectBuilder.workspace.readText(change.path)) === change.content) {
+            alreadyApplied += 1;
+          } else {
+            return { status: 'conflict', reason: 'created_path_has_different_content', path: change.path };
+          }
+          continue;
+        }
+
+        if (!exists) {
+          return { status: 'conflict', reason: 'updated_path_missing', path: change.path };
+        }
+        const currentContent = await projectBuilder.workspace.readText(change.path);
+        if (currentContent === change.content) {
+          alreadyApplied += 1;
+          continue;
+        }
+        const currentHash = crypto.createHash('sha256').update(currentContent, 'utf8').digest('hex');
+        if (currentHash === change.expectedContentSha256) {
+          notApplied += 1;
+          continue;
+        }
+        return { status: 'conflict', reason: 'updated_path_matches_neither_precondition_nor_proposal', path: change.path };
+      }
+
+      if (alreadyApplied === changes.length) {
+        return {
+          status: 'completed',
+          result: {
+            status: 'success',
+            changes: changes.map(({ action, path: changePath }) => ({ action, path: changePath })),
+            verification: { passed: true, reconciled: true, checkedFiles: changes.length },
+            policy: { allowed: true, reconciled: true },
+            rollback: null,
+            error: null
+          }
+        };
+      }
+
+      // A partially applied or untouched change set is not replayed here. The
+      // caller fails closed and requires an explicit repair/review decision.
+      return {
+        status: 'conflict',
+        reason: alreadyApplied > 0 ? 'partially_applied_change_set' : 'no_changes_proven_applied'
+      };
     }
   });
 
