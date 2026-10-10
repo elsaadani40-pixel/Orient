@@ -104,7 +104,25 @@ async function statAllowed(projectBuilder, relativePath) {
   }
 }
 
-function createWorkspaceTools(projectBuilder) {
+
+function projectChangeSetHash(changes) {
+  return crypto.createHash('sha256').update(JSON.stringify(changes), 'utf8').digest('hex');
+}
+
+function projectWorkspaceId(projectBuilder) {
+  return crypto.createHash('sha256')
+    .update(path.resolve(projectBuilder.policy.realAllowedRoot), 'utf8')
+    .digest('hex');
+}
+
+function hasReceiptIdentity(context) {
+  return context && typeof context.operationId === 'string' &&
+    context.operationId.length > 0 && context.operationId.length <= 256 &&
+    typeof context.tenantId === 'string' &&
+    context.tenantId.length > 0 && context.tenantId.length <= 128;
+}
+
+function createWorkspaceTools(projectBuilder, { operationReceiptStore = null } = {}) {
   if (!projectBuilder || !projectBuilder.workspace || !projectBuilder.policy) {
     throw new TypeError('projectBuilder with workspace policy is required');
   }
@@ -326,7 +344,7 @@ function createWorkspaceTools(projectBuilder) {
     description: 'تطبيق ChangeSet صريح بعد اجتياز تفويض المخاطر والموافقة البشرية والتحقق',
     capabilities: ['workspace.write'],
     risk: 'high',
-    execute: async (input) => {
+    execute: async (input, context = {}) => {
       const payload = inputObject(input);
       const rawChanges = Array.isArray(payload.changeSet?.changes)
         ? payload.changeSet.changes
@@ -358,6 +376,37 @@ function createWorkspaceTools(projectBuilder) {
       });
 
       const changeSet = { changes };
+      if (operationReceiptStore && !hasReceiptIdentity(context)) {
+        fail('تنفيذ تغييرات المشروع يتطلب معرّف عملية ومستأجر موثوقين من Runtime', 400, 'PROJECT_OPERATION_RECEIPT_IDENTITY_REQUIRED');
+      }
+      const receiptIdentity = operationReceiptStore && hasReceiptIdentity(context)
+        ? {
+            operationId: context.operationId,
+            tenantId: context.tenantId,
+            workspaceId: projectWorkspaceId(projectBuilder),
+            changeSetHash: projectChangeSetHash(changes)
+          }
+        : null;
+
+      // A durable receipt is the only authority for replaying a previously
+      // verified project operation. Identity mismatches and corrupt receipts fail closed.
+      if (receiptIdentity) {
+        const existingReceipt = operationReceiptStore.read(receiptIdentity);
+        if (existingReceipt) {
+          if (existingReceipt.workspaceId !== receiptIdentity.workspaceId ||
+              existingReceipt.changeSetHash !== receiptIdentity.changeSetHash) {
+            fail('معرّف العملية مرتبط بتغيير مختلف ولا يجوز إعادة استخدامه', 409, 'PROJECT_OPERATION_RECEIPT_IDENTITY_CONFLICT');
+          }
+          for (const change of changes) {
+            if (!(await projectBuilder.workspace.exists(change.path)) ||
+                (await projectBuilder.workspace.readText(change.path)) !== change.content) {
+              fail('نتيجة العملية المسجلة تغيرت لاحقًا؛ يلزم استرداد مضبوط', 409, 'PROJECT_OPERATION_RECEIPT_POST_STATE_CONFLICT');
+            }
+          }
+          return existingReceipt.result;
+        }
+      }
+
       const definitionOfDone = {
         required: ['Every changed file matches the approved proposed content.'],
         satisfied: false
@@ -381,7 +430,7 @@ function createWorkspaceTools(projectBuilder) {
         definitionOfDone,
         checks
       });
-      return {
+      const toolResult = {
         status: result.status,
         changes: changes.map(({ action, path: changePath }) => ({ action, path: changePath })),
         verification: result.verification || null,
@@ -393,8 +442,17 @@ function createWorkspaceTools(projectBuilder) {
           message: String(result.error.message || 'Change execution failed').slice(0, 500)
         } : null
       };
+
+      // Persist only after the builder verifies every requested change. If the
+      // process crashes before this durable write, reconciliation remains unknown.
+      if (receiptIdentity && toolResult.status === 'verified' &&
+          toolResult.verification?.status === 'passed' &&
+          toolResult.verification?.failed === 0) {
+        operationReceiptStore.write({ ...receiptIdentity, result: toolResult });
+      }
+      return toolResult;
     },
-    reconcile: async (input) => {
+    reconcile: async (input, context = {}) => {
       // This is read-after-crash reconciliation only. It never mutates files:
       // all proposed contents must already be present to claim completion.
       const payload = inputObject(input);
@@ -436,6 +494,27 @@ function createWorkspaceTools(projectBuilder) {
         });
       }
 
+      const receiptIdentity = operationReceiptStore && hasReceiptIdentity(context)
+        ? {
+            operationId: context.operationId,
+            tenantId: context.tenantId,
+            workspaceId: projectWorkspaceId(projectBuilder),
+            changeSetHash: projectChangeSetHash(changes)
+          }
+        : null;
+      let receipt = null;
+      if (receiptIdentity) {
+        try {
+          receipt = operationReceiptStore.read(receiptIdentity);
+        } catch {
+          return { status: 'conflict', reason: 'operation_receipt_corrupt' };
+        }
+        if (receipt && (receipt.workspaceId !== receiptIdentity.workspaceId ||
+            receipt.changeSetHash !== receiptIdentity.changeSetHash)) {
+          return { status: 'conflict', reason: 'operation_receipt_identity_mismatch' };
+        }
+      }
+
       let alreadyApplied = 0;
       let notApplied = 0;
       for (const change of changes) {
@@ -470,10 +549,11 @@ function createWorkspaceTools(projectBuilder) {
       }
 
       if (alreadyApplied === changes.length) {
+        if (receipt) {
+          return { status: 'completed', result: receipt.result };
+        }
         // Matching file contents prove only the current post-state, not that this
-        // logical operation produced it. Another operation or a user may have
-        // independently written identical bytes. Until a durable, tenant-scoped
-        // operation receipt is available, never mark this as completed.
+        // logical operation produced it. Never infer completion without a durable receipt.
         return {
           status: 'conflict',
           reason: 'operation_receipt_missing',

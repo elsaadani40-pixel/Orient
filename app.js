@@ -39,6 +39,9 @@ const ProjectBuilderAgent =
 const createWorkspaceTools =
   require('./src/application/tools/workspace.tools');
 
+const ProjectOperationReceiptStore =
+  require('./src/infrastructure/execution/project-operation-receipt-store');
+
 const OrientRuntime =
   require('./src/core/runtime/orient-runtime');
 
@@ -182,7 +185,12 @@ const projectBuilderAgent = new ProjectBuilderAgent({
     maxOutput: 30000
   }
 });
-const workspaceTools = createWorkspaceTools(projectBuilderAgent);
+const projectOperationReceiptStore = new ProjectOperationReceiptStore({
+  directory: path.join(config.agentDataDirectory, 'project-operation-receipts')
+});
+const workspaceTools = createWorkspaceTools(projectBuilderAgent, {
+  operationReceiptStore: projectOperationReceiptStore
+});
 
 for (const tool of [...memoryTools, ...workspaceTools]) {
   toolRegistry.register(tool);
