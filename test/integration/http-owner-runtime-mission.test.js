@@ -182,4 +182,17 @@ test('authenticated dashboard request completes a harmless mission through the r
   assert.equal(taskListResponse.status, 200);
   const taskList = await taskListResponse.json();
   assert.ok(taskList.items.some(item => item.id === created.task.id));
+
+  const deniedTaskDetail = await fetch(origin + '/api/v1/tasks/' + encodeURIComponent(created.task.id));
+  assert.equal(deniedTaskDetail.status, 401, 'task detail must require an owner session');
+
+  const taskDetailResponse = await fetch(origin + '/api/v1/tasks/' + encodeURIComponent(created.task.id), {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(taskDetailResponse.status, 200);
+  const detail = await taskDetailResponse.json();
+  assert.equal(detail.apiVersion, 'v1');
+  assert.equal(detail.task.id, created.task.id);
+  assert.equal(detail.task.status, 'completed');
+  assert.equal(Object.hasOwn(detail.task, 'tenantId'), false, 'public task summary must not disclose tenant identifiers');
 });
