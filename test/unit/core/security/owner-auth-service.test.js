@@ -128,3 +128,55 @@ test('owner auth fails closed when persisted state is corrupt', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('owner auth rejects oversized or malformed persisted state before loading entries', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-bounds-'));
+  const stateFile = path.join(directory, 'owner-auth-state.json');
+  try {
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1,
+      sessions: Array.from({ length: 4097 }, () => ({})),
+      failures: []
+    }), { mode: 0o600 });
+    assert.throws(
+      () => new OwnerAuthService({ password: 'a-strong-owner-password-2026', stateFile }),
+      error => error.code === 'OWNER_AUTH_STATE_CORRUPT'
+    );
+
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1,
+      sessions: [{
+        digest: 'a'.repeat(64),
+        id: '00000000-0000-4000-8000-000000000001',
+        csrfToken: 'not-a-valid-csrf-token',
+        createdAt: 1000,
+        expiresAt: 2000
+      }],
+      failures: []
+    }), { mode: 0o600 });
+    assert.throws(
+      () => new OwnerAuthService({ password: 'a-strong-owner-password-2026', stateFile, now: () => 1500 }),
+      error => error.code === 'OWNER_AUTH_STATE_CORRUPT'
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('owner auth rolls back a newly issued in-memory session when persistence fails', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-write-failure-'));
+  const stateFile = path.join(directory, 'owner-auth-state.json');
+  const password = 'a-strong-owner-password-2026';
+  try {
+    const auth = new OwnerAuthService({ password, stateFile });
+    fs.mkdirSync(stateFile);
+    await assert.rejects(
+      auth.login({ password, sourceIp: '192.0.2.90' }),
+      error => error.code === 'OWNER_AUTH_STATE_PERSIST_FAILED'
+    );
+    assert.equal(auth.sessions.size, 0, 'failed persistence must not leave an unreturned active session');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
