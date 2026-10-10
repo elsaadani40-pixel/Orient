@@ -36,7 +36,45 @@ function readBody(req, maxBytes = 1024 * 1024) {
   });
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null }) {
+
+function parseCookies(header = '') {
+  const cookies = Object.create(null);
+  for (const part of String(header).split(';')) {
+    const index = part.indexOf('=');
+    if (index <= 0) continue;
+    const name = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (/^[A-Za-z0-9_-]{1,80}$/.test(name)) cookies[name] = value;
+  }
+  return cookies;
+}
+
+function sendJson(res, statusCode, payload, extraHeaders = {}) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Pragma': 'no-cache',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    ...extraHeaders
+  });
+  res.end(JSON.stringify(payload));
+}
+
+function isSameOrigin(req) {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  if (typeof origin !== 'string' || typeof host !== 'string') return false;
+  try {
+    const parsed = new URL(origin);
+    const protocol = req.socket?.encrypted ? 'https:' : 'http:';
+    return parsed.origin === protocol + '//' + host.toLowerCase();
+  } catch (_) {
+    return false;
+  }
+}
+
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -44,6 +82,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null }) {
       req.url,
       'http://localhost'
     );
+    let authenticationOutcome = 'not_evaluated';
 
     res.setHeader('X-Request-ID', requestId);
     res.on('finish', () => {
@@ -55,7 +94,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null }) {
         pathname: requestUrl.pathname,
         statusCode: res.statusCode,
         userAgent: req.headers['user-agent'],
-        durationMs: Date.now() - requestStartedAt
+        durationMs: Date.now() - requestStartedAt,
+        authenticationOutcome
       });
       Promise.resolve(accessAudit.record(event)).catch(() => {
         logger.error('Access audit write failed', { code: 'ACCESS_AUDIT_WRITE_FAILED' });
@@ -63,6 +103,126 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null }) {
     });
 
     try {
+      if (req.method === 'GET' && requestUrl.pathname === '/owner') {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+          'Pragma': 'no-cache',
+          'Referrer-Policy': 'no-referrer',
+          'X-Frame-Options': 'DENY',
+          'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        });
+        res.end(require('fs').readFileSync(require('path').join(__dirname, 'owner-dashboard.html'), 'utf8'));
+        return;
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/owner-dashboard.js') {
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
+          'Content-Security-Policy': "default-src 'none'; script-src 'self'; base-uri 'none'"
+        });
+        res.end(require('fs').readFileSync(require('path').join(__dirname, 'owner-dashboard.js'), 'utf8'));
+        return;
+      }
+
+      const ownerCookie = parseCookies(req.headers.cookie).orient_owner_session;
+      const ownerSession = ownerAuth && ownerAuth.enabled
+        ? ownerAuth.authenticate(ownerCookie)
+        : null;
+
+      if (req.method === 'POST' && requestUrl.pathname === '/owner/login') {
+        authenticationOutcome = 'unauthenticated';
+        if (!ownerAuth || !ownerAuth.enabled) {
+          sendJson(res, 503, { ok: false, code: 'OWNER_AUTH_NOT_CONFIGURED', message: 'لم يتم إعداد كلمة مرور المالك محليًا.' });
+          return;
+        }
+        if (!isSameOrigin(req)) {
+          authenticationOutcome = 'csrf_rejected';
+          sendJson(res, 403, { ok: false, code: 'OWNER_ORIGIN_REJECTED', message: 'تم رفض مصدر الطلب.' });
+          return;
+        }
+        const rawBody = await readBody(req, 4096);
+        let payload;
+        try {
+          payload = JSON.parse(rawBody || '{}');
+        } catch (_) {
+          sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
+          return;
+        }
+        const result = await ownerAuth.login({
+          password: payload.password,
+          sourceIp: req.socket?.remoteAddress || 'unknown'
+        });
+        if (!result.ok) {
+          authenticationOutcome = 'owner_login_failed';
+          const status = result.code === 'OWNER_LOGIN_RATE_LIMITED' ? 429 : 401;
+          sendJson(res, status, { ok: false, code: result.code, message: 'تعذر تسجيل الدخول.' });
+          return;
+        }
+        authenticationOutcome = 'owner_login_success';
+        const secure = req.socket?.encrypted ? '; Secure' : '';
+        const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+        sendJson(res, 200, { ok: true, csrfToken: result.csrfToken, expiresAt: result.expiresAt }, {
+          'Set-Cookie': 'orient_owner_session=' + result.token + '; Path=/owner; HttpOnly; SameSite=Strict; Max-Age=' + maxAge + secure
+        });
+        return;
+      }
+
+      if (requestUrl.pathname.startsWith('/owner/')) {
+        if (!ownerAuth || !ownerAuth.enabled) {
+          sendJson(res, 503, { ok: false, code: 'OWNER_AUTH_NOT_CONFIGURED', message: 'لم يتم إعداد مصادقة المالك.' });
+          return;
+        }
+        if (!ownerSession) {
+          authenticationOutcome = 'unauthenticated';
+          sendJson(res, 401, { ok: false, code: 'OWNER_AUTH_REQUIRED', message: 'يلزم تسجيل دخول المالك.' }, {
+            'Set-Cookie': 'orient_owner_session=; Path=/owner; HttpOnly; SameSite=Strict; Max-Age=0' + (req.socket?.encrypted ? '; Secure' : '')
+          });
+          return;
+        }
+        authenticationOutcome = 'authenticated';
+
+        if (req.method === 'GET' && requestUrl.pathname === '/owner/session') {
+          sendJson(res, 200, { ok: true, csrfToken: ownerSession.csrfToken, expiresAt: ownerSession.expiresAt });
+          return;
+        }
+
+        if (req.method === 'GET' && requestUrl.pathname === '/owner/audit') {
+          if (!accessAudit || typeof accessAudit.listRecent !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'AUDIT_VIEW_UNAVAILABLE', message: 'سجل التدقيق غير متاح.' });
+            return;
+          }
+          try {
+            const events = await accessAudit.listRecent(100);
+            sendJson(res, 200, { ok: true, events });
+          } catch (error) {
+            logger.error('Owner audit view failed', { code: error.code || 'OWNER_AUDIT_READ_FAILED' });
+            sendJson(res, 503, { ok: false, code: 'AUDIT_VIEW_UNAVAILABLE', message: 'تعذر قراءة سجل التدقيق.' });
+          }
+          return;
+        }
+
+        if (req.method === 'POST' && requestUrl.pathname === '/owner/logout') {
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          ownerAuth.logout(ownerCookie);
+          sendJson(res, 200, { ok: true }, {
+            'Set-Cookie': 'orient_owner_session=; Path=/owner; HttpOnly; SameSite=Strict; Max-Age=0' + (req.socket?.encrypted ? '; Secure' : '')
+          });
+          return;
+        }
+
+        sendJson(res, 404, { ok: false, code: 'OWNER_ROUTE_NOT_FOUND', message: 'المسار غير موجود.' });
+        return;
+      }
+
       if (
         req.method === 'GET' &&
         requestUrl.pathname === '/command-scene.js'

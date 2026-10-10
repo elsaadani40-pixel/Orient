@@ -6,6 +6,12 @@ const SAFE_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', '
 const ROUTES = [
   [/^\/$/, '/'],
   [/^\/dashboard$/, '/dashboard'],
+  [/^\/owner$/, '/owner'],
+  [/^\/owner-dashboard\.js$/, '/owner-dashboard.js'],
+  [/^\/owner\/login$/, '/owner/login'],
+  [/^\/owner\/session$/, '/owner/session'],
+  [/^\/owner\/audit$/, '/owner/audit'],
+  [/^\/owner\/logout$/, '/owner/logout'],
   [/^\/command-scene\.js$/, '/command-scene.js'],
   [/^\/agent$/, '/agent'],
   [/^\/memory\/(add|delete)$/, '/memory/:operation'],
@@ -44,7 +50,8 @@ function createAccessAuditEvent({
   pathname,
   statusCode,
   userAgent,
-  durationMs
+  durationMs,
+  authenticationOutcome = 'not_evaluated'
 } = {}) {
   const numericStatus = Number(statusCode);
   const numericDuration = Number(durationMs);
@@ -66,7 +73,9 @@ function createAccessAuditEvent({
     durationMs: Number.isFinite(numericDuration) && numericDuration >= 0
       ? Math.min(Math.floor(numericDuration), 86400000)
       : 0,
-    authenticationOutcome: 'not_evaluated'
+    authenticationOutcome: ['not_evaluated', 'authenticated', 'unauthenticated', 'owner_login_success', 'owner_login_failed', 'csrf_rejected'].includes(authenticationOutcome)
+      ? authenticationOutcome
+      : 'not_evaluated'
   });
 }
 

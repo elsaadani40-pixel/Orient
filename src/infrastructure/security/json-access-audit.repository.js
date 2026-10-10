@@ -67,6 +67,53 @@ class JsonAccessAuditRepository {
     this.initialized = true;
   }
 
+  async listRecent(limit = 100) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 200)) : 100;
+    await this.queue;
+    await this.initialize();
+    let contents;
+    try {
+      contents = await fs.readFile(this.filePath, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+    const lines = contents.split('\n').filter(Boolean);
+    const verifiedEvents = [];
+    let expectedPreviousHash = null;
+    for (const line of lines) {
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch (_) {
+        throw integrityFailure();
+      }
+      const { integrity, ...event } = record;
+      const expectedHash = hashEvent(expectedPreviousHash, event);
+      if (
+        integrity?.algorithm !== 'sha256-chain-v1' ||
+        integrity.previousHash !== expectedPreviousHash ||
+        integrity.hash !== expectedHash
+      ) {
+        throw integrityFailure();
+      }
+      expectedPreviousHash = expectedHash;
+      verifiedEvents.push(event);
+    }
+    return verifiedEvents.slice(-boundedLimit).reverse().map((event) => ({
+      eventId: event.eventId,
+      requestId: event.requestId,
+      timestamp: event.timestamp,
+      sourceIp: event.sourceIp,
+      method: event.method,
+      route: event.route,
+      statusCode: event.statusCode,
+      userAgent: event.userAgent,
+      durationMs: event.durationMs,
+      authenticationOutcome: event.authenticationOutcome
+    }));
+  }
+
   record(event) {
     const operation = this.queue.then(async () => {
       await this.initialize();
