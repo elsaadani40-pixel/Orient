@@ -121,7 +121,7 @@
             preview.textContent = String(change.proposedContent || '');
             contentDetails.append(contentSummary, preview);
             changeCard.append(changeTitle, hashes, contentDetails);
-            if (change.contentTruncated || !change.path || !['create', 'update'].includes(change.action) || !change.proposedContentSha256) {
+            if (change.contentTruncated || !change.path || !['create', 'update'].includes(change.action) || !change.proposedContentSha256 || change.contentHashValid !== true || (change.action === 'update' && !change.expectedContentSha256)) {
               canApprove = false;
               const warning = document.createElement('p');
               warning.className = 'muted';
