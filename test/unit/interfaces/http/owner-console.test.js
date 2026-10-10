@@ -213,6 +213,7 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
       body: JSON.stringify({ approval: { approvalId: 'approval-123' } })
     });
     assert.equal(csrfDenied.status, 403);
+    assert.equal(decisionCalls.length, 0, 'CSRF rejection must not record an approval decision');
 
     const resumed = await request(origin, '/owner/executions/exec-123/resume', {
       method: 'POST',
