@@ -56,7 +56,10 @@ class WorkflowExecutionCoordinator {
       workspaceId: this.workspaceId,
       input: { text }
     });
-    instance.metadata.priority = priority;
+    // The public task identifier intentionally aliases the durable workflow ID.
+    // This gives task idempotency a stable target without introducing a second
+    // identifier store that could drift from the workflow record.
+    instance.metadata = { ...instance.metadata, taskId: instance.workflowId, priority };
     return { instance, text };
   }
 
@@ -80,6 +83,7 @@ class WorkflowExecutionCoordinator {
     }
 
     return {
+      taskId: instance.metadata.taskId || instance.workflowId,
       workflowId: instance.workflowId,
       state: instance.state,
       tenantId: instance.tenantId,
@@ -126,6 +130,8 @@ class WorkflowExecutionCoordinator {
     instance.metadata = {
       ...instance.metadata,
       approvalBlocked: true,
+      taskId: instance.metadata.taskId || instance.workflowId,
+      executionId: String(executionId),
       approvalExecutionId: String(executionId),
       approvalId,
       approvalRequiredAt: new Date().toISOString()
