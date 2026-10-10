@@ -144,7 +144,7 @@ class ApprovalService {
         .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
         .sort((a, b) => Date.parse(a.issuedAt || 0) - Date.parse(b.issuedAt || 0));
     return candidates
-      .filter(record => record && !record.used)
+      .filter(record => record && !record.used && !record.decision)
       .filter(record => !record.expiresAt || this.clock() < Date.parse(record.expiresAt))
       .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
       .slice(0, boundedLimit)
