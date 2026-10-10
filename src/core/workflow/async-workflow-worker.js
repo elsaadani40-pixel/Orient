@@ -21,7 +21,7 @@ class AsyncWorkflowWorker{
   try{
    while(true){
     if(workerHeartbeatError){leaseLost=true;break;}
-    if(lease.cancelled||instance.cancelRequested){const from=instance.state;if(instance.state!=='CANCELLED')instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
+    if((await this.refreshDurableCancellation(instance))||lease.cancelled||instance.cancelRequested){const from=instance.state;if(instance.state!=='CANCELLED')instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
     if(lease.deadlineAt&&new Date(lease.deadlineAt).getTime()<=this.now()){instance.metadata.deadlineExceeded=true;instance.metadata.failureCode='WORKFLOW_DEADLINE_EXCEEDED';const from=instance.state;if(instance.state!=='FAILED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);break;}
     await this.scheduler.renewAsync(instance.workflowId,lease.leaseId);if(workerHeartbeatError){leaseLost=true;break;}
     const ready=instance.readySteps();if(!ready.length){const done=instance.definition.steps.every(s=>instance.steps[s.id].state===WorkflowDefinition.STEP_STATES.COMPLETED);const from=instance.state;if(done)instance.transition('COMPLETED');else if(instance.state!=='FAILED'&&instance.state!=='CANCELLED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);break;}
@@ -32,7 +32,7 @@ class AsyncWorkflowWorker{
      let result;
      try{result=await this.executor({instance,step,lease});if(heartbeatError)throw heartbeatError;if(lease.fencingToken!==undefined&&typeof this.scheduler.assertCurrentAsync==='function')await this.scheduler.assertCurrentAsync(instance.workflowId,lease.leaseId,lease.fencingToken);}finally{clearInterval(heartbeat);}
      if(workerHeartbeatError){leaseLost=true;break;}
-     if(instance.cancelRequested){const from=instance.state;instance.cancelStep(step.id);instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
+     if((await this.refreshDurableCancellation(instance))||instance.cancelRequested){const from=instance.state;instance.cancelStep(step.id);if(instance.state!=='CANCELLED')instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
      const executionId=result?.execution?.executionId||result?.executionId||null;if(typeof executionId==='string'&&executionId)instance.metadata={...instance.metadata,taskId:instance.metadata.taskId||instance.workflowId,executionId};instance.markStepCompleted(step.id,result);this.emit('workflow.step.completed',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id,executionId});
     }catch(error){
      if(error?.code==='WORKFLOW_LEASE_NOT_OWNER'||error?.code==='WORKFLOW_LEASE_EXPIRED'||error?.code==='WORKFLOW_FENCING_REJECTED'){leaseLost=true;break;}
@@ -55,6 +55,19 @@ class AsyncWorkflowWorker{
    stopWorkerHeartbeat();
    try{await this.scheduler.releaseAsync(instance.workflowId,lease.leaseId);}catch(error){if(!leaseLost&&!['WORKFLOW_LEASE_NOT_OWNER','WORKFLOW_LEASE_EXPIRED'].includes(error?.code))throw error;}
   }
+ }
+ async refreshDurableCancellation(instance){
+  const repository=this.scheduler?.workflowRepository;
+  if(!repository||typeof repository.findById!=='function')return false;
+  const tenantId=this.tenantId||instance?.tenantId||this.scheduler?.tenantId||null;
+  const latest=await repository.findById(instance.workflowId,tenantId);
+  if(!latest)return false;
+  if(latest.cancelRequested||latest.state==='CANCELLED'||latest.metadata?.cancellationRequested){
+   if(typeof instance.requestCancel==='function')instance.requestCancel();
+   else instance.cancelRequested=true;
+   return true;
+  }
+  return false;
  }
  emit(type,payload){this.eventSink({eventId:crypto.randomUUID(),type,timestamp:new Date(this.now()).toISOString(),payload});}
  emitState(instance,from,to,lease){if(from===to)return;this.emit('workflow.state.changed',{workflowId:instance.workflowId,leaseId:lease.leaseId,from,to});}
