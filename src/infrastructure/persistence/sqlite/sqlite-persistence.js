@@ -305,9 +305,15 @@ class SqliteApprovalRepository {
       .map(row => this.mapRow(row))
       .filter(record => !record.used && (!record.expiresAt || now < Date.parse(record.expiresAt)));
   }  save(approval, { tenantId = null } = {}) {
-    if (tenantId && approval.tenantId !== tenantId && approval.metadata?.tenantId !== tenantId) throw new Error('Approval tenant mismatch');
-    this.db.run(`INSERT INTO approvals(approval_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata) VALUES (${SqliteDatabase.literal(approval.approvalId)},${SqliteDatabase.literal(approval.executionId)},${approval.step},${approval.planRevision},${SqliteDatabase.literal(approval.tool)},${SqliteDatabase.literal(approval.capability)},${SqliteDatabase.json(approval.scope)},${SqliteDatabase.literal(approval.issuedAt)},${SqliteDatabase.literal(approval.expiresAt)},${approval.used ? 1 : 0},${SqliteDatabase.literal(approval.usedAt || null)},${SqliteDatabase.json(approval.metadata)});`);
-    return { ...approval };
+    const effectiveTenant = approval.tenantId || approval.metadata?.tenantId || tenantId || 'local';
+    if (tenantId && effectiveTenant !== tenantId) throw new Error('Approval tenant mismatch');
+    const metadata = {
+      ...(approval.metadata || {}),
+      ...(approval.decision ? { decision: approval.decision } : {}),
+      tenantId: effectiveTenant
+    };
+    this.db.run(`INSERT INTO approvals(approval_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata) VALUES (${SqliteDatabase.literal(approval.approvalId)},${SqliteDatabase.literal(approval.executionId)},${approval.step},${approval.planRevision},${SqliteDatabase.literal(approval.tool)},${SqliteDatabase.literal(approval.capability)},${SqliteDatabase.json(approval.scope)},${SqliteDatabase.literal(approval.issuedAt)},${SqliteDatabase.literal(approval.expiresAt)},${approval.used ? 1 : 0},${SqliteDatabase.literal(approval.usedAt || null)},${SqliteDatabase.json(metadata)});`);
+    return { ...approval, tenantId: effectiveTenant, metadata };
   }
   findById(approvalId, { tenantId = null } = {}) {
     const rows=this.db.query(`SELECT * FROM approvals WHERE approval_id=${SqliteDatabase.literal(approvalId)} LIMIT 1;`);
