@@ -123,6 +123,13 @@ test('expired approval cannot be consumed after validation', async () => {
 
   now += 101;
   assert.equal(await service.consume(approval.approvalId), false);
+  await assert.rejects(
+    () => service.getApprovedForExecution({
+      approvalId: approval.approvalId,
+      executionId: 'exec-expiry'
+    }),
+    error => error.code === 'APPROVAL_EXPIRED' && error.approvalId === approval.approvalId
+  );
 });
 
 test('pending approvals expose bounded review summaries without exposing arbitrary metadata', async () => {
