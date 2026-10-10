@@ -207,15 +207,17 @@ class ApprovalRepository {
       if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) {
         throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
       }
-      if (record.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
-      if (!record.expiresAt || now >= Date.parse(record.expiresAt)) {
-        throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
-      }
+      // An exact replay of the immutable decision remains idempotent even
+      // after the approved operation consumed the challenge or its TTL elapsed.
       if (record.decision) {
         if (record.decision.status === decision.status && record.decision.actorId === decision.actorId) {
           return JSON.parse(JSON.stringify(record));
         }
         throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (record.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      if (!record.expiresAt || now >= Date.parse(record.expiresAt)) {
+        throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
       }
       records[approvalId] = { ...record, decision: { ...decision } };
       this.write(records);
