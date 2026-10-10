@@ -237,7 +237,11 @@ class MemoryService {
       goalId: event.goalId || context.goalId || null,
       decisionId: event.decisionId || context.decisionId || null,
       correlationId: event.correlationId || context.correlationId || null,
-      traceId: event.traceId || context.traceId || null
+      traceId: event.traceId || context.traceId || null,
+      // Stable logical operation identity lets async recovery prove whether
+      // this exact memory mutation committed with the memory/audit transaction.
+      operationId: event.operationId || context.operationId || null,
+      idempotencyKey: event.idempotencyKey || context.idempotencyKey || null
     });
   }
 
