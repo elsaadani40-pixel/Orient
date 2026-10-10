@@ -159,7 +159,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         });
         if (!result.ok) {
           authenticationOutcome = 'owner_login_failed';
-          const status = result.code === 'OWNER_LOGIN_RATE_LIMITED' ? 429 : 401;
+          const status = ['OWNER_LOGIN_RATE_LIMITED', 'OWNER_SESSION_LIMIT_REACHED'].includes(result.code) ? 429 : 401;
           sendJson(res, status, { ok: false, code: result.code, message: 'تعذر تسجيل الدخول.' });
           return;
         }
