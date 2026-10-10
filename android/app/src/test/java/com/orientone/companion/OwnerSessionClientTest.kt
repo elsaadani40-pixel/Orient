@@ -16,6 +16,7 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -33,11 +34,19 @@ class OwnerSessionClientTest {
         val executionRequests = AtomicInteger()
         val taskRequests = AtomicInteger()
         val logoutRequests = AtomicInteger()
+        val loginMethod = AtomicReference<String?>()
+        val loginOrigin = AtomicReference<String?>()
+        val executionCookie = AtomicReference<String?>()
+        val taskMethod = AtomicReference<String?>()
+        val taskCookie = AtomicReference<String?>()
+        val taskBody = AtomicReference<String?>()
+        val logoutCsrf = AtomicReference<String?>()
+        val logoutCookie = AtomicReference<String?>()
         val server = startServer { exchange ->
             when (exchange.requestURI.path) {
                 "/owner/login" -> {
-                    assertEquals("POST", exchange.requestMethod)
-                    assertTrue(exchange.requestHeaders.getFirst("Origin").startsWith("http://127.0.0.1:"))
+                    loginMethod.set(exchange.requestMethod)
+                    loginOrigin.set(exchange.requestHeaders.getFirst("Origin"))
                     respond(
                         exchange,
                         200,
@@ -46,20 +55,20 @@ class OwnerSessionClientTest {
                     )
                 }
                 "/executions" -> {
-                    assertTrue(exchange.requestHeaders.getFirst("Cookie").startsWith("orient_owner_session="))
+                    executionCookie.set(exchange.requestHeaders.getFirst("Cookie"))
                     executionRequests.incrementAndGet()
                     respond(exchange, 200, """{"executions":[]}""")
                 }
                 "/agent" -> {
-                    assertEquals("POST", exchange.requestMethod)
-                    assertTrue(exchange.requestHeaders.getFirst("Cookie").startsWith("orient_owner_session="))
-                    assertTrue(exchange.requestBody.bufferedReader().readText().contains("test task"))
+                    taskMethod.set(exchange.requestMethod)
+                    taskCookie.set(exchange.requestHeaders.getFirst("Cookie"))
+                    taskBody.set(exchange.requestBody.bufferedReader().readText())
                     taskRequests.incrementAndGet()
                     respond(exchange, 200, """{"status":"completed"}""")
                 }
                 "/owner/logout" -> {
-                    assertEquals("csrf-test-token", exchange.requestHeaders.getFirst("X-ORIENT-CSRF"))
-                    assertTrue(exchange.requestHeaders.getFirst("Cookie").startsWith("orient_owner_session="))
+                    logoutCsrf.set(exchange.requestHeaders.getFirst("X-ORIENT-CSRF"))
+                    logoutCookie.set(exchange.requestHeaders.getFirst("Cookie"))
                     logoutRequests.incrementAndGet()
                     respond(exchange, 200, """{"ok":true}""")
                 }
@@ -69,12 +78,20 @@ class OwnerSessionClientTest {
 
         try {
             val client = OwnerSessionClient(server.address.port)
-            assertTrue(withApiDiagnostics("login") { runBlocking { client.login("0123456789abcdef") } }.contains("успешно"))
+            assertTrue(withApiDiagnostics("login") { runBlocking { client.login("0123456789abcdef") } }.contains("بنجاح"))
             assertTrue(client.isAuthenticated)
             assertTrue(withApiDiagnostics("fetchExecutions") { runBlocking { client.fetchExecutions() } }.contains("executions"))
             assertTrue(withApiDiagnostics("executeTask") { runBlocking { client.executeTask("test task") } }.contains("completed"))
             withApiDiagnostics("logout") { runBlocking { client.logout() } }
 
+            assertEquals("POST", loginMethod.get())
+            assertTrue(loginOrigin.get()?.startsWith("http://127.0.0.1:") == true)
+            assertTrue(executionCookie.get()?.startsWith("orient_owner_session=") == true)
+            assertEquals("POST", taskMethod.get())
+            assertTrue(taskCookie.get()?.startsWith("orient_owner_session=") == true)
+            assertTrue(taskBody.get()?.contains("test task") == true)
+            assertEquals("csrf-test-token", logoutCsrf.get())
+            assertTrue(logoutCookie.get()?.startsWith("orient_owner_session=") == true)
             assertEquals(1, executionRequests.get())
             assertEquals(1, taskRequests.get())
             assertEquals(1, logoutRequests.get())
