@@ -74,3 +74,66 @@ test('WorkflowExecutionCoordinator rejects empty input before scheduling', async
   });
   assert.equal(scheduled, false);
 });
+
+test('WorkflowExecutionCoordinator accepts a durable workflow without executing it inline', async () => {
+  const AsyncWorkflowScheduler = require('../../../../src/core/workflow/async-workflow-scheduler');
+  const saved = new Map();
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-a',
+    workflowRepository: {
+      async save(instance) {
+        saved.set(instance.workflowId, instance.toJSON());
+        return instance.toJSON();
+      }
+    }
+  });
+  let executed = false;
+  const coordinator = new WorkflowExecutionCoordinator({
+    scheduler,
+    workflowRepository: {
+      async save(instance) {
+        saved.set(instance.workflowId, instance.toJSON());
+        return instance.toJSON();
+      }
+    },
+    tenantId: 'tenant-a',
+    userId: 'user-a',
+    workspaceId: 'workspace-a',
+    executeRequest: async () => {
+      executed = true;
+      return { ok: true };
+    }
+  });
+
+  const accepted = await coordinator.enqueue('prepare the report', {
+    workflowId: 'workflow-accepted-1',
+    priority: 3
+  });
+
+  assert.deepEqual(accepted, {
+    workflowId: 'workflow-accepted-1',
+    state: 'QUEUED',
+    tenantId: 'tenant-a',
+    createdAt: accepted.createdAt,
+    updatedAt: accepted.updatedAt
+  });
+  assert.equal(typeof accepted.createdAt, 'string');
+  assert.equal(typeof accepted.updatedAt, 'string');
+  assert.equal(executed, false);
+  assert.equal(scheduler.depth(), 1);
+  assert.equal(saved.get('workflow-accepted-1').state, 'QUEUED');
+});
+
+test('WorkflowExecutionCoordinator rejects durable acceptance with a synchronous scheduler', async () => {
+  const scheduler = new WorkflowScheduler({ tenantId: 'tenant-a' });
+  const coordinator = new WorkflowExecutionCoordinator({
+    scheduler,
+    tenantId: 'tenant-a',
+    executeRequest: async () => ({ ok: true })
+  });
+
+  await assert.rejects(
+    () => coordinator.enqueue('prepare the report'),
+    error => error?.code === 'ASYNC_WORKFLOW_SCHEDULER_REQUIRED'
+  );
+});
