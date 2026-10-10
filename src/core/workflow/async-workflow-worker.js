@@ -33,7 +33,7 @@ class AsyncWorkflowWorker{
      try{result=await this.executor({instance,step,lease});if(heartbeatError)throw heartbeatError;if(lease.fencingToken!==undefined&&typeof this.scheduler.assertCurrentAsync==='function')await this.scheduler.assertCurrentAsync(instance.workflowId,lease.leaseId,lease.fencingToken);}finally{clearInterval(heartbeat);}
      if(workerHeartbeatError){leaseLost=true;break;}
      if(instance.cancelRequested){const from=instance.state;instance.cancelStep(step.id);instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
-     instance.markStepCompleted(step.id,result);this.emit('workflow.step.completed',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id});
+     const executionId=result?.execution?.executionId||result?.executionId||null;if(typeof executionId==='string'&&executionId)instance.metadata={...instance.metadata,taskId:instance.metadata.taskId||instance.workflowId,executionId};instance.markStepCompleted(step.id,result);this.emit('workflow.step.completed',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id,executionId});
     }catch(error){
      if(error?.code==='WORKFLOW_LEASE_NOT_OWNER'||error?.code==='WORKFLOW_LEASE_EXPIRED'||error?.code==='WORKFLOW_FENCING_REJECTED'){leaseLost=true;break;}
      if(workerHeartbeatError){leaseLost=true;break;}
