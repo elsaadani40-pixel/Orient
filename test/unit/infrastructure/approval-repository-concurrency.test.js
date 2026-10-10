@@ -21,6 +21,8 @@ test('durable approval consume is atomic across processes', async () => {
     tool: 'danger.write',
     capability: 'external.write',
     scope: { target: 'x' },
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    decision: { status: 'approved', actorId: 'owner-test', decidedAt: new Date().toISOString() },
     used: false,
     tenantId: 'tenant-a',
     metadata: { tenantId: 'tenant-a' }
@@ -136,6 +138,35 @@ test('approval repository rejects valid JSON with an invalid root shape', () => 
     for (const invalidContent of ['[]', 'null', '"approval"', '42']) {
       fs.writeFileSync(file, invalidContent, 'utf8');
       assert.throws(() => repo.read(), /Approval storage root must be an object/);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('approval repository refuses to consume pending, rejected, expired, or malformed approvals', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-consume-gates-'));
+  const repo = new ApprovalRepository(path.join(dir, 'approvals.json'));
+  const now = Date.now();
+  const base = {
+    step: 1, planRevision: 1, tool: 'danger.write', capability: 'external.write',
+    used: false, tenantId: 'tenant-a', metadata: { tenantId: 'tenant-a' }
+  };
+  try {
+    const records = [
+      { ...base, approvalId: 'pending', executionId: 'e-pending', expiresAt: new Date(now + 60000).toISOString() },
+      { ...base, approvalId: 'rejected', executionId: 'e-rejected', expiresAt: new Date(now + 60000).toISOString(), decision: { status: 'rejected', actorId: 'owner', decidedAt: new Date(now).toISOString() } },
+      { ...base, approvalId: 'expired', executionId: 'e-expired', expiresAt: new Date(now - 1).toISOString(), decision: { status: 'approved', actorId: 'owner', decidedAt: new Date(now - 1000).toISOString() } },
+      { ...base, approvalId: 'malformed', executionId: 'e-malformed', expiresAt: 'not-a-date', decision: { status: 'approved', actorId: 'owner', decidedAt: new Date(now).toISOString() } }
+    ];
+    for (const record of records) await repo.save(record, { tenantId: 'tenant-a' });
+    const consumedAt = new Date(now).toISOString();
+    for (const record of records) {
+      assert.equal(await repo.consume(record.approvalId, consumedAt, 'tenant-a'), false, record.approvalId);
+    }
+    for (const record of records) {
+      assert.equal((await repo.findById(record.approvalId, { tenantId: 'tenant-a' })).used, false);
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
