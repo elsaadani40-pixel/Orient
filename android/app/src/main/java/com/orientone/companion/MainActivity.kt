@@ -58,13 +58,13 @@ private fun OrientCompanionApp() {
     var password by remember { mutableStateOf("") }
     var taskInput by remember { mutableStateOf("") }
     var resultText by remember { mutableStateOf("") }
-    var statusText by remember { mutableStateOf("أدخل كلمة مرور المالك للاتصال بخدمة ORIENT ONE المحلية.") }
+    var statusText by remember { mutableStateOf("أدخل كلمة مرور المالك للاتصال بخدمة ORIENT المحلية.") }
     var isBusy by remember { mutableStateOf(false) }
     var isAuthenticated by remember { mutableStateOf(false) }
     var client by remember { mutableStateOf<OwnerSessionClient?>(null) }
 
     fun handleFailure(error: Exception) {
-        statusText = error.message ?: "تعذر الاتصال بخدمة ORIENT ONE."
+        statusText = error.message ?: "تعذر الاتصال بخدمة ORIENT."
         if (error is OwnerApiException && error.statusCode == 401) {
             client?.clearSession()
             client = null
@@ -87,7 +87,7 @@ private fun OrientCompanionApp() {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    Text("ORIENT ONE", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("ORIENT", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
                     Text("المرافق التنفيذي", fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
@@ -120,7 +120,7 @@ private fun OrientCompanionApp() {
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text("تسجيل دخول المالك", fontSize = 19.sp, fontWeight = FontWeight.Bold)
                                 Text(
-                                    "يجب تشغيل ORIENT ONE على هذا الهاتف عبر Termux. لا يُرسل التطبيق كلمة المرور إلا إلى 127.0.0.1، ولا يحفظها أو يحفظ الجلسة على القرص.",
+                                    "يجب تشغيل ORIENT على هذا الهاتف عبر Termux. لا يُرسل التطبيق كلمة المرور إلا إلى 127.0.0.1، ولا يحفظها أو يحفظ الجلسة على القرص.",
                                     color = muted,
                                     fontSize = 13.sp
                                 )

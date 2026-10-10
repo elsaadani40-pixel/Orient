@@ -17,7 +17,7 @@ internal class OwnerApiException(
 ) : Exception(message)
 
 /**
- * Same-device client for the loopback-only ORIENT ONE service.
+ * Same-device client for the loopback-only ORIENT service.
  * Credentials and session material are intentionally held in memory only.
  */
 internal class OwnerSessionClient(
@@ -70,7 +70,7 @@ internal class OwnerSessionClient(
         sessionCookie = cookie
         csrfToken = token
         sessionExpiresAt = expiresAt
-        "تم تسجيل الدخول إلى ORIENT ONE بنجاح."
+        "تم تسجيل الدخول إلى ORIENT بنجاح."
     }
 
     suspend fun fetchExecutions(): String = withContext(Dispatchers.IO) {
@@ -169,7 +169,7 @@ internal class OwnerSessionClient(
                 throw OwnerApiException(
                     statusCode = status,
                     errorCode = error.optString("code", "HTTP_$status"),
-                    message = error.optString("message").ifBlank { "تعذر الاتصال بخدمة ORIENT ONE (HTTP $status)." }
+                    message = error.optString("message").ifBlank { "تعذر الاتصال بخدمة ORIENT (HTTP $status)." }
                 )
             }
             return response
