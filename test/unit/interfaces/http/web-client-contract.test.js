@@ -93,3 +93,23 @@ test('owner-session guard is evaluated before operational API dispatch', () => {
   const guardBody = server.slice(guard, guardEnd);
   assert.match(guardBody, /if \(!ownerSession\)[\s\S]*OWNER_AUTH_REQUIRED[\s\S]*return;/);
 });
+
+test('execution status, event-stream, approval, cancel, and resume routes stay behind owner authentication', () => {
+  const guard = server.indexOf('if (ownerAuth)');
+  assert.ok(guard >= 0, 'owner-session guard must exist');
+  const protectedRouteMarkers = [
+    "const v1TaskPrefix = '/api/v1/tasks/'",
+    "const executionEventsMatch =",
+    "requestUrl.pathname === '/executions'",
+    "requestUrl.pathname === '/approvals/pending'",
+    "const executionStatusMatch =",
+    "const executionApprovalsMatch =",
+    "const executionCancelMatch =",
+    "const executionResumeMatch =",
+    "requestUrl.pathname === '/agent'"
+  ];
+  for (const marker of protectedRouteMarkers) {
+    const routeIndex = server.indexOf(marker);
+    assert.ok(routeIndex > guard, `protected route marker ${marker} must remain after owner authentication`);
+  }
+});
