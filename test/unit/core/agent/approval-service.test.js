@@ -153,3 +153,77 @@ test('pending approvals expose bounded review summaries without exposing arbitra
   const forExecution = await service.listForExecution({ executionId: 'exec-review', tenantId: 'tenant-review' });
   assert.equal(forExecution[0].summary.kind, 'file_change');
 });
+
+test('approval decisions require authorization and persist one immutable tenant-scoped decision', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const ApprovalRepository = require('../../../../src/infrastructure/persistence/json/approval.repository');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-decision-'));
+  try {
+    const repository = new ApprovalRepository(path.join(dir, 'approvals.json'));
+    let authorized = true;
+    const service = new ApprovalService({
+      repository,
+      tenantId: 'tenant-a',
+      clock: () => 1000,
+      decisionAuthorizer: async ({ actorId, tenantId }) => authorized && actorId === 'owner-a' && tenantId === 'tenant-a'
+    });
+    const approval = await service.issue({
+      executionId: 'exec-decision',
+      step: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      tenantId: 'tenant-a',
+      ttlMs: 10000
+    });
+
+    authorized = false;
+    await assert.rejects(
+      () => service.decide({ approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_DECISION_FORBIDDEN'
+    );
+    assert.equal((await repository.findById(approval.approvalId, { tenantId: 'tenant-a' })).decision, undefined);
+
+    authorized = true;
+    const decided = await service.decide({
+      approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+    });
+    assert.equal(decided.decision.status, 'approved');
+    assert.equal(decided.decision.actorId, 'owner-a');
+
+    const replay = await service.decide({
+      approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+    });
+    assert.equal(replay.decision.status, 'approved');
+    assert.equal(replay.idempotent, true);
+
+    await assert.rejects(
+      () => service.decide({ approvalId: approval.approvalId, decision: 'rejected', actorId: 'owner-a', tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_DECISION_CONFLICT'
+    );
+    await assert.rejects(
+      () => service.decide({ approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-b', tenantId: 'tenant-b' }),
+      error => error.code === 'APPROVAL_NOT_FOUND' || error.code === 'APPROVAL_TENANT_MISMATCH'
+    );
+
+    const persisted = await repository.findById(approval.approvalId, { tenantId: 'tenant-a' });
+    assert.equal(persisted.decision.status, 'approved');
+    assert.equal(persisted.decision.actorId, 'owner-a');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('approval decision fails closed when no decision authorizer is configured', async () => {
+  const service = new ApprovalService({ tenantId: 'tenant-a', clock: () => 1000 });
+  const approval = await service.issue({
+    executionId: 'exec-no-authorizer', step: 1, tool: 'danger.write',
+    capability: 'external.write', tenantId: 'tenant-a', ttlMs: 10000
+  });
+  await assert.rejects(
+    () => service.decide({ approvalId: approval.approvalId, decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
+    error => error.code === 'APPROVAL_DECISION_FORBIDDEN'
+  );
+});
+
