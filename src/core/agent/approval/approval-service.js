@@ -266,6 +266,7 @@ class ApprovalService {
       : this.approvals.get(approvalId);
     if (!stored || stored.used) return false;
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return false;
+    if (stored.decision?.status !== 'approved') return false;
     if (isApprovalExpired(stored.expiresAt, this.clock())) return false;
     const usedAt = new Date(this.clock()).toISOString();
     if (this.repository?.consume) {
