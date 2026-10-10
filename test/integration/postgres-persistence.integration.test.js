@@ -489,6 +489,40 @@ test('PostgreSQL approval consumption is single-use under concurrency', async ()
   await pool.query('DELETE FROM approvals WHERE approval_id=$1 AND tenant_id=$2', [approvalId, 'tenant-approval']);
 });
 
+test('PostgreSQL workflow repository resolves approval-blocked executions by tenant', async () => {
+  const WorkflowDefinition = require('../../src/core/workflow/workflow-definition');
+  const WorkflowInstance = require('../../src/core/workflow/workflow-instance');
+  const workflowId = 'approval-workflow-map-' + Date.now();
+  const executionId = 'approval-execution-map-' + Date.now();
+  const tenantId = 'tenant-approval-map';
+  const definition = new WorkflowDefinition({
+    id: 'approval-mapping',
+    version: 1,
+    name: 'Approval mapping',
+    steps: [{ id: 'agent-runtime', agent: 'ORIENT_RUNTIME' }]
+  });
+  const instance = new WorkflowInstance({
+    definition,
+    workflowId,
+    tenantId,
+    input: { text: 'guarded operation' }
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  instance.transition('WAITING');
+  instance.metadata = { approvalBlocked: true, approvalExecutionId: executionId, approvalId: 'approval-map' };
+  await persistence.workflows.save(instance, tenantId);
+
+  try {
+    const found = await persistence.workflows.findByApprovalExecutionId({ executionId, tenantId });
+    assert.equal(found.workflowId, workflowId);
+    assert.equal(found.metadata.approvalId, 'approval-map');
+    assert.equal(await persistence.workflows.findByApprovalExecutionId({ executionId, tenantId: 'tenant-other' }), null);
+  } finally {
+    await persistence.workflows.delete(workflowId, tenantId);
+  }
+});
+
 test('PostgreSQL approval authorization is durable, tenant-scoped and replay-safe', async () => {
   const mapper = new CapabilityMapper({
     mappings: { 'danger.write': 'external.write' }
