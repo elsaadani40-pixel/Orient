@@ -37,6 +37,16 @@ class AsyncWorkflowWorker{
     }catch(error){
      if(error?.code==='WORKFLOW_LEASE_NOT_OWNER'||error?.code==='WORKFLOW_LEASE_EXPIRED'||error?.code==='WORKFLOW_FENCING_REJECTED'){leaseLost=true;break;}
      if(workerHeartbeatError){leaseLost=true;break;}
+     if(error?.code==='APPROVAL_REQUIRED'){
+      // Approval is a durable pause, not a failed step or a retryable tool error.
+      // Keep the step pending and block recovery until an explicit resume path exists.
+      instance.resetStepForRetry(step.id);
+      instance.metadata={...instance.metadata,approvalBlocked:true,approvalExecutionId:error.executionContext?.executionId||null,approvalId:error.executionContext?.approvalId||null,approvalRequiredAt:new Date(this.now()).toISOString()};
+      const from=instance.state;if(instance.state!=='WAITING')instance.transition('WAITING');
+      this.emit('workflow.approval.required',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id,executionId:instance.metadata.approvalExecutionId,approvalId:instance.metadata.approvalId});
+      this.emitState(instance,from,instance.state,lease);
+      break;
+     }
      instance.markStepFailed(step.id,error);instance.metadata.failedStepId=step.id;const retried=this.retryClassifier(error,{instance,step,lease})&&await this.scheduler.retryAsync(instance,{error,priority:instance.metadata.priority||0});if(!retried){const from=instance.state;if(instance.state!=='FAILED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);instance.metadata.failureCode=error?.code||'WORKFLOW_STEP_FAILED';}else if(instance.state!=='RUNNING'){this.emitState(instance,'RUNNING',instance.state,lease);if(instance.state==='QUEUED')this.emitState(instance,'WAITING','QUEUED',lease);}break;
     }
    }
