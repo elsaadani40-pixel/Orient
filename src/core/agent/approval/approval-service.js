@@ -222,7 +222,7 @@ class ApprovalService {
     };
     let updated;
     if (this.repository?.recordDecision) {
-      updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId, this.clock());
+      updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId, this.clock);
     } else {
       const current = stored.decision || null;
       if (current && (current.status !== decision || current.actorId !== actorId)) {
@@ -270,7 +270,7 @@ class ApprovalService {
     if (isApprovalExpired(stored.expiresAt, this.clock())) return false;
     const usedAt = new Date(this.clock()).toISOString();
     if (this.repository?.consume) {
-      const consumed = await this.repository.consume(approvalId, usedAt, tenantId);
+      const consumed = await this.repository.consume(approvalId, usedAt, tenantId, this.clock);
       if (!consumed) return false;
     }
     stored.used = true;
