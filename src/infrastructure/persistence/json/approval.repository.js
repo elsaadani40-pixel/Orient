@@ -216,8 +216,9 @@ class ApprovalRepository {
         throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
       }
       if (record.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
-      if (!record.expiresAt || now >= Date.parse(record.expiresAt)) {
-        throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+      const expiresAt = typeof record.expiresAt === 'string' ? Date.parse(record.expiresAt) : NaN;
+      if (!Number.isFinite(expiresAt) || now >= expiresAt) {
+        throw Object.assign(new Error('Approval expired or has an invalid expiry timestamp'), { code: 'APPROVAL_EXPIRED' });
       }
       records[approvalId] = { ...record, decision: { ...decision } };
       this.write(records);
