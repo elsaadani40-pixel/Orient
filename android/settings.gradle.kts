@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "OrientCompanion"
+rootProject.name = "ORIENT"
 include(":app")
