@@ -240,3 +240,83 @@ test('AsyncWorkflowWorker refuses to commit a step after fencing is lost during 
   assert.equal(assertCalls, 2, 'fencing must be checked before and after the side effect');
   assert.equal(released, true);
 });
+
+
+test('AsyncWorkflowWorker observes durable cancellation requested by another scheduler during a step', async () => {
+  let durableCancellationRequested = false;
+  let completed = false;
+  let released = false;
+  let announceStarted;
+  let finishStep;
+  const started = new Promise(resolve => { announceStarted = resolve; });
+  const gate = new Promise(resolve => { finishStep = resolve; });
+  const step = { id: 'step-remote-cancel' };
+  const instance = {
+    workflowId: 'workflow-remote-cancel',
+    tenantId: 'tenant-remote-cancel',
+    state: 'RUNNING',
+    cancelRequested: false,
+    deadlineAt: null,
+    metadata: {},
+    definition: { steps: [step] },
+    steps: { [step.id]: { state: 'READY' } },
+    readySteps() { return completed || this.steps[step.id].state === 'CANCELLED' ? [] : [step]; },
+    markStepRunning(id) { this.steps[id].state = 'RUNNING'; },
+    markStepCompleted(id) { completed = true; this.steps[id].state = 'COMPLETED'; },
+    cancelStep(id) { this.steps[id].state = 'CANCELLED'; },
+    requestCancel() { this.cancelRequested = true; },
+    markStepFailed() { throw new Error('unexpected failure'); },
+    transition(state) { this.state = state; }
+  };
+  const lease = {
+    workflowId: instance.workflowId,
+    leaseId: 'lease-remote-cancel',
+    workerId: 'worker-remote-cancel',
+    cancelled: false,
+    deadlineAt: null,
+    instance
+  };
+  const scheduler = {
+    tenantId: instance.tenantId,
+    leaseDurationMs: 3000,
+    workflowRepository: {
+      async findById(workflowId, tenantId) {
+        assert.equal(workflowId, instance.workflowId);
+        assert.equal(tenantId, instance.tenantId);
+        return {
+          workflowId,
+          tenantId,
+          state: 'RUNNING',
+          cancelRequested: durableCancellationRequested,
+          metadata: {}
+        };
+      }
+    },
+    async leaseAsync() { return lease; },
+    async renewAsync() { return lease; },
+    async persistAsync() {},
+    async releaseAsync() { released = true; return true; },
+    async retryAsync() { throw new Error('unexpected retry'); }
+  };
+  const worker = new AsyncWorkflowWorker({
+    scheduler,
+    workerId: 'worker-remote-cancel',
+    tenantId: instance.tenantId,
+    executor: async () => {
+      announceStarted();
+      await gate;
+      return { externalSideEffect: true };
+    }
+  });
+
+  const ticking = worker.tick();
+  await started;
+  durableCancellationRequested = true;
+  finishStep();
+  const result = await ticking;
+
+  assert.equal(result.state, 'CANCELLED');
+  assert.equal(result.steps[step.id].state, 'CANCELLED');
+  assert.equal(completed, false, 'a remotely cancelled step must not be committed as completed');
+  assert.equal(released, true);
+});
