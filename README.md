@@ -1,14 +1,14 @@
-# ORIENT ONE
+# ORIENT
 
 **An offline-first, policy-governed personal AI runtime — under active development.**
 
-ORIENT ONE is being built around a canonical runtime that coordinates planning, agent invocation, capability authorization, tool execution, durable state, observability, and recovery. The project prioritizes local-first operation, explicit permissions, human approval for consequential actions, and verifiable behavior over autonomous actions without boundaries.
+ORIENT is being built around a canonical runtime that coordinates planning, agent invocation, capability authorization, tool execution, durable state, observability, and recovery. The project prioritizes local-first operation, explicit permissions, human approval for consequential actions, and verifiable behavior over autonomous actions without boundaries.
 
 > **Project status:** active engineering / pre-release. This repository is not a claim that every planned capability is production-ready. Read the source, tests, and architecture notes to distinguish implemented behavior from future work.
 
 ## Product direction
 
-ORIENT ONE is intended to become one coherent personal AI operating system across Android phones, tablets, and computers—not a collection of device-specific demos. Its product contract, cross-device architecture, research-to-plan-to-verify lifecycle, validated learning model, security boundaries, and staged delivery roadmap are documented in [`docs/product/ORIENT-ONE-PRODUCT-CONTRACT.md`](docs/product/ORIENT-ONE-PRODUCT-CONTRACT.md). This is a target contract, not a claim that all listed capabilities already exist.
+ORIENT is intended to become one coherent personal AI operating system across Android phones, tablets, and computers—not a collection of device-specific demos. Its product contract, cross-device architecture, research-to-plan-to-verify lifecycle, validated learning model, security boundaries, and staged delivery roadmap are documented in [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md). This is a target contract, not a claim that all listed capabilities already exist.
 
 ## Current engineering focus
 
@@ -50,7 +50,7 @@ Open `http://127.0.0.1:8080` for the local memory interface or `http://127.0.0.1
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/agent \\
   -H 'Content-Type: application/json' \\
-  -d '{"input":"احفظ أنني أختبر ORIENT ONE"}'
+  -d '{"input":"احفظ أنني أختبر ORIENT"}'
 ```
 
 The default planner is deterministic and does not require a paid model API. The example uses local JSON persistence. Check the returned execution status and verify the saved memory in the local interface; do not treat an HTTP response alone as proof that every future tool or integration is available.
