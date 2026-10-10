@@ -300,7 +300,7 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
     decisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId)
   });
   const executionId = 'execution-http-real-resume';
-  const workflowId = 'workflow-http-real-resume';
+  let workflowId = null;
   const plan = {
     intent: 'resume.approved.operation',
     confidence: 1,
@@ -381,23 +381,6 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
       agentOrchestrator
     });
     await runtimeBeforeRestart.shutdown();
-    const created = runtimeBeforeRestart.workflowExecutionCoordinator.createInstance(
-      'perform the owner-approved operation',
-      { workflowId }
-    );
-    const workflow = created.instance;
-    workflow.transition('QUEUED');
-    workflow.transition('RUNNING');
-    workflow.transition('WAITING');
-    workflow.metadata = {
-      ...workflow.metadata,
-      taskId: workflowId,
-      approvalBlocked: true,
-      approvalExecutionId: executionId,
-      approvalId: issued.approvalId
-    };
-    await persistence.workflows.save(workflow, TENANT_ID);
-
     const approvalServiceAfterRestart = new ApprovalService({
       repository: persistence.approvals,
       tenantId: TENANT_ID,
@@ -428,19 +411,20 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
         };
       }
     };
+    const asyncScheduler = createScheduler(persistence);
     runtimeAfterRestart = new (require('../../src/core/runtime/orient-runtime'))({
       tenantId: TENANT_ID,
       userId: 'owner-user',
       workspaceId: 'owner-workspace',
       persistence,
+      workflowScheduler: asyncScheduler,
       approvalService: approvalServiceAfterRestart,
       approvalDecisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId),
       authorizationService,
       toolRegistry: makeToolRegistry(),
       agentOrchestrator
     });
-    const agentService = new AgentService(runtimeAfterRestart);
-    server = createServer({ agentRoutes: createAgentRoutes(agentService), ownerAuth });
+    const agentService = new AgentService(runtimeAfterRestart, { taskAcceptanceMode: 'async' });    server = createServer({ agentRoutes: createAgentRoutes(agentService), ownerAuth });
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(0, '127.0.0.1', resolve);
@@ -460,6 +444,46 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
       'X-ORIENT-CSRF': loginPayload.csrfToken
     };
 
+    const acceptedTaskResponse = await request(origin, '/api/v1/tasks', {
+      method: 'POST',
+      headers: { ...ownerHeaders, 'Idempotency-Key': 'real-runtime-approval-task-0001' },
+      body: { goal: 'perform the owner-approved operation' }
+    });
+    const acceptedTaskText = await acceptedTaskResponse.text();
+    assert.equal(acceptedTaskResponse.status, 201, 'public async task acceptance failed: ' + acceptedTaskText);
+    const acceptedTask = JSON.parse(acceptedTaskText).task;
+    workflowId = acceptedTask.id;
+    assert.equal(acceptedTask.workflowId, workflowId);
+    assert.equal(acceptedTask.status, 'queued');
+
+    // Simulate the worker's durable approval pause after public task acceptance.
+    const created = runtimeAfterRestart.workflowExecutionCoordinator.createInstance(
+      'perform the owner-approved operation',
+      { workflowId }
+    );
+    const workflow = created.instance;
+    workflow.transition('QUEUED');
+    workflow.transition('RUNNING');
+    workflow.transition('WAITING');
+    workflow.metadata = {
+      ...workflow.metadata,
+      taskId: workflowId,
+      approvalBlocked: true,
+      approvalExecutionId: executionId,
+      approvalId: issued.approvalId
+    };
+    await persistence.workflows.save(workflow, TENANT_ID);
+
+    const waitingTaskResponse = await request(origin, '/api/v1/tasks/' + encodeURIComponent(workflowId), {
+      headers: ownerHeaders
+    });
+    assert.equal(waitingTaskResponse.status, 200);
+    const waitingTask = (await waitingTaskResponse.json()).task;
+    assert.equal(waitingTask.id, workflowId);
+    assert.equal(waitingTask.status, 'waiting');
+    assert.equal(waitingTask.executionId, executionId);
+    assert.equal(waitingTask.approvalRequired, true);
+
     const resumeResponse = await request(
       origin,
       '/owner/executions/' + encodeURIComponent(executionId) + '/resume',
@@ -474,6 +498,15 @@ test('owner HTTP approval resume uses reconstructed real Runtime and executes th
     const payload = JSON.parse(resumeText);
     assert.equal(payload.execution.status, 'completed');
     assert.equal(sideEffects, 1);
+
+    const completedTaskResponse = await request(origin, '/api/v1/tasks/' + encodeURIComponent(workflowId), {
+      headers: ownerHeaders
+    });
+    assert.equal(completedTaskResponse.status, 200);
+    const completedTask = (await completedTaskResponse.json()).task;
+    assert.equal(completedTask.id, workflowId);
+    assert.equal(completedTask.status, 'completed');
+    assert.equal(completedTask.approvalRequired, false);
 
     const storedApproval = await persistence.approvals.findById(issued.approvalId, { tenantId: TENANT_ID });
     assert.equal(storedApproval.decision.status, 'approved');
