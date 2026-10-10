@@ -185,6 +185,7 @@ test('runtime resumes from the durable checkpoint without re-running completed s
 test('expired approval decision cancels the matching execution and reconciles its workflow', async () => {
   const calls = [];
   const runtime = {
+    isCurrentApprovalChallenge: OrientRuntime.prototype.isCurrentApprovalChallenge,
     tenantId: 'tenant-a',
     approvalService: {
       async decide() {
@@ -233,6 +234,7 @@ test('runtime cancels and reconciles an approval that expires after decision but
     executionId: 'execution-race'
   });
   const runtime = {
+    isCurrentApprovalChallenge: OrientRuntime.prototype.isCurrentApprovalChallenge,
     tenantId: 'tenant-a',
     requestExecutionCoordinator: {
       async resume(executionId) {
@@ -277,6 +279,7 @@ test('expired stale approval does not cancel a workflow waiting on a newer chall
     executionId: 'execution-stale'
   });
   const runtime = {
+    isCurrentApprovalChallenge: OrientRuntime.prototype.isCurrentApprovalChallenge,
     tenantId: 'tenant-a',
     approvalService: { async decide() { throw expired; } },
     requestExecutionCoordinator: { async resume() { throw expired; } },
