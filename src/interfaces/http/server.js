@@ -315,6 +315,18 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       const v1TaskMatch = v1TaskId && /^[A-Za-z0-9_-]{1,200}$/.test(v1TaskId)
         ? [requestUrl.pathname, v1TaskId]
         : null;
+      const v1TaskEventsSuffix = '/events';
+      const v1TaskEventsId = v1TaskId.endsWith(v1TaskEventsSuffix)
+        ? v1TaskId.slice(0, -v1TaskEventsSuffix.length)
+        : '';
+      const v1TaskEventsMatch = v1TaskEventsId && /^[A-Za-z0-9_-]{1,200}$/.test(v1TaskEventsId)
+        ? v1TaskEventsId
+        : null;
+      if (req.method === 'GET' && v1TaskEventsMatch) {
+        await agentRoutes.taskEvents(req, res, v1TaskEventsMatch);
+        return;
+      }
+
       if (req.method === 'GET' && v1TaskMatch) {
         await agentRoutes.task(req, res, v1TaskMatch[1]);
         return;
