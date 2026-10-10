@@ -201,7 +201,7 @@ class ApprovalService {
     };
     let updated;
     if (this.repository?.recordDecision) {
-      updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId);
+      updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId, this.clock());
     } else {
       const current = stored.decision || null;
       if (current && (current.status !== decision || current.actorId !== actorId)) {
@@ -216,7 +216,7 @@ class ApprovalService {
       executionId: updated.executionId,
       tenantId: updated.tenantId || tenantId || null,
       decision: { ...updated.decision },
-      idempotent: Boolean(updated.decision?.decidedAt !== decisionRecord.decidedAt)
+      idempotent: Boolean(stored.decision)
     };
   }
 
