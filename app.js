@@ -297,7 +297,13 @@ const runtime =
     maxToolInputChars: config.maxToolInputChars,
     agentRegistry,
     agentInvocationService,
-    capabilityGovernance
+    capabilityGovernance,
+    approvalDecisionAuthorizer: ({ actorId }) => Boolean(
+      typeof actorId === 'string' &&
+      [...ownerAuthService.sessions.values()].some(session =>
+        session.id === actorId && session.expiresAt > Date.now()
+      )
+    )
   });
 
 const agentService =
