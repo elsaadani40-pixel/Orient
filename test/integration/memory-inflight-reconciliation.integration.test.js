@@ -65,7 +65,7 @@ async function runInFlightMutation(mode) {
       memoryId = seeded.id;
     }
 
-    const root = path.resolve(__dirname, '../../..');
+    const root = path.resolve(__dirname, '../..');
     const script = [
       'const fs = require("node:fs");',
       'const path = require("node:path");',
