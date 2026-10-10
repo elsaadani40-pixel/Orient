@@ -44,6 +44,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null }) {
       req.url,
       'http://localhost'
     );
+    let authenticationOutcome = 'not_evaluated';
 
     res.setHeader('X-Request-ID', requestId);
     res.on('finish', () => {
@@ -55,7 +56,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null }) {
         pathname: requestUrl.pathname,
         statusCode: res.statusCode,
         userAgent: req.headers['user-agent'],
-        durationMs: Date.now() - requestStartedAt
+        durationMs: Date.now() - requestStartedAt,
+        authenticationOutcome
       });
       Promise.resolve(accessAudit.record(event)).catch(() => {
         logger.error('Access audit write failed', { code: 'ACCESS_AUDIT_WRITE_FAILED' });
