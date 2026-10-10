@@ -21,7 +21,7 @@ Open `http://127.0.0.1:8080/owner` (change the port if `PORT` is configured). Af
 - The browser cookie is `HttpOnly`, `SameSite=Strict`, scoped to `Path=/`, and expires after 30 minutes. A `Secure` attribute is added when the server socket is HTTPS.
 - Login/logout enforce same-origin checks; logout also requires the session CSRF token.
 - Operational HTTP routes require an authenticated owner session when the production composition is used. Mutating browser requests from a different origin are rejected.
-- Sessions and login-failure counters are currently in memory. Restarting the process invalidates active sessions and resets the rate-limit counters.
+- At most 64 active sessions are allowed by default; expired sessions are pruned before new login and during authentication. Sessions and login-failure counters are currently in memory. Restarting the process invalidates active sessions and resets the rate-limit counters.
 
 ## Access audit scope
 
