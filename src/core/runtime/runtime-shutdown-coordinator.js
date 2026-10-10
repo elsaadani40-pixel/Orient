@@ -41,8 +41,6 @@ class RuntimeShutdownCoordinator {
       }
     };
 
-    await runStage('event-subscriber', () => this.eventStoreSubscriber?.stop?.());
-
     // Stop accepting requests before draining workers, so no new task can race
     // with shutdown. Existing requests finish before workers are stopped.
     await runStage('http-server', () => this.closeServer());
@@ -56,6 +54,10 @@ class RuntimeShutdownCoordinator {
     });
 
     await runStage('runtime', () => this.runtime.shutdown(runtimeOptions));
+
+    // Keep event delivery alive while HTTP requests, workers, and Runtime are
+    // still able to emit events; stop the subscriber before closing persistence.
+    await runStage('event-subscriber', () => this.eventStoreSubscriber?.stop?.());
 
     await runStage('persistence', async () => {
       if (typeof this.persistenceRuntime?.close === 'function') {
