@@ -102,6 +102,33 @@ test('approved execution reconciles its blocked workflow to a durable completed 
   }
 });
 
+test('expired approval terminalizes only the workflow carrying that exact challenge', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-workflow-approval-expire-'));
+  try {
+    const { repository, coordinator } = createCoordinator(root);
+    await saveApprovalBlockedWorkflow(repository, {
+      workflowId: 'workflow-approval-expire',
+      executionId: 'execution-approval-expire',
+      approvalId: 'approval-expired'
+    });
+
+    assert.equal(await coordinator.expireApprovalWorkflow('execution-approval-expire', 'wrong-approval'), false);
+    assert.equal((await repository.findById('workflow-approval-expire', 'tenant-a')).metadata.approvalBlocked, true);
+
+    const expired = await coordinator.expireApprovalWorkflow('execution-approval-expire', 'approval-expired');
+    assert.equal(expired.state, WorkflowInstance.STATES.CANCELLED);
+    assert.equal(expired.metadata.approvalBlocked, false);
+    assert.equal(expired.metadata.approvalDecisionStatus, 'expired');
+    assert.equal(expired.metadata.cancellationReason, 'approval_expired');
+
+    const persisted = await repository.findById('workflow-approval-expire', 'tenant-a');
+    assert.equal(persisted.state, WorkflowInstance.STATES.CANCELLED);
+    assert.equal(persisted.metadata.approvalDecisionStatus, 'expired');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('approval challenge refresh and rejection update the same tenant-scoped workflow', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-workflow-approval-reject-'));
   try {
