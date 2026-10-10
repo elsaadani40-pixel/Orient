@@ -151,6 +151,20 @@ class MemoryAuditRepository {
       (!scope || event.scope === scope || (!event.scope && scope === 'personal'))
     );
   }
+
+  // Operation receipts are derived from the same durable audit file that is
+  // committed/rolled back with the memory store by MemoryTransactionCoordinator.
+  // Always scope by tenant; operation IDs are not an authorization boundary.
+  findByOperationId(operationId, tenantId = 'local', scope = null) {
+    if (typeof operationId !== 'string' || !operationId.trim()) {
+      throw new TypeError('operationId is required');
+    }
+    return this.read().filter(event =>
+      event.operationId === operationId &&
+      event.tenantId === tenantId &&
+      (!scope || event.scope === scope || (!event.scope && scope === 'personal'))
+    );
+  }
 }
 
 module.exports = MemoryAuditRepository;
