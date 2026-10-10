@@ -278,3 +278,71 @@ test('v1 task creation rejects malformed JSON before calling the service', async
     error => error.code === 'INVALID_JSON'
   );
 });
+
+
+test('POST v1 task creation requires the owner session and same-origin request', async t => {
+  let created = 0;
+  const server = createServer({
+    memoryRoutes: { home() {}, add() {}, delete() {} },
+    agentRoutes: {
+      async createTask(_req, res, body) {
+        created += 1;
+        const payload = JSON.parse(body);
+        assert.equal(payload.goal, 'authorized task');
+        res.writeHead(201, { 'Content-Type': 'application/json', Location: '/api/v1/tasks/exec-created' });
+        res.end(JSON.stringify({ apiVersion: 'v1', task: { id: 'exec-created' }, replayed: false }));
+      }
+    },
+    ownerAuth: {
+      enabled: true,
+      authenticate(token) {
+        return token === 'valid-session'
+          ? { sessionId: 'session-1', csrfToken: 'csrf-1', expiresAt: Date.now() + 60000 }
+          : null;
+      }
+    }
+  });
+
+  t.after(async () => {
+    if (server.listening) {
+      await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const payload = JSON.stringify({ goal: 'authorized task', idempotencyKey: 'api-key-0001' });
+
+  const unauthenticated = await fetch(`${origin}/api/v1/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: payload
+  });
+  assert.equal(unauthenticated.status, 401);
+
+  const wrongOrigin = await fetch(`${origin}/api/v1/tasks`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'http://attacker.invalid',
+      Cookie: 'orient_owner_session=valid-session'
+    },
+    body: payload
+  });
+  assert.equal(wrongOrigin.status, 403);
+  assert.equal(created, 0);
+
+  const authorized = await fetch(`${origin}/api/v1/tasks`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: origin,
+      Cookie: 'orient_owner_session=valid-session'
+    },
+    body: payload
+  });
+  assert.equal(authorized.status, 201);
+  assert.equal((await authorized.json()).task.id, 'exec-created');
+  assert.equal(created, 1);
+});
