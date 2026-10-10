@@ -35,3 +35,24 @@ test('JSON audit repository persists ordered records and resumes the hash chain'
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('repository rejects tampered audit records instead of extending a broken chain', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-audit-tamper-'));
+  const file = path.join(dir, 'events.jsonl');
+  try {
+    const repository = new JsonAccessAuditRepository(file);
+    const event = createAccessAuditEvent({ requestId: 'original', pathname: '/', method: 'GET', statusCode: 200 });
+    await repository.record(event);
+    const record = JSON.parse(await fs.readFile(file, 'utf8'));
+    record.sourceIp = '203.0.113.99';
+    await fs.writeFile(file, JSON.stringify(record) + '\\n', 'utf8');
+
+    const reopened = new JsonAccessAuditRepository(file);
+    await assert.rejects(
+      () => reopened.initialize(),
+      error => error.code === 'ACCESS_AUDIT_INTEGRITY_FAILED'
+    );
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
