@@ -810,6 +810,9 @@ class AgentLoop {
                 planRevision,
                 tool: step.tool,
                 record: existing,
+                tenantId: operationTenantId,
+                agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
+                memoryScope: step.memoryScope || runtimeContext.memoryScope || 'personal',
                 context
               }
             );
