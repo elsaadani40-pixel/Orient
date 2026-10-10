@@ -846,75 +846,7 @@ class PostgresApprovalRepository {
     const nowIso = new Date(now).toISOString();
     const values = [JSON.stringify(decision), nowIso, approvalId];
     let tenantClause = '';
-    if (tenantId) { values.push(tenantId); tenantClause = ' AND tenant_id=
-    const result = await this.db.query(
-      tenantId
-        ? 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND tenant_id=$3 AND used=FALSE AND expires_at>$1'
-        : 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND used=FALSE AND expires_at>$1',
-      tenantId ? [usedAt, approvalId, tenantId] : [usedAt, approvalId]
-    );
-    return result.rowCount === 1;
-  }
-
-  async count({ tenantId = null } = {}) {
-    const result = tenantId
-      ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])
-      : await this.db.query('SELECT COUNT(*)::int AS count FROM approvals');
-    return Number(result.rows[0].count);
-  }
-}
-
-class PostgresPersistence {
-  constructor({ pool, schema } = {}) {
-    this.isAsync = true;
-    this.db = pool instanceof PostgresDatabase ? pool : new PostgresDatabase({ pool, schema });
-    this.executions = new PostgresExecutionRepository(this.db);
-    this.events = new PostgresEventRepository(this.db);
-    this.idempotency = new PostgresIdempotencyRepository(this.db);
-    this.checkpoints = new PostgresCheckpointRepository(this.db);
-    this.workers = new PostgresWorkerRegistryRepository(this.db);
-    this.workflows = new PostgresWorkflowRepository(this.db, this.workers);
-    this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
-    this.approvals = new PostgresApprovalRepository(this.db);
-    this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
-    this.workers = new PostgresWorkerRegistryRepository(this.db);
-  }
-
-  initialize() {
-    return this.db.initialize();
-  }
-
-  health() {
-    return {
-      adapter: 'postgres',
-      ready: true,
-      repositories: {
-        executions: true,
-        events: true,
-        idempotency: true,
-        checkpoints: true,
-        workflows: true,
-        workflowLeases: true,
-        approvals: true,
-        tenantQuotas: true,
-        workers: true
-      }
-    };
-  }
-}
-
-module.exports = {
-  PostgresPersistence,
-  PostgresExecutionRepository,
-  PostgresEventRepository,
-  PostgresIdempotencyRepository,
-  PostgresCheckpointRepository,
-  PostgresWorkflowRepository,
-  PostgresWorkflowLeaseRepository,
-  PostgresApprovalRepository,
-  PostgresWorkerRegistryRepository
-};
- + values.length; }
+    if (tenantId) { values.push(tenantId); tenantClause = ' AND tenant_id=$' + values.length; }
     const result = await this.db.query(
       "UPDATE approvals SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('decision',$1::jsonb) " +
       "WHERE approval_id=$3" + tenantClause +
