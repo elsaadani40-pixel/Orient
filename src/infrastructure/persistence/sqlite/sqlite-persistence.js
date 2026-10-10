@@ -147,58 +147,83 @@ class SqliteIdempotencyRepository {
     if (!tool) throw new TypeError('tool is required');
     return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
-  findByKey(key, { tenantId = null } = {}) {
-    const rows = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)} LIMIT 1;`);
+  scope(tenantId) { return tenantId || 'local'; }
+  findByKey(key, { tenantId = 'local' } = {}) {
+    const tenant = ' AND tenant_id=' + SqliteDatabase.literal(this.scope(tenantId));
+    const rows = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)}${tenant} LIMIT 1;`);
     if (!rows.length) return null;
     const item = JSON.parse(rows[0].payload);
     return tenantId && item.tenantId !== tenantId && !(tenantId === 'local' && !item.tenantId) ? null : item;
   }
-  find(args) { return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || null }); }
+  find(args) { return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || 'local' }); }
   begin(args) {
     const key = this.buildKey(args);
-    const raw = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)} LIMIT 1;`);
-    if (raw.length) {
-      const existingRecord = JSON.parse(raw[0].payload);
-      if (args?.tenantId && existingRecord.tenantId !== args.tenantId && !(args.tenantId === 'local' && !existingRecord.tenantId)) throw new Error('Idempotency tenant mismatch');
-      return { created: false, key, record: existingRecord };
-    }
-    const existing = this.findByKey(key, { tenantId: args?.tenantId || null });
-    if (existing) return { created: false, key, record: existing };
+    const tenantId = this.scope(args?.tenantId);
+    const tenant = SqliteDatabase.literal(tenantId);
+    const raw = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant} LIMIT 1;`);
+    if (raw.length) return { created: false, key, record: JSON.parse(raw[0].payload) };
     const record = {
-      id: crypto.randomUUID(),
-      key,
-      executionId: args.executionId,
-      step: args.step,
-      tool: args.tool,
-      planRevision: args.planRevision || 1,
-      operationId: args.operationId || null,
-      tenantId: args.tenantId || null,
-      status: 'running',
-      result: null,
-      error: null,
-      startedAt: new Date().toISOString(),
-      completedAt: null
+      id: crypto.randomUUID(), key, executionId: args.executionId, step: args.step,
+      tool: args.tool, planRevision: args.planRevision || 1, operationId: args.operationId || null,
+      tenantId: args.tenantId || null, status: 'running', result: null, error: null,
+      startedAt: new Date().toISOString(), completedAt: null
     };
-    const inserted = this.db.query(`INSERT OR IGNORE INTO idempotency(key,payload,status,updated_at) VALUES (${SqliteDatabase.literal(key)},${SqliteDatabase.json(record)},'running',${SqliteDatabase.literal(record.startedAt)}); SELECT changes() AS changes;`);
-    const actual = this.findByKey(key, { tenantId: args?.tenantId || null });
+    const inserted = this.db.query(`INSERT OR IGNORE INTO idempotency(tenant_id,key,payload,status,updated_at) VALUES (${tenant},${SqliteDatabase.literal(key)},${SqliteDatabase.json(record)},'running',${SqliteDatabase.literal(record.startedAt)}); SELECT changes() AS changes;`);
+    const actual = this.findByKey(key, { tenantId: args?.tenantId || 'local' });
     if (!inserted.length || Number(inserted[inserted.length - 1].changes) !== 1) {
       return { created: false, key, record: actual };
     }
     return { created: true, key, record: actual };
   }
-  complete(key, result, { tenantId = null } = {}) {
+  terminalConflict(message) {
+    const error = new Error(message);
+    error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT';
+    error.status = 409;
+    return error;
+  }
+  complete(key, result, { tenantId = 'local' } = {}) {
     const record = this.findByKey(key, { tenantId }); if (!record) return null;
-    record.status = 'completed'; record.result = result ?? null; record.completedAt = new Date().toISOString();
-    this.db.run(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='completed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)};`);
+    const normalizedResult = result ?? null;
+    if (record.status === 'completed') {
+      if (JSON.stringify(record.result) !== JSON.stringify(normalizedResult)) {
+        throw this.terminalConflict('Idempotency record is already completed with a different result');
+      }
+      return record;
+    }
+    if (record.status !== 'running') {
+      throw this.terminalConflict('Idempotency record is not running');
+    }
+    record.status = 'completed'; record.result = normalizedResult; record.completedAt = new Date().toISOString();
+    const tenant = SqliteDatabase.literal(this.scope(tenantId));
+    const updated = this.db.query(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='completed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant} AND status='running'; SELECT changes() AS changes;`);
+    if (Number(updated[updated.length - 1]?.changes) !== 1) {
+      throw this.terminalConflict('Idempotency terminal transition lost a race');
+    }
     return record;
   }
-  fail(key, error, { tenantId = null } = {}) {
+  fail(key, error, { tenantId = 'local' } = {}) {
     const record = this.findByKey(key, { tenantId }); if (!record) return null;
+    if (record.status === 'failed') return record;
+    if (record.status === 'completed') {
+      throw this.terminalConflict('Completed idempotency record cannot be failed');
+    }
+    if (record.status !== 'running') {
+      throw this.terminalConflict('Idempotency record is not running');
+    }
     record.status = 'failed'; record.error = { code: error?.code || 'EXECUTION_FAILED', message: error?.message || String(error || '') }; record.completedAt = new Date().toISOString();
-    this.db.run(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='failed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)};`);
+    const tenant = SqliteDatabase.literal(this.scope(tenantId));
+    const updated = this.db.query(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='failed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant} AND status='running'; SELECT changes() AS changes;`);
+    if (Number(updated[updated.length - 1]?.changes) !== 1) {
+      throw this.terminalConflict('Idempotency terminal transition lost a race');
+    }
     return record;
   }
-  delete(key, { tenantId = null } = {}) { const found=this.findByKey(key, { tenantId }); if(!found)return false; this.db.run(`DELETE FROM idempotency WHERE key=${SqliteDatabase.literal(key)};`); return true; }
+  delete(key, { tenantId = 'local' } = {}) {
+    const found = this.findByKey(key, { tenantId }); if (!found) return false;
+    const tenant = SqliteDatabase.literal(this.scope(tenantId));
+    this.db.run(`DELETE FROM idempotency WHERE key=${SqliteDatabase.literal(key)} AND tenant_id=${tenant};`);
+    return true;
+  }
   clear() { this.db.run('DELETE FROM idempotency;'); }
   count() { return this.db.query('SELECT COUNT(*) AS count FROM idempotency;')[0].count; }
 }

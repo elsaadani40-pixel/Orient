@@ -153,6 +153,27 @@ class SqliteDatabase {
       INSERT OR IGNORE INTO schema_migrations(version, applied_at)
         VALUES (1, datetime('now'));
     `);
+
+    const migration = this.query('SELECT version FROM schema_migrations WHERE version=2 LIMIT 1;');
+    if (!migration.length) {
+      this.transaction([
+        'ALTER TABLE idempotency RENAME TO idempotency_v1;',
+        `CREATE TABLE idempotency (
+          tenant_id TEXT NOT NULL,
+          key TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          status TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (tenant_id, key)
+        );`,
+        `INSERT INTO idempotency(tenant_id,key,payload,status,updated_at)
+          SELECT COALESCE(NULLIF(json_extract(payload, '$.tenantId'), ''), 'local'),
+                 key, payload, status, updated_at
+          FROM idempotency_v1;`,
+        'DROP TABLE idempotency_v1;',
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));"
+      ]);
+    }
   }
 
   static literal(value) {

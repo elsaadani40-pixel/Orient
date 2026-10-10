@@ -145,3 +145,43 @@ test('AsyncWorkflowScheduler does not reserve quota after shutdown begins', asyn
   );
   assert.equal(reservations, 0);
 });
+
+
+test('AsyncWorkflowWorkerService unregisters only after in-flight work has drained', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const events = [];
+  const workerRegistry = {
+    async register() { events.push('register'); },
+    async heartbeat() { events.push('heartbeat'); },
+    async unregister() { events.push('unregister'); return true; }
+  };
+  const service = new AsyncWorkflowWorkerService({
+    scheduler: { tenantId: 'tenant-shutdown', async recoverPersisted() {} },
+    workerRegistry,
+    workerTtlMs: 3000,
+    workerHeartbeatIntervalMs: 1000,
+    pollIntervalMs: 50,
+    recoveryIntervalMs: 50,
+    workerFactory: () => ({
+      async tick() {
+        events.push('tick-start');
+        await gate;
+        events.push('tick-end');
+        return { state: 'COMPLETED' };
+      }
+    })
+  });
+
+  const activeTick = service.runOnce();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(events.includes('tick-start'));
+  const shutdown = service.stopAndDrain();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(events.includes('unregister'), false, 'worker lease must remain registered while a tick is active');
+  release();
+  await Promise.all([activeTick, shutdown]);
+  assert.ok(events.indexOf('tick-end') < events.indexOf('unregister'));
+  assert.equal(events.filter(event => event === 'unregister').length, 1);
+  assert.equal(service.workerRegistered, false);
+});

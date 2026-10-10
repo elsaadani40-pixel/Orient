@@ -104,7 +104,25 @@ async function statAllowed(projectBuilder, relativePath) {
   }
 }
 
-function createWorkspaceTools(projectBuilder) {
+
+function projectChangeSetHash(changes) {
+  return crypto.createHash('sha256').update(JSON.stringify(changes), 'utf8').digest('hex');
+}
+
+function projectWorkspaceId(projectBuilder) {
+  return crypto.createHash('sha256')
+    .update(path.resolve(projectBuilder.policy.realAllowedRoot), 'utf8')
+    .digest('hex');
+}
+
+function hasReceiptIdentity(context) {
+  return context && typeof context.operationId === 'string' &&
+    context.operationId.length > 0 && context.operationId.length <= 256 &&
+    typeof context.tenantId === 'string' &&
+    context.tenantId.length > 0 && context.tenantId.length <= 128;
+}
+
+function createWorkspaceTools(projectBuilder, { operationReceiptStore = null } = {}) {
   if (!projectBuilder || !projectBuilder.workspace || !projectBuilder.policy) {
     throw new TypeError('projectBuilder with workspace policy is required');
   }
@@ -326,7 +344,7 @@ function createWorkspaceTools(projectBuilder) {
     description: 'تطبيق ChangeSet صريح بعد اجتياز تفويض المخاطر والموافقة البشرية والتحقق',
     capabilities: ['workspace.write'],
     risk: 'high',
-    execute: async (input) => {
+    execute: async (input, context = {}) => {
       const payload = inputObject(input);
       const rawChanges = Array.isArray(payload.changeSet?.changes)
         ? payload.changeSet.changes
@@ -358,6 +376,37 @@ function createWorkspaceTools(projectBuilder) {
       });
 
       const changeSet = { changes };
+      if (operationReceiptStore && !hasReceiptIdentity(context)) {
+        fail('تنفيذ تغييرات المشروع يتطلب معرّف عملية ومستأجر موثوقين من Runtime', 400, 'PROJECT_OPERATION_RECEIPT_IDENTITY_REQUIRED');
+      }
+      const receiptIdentity = operationReceiptStore && hasReceiptIdentity(context)
+        ? {
+            operationId: context.operationId,
+            tenantId: context.tenantId,
+            workspaceId: projectWorkspaceId(projectBuilder),
+            changeSetHash: projectChangeSetHash(changes)
+          }
+        : null;
+
+      // A durable receipt is the only authority for replaying a previously
+      // verified project operation. Identity mismatches and corrupt receipts fail closed.
+      if (receiptIdentity) {
+        const existingReceipt = operationReceiptStore.read(receiptIdentity);
+        if (existingReceipt) {
+          if (existingReceipt.workspaceId !== receiptIdentity.workspaceId ||
+              existingReceipt.changeSetHash !== receiptIdentity.changeSetHash) {
+            fail('معرّف العملية مرتبط بتغيير مختلف ولا يجوز إعادة استخدامه', 409, 'PROJECT_OPERATION_RECEIPT_IDENTITY_CONFLICT');
+          }
+          for (const change of changes) {
+            if (!(await projectBuilder.workspace.exists(change.path)) ||
+                (await projectBuilder.workspace.readText(change.path)) !== change.content) {
+              fail('نتيجة العملية المسجلة تغيرت لاحقًا؛ يلزم استرداد مضبوط', 409, 'PROJECT_OPERATION_RECEIPT_POST_STATE_CONFLICT');
+            }
+          }
+          return existingReceipt.result;
+        }
+      }
+
       const definitionOfDone = {
         required: ['Every changed file matches the approved proposed content.'],
         satisfied: false
@@ -381,7 +430,7 @@ function createWorkspaceTools(projectBuilder) {
         definitionOfDone,
         checks
       });
-      return {
+      const toolResult = {
         status: result.status,
         changes: changes.map(({ action, path: changePath }) => ({ action, path: changePath })),
         verification: result.verification || null,
@@ -392,6 +441,135 @@ function createWorkspaceTools(projectBuilder) {
           code: result.error.code || null,
           message: String(result.error.message || 'Change execution failed').slice(0, 500)
         } : null
+      };
+
+      // Persist only after the builder verifies every requested change. If the
+      // process crashes before this durable write, reconciliation remains unknown.
+      if (receiptIdentity && toolResult.status === 'verified' &&
+          toolResult.verification?.status === 'passed' &&
+          toolResult.verification?.failed === 0) {
+        operationReceiptStore.write({ ...receiptIdentity, result: toolResult });
+      }
+      return toolResult;
+    },
+    reconcile: async (input, context = {}) => {
+      // This is read-after-crash reconciliation only. It never mutates files:
+      // all proposed contents must already be present to claim completion.
+      const payload = inputObject(input);
+      const rawChanges = Array.isArray(payload.changeSet?.changes)
+        ? payload.changeSet.changes
+        : Array.isArray(payload.proposals)
+          ? payload.proposals
+          : [];
+      if (rawChanges.length === 0 || rawChanges.length > MAX_CHANGES) {
+        return { status: 'conflict', reason: 'invalid_change_set' };
+      }
+
+      const changes = [];
+      for (const change of rawChanges) {
+        if (!change || typeof change !== 'object' ||
+            (change.action !== 'create' && change.action !== 'update') ||
+            typeof change.content !== 'string' ||
+            Buffer.byteLength(change.content, 'utf8') > MAX_CHANGE_BYTES) {
+          return { status: 'conflict', reason: 'invalid_change' };
+        }
+        let relativePath;
+        try {
+          relativePath = normalizeRelativePath(change.path);
+          assertAllowedPath(relativePath);
+        } catch {
+          return { status: 'conflict', reason: 'path_not_allowed' };
+        }
+        if (change.action === 'update' &&
+            !/^[a-f0-9]{64}$/i.test(String(change.expectedContentSha256 || ''))) {
+          return { status: 'conflict', reason: 'missing_update_precondition' };
+        }
+        changes.push({
+          action: change.action,
+          path: relativePath,
+          content: change.content,
+          ...(change.action === 'update'
+            ? { expectedContentSha256: change.expectedContentSha256.toLowerCase() }
+            : {})
+        });
+      }
+
+      const receiptIdentity = operationReceiptStore && hasReceiptIdentity(context)
+        ? {
+            operationId: context.operationId,
+            tenantId: context.tenantId,
+            workspaceId: projectWorkspaceId(projectBuilder),
+            changeSetHash: projectChangeSetHash(changes)
+          }
+        : null;
+      let receipt = null;
+      if (receiptIdentity) {
+        try {
+          receipt = operationReceiptStore.read(receiptIdentity);
+        } catch {
+          return { status: 'conflict', reason: 'operation_receipt_corrupt' };
+        }
+        if (receipt && (receipt.workspaceId !== receiptIdentity.workspaceId ||
+            receipt.changeSetHash !== receiptIdentity.changeSetHash)) {
+          return { status: 'conflict', reason: 'operation_receipt_identity_mismatch' };
+        }
+      }
+
+      let alreadyApplied = 0;
+      let notApplied = 0;
+      for (const change of changes) {
+        const exists = await projectBuilder.workspace.exists(change.path);
+        if (change.action === 'create') {
+          if (!exists) {
+            notApplied += 1;
+            continue;
+          }
+          if ((await projectBuilder.workspace.readText(change.path)) === change.content) {
+            alreadyApplied += 1;
+          } else {
+            return { status: 'conflict', reason: 'created_path_has_different_content', path: change.path };
+          }
+          continue;
+        }
+
+        if (!exists) {
+          return { status: 'conflict', reason: 'updated_path_missing', path: change.path };
+        }
+        const currentContent = await projectBuilder.workspace.readText(change.path);
+        if (currentContent === change.content) {
+          alreadyApplied += 1;
+          continue;
+        }
+        const currentHash = crypto.createHash('sha256').update(currentContent, 'utf8').digest('hex');
+        if (currentHash === change.expectedContentSha256) {
+          notApplied += 1;
+          continue;
+        }
+        return { status: 'conflict', reason: 'updated_path_matches_neither_precondition_nor_proposal', path: change.path };
+      }
+
+      if (alreadyApplied === changes.length) {
+        if (receipt) {
+          return { status: 'completed', result: receipt.result };
+        }
+        // Matching file contents prove only the current post-state, not that this
+        // logical operation produced it. Never infer completion without a durable receipt.
+        return {
+          status: 'conflict',
+          reason: 'operation_receipt_missing',
+          observations: changes.map(({ action, path: changePath }) => ({
+            action,
+            path: changePath,
+            postStateMatches: true
+          }))
+        };
+      }
+
+      // A partially applied or untouched change set is not replayed here. The
+      // caller fails closed and requires an explicit repair/review decision.
+      return {
+        status: 'conflict',
+        reason: alreadyApplied > 0 ? 'partially_applied_change_set' : 'no_changes_proven_applied'
       };
     }
   });

@@ -135,7 +135,13 @@ class WorkflowScheduler {
     const persisted = this.workflowRepository.findAll({ tenantId: this.tenantId });
 
     for (const payload of persisted) {
-      if (!payload || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state)) {
+      // A durable human-approval pause is not runnable work. Keep it waiting
+      // across restart until the canonical Runtime resumes the exact execution.
+      if (
+        !payload ||
+        ['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state) ||
+        Boolean(payload.metadata?.approvalBlocked)
+      ) {
         continue;
       }
 
