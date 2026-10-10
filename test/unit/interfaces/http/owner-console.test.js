@@ -295,3 +295,101 @@ test('owner execution never resumes or cancels when the durable approval decisio
     assert.deepEqual(actions, [], 'execution must remain untouched if the durable decision write fails');
   }, agentRoutes);
 });
+
+
+test('owner HTTP decision is durably authorized and bound to the exact execution', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
+  const ApprovalRepository = require('../../../../src/infrastructure/persistence/json/approval.repository');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-approval-e2e-'));
+  const ownerAuth = new OwnerAuthService({ password: PASSWORD });
+  const repositoryPath = path.join(root, 'approvals.json');
+  try {
+    const repository = new ApprovalRepository(repositoryPath);
+    const approvals = new ApprovalService({
+      repository,
+      tenantId: 'local',
+      decisionAuthorizer: async ({ actorId, tenantId }) =>
+        tenantId === 'local' &&
+        [...ownerAuth.sessions.values()].some(session =>
+          session.id === actorId && session.expiresAt > Date.now()
+        )
+    });
+    const approval = await approvals.issue({
+      executionId: 'exec-bound',
+      step: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      tenantId: 'local'
+    });
+    const decisions = [];
+    const resumed = [];
+    const agentRoutes = {
+      async recordApprovalDecision(decision) {
+        decisions.push(decision);
+        return approvals.decide({ ...decision, tenantId: 'local' });
+      },
+      async resume(_req, res, executionId, body) {
+        const approved = await approvals.getApprovedForExecution({
+          approvalId: body?.approval?.approvalId,
+          executionId,
+          tenantId: 'local'
+        });
+        if (!approved) {
+          res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ code: 'APPROVAL_NOT_APPROVED' }));
+          return;
+        }
+        resumed.push(executionId);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ executionId, approvalId: approved.approvalId }));
+      }
+    };
+
+    await withServer(ownerAuth, async ({ origin }) => {
+      const login = await request(origin, '/owner/login', {
+        method: 'POST',
+        headers: { Origin: origin },
+        body: JSON.stringify({ password: PASSWORD })
+      });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie').split(';')[0];
+      const { csrfToken } = await login.json();
+      const headers = { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken };
+
+      const wrongExecution = await request(origin, '/owner/executions/exec-other/resume', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ approval: { approvalId: approval.approvalId } })
+      });
+      assert.equal(wrongExecution.status, 409);
+      assert.equal((await wrongExecution.json()).code, 'APPROVAL_EXECUTION_MISMATCH');
+      assert.deepEqual(resumed, []);
+      assert.equal((await repository.findById(approval.approvalId, { tenantId: 'local' })).decision, undefined);
+
+      const response = await request(origin, '/owner/executions/exec-bound/resume', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ approval: { approvalId: approval.approvalId } })
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        executionId: 'exec-bound',
+        approvalId: approval.approvalId
+      });
+      assert.deepEqual(resumed, ['exec-bound']);
+      assert.equal(decisions.length, 2);
+      assert.equal(decisions[1].decision, 'approved');
+      assert.equal(decisions[1].executionId, 'exec-bound');
+    }, agentRoutes);
+
+    const restartedRepository = new ApprovalRepository(repositoryPath);
+    const durable = await restartedRepository.findById(approval.approvalId, { tenantId: 'local' });
+    assert.equal(durable.decision.status, 'approved');
+    assert.equal(durable.decision.actorId, decisions[1].actorId);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
