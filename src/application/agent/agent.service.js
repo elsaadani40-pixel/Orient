@@ -27,17 +27,21 @@ class AgentService {
     const crypto = require('node:crypto');
     const tenantId = this.runtime.tenantId || 'local';
     const digest = crypto.createHash('sha256').update(idempotencyKey, 'utf8').digest('hex');
+    const requestDigest = crypto.createHash('sha256').update(clean, 'utf8').digest('hex');
     const operationId = 'api-v1-task-create:' + tenantId + ':' + digest;
     const begun = await repository.begin({
       executionId: crypto.randomUUID(),
       step: 1,
-      tool: 'api.v1.tasks.create',
+      tool: 'api.v1.tasks.create:' + requestDigest,
       planRevision: 1,
       operationId,
       tenantId
     });
 
     if (!begun.created) {
+      if (begun.record?.tool !== 'api.v1.tasks.create:' + requestDigest) {
+        throw new AppError('لا يمكن إعادة استخدام مفتاح منع التكرار لطلب مختلف', 409, 'IDEMPOTENCY_KEY_REUSED');
+      }
       if (begun.record?.status === 'completed' && begun.record.result) {
         return { task: begun.record.result, replayed: true };
       }
