@@ -31,45 +31,73 @@ class WorkflowExecutionCoordinator {
       : null;
   }
 
-  async execute(input, {
-    approval = null,
-    approvals = {},
-    priority = 0,
-    deadlineAt = null
-  } = {}) {
+  createInstance(input, { priority = 0, deadlineAt = null, workflowId = undefined } = {}) {
     const text = String(input || '').trim();
-
     if (!text) {
-      return {
-        type: 'error',
-        message: 'لم يتم إرسال طلب.'
-      };
+      return { error: { type: 'error', message: 'لم يتم إرسال طلب.' } };
     }
 
     const definition = new WorkflowDefinition({
       id: 'orient.request.execution',
       version: 1,
       name: 'ORIENT Request Execution',
-      steps: [
-        {
-          id: 'agent-runtime',
-          agent: 'ORIENT_RUNTIME',
-          metadata: {
-            executionMode: 'canonical-agent-runtime'
-          }
-        }
-      ]
+      steps: [{
+        id: 'agent-runtime',
+        agent: 'ORIENT_RUNTIME',
+        metadata: { executionMode: 'canonical-agent-runtime' }
+      }]
     });
 
     const instance = new WorkflowInstance({
       definition,
+      workflowId,
       tenantId: this.tenantId,
       userId: this.userId,
       workspaceId: this.workspaceId,
       input: { text }
     });
-
     instance.metadata.priority = priority;
+    instance.setDeadline(deadlineAt);
+    return { instance, text };
+  }
+
+  async enqueue(input, { priority = 0, deadlineAt = null, workflowId = undefined } = {}) {
+    if (!this.scheduler.async || typeof this.scheduler.enqueueDurable !== 'function') {
+      throw Object.assign(
+        new Error('Durable asynchronous workflow scheduling requires an async scheduler'),
+        { code: 'ASYNC_WORKFLOW_SCHEDULER_REQUIRED' }
+      );
+    }
+
+    const created = this.createInstance(input, { priority, deadlineAt, workflowId });
+    if (created.error) return created.error;
+    const { instance } = created;
+
+    if (this.missionEventSink) await this.missionEventSink.recordCreated(instance);
+    const from = instance.state;
+    await this.scheduler.enqueueDurable(instance, { priority, deadlineAt });
+    if (this.missionEventSink && from !== instance.state) {
+      await this.missionEventSink.recordState(instance, from, instance.state);
+    }
+
+    return {
+      workflowId: instance.workflowId,
+      state: instance.state,
+      tenantId: instance.tenantId,
+      createdAt: instance.createdAt,
+      updatedAt: instance.updatedAt
+    };
+  }
+
+  async execute(input, {
+    approval = null,
+    approvals = {},
+    priority = 0,
+    deadlineAt = null
+  } = {}) {
+    const created = this.createInstance(input, { priority, deadlineAt });
+    if (created.error) return created.error;
+    const { instance, text } = created;
 
     if (this.missionEventSink) this.missionEventSink.recordCreated(instance);
 
@@ -107,10 +135,7 @@ class WorkflowExecutionCoordinator {
           });
         }
       },
-      executor: async () => this.executeRequest(text, {
-        approval,
-        approvals
-      })
+      executor: async () => this.executeRequest(text, { approval, approvals })
     });
 
     const completed = await worker.tick();
