@@ -311,3 +311,93 @@ test('expired stale approval does not cancel a workflow waiting on a newer chall
   );
   assert.deepEqual(calls, [], 'stale approval expiry must not cancel the newer active challenge');
 });
+
+
+test('real runtime restart reconciles a durable terminal execution without replaying tools', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-terminal-restart-'));
+  try {
+    const JsonPersistence = require('../../../../src/infrastructure/persistence/json/json-persistence');
+    const persistence = new JsonPersistence({ rootDir: directory });
+    const context = new ExecutionContext({
+      requestId: 'request-terminal-restart',
+      input: 'do not replay completed work',
+      executionId: 'execution-terminal-restart',
+      tenantId: 'local',
+      userId: 'local',
+      workspaceId: 'local'
+    });
+    context.start();
+    const plan = {
+      intent: 'restart.recovery',
+      confidence: 1,
+      steps: [{ step: 1, tool: 'test.side-effect', input: 'charge once', dependsOn: null }]
+    };
+    context.transitionAgentTo('planning');
+    context.transitionAgentTo('validating');
+    context.setPlan(plan);
+    context.metadata.planRevision = 1;
+    context.metadata.replans = 0;
+    context.transitionAgentTo('executing');
+    context.startStep({ step: 1, tool: 'test.side-effect', planRevision: 1 });
+    context.completeStep({
+      step: 1,
+      tool: 'test.side-effect',
+      result: { receipt: 'already-committed' },
+      planRevision: 1
+    });
+    context.addObservation({
+      step: 1,
+      tool: 'test.side-effect',
+      success: true,
+      result: { receipt: 'already-committed' }
+    });
+
+    await persistence.executions.insert({
+      ...context.snapshot(),
+      status: 'completed',
+      result: { receipt: 'already-committed' },
+      completedAt: new Date().toISOString()
+    }, { tenantId: 'local' });
+    await persistence.checkpoints.save(context.snapshot(), {
+      reason: 'crash-window-stale-checkpoint',
+      tenantId: 'local'
+    });
+
+    // A newly constructed runtime represents a process restart. The persisted
+    // terminal execution must override the older active checkpoint.
+    let toolCalls = 0;
+    const runtimeAfterRestart = new OrientRuntime({
+      toolRegistry: {
+        has: tool => tool === 'test.side-effect',
+        get: tool => ({ name: tool }),
+        async execute() {
+          toolCalls += 1;
+          return { receipt: 'duplicate' };
+        }
+      },
+      agentOrchestrator: {
+        decideReplanning() {
+          return { nextAction: null, toJSON: () => ({ outcome: 'done', nextAction: null }) };
+        },
+        async recover(error) { throw error; }
+      },
+      persistence
+    });
+
+    const result = await runtimeAfterRestart.resume('execution-terminal-restart');
+
+    assert.equal(result.resumed, false);
+    assert.equal(result.reason, 'execution_already_terminal');
+    assert.equal(result.reconciled, true);
+    assert.equal(result.execution.status, 'completed');
+    assert.deepEqual(result.execution.result, { receipt: 'already-committed' });
+    assert.equal(toolCalls, 0, 'terminal recovery must not replay the external side effect');
+
+    const repairedCheckpoint = await persistence.checkpoints.findLatest('execution-terminal-restart', {
+      tenantId: 'local'
+    });
+    assert.equal(repairedCheckpoint.snapshot.status, 'completed');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
