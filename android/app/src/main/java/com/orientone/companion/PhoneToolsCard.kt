@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -15,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +31,7 @@ import androidx.core.content.ContextCompat
 fun PhoneToolsCard() {
     val context = LocalContext.current
     var number by remember { mutableStateOf("") }
+    var showContactsPermissionRationale by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("ابحث محليًا عن رقم في جهات الاتصال، أو افتح شاشة الاتصال يدويًا.") }
     var hasContactsPermission by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED)
@@ -37,7 +40,36 @@ fun PhoneToolsCard() {
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasContactsPermission = granted
-        status = if (granted) "تم منح إذن جهات الاتصال. اضغط البحث مرة أخرى." else "لم يُمنح إذن جهات الاتصال؛ لم تتم قراءة أي بيانات."
+        status = if (granted) "تم منح إذن جهات الاتصال. اضغط البحث مرة أخرى." else "لم يُمنح إذن جهات الاتصال؛ لم تتم قراءة أي بيانات. يمكنك استخدام بقية ORIENT وفتح شاشة الاتصال دون هذا الإذن. إذا لم يظهر طلب الإذن مجددًا، يمكنك تغييره من إعدادات التطبيق."
+    }
+
+    if (showContactsPermissionRationale) {
+        AlertDialog(
+            onDismissRequest = {
+                showContactsPermissionRationale = false
+                status = "تم إلغاء البحث في جهات الاتصال؛ لم يُطلب أي إذن."
+            },
+            title = { Text("إذن اختياري لجهات الاتصال") },
+            text = {
+                Text("يحتاج البحث إلى إذن قراءة جهات الاتصال على هذا الهاتف فقط لمطابقة الرقم مع اسم محفوظ. الإذن اختياري؛ يمكنك الرفض واستخدام بقية ORIENT أو فتح شاشة الاتصال يدويًا.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showContactsPermissionRationale = false
+                        permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                    }
+                ) { Text("متابعة وطلب الإذن") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showContactsPermissionRationale = false
+                        status = "تم الرفض؛ لم تتم قراءة جهات الاتصال، ويمكنك استخدام بقية ORIENT."
+                    }
+                ) { Text("ليس الآن") }
+            }
+        )
     }
 
     Card(
@@ -63,7 +95,7 @@ fun PhoneToolsCard() {
                     if (normalized == null) {
                         status = "رقم غير صالح. استخدم 3 إلى 20 رقمًا، مع + اختياري في البداية."
                     } else if (!hasContactsPermission) {
-                        permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                        showContactsPermissionRationale = true
                     } else {
                         status = try {
                             PhoneNumberTools.lookupContactName(context, normalized)
