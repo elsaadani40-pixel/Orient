@@ -2,6 +2,66 @@ const AppError = require('../../../core/errors/AppError');
 
 function createAgentRoutes(agentService) {
   return {
+    async tasks(req, res) {
+      const url = new URL(req.url, 'http://localhost');
+      const limitValue = url.searchParams.get('limit');
+      const offsetValue = url.searchParams.get('offset');
+      const limit = limitValue === null ? 20 : Number(limitValue);
+      const offset = offsetValue === null ? 0 : Number(offsetValue);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100 ||
+          !Number.isInteger(offset) || offset < 0 || offset > 10000) {
+        throw new AppError('Invalid task pagination', 400, 'VALIDATION_ERROR');
+      }
+
+      const result = await agentService.listExecutionSummaries({ limit, offset });
+      const tasks = (result.executions || []).map(execution => ({
+        id: execution.executionId,
+        status: execution.status,
+        currentStep: execution.currentStep ?? null,
+        createdAt: execution.startedAt || null,
+        updatedAt: execution.updatedAt || null,
+        completedAt: execution.completedAt || null,
+        cancellationRequested: Boolean(execution.cancellationRequested),
+        version: 1
+      }));
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+        'X-ORIENT-API-Version': 'v1'
+      });
+      res.end(JSON.stringify({
+        apiVersion: 'v1',
+        items: tasks,
+        page: { limit: result.limit, offset: result.offset, total: result.total }
+      }));
+    },
+
+    async task(req, res, executionId) {
+      const result = await agentService.getExecutionStatus(executionId);
+      // Deliberately omit tenant identifiers and raw execution results from the
+      // cross-device task summary. Detailed output requires a separately governed API.
+      const task = {
+        id: result.executionId,
+        status: result.status,
+        currentStep: result.currentStep ?? null,
+        createdAt: result.startedAt || null,
+        updatedAt: result.updatedAt || null,
+        completedAt: result.completedAt || null,
+        cancellationRequested: Boolean(result.cancellationRequested),
+        agentLifecycle: result.agentLifecycle || null,
+        version: 1
+      };
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+        'X-ORIENT-API-Version': 'v1'
+      });
+      res.end(JSON.stringify({ apiVersion: 'v1', task }));
+    },
+
     async executions(req, res) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');

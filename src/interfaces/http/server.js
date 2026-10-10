@@ -301,6 +301,25 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         authenticationOutcome = 'authenticated';
       }
 
+      // Unified v1 task reads deliberately reuse the existing AgentService/runtime
+      // and sit after the shared owner-session and origin protections above.
+      if (req.method === 'GET' && requestUrl.pathname === '/api/v1/tasks') {
+        await agentRoutes.tasks(req, res);
+        return;
+      }
+
+      const v1TaskPrefix = '/api/v1/tasks/';
+      const v1TaskId = requestUrl.pathname.startsWith(v1TaskPrefix)
+        ? requestUrl.pathname.slice(v1TaskPrefix.length)
+        : '';
+      const v1TaskMatch = v1TaskId && /^[A-Za-z0-9_-]{1,200}$/.test(v1TaskId)
+        ? [requestUrl.pathname, v1TaskId]
+        : null;
+      if (req.method === 'GET' && v1TaskMatch) {
+        await agentRoutes.task(req, res, v1TaskMatch[1]);
+        return;
+      }
+
       if (
         req.method === 'GET' &&
         requestUrl.pathname === '/command-scene.js'
