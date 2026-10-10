@@ -63,6 +63,12 @@ class OwnerSessionClientTest {
                     unifiedTaskRequests.incrementAndGet()
                     respond(exchange, 200, """{"apiVersion":"v1","items":[{"id":"exec-1","status":"completed"}],"page":{"limit":20,"offset":0,"total":1}}""")
                 }
+                "/api/v1/tasks/exec-1/events" -> {
+                    assertEquals("GET", exchange.requestMethod)
+                    assertTrue(exchange.requestURI.rawQuery?.contains("limit=50") == true)
+                    assertTrue(exchange.requestHeaders.getFirst("Cookie")?.startsWith("orient_owner_session=") == true)
+                    respond(exchange, 200, """{"apiVersion":"v1","items":[{"id":"event-1","taskId":"exec-1"}],"page":{"limit":50,"nextCursor":"event-1","hasMore":false,"gapDetected":false}}""")
+                }
                 "/api/v1/tasks/exec-1" -> {
                     assertEquals("GET", exchange.requestMethod)
                     assertTrue(exchange.requestHeaders.getFirst("Cookie")?.startsWith("orient_owner_session=") == true)
@@ -98,6 +104,9 @@ class OwnerSessionClientTest {
             assertTrue(withApiDiagnostics("fetchExecutions") { runBlocking { client.fetchExecutions() } }.contains("executions"))
             assertTrue(withApiDiagnostics("fetchTasks") { runBlocking { client.fetchTasks() } }.contains("\"apiVersion\": \"v1\""))
             assertTrue(withApiDiagnostics("fetchTask") { runBlocking { client.fetchTask("exec-1") } }.contains("exec-1"))
+            assertTrue(withApiDiagnostics("fetchTaskEvents") { runBlocking { client.fetchTaskEvents("exec-1") } }.contains("event-1"))
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { client.fetchTaskEvents("exec-1", limit = 101) } }
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { client.fetchTaskEvents("../private") } }
             assertThrows(IllegalArgumentException::class.java) { runBlocking { client.fetchTask("../private") } }
             assertTrue(withApiDiagnostics("executeTask") { runBlocking { client.executeTask("test task") } }.contains("completed"))
             withApiDiagnostics("logout") { runBlocking { client.logout() } }
