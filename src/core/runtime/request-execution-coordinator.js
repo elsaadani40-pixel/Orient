@@ -4,6 +4,44 @@ const crypto = require('crypto');
 const ExecutionContext = require('../execution/execution-context');
 const AgentState = require('../agent/state/agent-state');
 
+function createApprovalSummary(tool, input) {
+  if (tool !== 'project.execute_change') {
+    return { kind: 'tool_action', tool: String(tool || 'unknown').slice(0, 120) };
+  }
+
+  const payload = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const rawChanges = Array.isArray(payload.changeSet?.changes)
+    ? payload.changeSet.changes
+    : Array.isArray(payload.proposals)
+      ? payload.proposals
+      : [];
+
+  const changes = rawChanges.slice(0, 10).map(change => {
+    const action = change?.action === 'update' ? 'update' : change?.action === 'create' ? 'create' : 'invalid';
+    const filePath = typeof change?.path === 'string' ? change.path.slice(0, 512) : '';
+    const content = typeof change?.content === 'string' ? change.content : '';
+    return {
+      action,
+      path: filePath,
+      expectedContentSha256: typeof change?.expectedContentSha256 === 'string'
+        ? change.expectedContentSha256.slice(0, 64)
+        : null,
+      proposedContentSha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+      contentBytes: Buffer.byteLength(content, 'utf8'),
+      lineCount: content.length ? content.split(/\r?\n/).length : 0,
+      proposedContent: content.slice(0, 32000),
+      contentTruncated: content.length > 32000
+    };
+  });
+
+  return {
+    kind: 'file_change',
+    changeCount: rawChanges.length,
+    changes,
+    reviewNotice: 'Review every path and the full proposed content before approving. Updates are guarded by the expected current-file SHA-256.'
+  };
+}
+
 class RequestExecutionCoordinator {
   constructor({
     agentOrchestrator,
@@ -238,18 +276,76 @@ class RequestExecutionCoordinator {
       }
 
       if (error?.code === 'APPROVAL_REQUIRED') {
-        context.record('approval.challenge.persisted', {
+        const approvalContext = error.executionContext || {};
+        const step = Number(approvalContext.step);
+        const planRevision = Number(approvalContext.planRevision || 1);
+        const tool = typeof approvalContext.tool === 'string' ? approvalContext.tool : null;
+        const capability = typeof approvalContext.capability === 'string' ? approvalContext.capability : null;
+        const tenantId = approvalContext.tenantId || context.tenantId || this.tenantId;
+        const agentId = approvalContext.agentId || context.metadata?.agentId || context.plan?.agentId || 'ORIENT_RUNTIME';
+        const operationId = approvalContext.operationId || null;
+        const approvalSummary = createApprovalSummary(tool, approvalContext.input);
+
+        if (Number.isInteger(step) && step > 0) {
+          context.metadata.pendingStepInputs = {
+            ...(context.metadata.pendingStepInputs || {}),
+            [step]: { tool, operationId }
+          };
+        }
+        context.record('approval.challenge.requested', {
           executionId: context.executionId,
-          step: error.executionContext?.step || null,
-          planRevision: error.executionContext?.planRevision || 1,
-          operationId: error.executionContext?.operationId || null
+          step: Number.isInteger(step) ? step : null,
+          planRevision,
+          operationId,
+          tool,
+          capability,
+          summaryKind: approvalSummary.kind,
+          changeCount: approvalSummary.changeCount || 0
         });
-        await this.persistenceCoordinator.checkpoint(
-          context,
-          'update',
-          'approval_required'
-        );
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_required');
         await this.persistenceCoordinator.persistEvents(context);
+
+        if (this.approvalService?.issue && Number.isInteger(step) && step > 0 && tool && capability) {
+          try {
+            const issued = await this.approvalService.issue({
+              executionId: context.executionId,
+              step,
+              tool,
+              capability,
+              planRevision,
+              scope: { planRevision },
+              tenantId,
+              agentId,
+              operationId,
+              ttlMs: 5 * 60 * 1000,
+              metadata: { approvalSummary }
+            });
+            context.record('approval.challenge.persisted', {
+              executionId: context.executionId,
+              step,
+              planRevision,
+              operationId,
+              approvalId: issued.approvalId,
+              tool,
+              capability,
+              summaryKind: approvalSummary.kind,
+              changeCount: approvalSummary.changeCount || 0
+            });
+            error.executionContext.approvalId = issued.approvalId;
+            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issued');
+            await this.persistenceCoordinator.persistEvents(context);
+          } catch (issueError) {
+            context.record('approval.challenge.issue_failed', {
+              executionId: context.executionId,
+              step,
+              planRevision,
+              code: issueError.code || 'APPROVAL_ISSUE_FAILED'
+            });
+            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issue_failed');
+            await this.persistenceCoordinator.persistEvents(context);
+            throw issueError;
+          }
+        }
         throw error;
       }
 

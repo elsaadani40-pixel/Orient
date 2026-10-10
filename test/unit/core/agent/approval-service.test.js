@@ -115,3 +115,41 @@ test('expired approval cannot be consumed after validation', async () => {
   now += 101;
   assert.equal(await service.consume(approval.approvalId), false);
 });
+
+test('pending approvals expose bounded review summaries without exposing arbitrary metadata', async () => {
+  const service = new ApprovalService({ clock: () => 1000 });
+  await service.issue({
+    executionId: 'exec-review',
+    step: 1,
+    tool: 'project.execute_change',
+    capability: 'workspace.write',
+    tenantId: 'tenant-review',
+    metadata: {
+      approvalSummary: {
+        kind: 'file_change',
+        changeCount: 1,
+        changes: [{
+          action: 'update',
+          path: 'src/example.js',
+          expectedContentSha256: 'a'.repeat(64),
+          proposedContentSha256: 'b'.repeat(64),
+          contentBytes: 40000,
+          lineCount: 2,
+          proposedContent: 'x'.repeat(40000),
+          contentTruncated: true
+        }]
+      },
+      privateInternalField: 'must not be returned'
+    }
+  });
+
+  const pending = await service.listPending({ tenantId: 'tenant-review' });
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].summary.kind, 'file_change');
+  assert.equal(pending[0].summary.changes[0].path, 'src/example.js');
+  assert.equal(pending[0].summary.changes[0].proposedContent.length, 32000);
+  assert.equal(Object.hasOwn(pending[0], 'privateInternalField'), false);
+
+  const forExecution = await service.listForExecution({ executionId: 'exec-review', tenantId: 'tenant-review' });
+  assert.equal(forExecution[0].summary.kind, 'file_change');
+});

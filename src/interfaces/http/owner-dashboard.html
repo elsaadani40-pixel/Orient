@@ -7,7 +7,7 @@
 <title>ORIENT ONE · Owner Console</title>
 <style>
 :root{color-scheme:dark;--bg:#080c13;--panel:#121a27;--line:#2a394e;--text:#edf4ff;--muted:#a0afc4;--blue:#8ab4ff;--red:#ff9292;--amber:#ffd27a}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif}.wrap{max-width:1100px;margin:auto;padding:28px 18px}.brand{color:var(--blue);font-size:12px;letter-spacing:.12em;font-weight:800}.head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:8px 0 24px}.head h1{margin:0;font-size:clamp(24px,4vw,36px)}.card{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:20px;margin:14px 0}.muted{color:var(--muted)}label{display:block;margin:8px 0}.input{width:100%;max-width:520px;background:#080e18;border:1px solid #394b64;border-radius:10px;color:var(--text);padding:12px;font:inherit}.btn{border:1px solid #3d5f91;background:#203b60;color:white;border-radius:10px;padding:10px 15px;font:inherit;font-weight:700;cursor:pointer}.btn.secondary{background:#151e2b;border-color:var(--line)}.error{color:var(--red);min-height:1.5em}.status{color:var(--amber);font-weight:700}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:right;padding:10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--blue)}code{overflow-wrap:anywhere}.hidden{display:none!important}.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:2px 9px;color:var(--muted);font-size:12px}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif}.wrap{max-width:1100px;margin:auto;padding:28px 18px}.brand{color:var(--blue);font-size:12px;letter-spacing:.12em;font-weight:800}.head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:8px 0 24px}.head h1{margin:0;font-size:clamp(24px,4vw,36px)}.card{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:20px;margin:14px 0}.muted{color:var(--muted)}label{display:block;margin:8px 0}.input{width:100%;max-width:520px;background:#080e18;border:1px solid #394b64;border-radius:10px;color:var(--text);padding:12px;font:inherit}.btn{border:1px solid #3d5f91;background:#203b60;color:white;border-radius:10px;padding:10px 15px;font:inherit;font-weight:700;cursor:pointer}.btn.secondary{background:#151e2b;border-color:var(--line)}.error{color:var(--red);min-height:1.5em}.status{color:var(--amber);font-weight:700}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:right;padding:10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--blue)}code{overflow-wrap:anywhere}.approval-change{border:1px solid var(--line);border-radius:10px;padding:12px;margin:10px 0;background:#0b121d}.approval-change h4{margin:0 0 8px}.code-preview{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;background:#070b12;border:1px solid var(--line);border-radius:8px;padding:12px;direction:ltr;text-align:left;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}.hidden{display:none!important}.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:2px 9px;color:var(--muted);font-size:12px}
 </style>
 </head>
 <body>
@@ -26,15 +26,21 @@
   <section id="console" class="hidden">
     <div class="card">
       <div class="row"><h2 style="margin:0">مركز الأمان</h2><span id="session-status" class="status">الجلسة محمية</span><a id="dashboard-link" class="btn secondary" href="/dashboard">لوحة التشغيل</a><button id="refresh" class="btn secondary">تحديث السجل</button><button id="logout" class="btn secondary">تسجيل الخروج</button></div>
-      <p class="muted">يعرض هذا الإصدار سجل الوصول إلى ORIENT ONE فقط. لا يسجل محتوى المهام أو كلمات المرور أو رموز الجلسات. حالة المصادقة تُعرض كما سجلها الخادم.</p>
+      <p class="muted">يعرض سجل الوصول والموافقات المعلقة. لا يسجل سجل الوصول محتوى المهام أو كلمات المرور أو رموز الجلسات؛ وتُعرض تفاصيل التغييرات المقترحة في قسم المراجعة الخاص بالمالك فقط.</p>
     </div>
     <div class="card">
       <h2>أحداث الوصول الأخيرة</h2>
       <div id="audit-status" class="muted" role="status">جارٍ تحميل السجل…</div>
       <div class="table-wrap"><table><thead><tr><th>الوقت</th><th>عنوان IP</th><th>المسار</th><th>الطريقة</th><th>HTTP</th><th>المصادقة</th><th>المدة</th></tr></thead><tbody id="audit-rows"></tbody></table></div>
     </div>
+    <div class="card">
+      <div class="row"><h2 style="margin:0">الموافقات المطلوبة</h2><button id="refresh-approvals" class="btn secondary">تحديث الموافقات</button></div>
+      <p class="muted">لن ينفذ ORIENT ONE تغييرًا عالي الخطورة دون موافقتك الصريحة. راجع الأداة والصلاحية والتنفيذ قبل الموافقة.</p>
+      <div id="approval-status" class="muted" role="status">جارٍ تحميل الموافقات…</div>
+      <div id="approval-items"></div>
+    </div>
   </section>
-  <p class="muted">تنبيه: لوحة المالك الحالية أولية؛ إدارة الجلسات المتعددة والسياسات والتنفيذ والتحكم في القدرات ستضاف بعد اختبارها. لا يعني تسجيل الحدث أن العملية المطلوبة اكتملت بنجاح.</p>
+  <p class="muted">إجراءات الموافقة والاستئناف والإلغاء محمية بجلسة المالك وفحص المصدر ورمز CSRF. لا تعني الموافقة أن التغيير نجح؛ تُعرض النتيجة التي يعيدها Runtime فقط.</p>
 </main>
 <script src="/owner-dashboard.js" defer></script>
 </body>
