@@ -108,6 +108,7 @@ function createAgentRoutes(agentService) {
               .filter(([, value]) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))
               .map(([key, value]) => [key, typeof value === 'string' ? value.replace(/[\r\n\0]/g, '').slice(0, 100) : value])
           
+          )
         };
       });
 
