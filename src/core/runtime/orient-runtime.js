@@ -258,7 +258,32 @@ class OrientRuntime {
     if (!this.approvalService?.decide) {
       throw Object.assign(new Error('Durable approval service is required'), { code: 'APPROVAL_SERVICE_REQUIRED' });
     }
-    return this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId });
+    try {
+      return await this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId });
+    } catch (error) {
+      if (error?.code === 'APPROVAL_EXPIRED' && options.executionId && options.approvalId) {
+        try {
+          if (typeof this.persistence?.executions?.requestCancellation === 'function') {
+            await this.persistence.executions.requestCancellation(
+              options.executionId,
+              'approval_expired',
+              { tenantId: options.tenantId || this.tenantId }
+            );
+          }
+          await this.workflowExecutionCoordinator.expireApprovalWorkflow(
+            options.executionId,
+            options.approvalId
+          );
+        } catch (reconciliationError) {
+          throw Object.assign(new Error('Expired approval could not be reconciled safely'), {
+            code: 'APPROVAL_EXPIRY_RECONCILIATION_FAILED',
+            cause: reconciliationError,
+            approvalError: error
+          });
+        }
+      }
+      throw error;
+    }
   }
 
   async cancelExecution(executionId, { reason = 'Execution cancellation requested' } = {}) {
