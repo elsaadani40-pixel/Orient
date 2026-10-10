@@ -97,3 +97,67 @@ test('owner audit view detects tampering after repository initialization', async
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('audit log rotation bounds storage and verifies the retained chain after restart', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-audit-rotation-'));
+  const file = path.join(dir, 'events.jsonl');
+  const maxFileBytes = 1024;
+  const maxArchives = 2;
+  try {
+    const repository = new JsonAccessAuditRepository(file, { maxFileBytes, maxArchives });
+    for (let index = 1; index <= 12; index += 1) {
+      await repository.record(createAccessAuditEvent({
+        requestId: 'rotation-' + index,
+        pathname: '/agent',
+        method: 'POST',
+        statusCode: 202,
+        userAgent: 'u'.repeat(150)
+      }));
+    }
+
+    const logPaths = [file, file + '.1', file + '.2'];
+    let totalBytes = 0;
+    for (const logPath of logPaths) {
+      try {
+        const stats = await fs.stat(logPath);
+        assert.ok(stats.size <= maxFileBytes);
+        totalBytes += stats.size;
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+    assert.ok(totalBytes <= maxFileBytes * (maxArchives + 1));
+
+    const events = await repository.listRecent(200);
+    assert.equal(events[0].requestId, 'rotation-12');
+    assert.ok(events.length < 12);
+    assert.ok(events.length > 0);
+
+    const reopened = new JsonAccessAuditRepository(file, { maxFileBytes, maxArchives });
+    const afterRestart = await reopened.listRecent(200);
+    assert.deepEqual(afterRestart.map(event => event.requestId), events.map(event => event.requestId));
+    await reopened.record(createAccessAuditEvent({
+      requestId: 'rotation-13',
+      pathname: '/agent',
+      method: 'POST',
+      statusCode: 202
+    }));
+    assert.equal((await reopened.listRecent(1))[0].requestId, 'rotation-13');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('audit repository rejects an individual event larger than the configured file limit', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-audit-capacity-'));
+  const file = path.join(dir, 'events.jsonl');
+  try {
+    const repository = new JsonAccessAuditRepository(file, { maxFileBytes: 1024, maxArchives: 1 });
+    await assert.rejects(
+      () => repository.record({ eventId: 'large', payload: 'x'.repeat(2000) }),
+      error => error.code === 'ACCESS_AUDIT_EVENT_TOO_LARGE'
+    );
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

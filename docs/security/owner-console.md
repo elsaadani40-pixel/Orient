@@ -25,6 +25,6 @@ Open `http://127.0.0.1:8080/owner` (change the port if `PORT` is configured). Af
 
 ## Access audit scope
 
-The owner console shows recent requests that pass through ORIENT ONE's HTTP server. The log records the direct socket IP, a route template, method, status, bounded user-agent, timing, request ID, and authentication outcome. It deliberately excludes query strings, request bodies, passwords, cookies, and authorization headers. The JSONL log is hash chained; integrity is re-checked before showing it.
+The owner console shows recent requests that pass through ORIENT ONE's HTTP server. The log records the direct socket IP, a route template, method, status, bounded user-agent, timing, request ID, and authentication outcome. It deliberately excludes query strings, request bodies, passwords, cookies, and authorization headers. The JSONL log is hash chained and rotated at 5 MiB per file with three retained archives (about 20 MiB maximum for the active file plus archives). Integrity is re-checked across retained segments before showing the log. When retention removes the oldest segment, the oldest remaining record becomes the verification anchor; older deleted records are no longer available for verification.
 
 This is application-level HTTP auditing, not device-wide monitoring. It cannot observe activity outside ORIENT ONE, and the current server is intentionally loopback-bound. It therefore does not yet provide a secure multi-device/LAN deployment or record remote client IPs. Audit retention/rotation and durable session storage remain follow-up work.
