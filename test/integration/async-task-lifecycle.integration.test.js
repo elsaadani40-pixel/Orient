@@ -90,7 +90,8 @@ test('public async task API survives restart, pauses for approval, and resumes t
     server.listen(0, '127.0.0.1', resolve);
   });
   const origin = 'http://127.0.0.1:' + server.address().port;
-  const loginResponse = await request(origin, '/owner/login', {
+  try {
+    const loginResponse = await request(origin, '/owner/login', {
     method: 'POST',
     headers: { Origin: origin },
     body: { password: OWNER_PASSWORD }
@@ -185,7 +186,6 @@ test('public async task API survives restart, pauses for approval, and resumes t
     return result;
   };
 
-  try {
     const acceptedResponse = await request(origin, '/api/v1/tasks', {
       method: 'POST',
       headers: { ...ownerHeaders, 'Idempotency-Key': 'async-e2e-request-0001' },
