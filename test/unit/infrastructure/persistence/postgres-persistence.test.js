@@ -235,3 +235,22 @@ test('Postgres approval repository supports durable tenant-scoped execution and 
   assert.match(db.calls[1].text, /tenant_id=\$1 AND used=FALSE AND expires_at>\$2.*LIMIT \$3/);
   assert.deepEqual(db.calls[1].values, ['tenant-a', '2026-10-10T10:00:00.000Z', 10]);
 });
+
+
+test('Postgres approval consume requires an approved decision and checks expiry in SQL', async () => {
+  const now = Date.now();
+  const db = fakeDb([{ rows: [], rowCount: 1 }]);
+  const repo = new PostgresApprovalRepository(db);
+  const requestedAt = new Date(now + 10).toISOString();
+  const consumed = await repo.consume('approval-consume-pg', requestedAt, 'tenant-a', () => now);
+  assert.equal(consumed, true);
+  assert.ok(db.calls[0].text.includes("metadata->'decision'->>'status'='approved'"));
+  assert.ok(db.calls[0].text.includes('clock_timestamp()'));
+  assert.ok(db.calls[0].text.includes('expires_at>$1::timestamptz'));
+  assert.deepEqual(db.calls[0].values, [
+    requestedAt,
+    new Date(now).toISOString(),
+    'approval-consume-pg',
+    'tenant-a'
+  ]);
+});
