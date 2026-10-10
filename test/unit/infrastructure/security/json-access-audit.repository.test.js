@@ -154,13 +154,7 @@ test('audit repository rejects an individual event larger than the configured fi
   try {
     const repository = new JsonAccessAuditRepository(file, { maxFileBytes: 1024, maxArchives: 1 });
     await assert.rejects(
-      () => repository.record(createAccessAuditEvent({
-        requestId: 'large',
-        pathname: '/',
-        method: 'GET',
-        statusCode: 200,
-        userAgent: 'x'.repeat(160)
-      })),
+      () => repository.record({ eventId: 'large', payload: 'x'.repeat(2000) }),
       error => error.code === 'ACCESS_AUDIT_EVENT_TOO_LARGE'
     );
   } finally {
