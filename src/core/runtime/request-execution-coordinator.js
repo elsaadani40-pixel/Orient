@@ -653,7 +653,23 @@ class RequestExecutionCoordinator {
         }
       }
 
-      if (pendingStep && !durableApproval) {
+      // A checkpoint can still show a pending approval input after the
+      // approved tool step was marked running and its idempotency reservation
+      // was persisted. Let AgentLoop reconcile that exact operation; it verifies
+      // the tenant-scoped idempotency record before bypassing a fresh approval
+      // check and fails closed if the record is missing.
+      const pendingOperationAlreadyStarted = Boolean(
+        pendingStep &&
+        pendingPlanStep?.tool &&
+        Array.isArray(context.steps) &&
+        context.steps.some(persistedStep =>
+          persistedStep?.status === 'running' &&
+          Number(persistedStep.step) === pendingStep &&
+          Number(persistedStep.planRevision || 1) === planRevision &&
+          persistedStep.tool === pendingPlanStep.tool
+        )
+      );
+      if (pendingStep && !durableApproval && !pendingOperationAlreadyStarted) {
         throw Object.assign(new Error('Execution is waiting for an explicit durable approval decision'), {
           code: 'APPROVAL_NOT_APPROVED'
         });
