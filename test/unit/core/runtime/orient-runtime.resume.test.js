@@ -223,3 +223,47 @@ test('expired approval decision cancels the matching execution and reconciles it
     { kind: 'expire-workflow', args: ['execution-expired', 'approval-expired'] }
   ]);
 });
+
+
+test('runtime cancels and reconciles an approval that expires after decision but before resume', async () => {
+  const calls = [];
+  const expired = Object.assign(new Error('Approved decision expired before execution resume'), {
+    code: 'APPROVAL_EXPIRED',
+    approvalId: 'approval-race',
+    executionId: 'execution-race'
+  });
+  const runtime = {
+    tenantId: 'tenant-a',
+    requestExecutionCoordinator: {
+      async resume(executionId) {
+        assert.equal(executionId, 'execution-race');
+        throw expired;
+      }
+    },
+    persistence: {
+      executions: {
+        async requestCancellation(...args) {
+          calls.push({ kind: 'cancel', args });
+          return { executionId: args[0], status: 'running' };
+        }
+      }
+    },
+    workflowExecutionCoordinator: {
+      async expireApprovalWorkflow(...args) {
+        calls.push({ kind: 'expire-workflow', args });
+        return true;
+      }
+    }
+  };
+
+  await assert.rejects(
+    () => OrientRuntime.prototype.resume.call(runtime, 'execution-race', {
+      approval: { approvalId: 'approval-race' }
+    }),
+    error => error.code === 'APPROVAL_EXPIRED'
+  );
+  assert.deepEqual(calls, [
+    { kind: 'cancel', args: ['execution-race', 'approval_expired', { tenantId: 'tenant-a' }] },
+    { kind: 'expire-workflow', args: ['execution-race', 'approval-race'] }
+  ]);
+});
