@@ -134,3 +134,137 @@ test('runtime failures are persisted as failed idempotency records and cannot re
   );
   assert.equal(fixture.executions, 1);
 });
+
+
+function createAsyncRuntime() {
+  const records = new Map();
+  const workflows = new Map();
+  let enqueueCalls = 0;
+  const idempotency = {
+    async begin(args) {
+      const existing = records.get(args.operationId);
+      if (existing) return { created: false, key: args.operationId, record: existing };
+      const record = { key: args.operationId, ...args, status: 'running', result: null };
+      records.set(args.operationId, record);
+      return { created: true, key: args.operationId, record };
+    },
+    async complete(key, result) {
+      const record = records.get(key);
+      record.status = 'completed';
+      record.result = result;
+      return record;
+    },
+    async fail(key, error) {
+      const record = records.get(key);
+      record.status = 'failed';
+      record.error = error;
+      return record;
+    }
+  };
+  const workflowRepository = {
+    async findById(workflowId, tenantId) {
+      const workflow = workflows.get(workflowId);
+      return workflow && workflow.tenantId === tenantId ? { ...workflow, metadata: { ...workflow.metadata } } : null;
+    },
+    async findAll({ tenantId } = {}) {
+      return [...workflows.values()].filter(workflow => !tenantId || workflow.tenantId === tenantId);
+    }
+  };
+  const runtime = {
+    tenantId: 'tenant-async',
+    persistence: { idempotency, workflows: workflowRepository, events: { async findByExecutionId() { return []; } } },
+    workflowExecutionCoordinator: {
+      workflowRepository,
+      async enqueue(goal, { workflowId }) {
+        enqueueCalls += 1;
+        const now = new Date().toISOString();
+        const workflow = {
+          workflowId,
+          tenantId: 'tenant-async',
+          state: 'QUEUED',
+          createdAt: now,
+          updatedAt: now,
+          metadata: { taskId: workflowId }
+        };
+        workflows.set(workflowId, workflow);
+        return { taskId: workflowId, workflowId, state: workflow.state, tenantId: workflow.tenantId, createdAt: now, updatedAt: now };
+      }
+    },
+    async execute() { assert.fail('async task submission must not execute inline'); },
+    async getExecutionStatus() { assert.fail('queued async tasks must read workflow state'); },
+    async listExecutionSummaries() { return { executions: [], limit: 20, offset: 0, total: 0 }; }
+  };
+  return {
+    service: new AgentService(runtime, { taskAcceptanceMode: 'async' }),
+    runtime,
+    records,
+    workflows,
+    get enqueueCalls() { return enqueueCalls; }
+  };
+}
+
+test('opt-in async task acceptance durably enqueues once and replays the stable task identity', async () => {
+  const fixture = createAsyncRuntime();
+  const first = await fixture.service.createTask({
+    goal: '  prepare the report  ',
+    idempotencyKey: 'async-request-0001'
+  });
+  const replay = await fixture.service.createTask({
+    goal: 'prepare the report',
+    idempotencyKey: 'async-request-0001'
+  });
+
+  assert.equal(first.replayed, false);
+  assert.equal(first.task.status, 'queued');
+  assert.equal(first.task.id, first.task.workflowId);
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.task, first.task);
+  assert.equal(fixture.enqueueCalls, 1);
+});
+
+test('async task status and listing resolve the workflow identity and canonical execution mapping', async () => {
+  const fixture = createAsyncRuntime();
+  const accepted = await fixture.service.createTask({
+    goal: 'wait for approval',
+    idempotencyKey: 'async-request-0002'
+  });
+  const workflow = fixture.workflows.get(accepted.task.workflowId);
+  workflow.state = 'WAITING';
+  workflow.updatedAt = new Date().toISOString();
+  workflow.metadata = {
+    ...workflow.metadata,
+    approvalBlocked: true,
+    approvalExecutionId: 'execution-async-2',
+    executionId: 'execution-async-2',
+    approvalId: 'approval-async-2'
+  };
+
+  const status = await fixture.service.getTaskStatus(accepted.task.id);
+  assert.equal(status.id, accepted.task.id);
+  assert.equal(status.status, 'waiting');
+  assert.equal(status.workflowId, accepted.task.workflowId);
+  assert.equal(status.executionId, 'execution-async-2');
+  assert.equal(status.approvalRequired, true);
+
+  const page = await fixture.service.listTasks({ limit: 10, offset: 0 });
+  assert.equal(page.total, 1);
+  assert.equal(page.executions[0].executionId, accepted.task.id);
+  assert.equal(page.executions[0].canonicalExecutionId, 'execution-async-2');
+  assert.equal(page.executions[0].approvalRequired, true);
+});
+
+test('async task mode fails closed when the durable workflow coordinator is unavailable', async () => {
+  const service = new AgentService({
+    tenantId: 'tenant-async',
+    persistence: { idempotency: {
+      async begin(args) { return { created: true, key: args.operationId, record: { ...args, status: 'running' } }; },
+      async complete() { assert.fail('must not complete without workflow acceptance'); },
+      async fail() { return true; }
+    } }
+  }, { taskAcceptanceMode: 'async' });
+
+  await assert.rejects(
+    service.createTask({ goal: 'queue safely', idempotencyKey: 'async-request-0003' }),
+    error => error.code === 'ASYNC_TASK_COORDINATOR_REQUIRED'
+  );
+});
