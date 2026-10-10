@@ -9,6 +9,45 @@ const SqlitePersistence =
 
 const ApprovalService =
   require('../../../src/core/agent/approval/approval-service');
+const WorkflowDefinition = require('../../../src/core/workflow/workflow-definition');
+const WorkflowInstance = require('../../../src/core/workflow/workflow-instance');
+
+test('SQLite workflow repository resolves the durable approval-to-workflow mapping', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-approval-workflow-'));
+  try {
+    const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+    const definition = new WorkflowDefinition({
+      id: 'approval-mapping',
+      version: 1,
+      name: 'Approval mapping',
+      steps: [{ id: 'agent-runtime', agent: 'ORIENT_RUNTIME' }]
+    });
+    const instance = new WorkflowInstance({
+      definition,
+      workflowId: 'workflow-sqlite-approval-map',
+      tenantId: 'tenant-a',
+      input: { text: 'guarded operation' }
+    });
+    instance.transition('QUEUED');
+    instance.transition('RUNNING');
+    instance.transition('WAITING');
+    instance.metadata = { approvalBlocked: true, approvalExecutionId: 'execution-sqlite-approval-map', approvalId: 'approval-sqlite-map' };
+    persistence.workflows.save(instance, 'tenant-a');
+
+    const found = persistence.workflows.findByApprovalExecutionId({
+      executionId: 'execution-sqlite-approval-map',
+      tenantId: 'tenant-a'
+    });
+    assert.equal(found.workflowId, 'workflow-sqlite-approval-map');
+    assert.equal(found.metadata.approvalId, 'approval-sqlite-map');
+    assert.equal(persistence.workflows.findByApprovalExecutionId({
+      executionId: 'execution-sqlite-approval-map',
+      tenantId: 'tenant-other'
+    }), null);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('SQLite persistence survives repository recreation and preserves execution state', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-'));
