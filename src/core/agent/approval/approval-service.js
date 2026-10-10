@@ -243,7 +243,14 @@ class ApprovalService {
       : this.approvals.get(approvalId);
     if (!stored || stored.executionId !== String(executionId)) return null;
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return null;
-    if (stored.used || !stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) return null;
+    if (stored.used) return null;
+    if (!stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) {
+      throw Object.assign(new Error('Approved decision expired before execution resume'), {
+        code: 'APPROVAL_EXPIRED',
+        approvalId,
+        executionId: String(executionId)
+      });
+    }
     if (stored.decision?.status !== 'approved') return null;
     return { ...stored };
   }
