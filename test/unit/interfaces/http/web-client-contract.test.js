@@ -49,6 +49,8 @@ test('operational dashboard is responsive and exposes real runtime controls', ()
   assert.match(dashboard, /\/approvals\/pending/);
   assert.match(dashboard, /href="\/owner"/);
   assert.match(dashboard, /id="healthText" role="status" aria-live="polite"/);
+  assert.match(dashboard, /\.status\{[^}]*flex-wrap:wrap/,
+    'status text and owner link must wrap instead of overflowing narrow mobile viewports');
   assert.match(server, /requestUrl\.pathname === '\/owner'/);
   assert.match(dashboard, /EventSource|text\/event-stream|addEventListener\(['"]message['"]/);
   assert.doesNotMatch(dashboard, /<script[^>]+src=["']https?:\/\//i,
