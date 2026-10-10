@@ -62,6 +62,74 @@ function createAgentRoutes(agentService) {
       res.end(JSON.stringify({ apiVersion: 'v1', task }));
     },
 
+    async taskEvents(req, res, executionId) {
+      const url = new URL(req.url, 'http://localhost');
+      const limitValue = url.searchParams.get('limit');
+      const after = url.searchParams.get('after');
+      const limit = limitValue === null ? 50 : Number(limitValue);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        throw new AppError('Invalid task event pagination', 400, 'VALIDATION_ERROR');
+      }
+      if (after !== null && (after.length < 1 || after.length > 200 || /[\\r\\n\\0]/.test(after))) {
+        throw new AppError('Invalid task event cursor', 400, 'VALIDATION_ERROR');
+      }
+
+      // The service scopes the execution and its events to the runtime tenant.
+      // Only the newest 200 events are currently retrievable; if a cursor falls
+      // outside that window, report a gap instead of silently skipping history.
+      const events = await agentService.getExecutionEvents(executionId, { limit: 200 });
+      let startIndex = 0;
+      if (after !== null) {
+        const cursorIndex = events.findIndex(event => String(event.id) === after);
+        if (cursorIndex < 0) {
+          throw new AppError('Task event cursor is no longer available', 409, 'EVENT_CURSOR_NOT_FOUND');
+        }
+        startIndex = cursorIndex + 1;
+      }
+
+      const page = events.slice(startIndex, startIndex + limit).map(event => {
+        const data = event?.data && typeof event.data === 'object' && !Array.isArray(event.data)
+          ? event.data
+          : {};
+        const safeString = (value, max = 100) =>
+          typeof value === 'string' ? value.replace(/[\\r\\n\\0]/g, '').slice(0, max) : null;
+        const sequence = event?.sequence == null ? null : Number(event.sequence);
+        return {
+          id: safeString(String(event?.id || ''), 200),
+          taskId: executionId,
+          sequence: Number.isFinite(sequence) ? sequence : null,
+          timestamp: safeString(event?.timestamp, 40),
+          type: safeString(event?.type, 100) || 'unknown',
+          stepId: safeString(data.stepId || (typeof data.step === 'string' ? data.step : ''), 100),
+          outcome: safeString(data.status, 80),
+          details: Object.fromEntries(
+            ['step', 'stepId', 'tool', 'status', 'errorCode']
+              .map(key => [key, data[key]])
+              .filter(([, value]) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))
+              .map(([key, value]) => [key, typeof value === 'string' ? value.replace(/[\\r\\n\\0]/g, '').slice(0, 100) : value])
+          )
+        };
+      });
+
+      const hasMore = startIndex + page.length < events.length;
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+        'X-ORIENT-API-Version': 'v1'
+      });
+      res.end(JSON.stringify({
+        apiVersion: 'v1',
+        items: page,
+        page: {
+          limit,
+          nextCursor: page.length ? page[page.length - 1].id : after,
+          hasMore,
+          gapDetected: false
+        }
+      }));
+    },
+
     async executions(req, res) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
