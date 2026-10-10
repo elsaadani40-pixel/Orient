@@ -233,7 +233,7 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
     const cancelled = await request(origin, '/owner/executions/exec-123/cancel', {
       method: 'POST',
       headers: { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken },
-      body: JSON.stringify({ reason: 'owner_rejected', approval: { approvalId: 'approval-123' } })
+      body: JSON.stringify({ reason: 'owner_rejected', approval: { approvalId: 'approval-reject-456' } })
     });
     assert.equal(cancelled.status, 200);
     assert.equal(calls[1].action, 'cancel');
