@@ -24,7 +24,7 @@ test('timeout terminates the complete child process group on POSIX', {
     allowedRoot: root,
     allowCommands: true,
     allowedCommands: ['node'],
-    timeoutMs: 150
+    timeoutMs: 1000
   });
 
   const runner = new CommandRunner({ policy, isolator: new TestCommandIsolator() });
