@@ -90,6 +90,7 @@ test('public async task API survives restart, pauses for approval, and resumes t
     server.listen(0, '127.0.0.1', resolve);
   });
   const origin = 'http://127.0.0.1:' + server.address().port;
+  const workerServices = [];
   try {
     const loginResponse = await request(origin, '/owner/login', {
     method: 'POST',
@@ -104,7 +105,6 @@ test('public async task API survives restart, pauses for approval, and resumes t
     Cookie: cookie,
     'X-ORIENT-CSRF': loginPayload.csrfToken
   };
-  const workerServices = [];
 
   const createWorkerService = scheduler => {
     const service = new AsyncWorkflowWorkerService({
