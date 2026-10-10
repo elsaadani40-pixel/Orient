@@ -4,6 +4,10 @@
 
 ORIENT is being engineered around a canonical runtime that coordinates planning, agent invocation, capability authorization, tool execution, durable state, observability, and recovery. The product direction is one coherent experience across phone, tablet, and computer—not a collection of unrelated demos. It prioritizes local-first operation, explicit permissions, human approval for consequential actions, and verifiable outcomes.
 
+## Product direction
+
+ORIENT is intended to be one coherent personal AI operating system across Android phones, tablets, and computers—not a collection of device-specific demos. Its cross-device product contract, canonical task lifecycle, research-to-plan-to-verify workflow, learning model, security boundaries, and staged roadmap are documented in [the ORIENT Product Contract](docs/product/ORIENT-PRODUCT-CONTRACT.md). This is a target contract, not a claim that every listed capability is already implemented.
+
 ## Brand website
 
 The premium responsive brand experience is in [`website/index.html`](website/index.html). It includes responsive layouts, English/Arabic language switching with RTL support, an animated dimensional visual, reduced-motion accessibility support, platform principles, and links to the source repository.
