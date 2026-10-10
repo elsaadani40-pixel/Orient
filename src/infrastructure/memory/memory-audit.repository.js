@@ -59,10 +59,20 @@ class MemoryAuditRepository {
         'memory.consolidated': 'memory.consolidated',
         'memory.archived': 'memory.archived'
       };
-      this.eventSink({
-        ...record,
-        type: record.type || eventTypeByAction[record.action] || 'memory.updated'
-      });
+      try {
+        this.eventSink({
+          ...record,
+          type: record.type || eventTypeByAction[record.action] || 'memory.updated'
+        });
+        this.lastEventSinkError = null;
+      } catch (error) {
+        // The audit record has already been durably written. Propagating a
+        // downstream publication error would make callers compensate a memory
+        // mutation even though its audit event is committed. Keep the durable
+        // audit log authoritative and retain the delivery failure for health
+        // reporting/replay; do not misreport the append as uncommitted.
+        this.lastEventSinkError = error;
+      }
     }
 
     return record;
