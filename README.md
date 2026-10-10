@@ -54,15 +54,7 @@ Start the HTTP application:
 node app.js
 ```
 
-Open `http://127.0.0.1:8080` for the local memory interface or `http://127.0.0.1:8080/dashboard` for the local control plane. The dashboard exposes tenant-scoped execution history, per-execution SSE events, a bounded event-driven WebGL view, pending approvals, and explicit cancellation requests. See [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md) for the exact API contract, safety boundaries, and smoke checklist. To submit a task to the canonical agent runtime from another terminal:
-
-```bash
-curl -sS -X POST http://127.0.0.1:8080/agent \
-  -H 'Content-Type: application/json' \
-  -d '{"input":"احفظ أنني أختبر ORIENT"}'
-```
-
-The default planner is deterministic and does not require a paid model API. The example uses local JSON persistence. Check the returned execution status and verify the saved memory in the local interface; do not treat an HTTP response alone as proof that every future tool or integration is available.
+Open `http://127.0.0.1:8080` for the local memory interface or `http://127.0.0.1:8080/dashboard` for the local control plane. The dashboard exposes tenant-scoped execution history, per-execution SSE events, a bounded event-driven WebGL view, pending approvals, and explicit cancellation requests. See [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md) for the exact API contract, safety boundaries, and smoke checklist. To submit a task, open `http://127.0.0.1:8080/owner`, sign in with the password configured above, follow the link to `/dashboard`, and submit a harmless test task from the dashboard. The operational API is owner-session protected, so an unauthenticated `curl POST /agent` request is expected to be rejected. The default planner is deterministic and does not require a paid model API. Check the returned execution status and verify the result in the local interface; do not treat an HTTP response alone as proof that every future tool or integration is available.
 
 The default configuration uses local JSON persistence and binds the HTTP server to `127.0.0.1:8080`. The owner console and protected dashboard/API routes require `ORIENT_OWNER_PASSWORD` to be set to a unique secret of at least 16 characters; without it, those routes fail closed. After copying `.env.example` to `.env`, set that value locally and load the file into the current shell before starting Node (plain `node app.js` does not automatically load `.env`):
 
