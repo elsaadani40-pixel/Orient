@@ -25,7 +25,7 @@ test('prepared memory transaction is rolled back after a child process crashes b
       `const Coordinator = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/memory-transaction-coordinator'))});`,
       `const fs = require('node:fs');`,
       `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
-      `c.run(() => { fs.writeFileSync(process.env.MEMORY_FILE, '[{"id":"after"}]\n'); fs.writeFileSync(process.env.AUDIT_FILE, '[{"action":"after"}]\n'); process.exit(73); });`
+      `c.run(() => { fs.writeFileSync(process.env.MEMORY_FILE, '[{"id":"after"}]'); fs.writeFileSync(process.env.AUDIT_FILE, '[{"action":"after"}]'); process.exit(73); });`
     ].join('\n');
     const child = spawnSync(process.execPath, ['-e', script], {
       encoding: 'utf8',
