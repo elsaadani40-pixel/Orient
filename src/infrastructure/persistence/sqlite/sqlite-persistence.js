@@ -278,7 +278,8 @@ class SqliteApprovalRepository {
       used: Boolean(r.used),
       usedAt: r.used_at || undefined,
       metadata,
-      tenantId: metadata?.tenantId || null
+      tenantId: metadata?.tenantId || null,
+      ...(metadata?.decision ? { decision: metadata.decision } : {})
     };
   }
   findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null } = {}) {
@@ -314,6 +315,41 @@ class SqliteApprovalRepository {
     const record = this.mapRow(rows[0]);
     if (tenantId && record.tenantId !== tenantId) return null;
     return record;
+  }
+  recordDecision(approvalId, decision, tenantId = null, now = Date.now()) {
+    if (!approvalId || !decision || !['approved', 'rejected'].includes(decision.status) ||
+        typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
+        typeof decision.decidedAt !== 'string') {
+      throw Object.assign(new TypeError('Invalid approval decision record'), { code: 'APPROVAL_DECISION_INVALID' });
+    }
+    const current = this.findById(approvalId, { tenantId });
+    if (!current) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+    if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    if (!current.expiresAt || now >= Date.parse(current.expiresAt)) {
+      throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+    }
+    if (current.decision) {
+      if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+      throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+    }
+
+    const metadata = { ...(current.metadata || {}), decision };
+    const result = this.db.query(
+      'UPDATE approvals SET metadata=' + SqliteDatabase.json(metadata) +
+      ' WHERE approval_id=' + SqliteDatabase.literal(approvalId) +
+      ' AND used=0 AND expires_at>' + SqliteDatabase.literal(new Date(now).toISOString()) +
+      " AND json_extract(metadata, '$.decision') IS NULL; SELECT changes() AS changes;"
+    );
+    if (result.length && Number(result[result.length - 1].changes) === 1) {
+      return this.findById(approvalId, { tenantId });
+    }
+    const latest = this.findById(approvalId, { tenantId });
+    if (latest?.decision?.status === decision.status && latest.decision.actorId === decision.actorId) return latest;
+    if (latest?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    if (latest && latest.expiresAt && now >= Date.parse(latest.expiresAt)) {
+      throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+    }
+    throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
   }
   consume(approvalId, usedAt, tenantId = null) {
     const current = this.findById(approvalId, { tenantId });
