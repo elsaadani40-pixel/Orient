@@ -138,4 +138,48 @@ test('authenticated dashboard request completes a harmless mission through the r
   assert.equal(status.executionId, result.execution.executionId);
   assert.equal(status.status, 'completed');
   assert.equal(status.tenantId, 'tenant-owner-runtime');
+
+  // Exercise the canonical cross-device task API against the same real runtime.
+  const taskHeaders = {
+    'content-type': 'application/json',
+    Origin: origin,
+    Cookie: cookie,
+    'Idempotency-Key': 'owner-runtime-task-key-0001'
+  };
+  const taskResponse = await fetch(origin + '/api/v1/tasks', {
+    method: 'POST',
+    headers: taskHeaders,
+    body: JSON.stringify({ goal: 'افحص المشروع' })
+  });
+  assert.equal(taskResponse.status, 201);
+  const created = await taskResponse.json();
+  assert.equal(created.apiVersion, 'v1');
+  assert.equal(created.replayed, false);
+  assert.ok(created.task.id);
+  assert.equal(created.task.status, 'completed');
+
+  const replayResponse = await fetch(origin + '/api/v1/tasks', {
+    method: 'POST',
+    headers: taskHeaders,
+    body: JSON.stringify({ goal: 'افحص المشروع' })
+  });
+  assert.equal(replayResponse.status, 200);
+  const replayed = await replayResponse.json();
+  assert.equal(replayed.replayed, true);
+  assert.equal(replayed.task.id, created.task.id, 'idempotent replay must not create another execution');
+
+  const conflictingReuse = await fetch(origin + '/api/v1/tasks', {
+    method: 'POST',
+    headers: taskHeaders,
+    body: JSON.stringify({ goal: 'طلب مختلف لا يجوز تنفيذه بنفس المفتاح' })
+  });
+  assert.equal(conflictingReuse.status, 409);
+  assert.equal((await conflictingReuse.json()).code, 'IDEMPOTENCY_KEY_REUSED');
+
+  const taskListResponse = await fetch(origin + '/api/v1/tasks?limit=20&offset=0', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(taskListResponse.status, 200);
+  const taskList = await taskListResponse.json();
+  assert.ok(taskList.items.some(item => item.id === created.task.id));
 });
