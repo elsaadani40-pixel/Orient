@@ -204,10 +204,10 @@ function createOwnerServer(options = {}) {
     const ip = req.socket.remoteAddress || 'unknown';
 
     if (req.method === 'GET' && url.pathname === '/api/auth/me') {
-      const session = userSessionFor(req);
-      if (session) return sendJson(res, 200, { username: session.username, role: 'user' });
       const owner = sessionFor(req);
       if (owner) return sendJson(res, 200, { username: 'Admin', role: 'owner', passwordChangeRequired: state.mustChangePassword });
+      const session = userSessionFor(req);
+      if (session) return sendJson(res, 200, { username: session.username, role: 'user' });
       return sendJson(res, 401, { error: 'Authentication required' });
     }
 
