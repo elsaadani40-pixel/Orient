@@ -35,6 +35,8 @@ const ProjectBuilderAgent =
 
 const createWorkspaceTools =
   require('./src/application/tools/workspace.tools');
+const createProjectTools =
+  require('./src/application/tools/project.tools');
 
 const OrientRuntime =
   require('./src/core/runtime/orient-runtime');
@@ -167,8 +169,21 @@ const projectBuilderAgent = new ProjectBuilderAgent({
   }
 });
 const workspaceTools = createWorkspaceTools(projectBuilderAgent);
+// Project audit/proposal tools are read-only. The high-risk execute tool is
+// registered with the canonical runtime and remains subject to capability
+// authorization plus durable human approval before any workspace mutation.
+const projectTools = createProjectTools({
+  projectRoot: __dirname,
+  policy: {
+    allowRead: true,
+    allowWrite: true,
+    allowCommands: false,
+    allowGit: false,
+    maxOutput: 30000
+  }
+});
 
-for (const tool of [...memoryTools, ...workspaceTools]) {
+for (const tool of [...memoryTools, ...workspaceTools, ...projectTools]) {
   toolRegistry.register(tool);
 }
 
