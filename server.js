@@ -109,7 +109,7 @@ function createOwnerServer(options = {}) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw new Error('Cannot read user records safely: ' + error.message);
     const fd = fs.openSync(usersFile, 'wx', 0o600);
-    try { fs.writeFileSync(fd, '[]\\n', 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    try { fs.writeFileSync(fd, '[]\n', 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     try { fs.chmodSync(usersFile, 0o600); } catch {}
   }
   const userSessions = new Map();
@@ -120,7 +120,7 @@ function createOwnerServer(options = {}) {
   function persistUsers(nextUsers) {
     const temp = usersFile + '.tmp.' + process.pid + '.' + crypto.randomUUID();
     const fd = fs.openSync(temp, 'wx', 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify(nextUsers, null, 2) + '\\n', 'utf8'); fs.fsyncSync(fd); }
+    try { fs.writeFileSync(fd, JSON.stringify(nextUsers, null, 2) + '\n', 'utf8'); fs.fsyncSync(fd); }
     finally { fs.closeSync(fd); }
     try {
       fs.renameSync(temp, usersFile);
@@ -133,7 +133,7 @@ function createOwnerServer(options = {}) {
 
   function userSessionFor(req) {
     const cookie = req.headers.cookie || '';
-    const match = cookie.match(/(?:^|;\\s*)orient_user_session=([A-Za-z0-9_-]+)/);
+    const match = cookie.match(/(?:^|;\s*)orient_user_session=([A-Za-z0-9_-]+)/);
     if (!match) return null;
     const session = userSessions.get(match[1]);
     if (!session || session.expiresAt <= Date.now()) { userSessions.delete(match[1]); return null; }
