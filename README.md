@@ -1,34 +1,55 @@
-# ORIENT
+# ORIENT ONE
 
-**A governed personal AI operating system — under active development.**
+**A governed, local-first personal AI operating system — under active engineering.**
 
-ORIENT is being engineered around a canonical runtime that coordinates planning, agent invocation, capability authorization, tool execution, durable state, observability, and recovery. The product direction is one coherent experience across phone, tablet, and computer—not a collection of unrelated demos. It prioritizes local-first operation, explicit permissions, human approval for consequential actions, and verifiable outcomes.
+ORIENT is being built as one coherent system for researching, planning, executing, verifying, and recovering from work across phone, tablet, and computer. A canonical runtime owns task execution, tool permissions, durable state, approvals, and recovery. Client interfaces must not bypass those controls.
 
-## Product direction
+> **Status: pre-release / active development.** This repository does not claim that every planned capability is complete or production-ready. Use the source, tests, pull requests, and acceptance evidence to distinguish implemented behavior from roadmap.
 
-ORIENT is intended to be one coherent personal AI operating system across Android phones, tablets, and computers—not a collection of device-specific demos. Its cross-device product contract, canonical task lifecycle, research-to-plan-to-verify workflow, learning model, security boundaries, and staged roadmap are documented in [the ORIENT Product Contract](docs/product/ORIENT-PRODUCT-CONTRACT.md). This is a target contract, not a claim that every listed capability is already implemented.
+## Start here
 
-## Brand website
+- **Repository:** [Source code](https://github.com/elsaadani40-pixel/Orient)
+- **Brand website source:** [`website/index.html`](website/index.html) — responsive English/Arabic landing page with RTL support. This is source in the repository; it is not a claim that a public website deployment is live.
+- **Engineering constitution:** [`AGENT.md`](AGENT.md)
+- **Product contract and cross-device roadmap:** [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md)
+- **Dashboard and control-plane contract:** [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md)
+- **Security policy:** [`SECURITY.md`](SECURITY.md)
+- **Contribution rules:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **Automated checks:** [GitHub Actions](https://github.com/elsaadani40-pixel/Orient/actions)
 
-The premium responsive brand experience is in [`website/index.html`](website/index.html). It includes responsive layouts, English/Arabic language switching with RTL support, an animated dimensional visual, reduced-motion accessibility support, platform principles, and links to the source repository.
+### Browser workbench status
 
-The website is a product/brand landing page. It does **not** imply that every product capability shown as a direction is already released. Current implementation status must be established from code, tests, and release evidence.
+The responsive web task workbench and its governed project-builder integration are being developed in reviewable pull requests, not silently treated as released features:
 
-## Project status
+- [Arabic web task workbench — PR #211](https://github.com/elsaadani40-pixel/Orient/pull/211)
+- [Workbench to governed project builder — PR #221](https://github.com/elsaadani40-pixel/Orient/pull/221)
 
-ORIENT is in active engineering / pre-release. This repository is not a claim that every planned capability is production-ready. Read the source, tests, and architecture notes to distinguish implemented behavior from future work.
+Both are drafts. The project-builder integration is stacked on PR #211. Do not merge it ahead of its dependency; complete the required CI, real-browser phone/tablet/desktop acceptance, approval/resume/cancellation checks, and deployment/security review first.
+
+## Architecture principles
+
+- **One canonical Runtime:** agents and clients do not bypass the runtime to perform privileged actions.
+- **Governed capabilities:** tools declare permissions and risk; authorization is enforced at the execution boundary.
+- **Human authority:** consequential actions require the appropriate durable owner approval.
+- **Durable execution:** state, checkpoints, events, and recovery should survive process interruptions where the configured persistence adapter supports it.
+- **Local-first by default:** local operation must be honest about unavailable network or integrations; no fabricated offline results.
+- **Sandboxed project work:** audit, propose, execute, and verify are distinct operations; writes and commands remain bounded and governed.
+- **Evidence-based reporting:** an accepted request or successful HTTP response is not, by itself, proof that the intended outcome occurred.
+- **No uncontrolled self-modification:** project-building capabilities remain subject to explicit policy, scope, resource limits, and approval.
+
+The product contract describes intended cross-device behavior and staged goals. It is a roadmap, not proof that every listed feature has shipped.
 
 ## Current engineering focus
 
-- A canonical runtime and governed tool/capability execution path.
-- Tenant/scope-aware memory and durable execution state.
-- Risk-based authorization and human approval for high-risk operations.
+- Canonical task lifecycle across the runtime and web clients.
+- Tenant-scoped memory and execution history.
+- Risk-based authorization and durable approvals.
 - Checkpointing, idempotency, cancellation, and failure recovery.
-- Sandboxed project operations with explicit resource limits.
-- Automated tests across supported Node.js versions and PostgreSQL integration.
-- A unified task/capability contract for clients across supported devices.
+- Bounded project workspace operations and post-change verification.
+- Node.js unit/architecture tests, PostgreSQL integration tests, static safety checks, and Android companion build/tests.
+- A browser acceptance path that can be exercised by the project owner.
 
-The test suite is evidence for the scenarios it covers; it is not a blanket security certification or a guarantee against every failure mode.
+CI results are commit-specific. A green run on an earlier commit does not make a later failing commit green, and automated tests do not replace real-device/browser acceptance or a security review.
 
 ## Requirements
 
@@ -46,7 +67,7 @@ npm test
 npm run check:syntax
 ```
 
-### Run a first local task
+### Run locally
 
 Start the HTTP application:
 
@@ -54,7 +75,16 @@ Start the HTTP application:
 node app.js
 ```
 
-Open `http://127.0.0.1:8080` for the local memory interface, `http://127.0.0.1:8080/dashboard` for the local control plane, or `http://127.0.0.1:8080/workbench` for the Arabic task workbench. The workbench lets the owner submit a goal through the v1 task API and inspect the returned task status and allowlisted events; it requires an owner session. Configure `ORIENT_OWNER_PASSWORD` to a private password of at least 16 characters before starting the app, then sign in at `/owner`. See [`docs/operations/TASK-WORKBENCH.md`](docs/operations/TASK-WORKBENCH.md) for setup and a manual smoke checklist, and [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md) for the existing dashboard contract. The default server binds to loopback only; this is not a hosted public website. To submit a task to the canonical agent runtime from another terminal:
+By default, the server binds to `127.0.0.1:8080`.
+
+- Open `http://127.0.0.1:8080` for the local memory interface.
+- Open `http://127.0.0.1:8080/dashboard` for the local execution dashboard and control plane.
+
+- Open `http://127.0.0.1:8080/workbench` for the Arabic task workbench. It submits goals through the canonical v1 task API and displays the returned task status and allowlisted events; an owner session is required. Configure `ORIENT_OWNER_PASSWORD` to a private password of at least 16 characters before starting the app, then sign in at `/owner`. See [`docs/operations/TASK-WORKBENCH.md`](docs/operations/TASK-WORKBENCH.md) for setup and the manual smoke checklist. This is a local workbench, not a claim that a hosted public deployment is live.
+
+The dashboard exposes bounded, tenant-scoped execution history, per-execution event streams, pending approvals, and explicit cancellation requests. See [the dashboard contract](docs/operations/DASHBOARD-CONTROL-PLANE.md) for API details, security boundaries, and its smoke checklist.
+
+To submit a task through the canonical agent runtime from another terminal:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/agent \
@@ -62,26 +92,28 @@ curl -sS -X POST http://127.0.0.1:8080/agent \
   -d '{"input":"احفظ أنني أختبر ORIENT"}'
 ```
 
-The default planner is deterministic and does not require a paid model API. The example uses local JSON persistence. Check the returned execution status and verify the saved memory in the local interface; do not treat an HTTP response alone as proof that every future tool or integration is available.
+The default planner is deterministic and does not require a paid model API. This example uses local JSON persistence. Inspect the returned status and verify the saved memory in the local interface; do not treat an HTTP response alone as proof that every tool or integration is available.
 
-The default configuration uses local JSON persistence and binds the HTTP server to `127.0.0.1:8080`. Review `src/core/config/index.js` and the security documentation before exposing any service to a network.
+The default server binding is loopback-only. Do not expose it to a network without a complete authentication/session boundary and transport protection.
 
 ### Optional PostgreSQL persistence
 
-Set `ORIENT_PERSISTENCE=postgres` and `ORIENT_DATABASE_URL` (or `DATABASE_URL`) in your local environment. Never commit real connection strings or credentials. Use a dedicated development/test database and least-privilege credentials.
+Set `ORIENT_PERSISTENCE=postgres` and `ORIENT_DATABASE_URL` (or `DATABASE_URL`) in your local environment. Use a dedicated development/test database and least-privilege credentials. Never commit real connection strings or credentials.
 
-A sample environment file is provided in [`.env.example`](.env.example). Copy it to `.env` for local use; `.env` is ignored by Git.
+A sample environment file is provided in [`.env.example`](.env.example). Copy it to `.env` locally; `.env` is ignored by Git.
 
 ## Repository map
 
-- `src/core` — runtime, policies, planning, execution, and governance
+- `src/core` — runtime, planning, execution, policies, authorization, and recovery
 - `src/application` — application services and tool adapters
 - `src/infrastructure` — persistence and external-system implementations
 - `src/interfaces` — HTTP interfaces
 - `test/unit` — unit and architecture tests
-- `test/integration` — runtime recovery and persistence proofs
+- `test/integration` — runtime, recovery, and persistence proofs
 - `docs/architecture` — architecture decisions and ownership boundaries
 - `docs/security` — security design notes and constraints
+- `docs/product` — product contract and cross-device roadmap
+- `website/` — static brand landing-page source
 - `AGENT.md` — engineering constitution for coding agents
 
 Archived implementations under `archive/` are historical reference material, not canonical runtime owners.
@@ -89,15 +121,15 @@ Archived implementations under `archive/` are historical reference material, not
 ## Security and data handling
 
 - Do not commit API keys, tokens, private keys, credentials, production database URLs, personal memories, customer data, or runtime state.
-- Keep local runtime data under ignored paths; verify `git status --short` before every push.
+- Keep local runtime data under ignored paths and check `git status --short` before pushing.
 - Do not put sensitive details in public issues or pull requests.
-- Review [`SECURITY.md`](SECURITY.md) before using the project with sensitive data.
-- The repository being public means its code, history, issues, and pull-request discussions may be visible and copied. Removing a file in a later commit does not erase it from Git history or other copies.
+- Review [`SECURITY.md`](SECURITY.md) before using ORIENT with sensitive data.
+- Public repository code, history, issues, and pull-request discussions may be visible and copied. Removing a file in a later commit does not erase it from Git history or other copies.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Changes should be focused, tested, documented, and merged only after required CI checks pass.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Keep changes focused, tested, documented, and reviewed. Do not merge a change with failing required checks or skip an unresolved dependency pull request.
 
 ## License
 
-ORIENT is licensed under the [MIT License](LICENSE). The license applies to the repository's original code and documentation; third-party components remain subject to their own licenses. The `private: true` setting in `package.json` prevents accidental npm publication and does not itself grant or remove rights to the public Git repository.
+ORIENT is licensed under the [MIT License](LICENSE). The license applies to the repository's original code and documentation; third-party components remain subject to their own licenses. The `private: true` setting in `package.json` prevents accidental npm publication; it does not make this GitHub repository private.
