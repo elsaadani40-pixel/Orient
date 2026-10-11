@@ -242,27 +242,37 @@
     const button = $('submitTask');
     button.disabled = true;
     message('submitMessage', 'جارٍ إرسال المهمة. إذا انقطع الاتصال بعد الإرسال، ستُعاد المحاولة بنفس مفتاح منع التكرار.');
+    let result;
     try {
-      const result = await request('/api/v1/tasks', {
+      result = await request('/api/v1/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': state.pendingKey },
         body: JSON.stringify({ goal, idempotencyKey: state.pendingKey })
       });
-      const task = result.task;
-      if (!task || typeof task.id !== 'string') throw new Error('استجابة الخادم لا تحتوي على معرّف مهمة صالح.');
-      state.pendingKey = null;
-      state.pendingGoal = null;
-      state.selectedId = task.id;
-      $('goal').value = '';
-      message('submitMessage', (result.replayed ? 'استجابة معاد تشغيلها لنفس الطلب. ' : 'استقبل الخادم المهمة. ') + 'المعرّف: ' + task.id + '\nالحالة الحالية: ' + statusLabel(task.status) + '. هذه ليست شهادة اكتمال.', 'success');
-      await loadTasks();
-      await selectTask(task.id);
     } catch (error) {
+      // Only a failed/ambiguous POST keeps the idempotency key for a safe retry.
       message('submitMessage', 'لم يمكن تأكيد نتيجة الإرسال: ' + error.message + '\nأعد المحاولة دون تغيير نص المهمة للحفاظ على مفتاح منع التكرار.', 'error');
       setConnection(false, 'تعذر تأكيد نتيجة الطلب؛ قد تكون النتيجة غير محسومة');
-    } finally {
       button.disabled = false;
+      return;
     }
+    const task = result.task;
+    if (!task || typeof task.id !== 'string' || !task.id) {
+      message('submitMessage', 'استجابة الخادم لا تحتوي على معرّف مهمة صالح؛ لا تعِد الإرسال تلقائيًا. افحص سجل المهام أولًا.', 'error');
+      setConnection(false, 'استجابة غير قابلة للتحقق');
+      button.disabled = false;
+      return;
+    }
+    // The server has acknowledged a durable task. Clear the retry key before
+    // refreshing read-only views, so a later GET failure cannot invite a duplicate POST.
+    state.pendingKey = null;
+    state.pendingGoal = null;
+    state.selectedId = task.id;
+    $('goal').value = '';
+    message('submitMessage', (result.replayed ? 'استجابة معاد تشغيلها لنفس الطلب. ' : 'استقبل الخادم المهمة. ') + 'المعرّف: ' + task.id + '\nالحالة الحالية: ' + statusLabel(task.status) + '. هذه ليست شهادة اكتمال.', 'success');
+    button.disabled = false;
+    await loadTasks();
+    await selectTask(task.id);
   }
   $('taskForm').addEventListener('submit', submitTask);
   $('clearGoal').addEventListener('click', () => {
