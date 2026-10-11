@@ -137,6 +137,8 @@ function createOwnerServer(options = {}) {
     if (!match) return null;
     const session = userSessions.get(match[1]);
     if (!session || session.expiresAt <= Date.now()) { userSessions.delete(match[1]); return null; }
+    const account = users.find(user => user.id === session.userId);
+    if (!account || account.disabled) { userSessions.delete(match[1]); return null; }
     return { token: match[1], ...session };
   }
 
@@ -287,6 +289,26 @@ function createOwnerServer(options = {}) {
       let body;
       try { body = await readJsonBody(req); }
       catch (error) { return sendJson(res, error.statusCode || 400, { error: error.message }); }
+
+      const userStatusMatch = url.pathname.match(/^\/api\/owner\/users\/([0-9a-f-]{36})\/status$/i);
+      if (userStatusMatch) {
+        const ownerSession = sessionFor(req);
+        if (!ownerSession) return sendJson(res, 401, { error: 'Owner authentication required' });
+        if (state.mustChangePassword) return sendJson(res, 403, { error: 'Password change required' });
+        if (typeof body.disabled !== 'boolean') return sendJson(res, 400, { error: 'disabled must be a boolean.' });
+        const userId = userStatusMatch[1];
+        const target = users.find(user => user.id === userId);
+        if (!target) return sendJson(res, 404, { error: 'Account not found.' });
+        const nextUsers = users.map(user => user.id === userId ? { ...user, disabled: body.disabled, updatedAt: new Date().toISOString() } : user);
+        try { persistUsers(nextUsers); }
+        catch { return sendJson(res, 500, { error: 'Could not safely update the account.' }); }
+        if (body.disabled) {
+          for (const [token, session] of userSessions) {
+            if (session.userId === userId) userSessions.delete(token);
+          }
+        }
+        return sendJson(res, 200, { ok: true, id: userId, disabled: body.disabled });
+      }
 
       if (url.pathname === '/api/owner/login') {
         if (typeof body.username !== 'string' || typeof body.password !== 'string' ||
