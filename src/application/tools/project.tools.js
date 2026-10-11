@@ -86,32 +86,14 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
         if (!applied) allApplied = false;
       }
 
-      if (allApplied) {
-        return {
-          status: 'completed',
-          result: {
-            status: 'verified',
-            reconciled: true,
-            modification: { applied: true, reconciled: true, changes: proposals.map(({ action, path, content }) => ({ action, path, content })) },
-            verification: {
-              status: 'reconciled',
-              passed: observations.length,
-              failed: 0,
-              definitionOfDoneSatisfied: true,
-              checks: observations.map((observation, index) => ({
-                id: 'proposal-applied-' + index,
-                passed: observation.applied,
-                result: observation
-              }))
-            },
-            recovery: { operationId: null, observations }
-          }
-        };
-      }
-
+      // Matching file contents are not proof that this operation produced them.
+      // This legacy factory has no durable operation-receipt store, so it must
+      // never report a recovered side effect as completed. Fail closed instead.
       return {
         status: 'conflict',
-        reason: 'external_state_does_not_match_expected_post_state',
+        reason: allApplied
+          ? 'operation_receipt_missing'
+          : 'external_state_does_not_match_expected_post_state',
         observations
       };
     }
