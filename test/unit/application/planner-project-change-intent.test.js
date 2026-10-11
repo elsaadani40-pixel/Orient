@@ -17,7 +17,7 @@ test('explicitly proposal-only project goal does not schedule execution', async 
 test('explicit owner-approved execution goal schedules proposal then gated execution', async () => {
   const planner = new PlannerService();
   const plan = await planner.plan(
-    'حلل المشروع الحالي، وحدد تغييرًا آمنًا ومحددًا، ثم اطلب موافقة المالك قبل أي تعديل، ونفذ فقط التغيير المعتمد داخل مساحة العمل المقيدة.'
+    'حلل المشروع الحالي، وحدد تغييرًا آمنًا ومحددًا، ثم اطلب موافقة المالك قبل أي تعديل، ونفذ فقط التغيير المعتمد داخل مساحة العمل المقيدة، وشغّل التحقق المتاح، وارجع التغييرات إذا فشل التحقق.'
   );
 
   assert.equal(plan.intent, 'project.change');
