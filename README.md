@@ -14,6 +14,10 @@ The premium responsive brand experience is in [`website/index.html`](website/ind
 
 The website is a product/brand landing page. It does **not** imply that every product capability shown as a direction is already released. Current implementation status must be established from code, tests, and release evidence.
 
+### Run the website and owner sign-in locally
+
+Run `npm ci`, then `npm run start:web`. Open `http://127.0.0.1:8080/` for the landing page or `http://127.0.0.1:8080/owner` for owner sign-in. On first startup, the server prints a randomly generated temporary password to the terminal once; use username `Admin`, then immediately set a new password of at least 14 characters. Keep the terminal output private. Credentials are stored locally in `.orient-data/owner.json`, excluded from Git, as a salted scrypt hash with restrictive file permissions. The server binds to loopback by default; do not expose it directly to the public internet.
+
 ## Project status
 
 ORIENT is in active engineering / pre-release. This repository is not a claim that every planned capability is production-ready. Read the source, tests, and architecture notes to distinguish implemented behavior from future work.
