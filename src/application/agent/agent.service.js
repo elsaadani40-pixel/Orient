@@ -53,7 +53,21 @@ class AgentService {
 
     let task;
     try {
-      const result = await this.execute(clean);
+      let result;
+      try {
+        result = await this.execute(clean);
+      } catch (error) {
+        // A high-risk tool may durably checkpoint an execution and pause for
+        // owner approval before execute() returns. Treat that as an accepted,
+        // observable task—not as a failed creation—so the web workbench can
+        // link the task to the owner approval flow without retrying the effect.
+        const approvalExecutionId = error?.code === 'APPROVAL_REQUIRED'
+          ? error.executionContext?.executionId
+          : null;
+        if (typeof approvalExecutionId !== 'string' || !approvalExecutionId) throw error;
+        result = { execution: { executionId: approvalExecutionId }, awaitingApproval: true };
+      }
+
       const executionId = result?.execution?.executionId || result?.executionId;
       if (typeof executionId !== 'string' || !executionId) {
         throw new AppError('لم يُرجع Runtime معرّف مهمة قابلًا للتحقق', 502, 'TASK_EXECUTION_ID_MISSING');
