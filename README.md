@@ -108,6 +108,7 @@ Run the website locally with `npm run start:web`, then open `http://127.0.0.1:80
 
 - The public site remains browseable without an account.
 - `/auth` provides public account registration and sign-in. New accounts receive the ordinary `user` role only.
+- `/account` is the signed-in user's personal account page; it shows the account name and provides logout. The homepage action changes to `My account` or `Owner dashboard` when a session is active.
 - Owner sign-in is available at `/auth?mode=owner`; first-time owner access still requires replacing the generated temporary password.
 - `/owner` redirects to the owner dashboard only for an authenticated owner session. The server checks authorization on the dashboard route and owner APIs; hiding a link is not the security boundary.
 - User password hashes and owner credentials are stored under `.orient-data/` with restrictive local file permissions. Sessions are in memory and are invalidated by a server restart.
