@@ -10,7 +10,7 @@ const createProjectTools = require('../../../../src/application/tools/project.to
 async function withProject(run) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-project-tools-'));
   try {
-    await fs.writeFile(path.join(root, 'main.js'), 'const marker = "already-present";\\n', 'utf8');
+    await fs.writeFile(path.join(root, 'main.js'), 'const marker = "already-present";\n', 'utf8');
     const tools = createProjectTools({
       projectRoot: root,
       policy: { allowRead: true, allowWrite: false, allowCommands: false, allowGit: false }
@@ -27,7 +27,7 @@ test('legacy project change reconciliation fails closed when matching contents h
       proposals: [{
         action: 'update',
         path: 'main.js',
-        content: 'const marker = "already-present";\\n'
+        content: 'const marker = "already-present";\n'
       }]
     });
 
@@ -43,7 +43,7 @@ test('legacy project change reconciliation reports conflicting target state', as
       proposals: [{
         action: 'update',
         path: 'main.js',
-        content: 'const marker = "different";\\n'
+        content: 'const marker = "different";\n'
       }]
     });
 
