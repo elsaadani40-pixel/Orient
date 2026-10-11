@@ -243,6 +243,19 @@ test('task workbench serves a responsive Arabic task console and same-origin API
   assert.match(source, /Idempotency-Key/);
   assert.match(source, /textContent/);
   assert.doesNotMatch(source, /innerHTML/);
+
+  // A post-submit GET failure must not be reported as an ambiguous POST:
+  // that would invite resubmission after the original task was already accepted.
+  const postStart = source.indexOf("result = await request('/api/v1/tasks'");
+  const postCatch = source.indexOf("} catch (error) {", postStart);
+  const taskValidation = source.indexOf('const task = result.task;', postCatch);
+  const clearRetryKey = source.indexOf('state.pendingKey = null;', taskValidation);
+  const refreshAfterAcceptance = source.indexOf('await loadTasks();', clearRetryKey);
+  assert.ok(postStart >= 0 && postCatch > postStart, 'task POST has a bounded error handler');
+  assert.ok(taskValidation > postCatch, 'task response is handled after the POST catch');
+  assert.ok(clearRetryKey > taskValidation, 'retry key is cleared only after a task ID is validated');
+  assert.ok(refreshAfterAcceptance > clearRetryKey, 'read-only refresh happens after accepted-task state is recorded');
+  assert.doesNotMatch(source.slice(postStart, postCatch), /loadTasks|selectTask/, 'read-only refreshes cannot be caught as a failed POST');
 });
 
 test('task workbench and its API remain behind the configured owner session gate', async t => {
