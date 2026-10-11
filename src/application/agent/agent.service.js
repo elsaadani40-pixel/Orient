@@ -134,6 +134,10 @@ class AgentService {
     return this.runtime.resume(executionId, options);
   }
 
+  decideApproval(options = {}) {
+    return this.runtime.decideApproval(options);
+  }
+
   cancelExecution(executionId, options = {}) {
     return this.runtime.cancelExecution(executionId, options);
   }

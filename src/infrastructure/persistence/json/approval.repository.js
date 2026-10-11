@@ -154,6 +154,11 @@ class ApprovalRepository {
       if (existing && tenantId && existing.tenantId !== tenantId && existing.metadata?.tenantId !== tenantId) {
         throw Object.assign(new Error('Approval tenant collision'), { code: 'APPROVAL_TENANT_MISMATCH' });
       }
+      if (existing) {
+        throw Object.assign(new Error('Approval identifier already exists; durable records cannot be replaced'), {
+          code: 'APPROVAL_ALREADY_EXISTS'
+        });
+      }
       records[approval.approvalId] = JSON.parse(JSON.stringify(approval));
       this.write(records);
       return JSON.parse(JSON.stringify(records[approval.approvalId]));
@@ -191,7 +196,43 @@ class ApprovalRepository {
     return JSON.parse(JSON.stringify(record));
   }
 
-  async consume(approvalId, usedAt, tenantId = null) {
+
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now()) {
+    if (!approvalId) throw new TypeError('approvalId is required');
+    if (!decision || !['approved', 'rejected'].includes(decision.status) ||
+        typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
+        typeof decision.decidedAt !== 'string') {
+      throw Object.assign(new TypeError('Invalid approval decision record'), { code: 'APPROVAL_DECISION_INVALID' });
+    }
+
+    return this.withLock(() => {
+      const records = this.read();
+      const record = records[approvalId];
+      if (!record) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+      if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) {
+        throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
+      }
+      // An exact replay of the immutable decision remains idempotent even
+      // after the approved operation consumed the challenge or its TTL elapsed.
+      if (record.decision) {
+        if (record.decision.status === decision.status && record.decision.actorId === decision.actorId) {
+          return JSON.parse(JSON.stringify(record));
+        }
+        throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (record.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      const expiresAt = typeof record.expiresAt === 'string' ? Date.parse(record.expiresAt) : NaN;
+      const decisionNow = typeof now === 'function' ? now() : now;
+      if (!Number.isFinite(expiresAt) || !Number.isFinite(decisionNow) || decisionNow >= expiresAt) {
+        throw Object.assign(new Error('Approval expired or has an invalid expiry timestamp'), { code: 'APPROVAL_EXPIRED' });
+      }
+      records[approvalId] = { ...record, decision: { ...decision } };
+      this.write(records);
+      return JSON.parse(JSON.stringify(records[approvalId]));
+    });
+  }
+
+  async consume(approvalId, usedAt, tenantId = null, now = () => Date.now()) {
     if (!approvalId) return false;
 
     return this.withLock(() => {
@@ -199,12 +240,17 @@ class ApprovalRepository {
       const record = records[approvalId];
       if (!record) return false;
       if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) return false;
-      if (record.used) return false;
+      if (record.used || record.decision?.status !== 'approved') return false;
+      const requestedAt = typeof usedAt === 'string' ? Date.parse(usedAt) : NaN;
+      const consumedAt = typeof now === 'function' ? now() : now;
+      const expiresAt = typeof record.expiresAt === 'string' ? Date.parse(record.expiresAt) : NaN;
+      if (!Number.isFinite(requestedAt) || !Number.isFinite(consumedAt) ||
+          !Number.isFinite(expiresAt) || requestedAt >= expiresAt || consumedAt >= expiresAt) return false;
 
       records[approvalId] = {
         ...record,
         used: true,
-        usedAt
+        usedAt: new Date(consumedAt).toISOString()
       };
       this.write(records);
       return true;

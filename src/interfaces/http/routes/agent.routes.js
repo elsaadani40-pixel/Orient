@@ -328,6 +328,13 @@ function createAgentRoutes(agentService) {
       res.end(JSON.stringify(result, null, 2));
     },
 
+    async recordApprovalDecision({ approvalId, executionId, decision, actorId }) {
+      if (typeof agentService.decideApproval !== 'function') {
+        throw new AppError('Approval decision service is unavailable', 503, 'APPROVAL_DECISION_UNAVAILABLE');
+      }
+      return agentService.decideApproval({ approvalId, executionId, decision, actorId });
+    },
+
     async resume(req, res, executionId, body) {
       let options = {};
 

@@ -478,6 +478,7 @@ test('PostgreSQL approval consumption is single-use under concurrency', async ()
     scope: { tenant: 'tenant-approval' },
     issuedAt: new Date(Date.now() - 1000).toISOString(),
     expiresAt: new Date(Date.now() + 60000).toISOString(),
+    decision: { status: 'approved', actorId: 'owner-test', decidedAt: new Date().toISOString() },
     used: false,
     metadata: { tenantId: 'tenant-approval' }
   }, { tenantId: 'tenant-approval' });
@@ -487,6 +488,40 @@ test('PostgreSQL approval consumption is single-use under concurrency', async ()
   ]);
   assert.deepEqual(results.sort(), [false, true]);
   await pool.query('DELETE FROM approvals WHERE approval_id=$1 AND tenant_id=$2', [approvalId, 'tenant-approval']);
+});
+
+test('PostgreSQL workflow repository resolves approval-blocked executions by tenant', async () => {
+  const WorkflowDefinition = require('../../src/core/workflow/workflow-definition');
+  const WorkflowInstance = require('../../src/core/workflow/workflow-instance');
+  const workflowId = 'approval-workflow-map-' + Date.now();
+  const executionId = 'approval-execution-map-' + Date.now();
+  const tenantId = 'tenant-approval-map';
+  const definition = new WorkflowDefinition({
+    id: 'approval-mapping',
+    version: 1,
+    name: 'Approval mapping',
+    steps: [{ id: 'agent-runtime', agent: 'ORIENT_RUNTIME' }]
+  });
+  const instance = new WorkflowInstance({
+    definition,
+    workflowId,
+    tenantId,
+    input: { text: 'guarded operation' }
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  instance.transition('WAITING');
+  instance.metadata = { approvalBlocked: true, approvalExecutionId: executionId, approvalId: 'approval-map' };
+  await persistence.workflows.save(instance, tenantId);
+
+  try {
+    const found = await persistence.workflows.findByApprovalExecutionId({ executionId, tenantId });
+    assert.equal(found.workflowId, workflowId);
+    assert.equal(found.metadata.approvalId, 'approval-map');
+    assert.equal(await persistence.workflows.findByApprovalExecutionId({ executionId, tenantId: 'tenant-other' }), null);
+  } finally {
+    await persistence.workflows.delete(workflowId, tenantId);
+  }
 });
 
 test('PostgreSQL approval authorization is durable, tenant-scoped and replay-safe', async () => {
@@ -499,7 +534,8 @@ test('PostgreSQL approval authorization is durable, tenant-scoped and replay-saf
   });
   const approvals = new ApprovalService({
     repository: persistence.approvals,
-    tenantId: 'tenant-approval-service'
+    tenantId: 'tenant-approval-service',
+    decisionAuthorizer: async () => true
   });
   const auth = new AuthorizationService({
     capabilityMapper: mapper,
@@ -515,6 +551,8 @@ test('PostgreSQL approval authorization is durable, tenant-scoped and replay-saf
     scope: { planRevision: 1 },
     tenantId: 'tenant-approval-service'
   });
+
+  await approvals.decide({ approvalId: approval.approvalId, executionId: 'exec-approval-service', decision: 'approved', actorId: 'owner-test', tenantId: 'tenant-approval-service' });
 
   const allowed = await auth.authorize('danger.write', {
     executionId: 'exec-approval-service',

@@ -7,7 +7,7 @@ const CapabilityMapper = require('../../../../src/core/agent/capability/capabili
 const PolicyEngine = require('../../../../src/core/agent/policy/policy-engine');
 
 function authorizationFixture() {
-  const approvals = new ApprovalService({ tenantId: 'tenant-a' });
+  const approvals = new ApprovalService({ tenantId: 'tenant-a', decisionAuthorizer: async () => true });
   const auth = new AuthorizationService({
     capabilityMapper: new CapabilityMapper({
       mappings: { 'danger.write': 'external.write' }
@@ -32,6 +32,8 @@ test('approval is bound to the issuing agent identity', async () => {
     agentId: 'PROJECT_BUILDER_AGENT',
     operationId: 'op-agent-bound'
   });
+
+  await approvals.decide({ approvalId: approval.approvalId, executionId: approval.executionId, decision: 'approved', actorId: 'owner-test', tenantId: 'tenant-a' });
 
   const allowed = await auth.authorize('danger.write', {
     executionId: 'exec-agent-bound',
@@ -68,6 +70,8 @@ test('approval is bound to the canonical operation identity', async () => {
     agentId: 'PROJECT_BUILDER_AGENT',
     operationId: 'op-canonical'
   });
+
+  await approvals.decide({ approvalId: approval.approvalId, executionId: approval.executionId, decision: 'approved', actorId: 'owner-test', tenantId: 'tenant-a' });
 
   const wrongOperation = await auth.authorize('danger.write', {
     executionId: 'exec-operation-bound',

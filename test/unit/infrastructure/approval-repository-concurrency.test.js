@@ -21,6 +21,8 @@ test('durable approval consume is atomic across processes', async () => {
     tool: 'danger.write',
     capability: 'external.write',
     scope: { target: 'x' },
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    decision: { status: 'approved', actorId: 'owner-test', decidedAt: new Date().toISOString() },
     used: false,
     tenantId: 'tenant-a',
     metadata: { tenantId: 'tenant-a' }
@@ -137,6 +139,107 @@ test('approval repository rejects valid JSON with an invalid root shape', () => 
       fs.writeFileSync(file, invalidContent, 'utf8');
       assert.throws(() => repo.read(), /Approval storage root must be an object/);
     }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('approval repository refuses to consume pending, rejected, expired, or malformed approvals', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-consume-gates-'));
+  const repo = new ApprovalRepository(path.join(dir, 'approvals.json'));
+  const now = Date.now();
+  const base = {
+    step: 1, planRevision: 1, tool: 'danger.write', capability: 'external.write',
+    used: false, tenantId: 'tenant-a', metadata: { tenantId: 'tenant-a' }
+  };
+  try {
+    const records = [
+      { ...base, approvalId: 'pending', executionId: 'e-pending', expiresAt: new Date(now + 60000).toISOString() },
+      { ...base, approvalId: 'rejected', executionId: 'e-rejected', expiresAt: new Date(now + 60000).toISOString(), decision: { status: 'rejected', actorId: 'owner', decidedAt: new Date(now).toISOString() } },
+      { ...base, approvalId: 'expired', executionId: 'e-expired', expiresAt: new Date(now - 1).toISOString(), decision: { status: 'approved', actorId: 'owner', decidedAt: new Date(now - 1000).toISOString() } },
+      { ...base, approvalId: 'malformed', executionId: 'e-malformed', expiresAt: 'not-a-date', decision: { status: 'approved', actorId: 'owner', decidedAt: new Date(now).toISOString() } }
+    ];
+    for (const record of records) await repo.save(record, { tenantId: 'tenant-a' });
+    const consumedAt = new Date(now).toISOString();
+    for (const record of records) {
+      assert.equal(await repo.consume(record.approvalId, consumedAt, 'tenant-a'), false, record.approvalId);
+    }
+    for (const record of records) {
+      assert.equal((await repo.findById(record.approvalId, { tenantId: 'tenant-a' })).used, false);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('approval repository rechecks expiry at decision and consumption commit time', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-commit-expiry-'));
+  const repo = new ApprovalRepository(path.join(dir, 'approvals.json'));
+  const now = Date.now();
+  const expiresAt = new Date(now + 1000).toISOString();
+  const base = {
+    step: 1, planRevision: 1, tool: 'danger.write', capability: 'external.write',
+    expiresAt, used: false, tenantId: 'tenant-a', metadata: { tenantId: 'tenant-a' }
+  };
+  try {
+    await repo.save({ ...base, approvalId: 'decision-race', executionId: 'execution-decision-race' }, { tenantId: 'tenant-a' });
+    await assert.rejects(
+      () => repo.recordDecision('decision-race', {
+        status: 'approved', actorId: 'owner-a', decidedAt: new Date(now).toISOString()
+      }, 'tenant-a', () => now + 1001),
+      error => error.code === 'APPROVAL_EXPIRED'
+    );
+    assert.equal((await repo.findById('decision-race', { tenantId: 'tenant-a' })).decision, undefined);
+
+    await repo.save({
+      ...base,
+      approvalId: 'consume-race',
+      executionId: 'execution-consume-race',
+      decision: { status: 'approved', actorId: 'owner-a', decidedAt: new Date(now).toISOString() }
+    }, { tenantId: 'tenant-a' });
+    assert.equal(await repo.consume(
+      'consume-race',
+      new Date(now + 999).toISOString(),
+      'tenant-a',
+      () => now + 1001
+    ), false);
+    assert.equal((await repo.findById('consume-race', { tenantId: 'tenant-a' })).used, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('approval repository cannot overwrite an existing durable decision through save', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-immutable-save-'));
+  const repo = new ApprovalRepository(path.join(dir, 'approvals.json'));
+  const now = Date.now();
+  const approval = {
+    approvalId: 'immutable-approval',
+    executionId: 'immutable-execution',
+    step: 1,
+    planRevision: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: {},
+    issuedAt: new Date(now - 1000).toISOString(),
+    expiresAt: new Date(now + 60000).toISOString(),
+    used: false,
+    tenantId: 'tenant-a',
+    metadata: { tenantId: 'tenant-a' }
+  };
+  try {
+    await repo.save(approval, { tenantId: 'tenant-a' });
+    await repo.recordDecision('immutable-approval', {
+      status: 'approved', actorId: 'owner-a', decidedAt: new Date(now).toISOString()
+    }, 'tenant-a', () => now);
+    await assert.rejects(
+      () => repo.save({ ...approval, decision: undefined }, { tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_ALREADY_EXISTS'
+    );
+    assert.equal((await repo.findById('immutable-approval', { tenantId: 'tenant-a' })).decision.status, 'approved');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

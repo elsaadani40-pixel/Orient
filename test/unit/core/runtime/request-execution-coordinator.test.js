@@ -549,3 +549,66 @@ test('resume fails closed and releases a lease when renewal is unsupported', asy
   assert.equal(executionAttempts, 0);
   assert.equal(releaseCount, 1);
 });
+
+
+test('resume fails closed before tool execution when a pending approval has no durable approved decision', async () => {
+  const ExecutionContext = require('../../../../src/core/execution/execution-context');
+  const context = new ExecutionContext({
+    requestId: 'request-approval-required',
+    input: 'perform guarded write',
+    executionId: 'execution-approval-required',
+    tenantId: 'tenant-a'
+  });
+  context.start();
+  context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
+  context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+  context.setPlan({
+    intent: 'test.approval-required',
+    steps: [{ step: 1, tool: 'danger.write', input: {}, dependsOn: null }]
+  });
+  context.metadata.planRevision = 1;
+  context.metadata.pendingStepInputs = { 1: { approvalRequired: true } };
+  context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+
+  let executionAttempts = 0;
+  let leaseReleases = 0;
+  let recoveryFailures = 0;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {
+      run: async () => { executionAttempts += 1; }
+    },
+    recoveryCoordinator: { fail: async () => { recoveryFailures += 1; } },
+    persistence: {
+      executions: { findById: async () => null },
+      checkpoints: {
+        findLatest: async () => ({
+          checkpointId: 'checkpoint-approval-required',
+          sequence: 2,
+          snapshot: context.snapshot(),
+          snapshotSha256: null
+        }),
+        acquireResumeLease: async () => ({ leaseId: 'lease-approval-required' }),
+        renewResumeLease: async () => ({ leaseId: 'lease-approval-required' }),
+        releaseResumeLease: async () => { leaseReleases += 1; }
+      }
+    },
+    persistenceCoordinator: {},
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    approvalService: {
+      getApprovedForExecution: async () => null,
+      findReusable: async () => null
+    },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  await assert.rejects(
+    coordinator.resume('execution-approval-required'),
+    error => error.code === 'APPROVAL_NOT_APPROVED'
+  );
+  assert.equal(executionAttempts, 0, 'a guarded tool must not run before a durable approval decision');
+  assert.equal(recoveryFailures, 0, 'missing approval must not convert a waiting execution into a failed execution');
+  assert.equal(leaseReleases, 1, 'the resume lease must be released after fail-closed rejection');
+});

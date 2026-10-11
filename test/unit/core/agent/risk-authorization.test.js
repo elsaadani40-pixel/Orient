@@ -16,7 +16,7 @@ test('high risk capability requires matching single use approval', async () => {
     riskByCapability: { 'external.write': 'high' }
   });
 
-  const approvals = new ApprovalService();
+  const approvals = new ApprovalService({ decisionAuthorizer: async () => true });
   const auth = new AuthorizationService({
     capabilityMapper: mapper,
     capabilityPolicy: policy,
@@ -38,6 +38,8 @@ test('high risk capability requires matching single use approval', async () => {
     capability: 'external.write',
     scope: { planRevision: 1 }
   });
+
+  await approvals.decide({ approvalId: approval.approvalId, executionId: 'exec-1', decision: 'approved', actorId: 'owner-test' });
 
   const allowed = await auth.authorize('danger.write', {
     executionId: 'exec-1',

@@ -224,6 +224,15 @@ class OwnerAuthService {
     });
   }
 
+  isActiveSession(sessionId) {
+    if (typeof sessionId !== 'string' || !sessionId) return false;
+    this.pruneExpiredSessions(this.now());
+    for (const session of this.sessions.values()) {
+      if (session.id === sessionId && session.expiresAt > this.now()) return true;
+    }
+    return false;
+  }
+
   verifyCsrf(session, token) {
     return Boolean(session && typeof token === 'string' && safeEqual(session.csrfToken, token));
   }

@@ -189,7 +189,7 @@
           try {
             await request(
               '/owner/executions/' + encodeURIComponent(String(approval.executionId)) + '/cancel',
-              { method: 'POST', body: JSON.stringify({ reason: 'owner_rejected' }) }
+              { method: 'POST', body: JSON.stringify({ reason: 'owner_rejected', approval: { approvalId: approval.approvalId } }) }
             );
             approvalStatus.textContent = 'تم إرسال طلب الإلغاء.';
             await Promise.all([loadApprovals(), loadAudit()]);

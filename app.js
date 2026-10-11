@@ -297,7 +297,8 @@ const runtime =
     maxToolInputChars: config.maxToolInputChars,
     agentRegistry,
     agentInvocationService,
-    capabilityGovernance
+    capabilityGovernance,
+    approvalDecisionAuthorizer: ({ actorId }) => ownerAuthService.isActiveSession(actorId)
   });
 
 const agentService =

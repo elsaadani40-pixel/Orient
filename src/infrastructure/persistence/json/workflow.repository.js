@@ -221,6 +221,15 @@ class WorkflowRepository {
     ) || null;
   }
 
+  findByApprovalExecutionId({ executionId, tenantId = null } = {}) {
+    if (!executionId) return null;
+    return this.read().find(item =>
+      (!tenantId || item.tenantId === tenantId) &&
+      item.metadata?.approvalBlocked === true &&
+      String(item.metadata.approvalExecutionId || '') === String(executionId)
+    ) || null;
+  }
+
   findAll({ tenantId = null } = {}) {
     return this.read().filter(item => !tenantId || item.tenantId === tenantId);
   }

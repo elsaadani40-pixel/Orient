@@ -170,7 +170,9 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
     expiresAt: new Date(Date.now() + 60000).toISOString()
   };
   const calls = [];
+  const decisionCalls = [];
   const agentRoutes = {
+    async recordApprovalDecision(decision) { decisionCalls.push(decision); return { decision: { status: decision.decision } }; },
     async pendingApprovals(_req, res) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify([approval]));
@@ -211,6 +213,7 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
       body: JSON.stringify({ approval: { approvalId: 'approval-123' } })
     });
     assert.equal(csrfDenied.status, 403);
+    assert.equal(decisionCalls.length, 0, 'CSRF rejection must not record an approval decision');
 
     const resumed = await request(origin, '/owner/executions/exec-123/resume', {
       method: 'POST',
@@ -222,13 +225,211 @@ test('owner approval inbox is private and approve/cancel actions require CSRF', 
     assert.equal(calls[0].action, 'resume');
     assert.deepEqual(calls[0].body, { approval: { approvalId: 'approval-123' } });
 
+    assert.equal(decisionCalls.length, 1);
+    assert.equal(decisionCalls[0].decision, 'approved');
+    assert.equal(decisionCalls[0].approvalId, 'approval-123');
+    assert.equal(decisionCalls[0].executionId, 'exec-123');
+    assert.equal(typeof decisionCalls[0].actorId, 'string');
+
     const cancelled = await request(origin, '/owner/executions/exec-123/cancel', {
       method: 'POST',
       headers: { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken },
-      body: JSON.stringify({ reason: 'owner_rejected' })
+      body: JSON.stringify({ reason: 'owner_rejected', approval: { approvalId: 'approval-reject-456' } })
     });
     assert.equal(cancelled.status, 200);
     assert.equal(calls[1].action, 'cancel');
     assert.equal(calls[1].body.reason, 'owner_rejected');
+    assert.equal(decisionCalls.length, 2);
+    assert.equal(decisionCalls[1].decision, 'rejected');
+    assert.equal(decisionCalls[1].executionId, 'exec-123');
+  }, agentRoutes);
+});
+
+
+test('owner execution never resumes or cancels when the durable approval decision cannot be recorded', async () => {
+  const actions = [];
+  const agentRoutes = {
+    async recordApprovalDecision({ decision }) {
+      throw Object.assign(new Error('decision storage unavailable'), {
+        code: 'APPROVAL_DECISION_CONFLICT'
+      });
+    },
+    async resume(_req, res) {
+      actions.push('resume');
+      res.writeHead(200);
+      res.end('{}');
+    },
+    async cancel(_req, res) {
+      actions.push('cancel');
+      res.writeHead(200);
+      res.end('{}');
+    }
+  };
+
+  await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
+    const login = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ password: PASSWORD })
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const { csrfToken } = await login.json();
+    const headers = { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken };
+
+    const resume = await request(origin, '/owner/executions/exec-guarded/resume', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ approval: { approvalId: 'approval-guarded' } })
+    });
+    assert.equal(resume.status, 409);
+    assert.equal((await resume.json()).code, 'APPROVAL_DECISION_CONFLICT');
+
+    const reject = await request(origin, '/owner/executions/exec-guarded/cancel', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ approval: { approvalId: 'approval-guarded' } })
+    });
+    assert.equal(reject.status, 409);
+    assert.equal((await reject.json()).code, 'APPROVAL_DECISION_CONFLICT');
+    assert.deepEqual(actions, [], 'execution must remain untouched if the durable decision write fails');
+  }, agentRoutes);
+});
+
+
+test('owner HTTP decision is durably authorized and bound to the exact execution', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
+  const ApprovalRepository = require('../../../../src/infrastructure/persistence/json/approval.repository');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-approval-e2e-'));
+  const ownerAuth = new OwnerAuthService({ password: PASSWORD });
+  const repositoryPath = path.join(root, 'approvals.json');
+  try {
+    const repository = new ApprovalRepository(repositoryPath);
+    const approvals = new ApprovalService({
+      repository,
+      tenantId: 'local',
+      decisionAuthorizer: async ({ actorId, tenantId }) =>
+        tenantId === 'local' &&
+        [...ownerAuth.sessions.values()].some(session =>
+          session.id === actorId && session.expiresAt > Date.now()
+        )
+    });
+    const approval = await approvals.issue({
+      executionId: 'exec-bound',
+      step: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      tenantId: 'local'
+    });
+    const decisions = [];
+    const resumed = [];
+    const agentRoutes = {
+      async recordApprovalDecision(decision) {
+        decisions.push(decision);
+        return approvals.decide({ ...decision, tenantId: 'local' });
+      },
+      async resume(_req, res, executionId, body) {
+        const approved = await approvals.getApprovedForExecution({
+          approvalId: body?.approval?.approvalId,
+          executionId,
+          tenantId: 'local'
+        });
+        if (!approved) {
+          res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ code: 'APPROVAL_NOT_APPROVED' }));
+          return;
+        }
+        resumed.push(executionId);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ executionId, approvalId: approved.approvalId }));
+      }
+    };
+
+    await withServer(ownerAuth, async ({ origin }) => {
+      const login = await request(origin, '/owner/login', {
+        method: 'POST',
+        headers: { Origin: origin },
+        body: JSON.stringify({ password: PASSWORD })
+      });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie').split(';')[0];
+      const { csrfToken } = await login.json();
+      const headers = { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken };
+
+      const wrongExecution = await request(origin, '/owner/executions/exec-other/resume', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ approval: { approvalId: approval.approvalId } })
+      });
+      assert.equal(wrongExecution.status, 409);
+      assert.equal((await wrongExecution.json()).code, 'APPROVAL_EXECUTION_MISMATCH');
+      assert.deepEqual(resumed, []);
+      assert.equal((await repository.findById(approval.approvalId, { tenantId: 'local' })).decision, undefined);
+
+      const response = await request(origin, '/owner/executions/exec-bound/resume', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ approval: { approvalId: approval.approvalId } })
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        executionId: 'exec-bound',
+        approvalId: approval.approvalId
+      });
+      assert.deepEqual(resumed, ['exec-bound']);
+      assert.equal(decisions.length, 2);
+      assert.equal(decisions[1].decision, 'approved');
+      assert.equal(decisions[1].executionId, 'exec-bound');
+    }, agentRoutes);
+
+    const restartedRepository = new ApprovalRepository(repositoryPath);
+    const durable = await restartedRepository.findById(approval.approvalId, { tenantId: 'local' });
+    assert.equal(durable.decision.status, 'approved');
+    assert.equal(durable.decision.actorId, decisions[1].actorId);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('owner resume reports an expired approved challenge as a conflict after reconciliation', async () => {
+  const agentRoutes = {
+    async recordApprovalDecision({ decision }) {
+      assert.equal(decision, 'approved');
+      return { decision: { status: 'approved' } };
+    },
+    async resume(_req, _res, executionId, body) {
+      throw Object.assign(new Error('Approved decision expired before execution resume'), {
+        code: 'APPROVAL_EXPIRED',
+        executionId,
+        approvalId: body?.approval?.approvalId
+      });
+    }
+  };
+
+  await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
+    const login = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ password: PASSWORD })
+    });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const { csrfToken } = await login.json();
+    const response = await request(origin, '/owner/executions/exec-expired/resume', {
+      method: 'POST',
+      headers: { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': csrfToken },
+      body: JSON.stringify({ approval: { approvalId: 'approval-expired' } })
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      code: 'APPROVAL_EXPIRED',
+      executionId: 'exec-expired',
+      approvalId: 'approval-expired',
+      message: 'انتهت صلاحية الموافقة؛ تم إيقاف التنفيذ وتحديث حالته.'
+    });
   }, agentRoutes);
 });

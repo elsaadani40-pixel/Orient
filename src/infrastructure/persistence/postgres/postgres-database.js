@@ -18,6 +18,7 @@ CREATE INDEX IF NOT EXISTS idx_execution_resume_leases_expiry ON execution_resum
 CREATE INDEX IF NOT EXISTS idx_checkpoints_tenant_execution ON checkpoints(tenant_id, execution_id, sequence DESC);
 CREATE TABLE IF NOT EXISTS workflows (workflow_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, state TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_workflows_tenant_state ON workflows(tenant_id, state);
+CREATE INDEX IF NOT EXISTS idx_workflows_approval_execution ON workflows(tenant_id, ((payload->'metadata'->>'approvalExecutionId'))) WHERE payload->'metadata'->>'approvalBlocked'='true';
 CREATE SEQUENCE IF NOT EXISTS workflow_lease_fencing_seq;
 CREATE TABLE IF NOT EXISTS workflow_leases (workflow_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, lease_id TEXT NOT NULL UNIQUE, fencing_token BIGINT NOT NULL DEFAULT nextval('workflow_lease_fencing_seq'), worker_id TEXT NOT NULL, acquired_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_leases_fencing ON workflow_leases(fencing_token);

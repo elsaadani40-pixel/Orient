@@ -1,5 +1,10 @@
 const crypto = require('crypto');
 
+function isApprovalExpired(expiresAt, now) {
+  const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : NaN;
+  return !Number.isFinite(expiry) || now >= expiry;
+}
+
 function publicApprovalSummary(value) {
   if (!value || typeof value !== 'object') return null;
   if (value.kind === 'file_change' && Array.isArray(value.changes)) {
@@ -37,10 +42,11 @@ function publicApprovalSummary(value) {
 }
 
 class ApprovalService {
-  constructor({ clock = () => Date.now(), repository = null, tenantId = null } = {}) {
+  constructor({ clock = () => Date.now(), repository = null, tenantId = null, decisionAuthorizer = null } = {}) {
     this.clock = clock;
     this.repository = repository;
     this.tenantId = tenantId;
+    this.decisionAuthorizer = decisionAuthorizer;
     this.approvals = new Map();
   }
 
@@ -81,11 +87,12 @@ class ApprovalService {
     if (!stored) return { allowed: false, reason: 'APPROVAL_NOT_FOUND' };
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return { allowed: false, reason: 'APPROVAL_TENANT_MISMATCH' };
     if (stored.used) return { allowed: false, reason: 'APPROVAL_ALREADY_USED' };
-    if (this.clock() >= Date.parse(stored.expiresAt)) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
+    if (isApprovalExpired(stored.expiresAt, this.clock())) return { allowed: false, reason: 'APPROVAL_EXPIRED' };
     if (stored.executionId !== String(executionId) || stored.step !== step || stored.planRevision !== planRevision || stored.tool !== tool || stored.capability !== capability) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
     if (agentId && stored.metadata?.agentId !== agentId) return { allowed: false, reason: 'APPROVAL_AGENT_MISMATCH' };
     if (operationId && stored.metadata?.operationId !== operationId) return { allowed: false, reason: 'APPROVAL_OPERATION_MISMATCH' };
     if (!Object.entries(stored.scope || {}).every(([key, value]) => scope[key] === value)) return { allowed: false, reason: 'APPROVAL_SCOPE_MISMATCH' };
+    if (stored.decision?.status !== 'approved') return { allowed: false, reason: stored.decision?.status === 'rejected' ? 'APPROVAL_REJECTED' : 'APPROVAL_NOT_APPROVED' };
     return { allowed: true, approval: { ...stored } };
   }
 
@@ -97,9 +104,9 @@ class ApprovalService {
         .filter(record => record.executionId === String(executionId) && Number(record.step) === step && record.tool === tool && Number(record.planRevision || 1) === Number(planRevision))
         .sort((x, y) => Date.parse(y.issuedAt || 0) - Date.parse(x.issuedAt || 0));
     for (const candidate of candidates) {
-      if (!candidate || candidate.used) continue;
+      if (!candidate || candidate.used || candidate.decision?.status !== 'approved') continue;
       if (tenantId && candidate.tenantId !== tenantId && candidate.metadata?.tenantId !== tenantId) continue;
-      if (!candidate.expiresAt || this.clock() >= Date.parse(candidate.expiresAt)) continue;
+      if (isApprovalExpired(candidate.expiresAt, this.clock())) continue;
       return { ...candidate };
     }
     return null;
@@ -117,7 +124,7 @@ class ApprovalService {
     return candidates
       .filter(record => record && (!tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId))
       .filter(record => !record.used)
-      .filter(record => !record.expiresAt || this.clock() < Date.parse(record.expiresAt))
+      .filter(record => !isApprovalExpired(record.expiresAt, this.clock()))
       .map(record => ({
         approvalId: record.approvalId,
         executionId: record.executionId,
@@ -142,8 +149,8 @@ class ApprovalService {
         .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
         .sort((a, b) => Date.parse(a.issuedAt || 0) - Date.parse(b.issuedAt || 0));
     return candidates
-      .filter(record => record && !record.used)
-      .filter(record => !record.expiresAt || this.clock() < Date.parse(record.expiresAt))
+      .filter(record => record && !record.used && !record.decision)
+      .filter(record => !isApprovalExpired(record.expiresAt, this.clock()))
       .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
       .slice(0, boundedLimit)
       .map(record => ({
@@ -161,16 +168,109 @@ class ApprovalService {
       }));
   }
 
+
+  async decide({ approvalId, decision, actorId, executionId, tenantId = this.tenantId } = {}) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) {
+      throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    }
+    if (!['approved', 'rejected'].includes(decision)) {
+      throw Object.assign(new TypeError('decision must be approved or rejected'), { code: 'APPROVAL_DECISION_INVALID' });
+    }
+    if (typeof actorId !== 'string' || !actorId.trim()) {
+      throw Object.assign(new TypeError('actorId is required'), { code: 'APPROVAL_ACTOR_REQUIRED' });
+    }
+
+    const stored = this.repository?.findById
+      ? await this.repository.findById(approvalId, { tenantId })
+      : this.approvals.get(approvalId);
+    if (!stored) {
+      throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+    }
+    if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) {
+      throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
+    }
+    if (executionId === undefined || executionId === null || String(executionId) !== stored.executionId) {
+      throw Object.assign(new Error('Approval execution does not match the requested execution'), { code: 'APPROVAL_EXECUTION_MISMATCH' });
+    }
+    if (typeof this.decisionAuthorizer !== 'function' ||
+        await this.decisionAuthorizer({ actorId, tenantId, decision, approval: { ...stored } }) !== true) {
+      throw Object.assign(new Error('Approval decision is not authorized'), { code: 'APPROVAL_DECISION_FORBIDDEN' });
+    }
+    if (stored.decision) {
+      if (stored.decision.status === decision && stored.decision.actorId === actorId) {
+        return {
+          approvalId,
+          executionId: stored.executionId,
+          tenantId: stored.tenantId || tenantId || null,
+          decision: { ...stored.decision },
+          idempotent: true
+        };
+      }
+      throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+    }
+    if (stored.used) {
+      throw Object.assign(new Error('Approval has already been consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    }
+    if (isApprovalExpired(stored.expiresAt, this.clock())) {
+      throw Object.assign(new Error('Approval has expired'), { code: 'APPROVAL_EXPIRED' });
+    }
+
+    const decisionRecord = {
+      status: decision,
+      actorId,
+      decidedAt: new Date(this.clock()).toISOString()
+    };
+    let updated;
+    if (this.repository?.recordDecision) {
+      updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId, this.clock);
+    } else {
+      const current = stored.decision || null;
+      if (current && (current.status !== decision || current.actorId !== actorId)) {
+        throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      updated = current ? stored : { ...stored, decision: decisionRecord };
+      this.approvals.set(approvalId, updated);
+    }
+
+    return {
+      approvalId,
+      executionId: updated.executionId,
+      tenantId: updated.tenantId || tenantId || null,
+      decision: { ...updated.decision },
+      idempotent: Boolean(stored.decision || updated.decision?.decidedAt !== decisionRecord.decidedAt)
+    };
+  }
+
+  async getApprovedForExecution({ approvalId, executionId, tenantId = this.tenantId } = {}) {
+    if (typeof approvalId !== 'string' || !approvalId || !executionId) return null;
+    const stored = this.repository?.findById
+      ? await this.repository.findById(approvalId, { tenantId })
+      : this.approvals.get(approvalId);
+    if (!stored || stored.executionId !== String(executionId)) return null;
+    if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return null;
+    if (stored.used) return null;
+    if (isApprovalExpired(stored.expiresAt, this.clock())) {
+      throw Object.assign(new Error('Approved decision expired or has an invalid expiry timestamp before execution resume'), {
+        code: 'APPROVAL_EXPIRED',
+        approvalId,
+        executionId: String(executionId)
+      });
+    }
+    if (stored.decision?.status !== 'approved') return null;
+    return { ...stored };
+  }
+
   async consume(approvalId, tenantId = this.tenantId) {
     const stored = this.repository?.findById
       ? await this.repository.findById(approvalId, { tenantId })
       : this.approvals.get(approvalId);
     if (!stored || stored.used) return false;
     if (tenantId && stored.tenantId !== tenantId && stored.metadata?.tenantId !== tenantId) return false;
-    if (!stored.expiresAt || this.clock() >= Date.parse(stored.expiresAt)) return false;
+    if (stored.decision?.status !== 'approved') return false;
+    if (isApprovalExpired(stored.expiresAt, this.clock())) return false;
     const usedAt = new Date(this.clock()).toISOString();
     if (this.repository?.consume) {
-      const consumed = await this.repository.consume(approvalId, usedAt, tenantId);
+      const consumed = await this.repository.consume(approvalId, usedAt, tenantId, this.clock);
       if (!consumed) return false;
     }
     stored.used = true;
