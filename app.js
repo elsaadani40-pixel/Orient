@@ -183,7 +183,16 @@ const projectTools = createProjectTools({
   }
 });
 
-for (const tool of [...memoryTools, ...workspaceTools, ...projectTools]) {
+// The legacy workspace factory also exposes project.audit,
+// project.propose_changes, and project.execute_change. Prefer the newer
+// sandboxed project tools for those names while retaining workspace read/search
+// tools; ToolRegistry deliberately rejects duplicate registrations.
+const projectToolNames = new Set(projectTools.map((tool) => tool.name));
+const uniqueWorkspaceTools = workspaceTools.filter(
+  (tool) => !projectToolNames.has(tool.name)
+);
+
+for (const tool of [...memoryTools, ...uniqueWorkspaceTools, ...projectTools]) {
   toolRegistry.register(tool);
 }
 
