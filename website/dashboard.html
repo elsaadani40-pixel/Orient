@@ -6,7 +6,7 @@
 <main class="wrap"><section class="hero"><div class="eyebrow">PRIVATE CONTROL CENTER · مساحة المالك</div><h1>لوحة تحكم المالك</h1><p class="muted">هذه المساحة لا تُفتح إلا بجلسة المالك المعتمدة. الحسابات العامة لا تحصل على هذه الصلاحيات.</p></section>
 <section class="grid"><article class="card"><div class="muted">الحسابات المسجلة</div><div class="num" id="userCount">—</div></article><article class="card"><div class="muted">حالة الجلسة</div><div class="num" style="font-size:22px">موثقة</div><div class="muted">Admin</div></article></section>
 <h2>حسابات الموقع</h2><p id="status" class="muted">جارٍ تحميل البيانات…</p><div class="tablebox"><table><thead><tr><th>اسم المستخدم</th><th>نوع الحساب</th><th>تاريخ الإنشاء</th><th>الحالة</th><th>إجراء</th></tr></thead><tbody id="users"><tr><td colspan="5">جارٍ التحميل…</td></tr></tbody></table></div>
-<p class="note">النسخة الحالية تعرض الحسابات المسجلة فقط. لا توجد هنا أدوات حذف أو تغيير صلاحيات للمستخدمين. لا تنشر الخادم على الإنترنت العام قبل إعداد HTTPS ومراجعة إعدادات الإنتاج.</p></main>
+<p class="note">يمكنك إيقاف الحساب العادي أو إعادة تفعيله؛ إيقاف الحساب ينهي جلساته الحالية. لا تتوفر حاليًا أدوات حذف الحساب أو تغيير دوره. التخزين محلي بصيغة JSON والجلسات داخل الذاكرة، لذلك لا تنشر الخادم على الإنترنت العام قبل الانتقال إلى تخزين وجلسات إنتاجية وإعداد HTTPS ومراجعة أمنية.</p></main>
 <script>
 (async()=>{const $=id=>document.getElementById(id);const status=$('status'),usersBody=$('users');
 function escapeHtml(value){return String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}
