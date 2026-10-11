@@ -332,6 +332,20 @@ function createOwnerServer(options = {}) {
       return sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' });
     }
 
+    if (req.method === 'GET' && (url.pathname === '/account' || url.pathname === '/account/' || url.pathname === '/account.html')) {
+      const userSession = userSessionFor(req);
+      const ownerSession = sessionFor(req);
+      const target = ownerSession ? '/owner' : userSession ? '/account.html' : '/auth';
+      if (url.pathname !== target && !(target === '/account.html' && url.pathname === '/account.html')) {
+        res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      if (target === '/account.html' && !userSession) {
+        res.writeHead(302, { Location: '/auth', 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+    }
+
     if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/owner.html' || url.pathname === '/dashboard.html')) {
       const ownerSession = sessionFor(req);
       if (!ownerSession) {
@@ -349,7 +363,7 @@ function createOwnerServer(options = {}) {
       }
     }
 
-    const pathname = url.pathname === '/' ? '/index.html' : url.pathname === '/auth' || url.pathname === '/auth/' ? '/auth.html' : url.pathname;
+    const pathname = url.pathname === '/' ? '/index.html' : url.pathname === '/auth' || url.pathname === '/auth/' ? '/auth.html' : url.pathname === '/account' || url.pathname === '/account/' ? '/account.html' : url.pathname;
     let filePath;
     try { filePath = path.resolve(WEB_ROOT, '.' + decodeURIComponent(pathname)); }
     catch { return sendJson(res, 400, { error: 'Invalid path' }); }
