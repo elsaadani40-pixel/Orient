@@ -40,9 +40,12 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
           ...policy,
           allowRead: true,
           allowWrite: true,
-          allowCommands: true,
+          // Project changes must not silently elevate the caller's command policy.
+          // Running repository tests executes project-controlled JavaScript, so it
+          // remains disabled unless the outer runtime policy explicitly enables it.
+          allowCommands: policy.allowCommands === true,
+          allowedCommands: Array.isArray(policy.allowedCommands) ? policy.allowedCommands : [],
           allowGit: false,
-          allowedCommands: ['node'],
           timeoutMs: policy.timeoutMs || 120000
         }
       });
@@ -56,7 +59,9 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
         })
       }));
 
-      const hasTests = await agent.workspace.exists('test');
+      const canRunNodeTests = agent.policy.allowCommands === true &&
+        agent.policy.allowedCommands.includes('node');
+      const hasTests = canRunNodeTests && await agent.workspace.exists('test');
       if (hasTests) checks.push(commandVerification.createCheck({ id: 'node-test-suite', executable: 'node', args: ['--test'] }));
 
       return agent.execute({
