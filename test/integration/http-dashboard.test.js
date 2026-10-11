@@ -328,11 +328,11 @@ test('task workbench preserves an ambiguous POST retry key across a page reload'
   const response = await fetch(origin + '/workbench.js');
   const source = await response.text();
   assert.equal(response.status, 200);
-  assert.match(source, /const pendingStorageKey = 'orient\\.workbench\\.pending-task\\.v1'/);
-  assert.match(source, /sessionStorage\\.setItem\\(pendingStorageKey/);
-  assert.match(source, /sessionStorage\\.getItem\\(pendingStorageKey/);
-  assert.match(source, /state\\.pendingKey = saved\\.key/);
-  assert.match(source, /state\\.pendingGoal = saved\\.goal/);
+  assert.ok(source.includes("const pendingStorageKey = 'orient.workbench.pending-task.v1'"));
+  assert.ok(source.includes('sessionStorage.setItem(pendingStorageKey'));
+  assert.ok(source.includes('sessionStorage.getItem(pendingStorageKey'));
+  assert.ok(source.includes('state.pendingKey = saved.key'));
+  assert.ok(source.includes('state.pendingGoal = saved.goal'));
 
   const submitStart = source.indexOf('async function submitTask(event)');
   const persistBeforePost = source.indexOf('persistPendingTask();', source.indexOf('if (!state.pendingKey)', submitStart));
@@ -343,5 +343,5 @@ test('task workbench preserves an ambiguous POST retry key across a page reload'
   assert.ok(persistBeforePost > submitStart && persistBeforePost < postStart, 'retry key and goal are persisted before the POST');
   assert.ok(postCatch > postStart && clearAfterAck > postCatch, 'ambiguous POST failures retain the retry state');
   assert.ok(clearPersist > clearAfterAck, 'the stored retry state is cleared only after a valid task acknowledgement');
-  assert.match(source, /restorePendingTask\\(\\);/);
+  assert.ok(source.includes('restorePendingTask();'));
 });
