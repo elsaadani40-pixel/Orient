@@ -325,9 +325,15 @@ function createOwnerServer(options = {}) {
         res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
         return res.end();
       }
-      const target = state.mustChangePassword ? '/owner.html' : '/dashboard.html';
-      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
-      return res.end();
+      if (state.mustChangePassword) {
+        if (url.pathname !== '/owner.html') {
+          res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
+          return res.end();
+        }
+      } else if (url.pathname !== '/dashboard.html') {
+        res.writeHead(302, { Location: '/dashboard.html', 'Cache-Control': 'no-store' });
+        return res.end();
+      }
     }
 
     const pathname = url.pathname === '/' ? '/index.html' : url.pathname === '/auth' || url.pathname === '/auth/' ? '/auth.html' : url.pathname;
