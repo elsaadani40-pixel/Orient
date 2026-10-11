@@ -155,7 +155,7 @@ test('project change precondition blocks stale proposals after external mutation
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('project change reconciliation recognizes an already-applied post-state without reapplying it', async () => {
+test('project change reconciliation fails closed when the post-state has no durable operation receipt', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-reconcile-'));
   fs.mkdirSync(path.join(root, 'test'));
   const manifestPath = path.join(root, 'package.json');
@@ -175,9 +175,9 @@ test('project change reconciliation recognizes an already-applied post-state wit
     tool: 'project.execute_change'
   });
 
-  assert.equal(reconciliation.status, 'completed');
-  assert.equal(reconciliation.result.status, 'verified');
-  assert.equal(reconciliation.result.reconciled, true);
+  assert.equal(reconciliation.status, 'conflict');
+  assert.equal(reconciliation.reason, 'operation_receipt_missing');
+  assert.deepEqual(reconciliation.observations, [{ path: 'package.json', applied: true }]);
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), proposal.result.proposals[0].content);
 
   runtime.shutdown({ cancelQueued: false });
