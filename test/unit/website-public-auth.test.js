@@ -40,6 +40,13 @@ test('public registration creates a regular account and never grants owner dashb
   assert.equal((await registered.json()).role, 'user');
   const cookie = registered.headers.get('set-cookie').split(';')[0];
 
+  const accountRoute = await fetch(base + '/account', { headers: { cookie }, redirect: 'manual' });
+  assert.equal(accountRoute.status, 302);
+  assert.equal(accountRoute.headers.get('location'), '/account.html');
+  const accountPage = await fetch(base + '/account.html', { headers: { cookie }, redirect: 'manual' });
+  assert.equal(accountPage.status, 200);
+  assert.match(await accountPage.text(), /PERSONAL ACCOUNT/);
+
   const ownerApi = await fetch(base + '/api/owner/users', { headers: { cookie } });
   assert.equal(ownerApi.status, 401);
   const dashboard = await fetch(base + '/dashboard.html', { headers: { cookie }, redirect: 'manual' });
@@ -50,6 +57,15 @@ test('public registration creates a regular account and never grants owner dashb
   assert.equal(stored[0].role, 'user');
   assert.equal(JSON.stringify(stored).includes('long-public-password-123'), false);
   assert.equal(fs.statSync(path.join(dataDir, 'users.json')).mode & 0o777, 0o600);
+
+  const logout = await fetch(base + '/api/auth/logout', {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie },
+    body: '{}'
+  });
+  assert.equal(logout.status, 200);
+  const afterLogout = await fetch(base + '/account.html', { redirect: 'manual' });
+  assert.equal(afterLogout.status, 302);
+  assert.equal(afterLogout.headers.get('location'), '/auth');
 });
 
 test('owner alone can open the dashboard after mandatory password replacement', async t => {
