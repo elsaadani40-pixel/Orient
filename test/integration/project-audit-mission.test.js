@@ -40,13 +40,13 @@ async function skipIfOsSandboxUnavailable(t, root) {
   return false;
 }
 
-function createRuntime(root, { secure = false, approvalService = null } = {}) {
+function createRuntime(root, { secure = false, approvalService = null, projectPolicy = {} } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   if (!fs.existsSync(path.join(root, 'AGENT.md'))) fs.writeFileSync(path.join(root, 'AGENT.md'), '# mission fixture\n');
   const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
   const registry = new AgentRegistry(); registerDefaultAgents(registry);
-  const toolRegistry = new ToolRegistry(); for (const tool of createProjectTools({ projectRoot: root })) toolRegistry.register(tool);
+  const toolRegistry = new ToolRegistry(); for (const tool of createProjectTools({ projectRoot: root, policy: projectPolicy })) toolRegistry.register(tool);
   const orchestrator = new AgentOrchestrator({ planner: new PlannerService(), planValidator: new PlanValidator({ maxSteps: 5, toolRegistry }), replanner: new Replanner({ maxReplans: 1 }), decisionEngine: new DecisionEngine(), recoveryEngine: new RecoveryEngine() });
   if (!secure) return new OrientRuntime({ toolRegistry, agentOrchestrator: orchestrator, persistence, tenantId: 'tenant-mission', agentRegistry: registry });
   const approvals = approvalService || new ApprovalService({ tenantId: 'tenant-mission' });
@@ -96,7 +96,7 @@ test('project change mission executes the proposal in the bounded workspace and 
   const original = '{"name":"execution-fixture"}\n';
   fs.writeFileSync(manifestPath, original);
 
-  const runtime = createRuntime(root);
+  const runtime = createRuntime(root, { projectPolicy: { allowCommands: true, allowedCommands: ['node'] } });
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
 
   assert.equal(result.type, 'tool_result');
@@ -110,15 +110,16 @@ test('project change mission executes the proposal in the bounded workspace and 
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('verification failure rolls the project back to its pre-execution state', async () => {
+test('verification failure rolls the project back to its pre-execution state', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-rollback-'));
+  if (await skipIfOsSandboxUnavailable(t, root)) { fs.rmSync(root, { recursive: true, force: true }); return; }
   fs.mkdirSync(path.join(root, 'test'));
   fs.writeFileSync(path.join(root, 'test', 'failing.test.js'), "const test = require('node:test'); test('fails', () => { throw new Error('intentional'); });\n");
   const manifestPath = path.join(root, 'package.json');
   const original = '{"name":"rollback-fixture"}\n';
   fs.writeFileSync(manifestPath, original);
 
-  const runtime = createRuntime(root);
+  const runtime = createRuntime(root, { projectPolicy: { allowCommands: true, allowedCommands: ['node'] } });
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
 
   assert.equal(result.type, 'tool_result');
@@ -220,7 +221,7 @@ test('high-risk project execution requires a real approval, then executes throug
   fs.writeFileSync(manifestPath, '{"name":"high-risk-fixture"}\n');
 
   const approvals = new ApprovalService({ tenantId: 'tenant-mission' });
-  const runtime = createRuntime(root, { secure: true, approvalService: approvals });
+  const runtime = createRuntime(root, { secure: true, approvalService: approvals, projectPolicy: { allowCommands: true, allowedCommands: ['node'] } });
 
   let challenge;
   await assert.rejects(
