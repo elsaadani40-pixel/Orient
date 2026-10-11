@@ -1,11 +1,31 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+
+// The sqlite3 CLI opens a fresh connection for every invocation, so SQLite's
+// literal ":memory:" database cannot survive across run()/query() calls.
+// Back it with a private temporary file while preserving per-instance isolation.
+const temporaryDirectories = new Set();
+process.once('exit', () => {
+  for (const directory of temporaryDirectories) {
+    try {
+      fs.rmSync(directory, { recursive: true, force: true });
+    } catch {}
+  }
+});
 
 class SqliteDatabase {
   constructor(filePath, { binary = 'sqlite3' } = {}) {
     if (!filePath) throw new TypeError('filePath is required');
-    this.filePath = path.resolve(filePath);
+    this.temporaryDirectory = null;
+    if (filePath === ':memory:') {
+      this.temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-'));
+      temporaryDirectories.add(this.temporaryDirectory);
+      this.filePath = path.join(this.temporaryDirectory, 'database.sqlite');
+    } else {
+      this.filePath = path.resolve(filePath);
+    }
     this.binary = binary;
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     this.initialize();
