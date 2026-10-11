@@ -110,3 +110,99 @@ test('owner alone can open the dashboard after mandatory password replacement', 
   assert.equal(users.status, 200);
   assert.equal((await users.json()).count, 0);
 });
+
+test('owner can disable and re-enable a public account, and disabling revokes its active session', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-account-controls-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const instance = createOwnerServer({ dataDir, bootstrapPassword: 'temporary-owner-password-9F!x', log: () => {} });
+  const base = await listen(instance.server);
+  t.after(() => close(instance.server));
+
+  const registered = await fetch(base + '/api/auth/register', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'managed_user', password: 'long-public-password-123' })
+  });
+  assert.equal(registered.status, 201);
+  const userCookie = registered.headers.get('set-cookie').split(';')[0];
+  const userId = JSON.parse(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8'))[0].id;
+
+  const denied = await fetch(base + '/api/owner/users/' + userId + '/status', {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ disabled: true })
+  });
+  assert.equal(denied.status, 401);
+
+  const ownerLogin = await fetch(base + '/api/owner/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'Admin', password: 'temporary-owner-password-9F!x' })
+  });
+  const ownerCookie = ownerLogin.headers.get('set-cookie').split(';')[0];
+  const passwordChange = await fetch(base + '/api/owner/password', {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie: ownerCookie },
+    body: JSON.stringify({ password: 'permanent-owner-password-2026!', confirmPassword: 'permanent-owner-password-2026!' })
+  });
+  assert.equal(passwordChange.status, 200);
+
+  const disable = await fetch(base + '/api/owner/users/' + userId + '/status', {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie: ownerCookie },
+    body: JSON.stringify({ disabled: true })
+  });
+  assert.equal(disable.status, 200);
+  assert.equal((await disable.json()).disabled, true);
+  const revoked = await fetch(base + '/api/auth/me', { headers: { cookie: userCookie } });
+  assert.equal(revoked.status, 401);
+
+  const enable = await fetch(base + '/api/owner/users/' + userId + '/status', {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie: ownerCookie },
+    body: JSON.stringify({ disabled: false })
+  });
+  assert.equal(enable.status, 200);
+  assert.equal((await enable.json()).disabled, false);
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8'));
+  assert.equal(stored[0].disabled, false);
+});
+
+test('a public user can change their password, rotate the active session, and no longer use the old password', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-user-password-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const instance = createOwnerServer({ dataDir, bootstrapPassword: 'temporary-owner-password-9F!x', log: () => {} });
+  const base = await listen(instance.server);
+  t.after(() => close(instance.server));
+  const oldPassword = 'original-public-password-123';
+  const newPassword = 'replacement-public-password-456';
+  const registered = await fetch(base + '/api/auth/register', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'password_user', password: oldPassword })
+  });
+  assert.equal(registered.status, 201);
+  const oldCookie = registered.headers.get('set-cookie').split(';')[0];
+
+  const badChange = await fetch(base + '/api/auth/password', {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie: oldCookie },
+    body: JSON.stringify({ currentPassword: 'wrong-current-password', password: newPassword, confirmPassword: newPassword })
+  });
+  assert.equal(badChange.status, 401);
+
+  const changed = await fetch(base + '/api/auth/password', {
+    method: 'POST', headers: { 'content-type': 'application/json', cookie: oldCookie },
+    body: JSON.stringify({ currentPassword: oldPassword, password: newPassword, confirmPassword: newPassword })
+  });
+  assert.equal(changed.status, 200);
+  const newCookie = changed.headers.get('set-cookie').split(';')[0];
+  assert.notEqual(newCookie, oldCookie);
+  assert.equal((await fetch(base + '/api/auth/me', { headers: { cookie: oldCookie } })).status, 401);
+  assert.equal((await fetch(base + '/api/auth/me', { headers: { cookie: newCookie } })).status, 200);
+
+  const oldLogin = await fetch(base + '/api/auth/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'password_user', password: oldPassword })
+  });
+  assert.equal(oldLogin.status, 401);
+  const newLogin = await fetch(base + '/api/auth/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'password_user', password: newPassword })
+  });
+  assert.equal(newLogin.status, 200);
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8'));
+  assert.equal(JSON.stringify(stored).includes(newPassword), false);
+});
