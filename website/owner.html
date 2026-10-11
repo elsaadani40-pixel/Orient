@@ -74,7 +74,7 @@
    if(password.length<14){message('كلمة المرور يجب أن تكون 14 حرفًا على الأقل.');return}
    if(password!==confirmPassword){message('كلمتا المرور غير متطابقتين.');return}
    const button=$('changeForm').querySelector('button');button.disabled=true;
-   try{await api('/api/owner/password',{password,confirmPassword});$('newPassword').value='';$('confirmPassword').value='';show('homeView');message('تم حفظ كلمة المرور الجديدة بنجاح.','ok')}
+   try{await api('/api/owner/password',{password,confirmPassword});$('newPassword').value='';$('confirmPassword').value='';location.href='/owner'}
    catch(error){message(error.message)}
    finally{button.disabled=false}
  });
