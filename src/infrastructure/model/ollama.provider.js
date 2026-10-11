@@ -68,10 +68,20 @@ class OllamaProvider {
 
   async complete(request = {}) {
     const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      this.timeoutMs
-    );
+    const callerSignal = request.signal;
+    let timedOut = false;
+    const abortFromCaller = () => controller.abort(callerSignal.reason);
+
+    if (callerSignal?.aborted) {
+      controller.abort(callerSignal.reason);
+    } else if (typeof callerSignal?.addEventListener === 'function') {
+      callerSignal.addEventListener('abort', abortFromCaller, { once: true });
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.timeoutMs);
 
     try {
       const response = await this.fetch(
@@ -118,15 +128,22 @@ class OllamaProvider {
         usage: payload.usage || null
       };
     } catch (error) {
-      if (error?.name === 'AbortError') {
+      if (callerSignal?.aborted) {
+        throw Object.assign(
+          new Error('Ollama request was cancelled by the caller'),
+          { code: 'MODEL_PROVIDER_CANCELLED', cause: error }
+        );
+      }
+      if (timedOut) {
         throw Object.assign(
           new Error('Ollama request timed out'),
-          { code: 'MODEL_PROVIDER_TIMEOUT' }
+          { code: 'MODEL_PROVIDER_TIMEOUT', cause: error }
         );
       }
       throw error;
     } finally {
       clearTimeout(timer);
+      callerSignal?.removeEventListener?.('abort', abortFromCaller);
     }
   }
 }
