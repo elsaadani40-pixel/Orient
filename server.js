@@ -115,6 +115,7 @@ function createOwnerServer(options = {}) {
   const userSessions = new Map();
   const sessions = new Map();
   const attempts = new Map();
+  const registrationAttempts = new Map();
 
   function persistUsers(nextUsers) {
     const temp = usersFile + '.tmp.' + process.pid + '.' + crypto.randomUUID();
@@ -212,11 +213,18 @@ function createOwnerServer(options = {}) {
 
     if (req.method === 'POST' && url.pathname.startsWith('/api/auth/')) {
       if (!checkOrigin(req)) return sendJson(res, 403, { error: 'Request origin rejected' });
+      const authAttempt = attempts.get(ip) || { count: 0, until: 0 };
+      if (authAttempt.until > Date.now() && authAttempt.count >= 10) return sendJson(res, 429, { error: 'Too many login attempts. Wait 15 minutes.' }, { 'Retry-After': String(Math.ceil((authAttempt.until - Date.now()) / 1000)) });
       let body;
       try { body = await readJsonBody(req); }
       catch (error) { return sendJson(res, error.statusCode || 400, { error: error.message }); }
 
       if (url.pathname === '/api/auth/register') {
+        const signupAttempt = registrationAttempts.get(ip) || { count: 0, until: 0 };
+        if (signupAttempt.until > Date.now() && signupAttempt.count >= 10) return sendJson(res, 429, { error: 'Too many registration attempts. Wait 15 minutes.' }, { 'Retry-After': String(Math.ceil((signupAttempt.until - Date.now()) / 1000)) });
+        const nextSignup = signupAttempt.until > Date.now() ? signupAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
+        nextSignup.count += 1;
+        registrationAttempts.set(ip, nextSignup);
         const username = typeof body.username === 'string' ? body.username.trim() : '';
         const password = body.password;
         if (!/^[A-Za-z0-9_ -]{3,32}$/.test(username)) return sendJson(res, 400, { error: 'اسم المستخدم يجب أن يكون من 3 إلى 32 حرفًا أو رقمًا.' });
@@ -234,7 +242,12 @@ function createOwnerServer(options = {}) {
       if (url.pathname === '/api/auth/login') {
         if (typeof body.username !== 'string' || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل اسم المستخدم وكلمة المرور.' });
         const user = users.find(item => item.username.toLowerCase() === body.username.trim().toLowerCase());
-        if (!user || user.disabled || !verifyPassword(body.password, user.password)) return sendJson(res, 401, { error: 'اسم المستخدم أو كلمة المرور غير صحيحة.' });
+        if (!user || user.disabled || !verifyPassword(body.password, user.password)) {
+          const next = authAttempt.until > Date.now() ? authAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
+          next.count += 1; attempts.set(ip, next);
+          return sendJson(res, 401, { error: 'اسم المستخدم أو كلمة المرور غير صحيحة.' });
+        }
+        attempts.delete(ip);
         const token = crypto.randomBytes(32).toString('base64url');
         userSessions.set(token, { userId: user.id, username: user.username, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
         return sendJson(res, 200, { ok: true, username: user.username, role: 'user' }, { 'Set-Cookie': userCookie(token, req) });
