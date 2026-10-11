@@ -41,7 +41,7 @@ async function skipIfOsSandboxUnavailable(t, root) {
   return false;
 }
 
-function createRuntime(root, { approvalService = null, persistence: persisted = null } = {}) {
+function createRuntime(root, { approvalService = null, persistence: persisted = null, projectPolicy = {} } = {}) {
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   if (!fs.existsSync(path.join(root, 'AGENT.md'))) fs.writeFileSync(path.join(root, 'AGENT.md'), '# mission fixture\n');
@@ -50,7 +50,7 @@ function createRuntime(root, { approvalService = null, persistence: persisted = 
   registerDefaultAgents(registry);
 
   const toolRegistry = new ToolRegistry();
-  for (const tool of createProjectTools({ projectRoot: root })) {
+  for (const tool of createProjectTools({ projectRoot: root, policy: projectPolicy })) {
     toolRegistry.register(tool);
   }
 
@@ -134,7 +134,7 @@ test('high-risk verification failure rolls back after a real approval and cannot
   fs.writeFileSync(manifestPath, original);
 
   const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
-  const runtime = createRuntime(root, { approvalService: approvals });
+  const runtime = createRuntime(root, { approvalService: approvals, projectPolicy: { allowCommands: true, allowedCommands: ['node'] } });
   const { challenge, approval } = await approveChallenge(runtime, approvals, root);
 
   const resumed = await runtime.resume(challenge.executionId, { approval });
