@@ -261,7 +261,7 @@ function createOwnerServer(options = {}) {
       return sendJson(res, 404, { error: 'Not found' });
     }
 
-    if (req.method === 'PATCH' && /^\\/api\\/owner\\/users\\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+    if (req.method === 'PATCH' && /^\/api\/owner\/users\/[0-9a-f-]{36}$/i.test(url.pathname)) {
       const session = sessionFor(req);
       if (!session) return sendJson(res, 401, { error: 'Owner authentication required' });
       if (state.mustChangePassword) return sendJson(res, 403, { error: 'Password change required' });
