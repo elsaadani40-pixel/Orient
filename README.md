@@ -100,3 +100,15 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). Changes should be focused, tested, doc
 ## License
 
 ORIENT is licensed under the [MIT License](LICENSE). The license applies to the repository's original code and documentation; third-party components remain subject to their own licenses. The `private: true` setting in `package.json` prevents accidental npm publication and does not itself grant or remove rights to the public Git repository.
+
+
+## Website accounts and owner access
+
+Run the website locally with `npm run start:web`, then open `http://127.0.0.1:8080/`.
+
+- The public site remains browseable without an account.
+- `/auth` provides public account registration and sign-in. New accounts receive the ordinary `user` role only.
+- Owner sign-in is available at `/auth?mode=owner`; first-time owner access still requires replacing the generated temporary password.
+- `/owner` redirects to the owner dashboard only for an authenticated owner session. The server checks authorization on the dashboard route and owner APIs; hiding a link is not the security boundary.
+- User password hashes and owner credentials are stored under `.orient-data/` with restrictive local file permissions. Sessions are in memory and are invalidated by a server restart.
+- The current owner dashboard is a foundational account overview, not the full ORIENT operating console. This local server binds to `127.0.0.1` by default and must not be exposed directly to the public internet. Public deployment requires HTTPS, production session hardening, persistent session management, operational monitoring, and a reviewed hosting configuration.
