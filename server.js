@@ -261,6 +261,30 @@ function createOwnerServer(options = {}) {
       return sendJson(res, 404, { error: 'Not found' });
     }
 
+    if (req.method === 'PATCH' && /^\\/api\\/owner\\/users\\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+      const session = sessionFor(req);
+      if (!session) return sendJson(res, 401, { error: 'Owner authentication required' });
+      if (state.mustChangePassword) return sendJson(res, 403, { error: 'Password change required' });
+      if (!checkOrigin(req)) return sendJson(res, 403, { error: 'Request origin rejected' });
+      let body;
+      try { body = await readJsonBody(req); }
+      catch (error) { return sendJson(res, error.statusCode || 400, { error: error.message }); }
+      if (typeof body.disabled !== 'boolean') return sendJson(res, 400, { error: 'A boolean disabled value is required.' });
+      const userId = url.pathname.slice('/api/owner/users/'.length);
+      const index = users.findIndex(user => user.id === userId);
+      if (index < 0) return sendJson(res, 404, { error: 'User not found.' });
+      const nextUsers = users.map((user, userIndex) => userIndex === index ? { ...user, disabled: body.disabled } : user);
+      try { persistUsers(nextUsers); }
+      catch { return sendJson(res, 500, { error: 'Could not safely save the account status.' }); }
+      if (body.disabled) {
+        for (const [token, userSession] of userSessions) {
+          if (userSession.userId === userId) userSessions.delete(token);
+        }
+      }
+      const updated = users[index];
+      return sendJson(res, 200, { ok: true, user: { id: updated.id, username: updated.username, disabled: updated.disabled } });
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/owner/users') {
       const session = sessionFor(req);
       if (!session) return sendJson(res, 401, { error: 'Owner authentication required' });
