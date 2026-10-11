@@ -16,6 +16,7 @@ secrets/
 *.crt
 
 # Local runtime state and user data
+.orient-data/
 data/
 memories.json
 orient-one/
