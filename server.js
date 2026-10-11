@@ -101,8 +101,48 @@ function createOwnerServer(options = {}) {
     log('Sign in locally and replace this password immediately.');
   }
 
+  const usersFile = path.join(dataDir, 'users.json');
+  let users = [];
+  try {
+    users = JSON.parse(fs.readFileSync(usersFile, 'utf8'));
+    if (!Array.isArray(users)) throw new Error('Invalid user store format');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new Error('Cannot read user records safely: ' + error.message);
+    const fd = fs.openSync(usersFile, 'wx', 0o600);
+    try { fs.writeFileSync(fd, '[]\\n', 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    try { fs.chmodSync(usersFile, 0o600); } catch {}
+  }
+  const userSessions = new Map();
   const sessions = new Map();
   const attempts = new Map();
+
+  function persistUsers(nextUsers) {
+    const temp = usersFile + '.tmp.' + process.pid + '.' + crypto.randomUUID();
+    const fd = fs.openSync(temp, 'wx', 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify(nextUsers, null, 2) + '\\n', 'utf8'); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    try {
+      fs.renameSync(temp, usersFile);
+      try { fs.chmodSync(usersFile, 0o600); } catch {}
+      const dirFd = fs.openSync(dataDir, 'r');
+      try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+    } catch (error) { try { fs.unlinkSync(temp); } catch {} throw error; }
+    users = nextUsers;
+  }
+
+  function userSessionFor(req) {
+    const cookie = req.headers.cookie || '';
+    const match = cookie.match(/(?:^|;\\s*)orient_user_session=([A-Za-z0-9_-]+)/);
+    if (!match) return null;
+    const session = userSessions.get(match[1]);
+    if (!session || session.expiresAt <= Date.now()) { userSessions.delete(match[1]); return null; }
+    return { token: match[1], ...session };
+  }
+
+  function userCookie(token, req) {
+    const secure = req.socket.encrypted ? '; Secure' : '';
+    return 'orient_user_session=' + token + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800' + secure;
+  }
 
   function persist(nextState) {
     const temp = stateFile + '.tmp.' + process.pid + '.' + crypto.randomUUID();
@@ -161,6 +201,59 @@ function createOwnerServer(options = {}) {
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     const url = new URL(req.url, 'http://localhost');
     const ip = req.socket.remoteAddress || 'unknown';
+
+    if (req.method === 'GET' && url.pathname === '/api/auth/me') {
+      const session = userSessionFor(req);
+      if (session) return sendJson(res, 200, { username: session.username, role: 'user' });
+      const owner = sessionFor(req);
+      if (owner) return sendJson(res, 200, { username: 'Admin', role: 'owner', passwordChangeRequired: state.mustChangePassword });
+      return sendJson(res, 401, { error: 'Authentication required' });
+    }
+
+    if (req.method === 'POST' && url.pathname.startsWith('/api/auth/')) {
+      if (!checkOrigin(req)) return sendJson(res, 403, { error: 'Request origin rejected' });
+      let body;
+      try { body = await readJsonBody(req); }
+      catch (error) { return sendJson(res, error.statusCode || 400, { error: error.message }); }
+
+      if (url.pathname === '/api/auth/register') {
+        const username = typeof body.username === 'string' ? body.username.trim() : '';
+        const password = body.password;
+        if (!/^[A-Za-z0-9_ -]{3,32}$/.test(username)) return sendJson(res, 400, { error: 'اسم المستخدم يجب أن يكون من 3 إلى 32 حرفًا أو رقمًا.' });
+        if (username.toLowerCase() === 'admin') return sendJson(res, 400, { error: 'اسم المستخدم محجوز.' });
+        if (typeof password !== 'string' || password.length < 12 || password.length > 1024) return sendJson(res, 400, { error: 'استخدم كلمة مرور لا تقل عن 12 حرفًا.' });
+        if (users.some(user => user.username.toLowerCase() === username.toLowerCase())) return sendJson(res, 409, { error: 'اسم المستخدم مستخدم بالفعل.' });
+        const user = { id: crypto.randomUUID(), username, password: hashPassword(password), role: 'user', createdAt: new Date().toISOString(), disabled: false };
+        try { persistUsers([...users, user]); }
+        catch { return sendJson(res, 500, { error: 'تعذر حفظ الحساب بأمان.' }); }
+        const token = crypto.randomBytes(32).toString('base64url');
+        userSessions.set(token, { userId: user.id, username: user.username, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+        return sendJson(res, 201, { ok: true, username, role: 'user' }, { 'Set-Cookie': userCookie(token, req) });
+      }
+
+      if (url.pathname === '/api/auth/login') {
+        if (typeof body.username !== 'string' || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل اسم المستخدم وكلمة المرور.' });
+        const user = users.find(item => item.username.toLowerCase() === body.username.trim().toLowerCase());
+        if (!user || user.disabled || !verifyPassword(body.password, user.password)) return sendJson(res, 401, { error: 'اسم المستخدم أو كلمة المرور غير صحيحة.' });
+        const token = crypto.randomBytes(32).toString('base64url');
+        userSessions.set(token, { userId: user.id, username: user.username, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+        return sendJson(res, 200, { ok: true, username: user.username, role: 'user' }, { 'Set-Cookie': userCookie(token, req) });
+      }
+
+      if (url.pathname === '/api/auth/logout') {
+        const session = userSessionFor(req);
+        if (session) userSessions.delete(session.token);
+        return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'orient_user_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+      }
+      return sendJson(res, 404, { error: 'Not found' });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/owner/users') {
+      const session = sessionFor(req);
+      if (!session) return sendJson(res, 401, { error: 'Owner authentication required' });
+      if (state.mustChangePassword) return sendJson(res, 403, { error: 'Password change required' });
+      return sendJson(res, 200, { count: users.length, users: users.map(({ id, username, role, createdAt, disabled }) => ({ id, username, role, createdAt, disabled })) });
+    }
 
     if (req.method === 'GET' && url.pathname === '/api/owner/status') {
       return sendJson(res, 200, { ownerExists: true, passwordChangeRequired: state.mustChangePassword });
@@ -226,7 +319,18 @@ function createOwnerServer(options = {}) {
       return sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' });
     }
 
-    const pathname = url.pathname === '/' ? '/index.html' : url.pathname === '/owner' || url.pathname === '/owner/' ? '/owner.html' : url.pathname;
+    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/dashboard.html')) {
+      const ownerSession = sessionFor(req);
+      if (!ownerSession) {
+        res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      const target = state.mustChangePassword ? '/owner.html' : '/dashboard.html';
+      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+
+    const pathname = url.pathname === '/' ? '/index.html' : url.pathname === '/auth' || url.pathname === '/auth/' ? '/auth.html' : url.pathname;
     let filePath;
     try { filePath = path.resolve(WEB_ROOT, '.' + decodeURIComponent(pathname)); }
     catch { return sendJson(res, 400, { error: 'Invalid path' }); }
