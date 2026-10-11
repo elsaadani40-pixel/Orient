@@ -14,6 +14,10 @@ The premium responsive brand experience is in [`website/index.html`](website/ind
 
 The website is a product/brand landing page. It does **not** imply that every product capability shown as a direction is already released. Current implementation status must be established from code, tests, and release evidence.
 
+### Run the website and owner sign-in locally
+
+Run `npm ci`, then `npm run start:web`. Open `http://127.0.0.1:8080/` for the landing page or `http://127.0.0.1:8080/owner` for owner sign-in. On first startup, the server prints a randomly generated temporary password to the terminal once; use username `Admin`, then immediately set a new password of at least 14 characters. Keep the terminal output private. Credentials are stored locally in `.orient-data/owner.json`, excluded from Git, as a salted scrypt hash with restrictive file permissions. The server binds to loopback by default; do not expose it directly to the public internet.
+
 ## Project status
 
 ORIENT is in active engineering / pre-release. This repository is not a claim that every planned capability is production-ready. Read the source, tests, and architecture notes to distinguish implemented behavior from future work.
@@ -96,3 +100,16 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). Changes should be focused, tested, doc
 ## License
 
 ORIENT is licensed under the [MIT License](LICENSE). The license applies to the repository's original code and documentation; third-party components remain subject to their own licenses. The `private: true` setting in `package.json` prevents accidental npm publication and does not itself grant or remove rights to the public Git repository.
+
+
+## Website accounts and owner access
+
+Run the website locally with `npm run start:web`, then open `http://127.0.0.1:8080/`.
+
+- The public site remains browseable without an account.
+- `/auth` provides public account registration and sign-in. New accounts receive the ordinary `user` role only.
+- `/account` is the signed-in user's personal account page; it shows the account name and provides logout. The homepage action changes to `My account` or `Owner dashboard` when a session is active.
+- Owner sign-in is available at `/auth?mode=owner`; first-time owner access still requires replacing the generated temporary password.
+- `/owner` redirects to the owner dashboard only for an authenticated owner session. The server checks authorization on the dashboard route and owner APIs; hiding a link is not the security boundary.
+- User password hashes and owner credentials are stored under `.orient-data/` with restrictive local file permissions. Sessions are in memory and are invalidated by a server restart.
+- The current owner dashboard is a foundational account overview, not the full ORIENT operating console. This local server binds to `127.0.0.1` by default and must not be exposed directly to the public internet. Public deployment requires HTTPS, production session hardening, persistent session management, operational monitoring, and a reviewed hosting configuration.

@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "check:syntax": "find src test -type f -name '*.js' -print0 | xargs -0 -n1 node --check"
+    "check:syntax": "find src test -type f -name '*.js' -print0 | xargs -0 -n1 node --check",
+    "start:web": "node server.js"
   },
   "dependencies": {
     "pg": "^8.23.1"
