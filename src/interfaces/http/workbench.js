@@ -265,6 +265,16 @@
     }
   }
   $('taskForm').addEventListener('submit', submitTask);
+  document.querySelectorAll('[data-project-goal]').forEach(button => {
+    button.addEventListener('click', () => {
+      const goal = button.getAttribute('data-project-goal') || '';
+      $('goal').value = goal;
+      state.pendingGoal = null;
+      state.pendingKey = null;
+      message('submitMessage', 'تم تجهيز مهمة المشروع فقط. راجع نص الطلب ثم اضغط «إرسال المهمة»؛ لا يبدأ التنفيذ بمجرد اختيارها.');
+      $('goal').focus();
+    });
+  });
   $('clearGoal').addEventListener('click', () => {
     $('goal').value = '';
     state.pendingGoal = null;
