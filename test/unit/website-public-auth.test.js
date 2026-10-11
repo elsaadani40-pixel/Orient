@@ -26,9 +26,11 @@ test('public registration creates a regular account and never grants owner dashb
   const base = await listen(instance.server);
   t.after(() => close(instance.server));
 
-  const blocked = await fetch(base + '/dashboard.html', { redirect: 'manual' });
-  assert.equal(blocked.status, 302);
-  assert.equal(blocked.headers.get('location'), '/auth?mode=owner');
+  for (const protectedPath of ['/dashboard.html', '/owner.html', '/owner']) {
+    const blocked = await fetch(base + protectedPath, { redirect: 'manual' });
+    assert.equal(blocked.status, 302, protectedPath + ' must require owner authentication');
+    assert.equal(blocked.headers.get('location'), '/auth?mode=owner');
+  }
 
   const registered = await fetch(base + '/api/auth/register', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -64,9 +66,13 @@ test('owner alone can open the dashboard after mandatory password replacement', 
   assert.equal(login.status, 200);
   const cookie = login.headers.get('set-cookie').split(';')[0];
 
-  const beforeChange = await fetch(base + '/owner', { headers: { cookie }, redirect: 'manual' });
-  assert.equal(beforeChange.status, 302);
-  assert.equal(beforeChange.headers.get('location'), '/owner.html');
+  for (const protectedPath of ['/owner', '/dashboard.html']) {
+    const beforeChange = await fetch(base + protectedPath, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(beforeChange.status, 302);
+    assert.equal(beforeChange.headers.get('location'), '/owner.html');
+  }
+  const setupPage = await fetch(base + '/owner.html', { headers: { cookie }, redirect: 'manual' });
+  assert.equal(setupPage.status, 200);
 
   const changed = await fetch(base + '/api/owner/password', {
     method: 'POST', headers: { 'content-type': 'application/json', cookie },
@@ -74,9 +80,11 @@ test('owner alone can open the dashboard after mandatory password replacement', 
   });
   assert.equal(changed.status, 200);
 
-  const dashboard = await fetch(base + '/owner', { headers: { cookie }, redirect: 'manual' });
-  assert.equal(dashboard.status, 302);
-  assert.equal(dashboard.headers.get('location'), '/dashboard.html');
+  for (const protectedPath of ['/owner', '/owner.html']) {
+    const dashboard = await fetch(base + protectedPath, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(dashboard.status, 302);
+    assert.equal(dashboard.headers.get('location'), '/dashboard.html');
+  }
 
   const html = await fetch(base + '/dashboard.html', { headers: { cookie }, redirect: 'manual' });
   assert.equal(html.status, 200);
