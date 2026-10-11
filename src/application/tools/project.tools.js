@@ -86,26 +86,14 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
         if (!applied) allApplied = false;
       }
 
+      // Matching files prove only the observed post-state, not that this
+      // operation produced it. Without a durable operation receipt, fail closed
+      // rather than reporting completion or permitting a blind replay.
       if (allApplied) {
         return {
-          status: 'completed',
-          result: {
-            status: 'verified',
-            reconciled: true,
-            modification: { applied: true, reconciled: true, changes: proposals.map(({ action, path, content }) => ({ action, path, content })) },
-            verification: {
-              status: 'reconciled',
-              passed: observations.length,
-              failed: 0,
-              definitionOfDoneSatisfied: true,
-              checks: observations.map((observation, index) => ({
-                id: 'proposal-applied-' + index,
-                passed: observation.applied,
-                result: observation
-              }))
-            },
-            recovery: { operationId: null, observations }
-          }
+          status: 'conflict',
+          reason: 'operation_receipt_missing',
+          observations
         };
       }
 
