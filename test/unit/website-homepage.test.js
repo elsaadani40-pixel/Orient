@@ -6,11 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const homepagePath = path.join(__dirname, '../../../website/index.html');
+const homepagePath = path.join(__dirname, '../../website/index.html');
 
 function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLanguage = null } = {}) {
   const html = fs.readFileSync(homepagePath, 'utf8');
-  const scripts = [...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)].map(match => match[1]);
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]);
   const script = scripts.find(source => source.includes("orient-language"));
   assert.ok(script, 'homepage initialization script should exist');
 
@@ -51,7 +51,6 @@ function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLang
       fetchCalls.push({ url, options });
       return Promise.resolve({ ok: false, json: async () => ({}) });
     },
-    IntersectionObserver: undefined,
     console,
     URLSearchParams,
     setTimeout,
@@ -61,7 +60,7 @@ function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLang
   return { document, elements, listeners, storage, fetchCalls };
 }
 
-test('homepage initializes language and account navigation when reduced motion is enabled', async () => {
+test('homepage initializes language and account navigation when reduced motion is enabled', () => {
   const app = bootHomepage({ reducedMotion: true, browserLanguage: 'ar' });
   assert.equal(app.document.documentElement.lang, 'ar');
   assert.equal(app.document.documentElement.dir, 'rtl');
