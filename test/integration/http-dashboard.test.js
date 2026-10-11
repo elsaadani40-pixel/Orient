@@ -312,3 +312,36 @@ test('task workbench and its API remain behind the configured owner session gate
     page: { limit: 20, offset: 0, total: 0 }
   });
 });
+
+
+test('task workbench preserves an ambiguous POST retry key across a page reload', async t => {
+  const server = createServer({
+    memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('memory'); }, add() {}, delete() {} },
+    agentRoutes: {}
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+  }));
+
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const response = await fetch(origin + '/workbench.js');
+  const source = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(source, /const pendingStorageKey = 'orient\\.workbench\\.pending-task\\.v1'/);
+  assert.match(source, /sessionStorage\\.setItem\\(pendingStorageKey/);
+  assert.match(source, /sessionStorage\\.getItem\\(pendingStorageKey/);
+  assert.match(source, /state\\.pendingKey = saved\\.key/);
+  assert.match(source, /state\\.pendingGoal = saved\\.goal/);
+
+  const submitStart = source.indexOf('async function submitTask(event)');
+  const persistBeforePost = source.indexOf('persistPendingTask();', source.indexOf('if (!state.pendingKey)', submitStart));
+  const postStart = source.indexOf("result = await request('/api/v1/tasks'", submitStart);
+  const postCatch = source.indexOf('} catch (error) {', postStart);
+  const clearAfterAck = source.indexOf('state.pendingKey = null;', source.indexOf('const task = result.task;', postCatch));
+  const clearPersist = source.indexOf('persistPendingTask();', clearAfterAck);
+  assert.ok(persistBeforePost > submitStart && persistBeforePost < postStart, 'retry key and goal are persisted before the POST');
+  assert.ok(postCatch > postStart && clearAfterAck > postCatch, 'ambiguous POST failures retain the retry state');
+  assert.ok(clearPersist > clearAfterAck, 'the stored retry state is cleared only after a valid task acknowledgement');
+  assert.match(source, /restorePendingTask\\(\\);/);
+});
