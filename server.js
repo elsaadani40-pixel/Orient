@@ -136,6 +136,8 @@ function createOwnerServer(options = {}) {
     const match = cookie.match(/(?:^|;\s*)orient_user_session=([A-Za-z0-9_-]+)/);
     if (!match) return null;
     const session = userSessions.get(match[1]);
+    const account = users.find(user => user.id === session?.userId);
+    if (!account || account.disabled) { userSessions.delete(match[1]); return null; }
     if (!session || session.expiresAt <= Date.now()) { userSessions.delete(match[1]); return null; }
     return { token: match[1], ...session };
   }
@@ -253,6 +255,43 @@ function createOwnerServer(options = {}) {
         return sendJson(res, 200, { ok: true, username: user.username, role: 'user' }, { 'Set-Cookie': userCookie(token, req) });
       }
 
+      if (url.pathname === '/api/auth/password') {
+        const session = userSessionFor(req);
+        if (!session) return sendJson(res, 401, { error: 'Authentication required' });
+        if (typeof body.currentPassword !== 'string' || typeof body.password !== 'string' ||
+            typeof body.confirmPassword !== 'string') {
+          return sendJson(res, 400, { error: 'أكمل حقول كلمة المرور.' });
+        }
+        if (body.password.length < 12 || body.password.length > 1024) {
+          return sendJson(res, 400, { error: 'استخدم كلمة مرور جديدة لا تقل عن 12 حرفًا.' });
+        }
+        if (body.password !== body.confirmPassword) {
+          return sendJson(res, 400, { error: 'كلمتا المرور الجديدتان غير متطابقتين.' });
+        }
+        const currentUser = users.find(user => user.id === session.userId);
+        if (!currentUser || !verifyPassword(body.currentPassword, currentUser.password)) {
+          const next = authAttempt.until > Date.now() ? authAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
+          next.count += 1;
+          attempts.set(ip, next);
+          return sendJson(res, 401, { error: 'كلمة المرور الحالية غير صحيحة.' });
+        }
+        if (verifyPassword(body.password, currentUser.password)) {
+          return sendJson(res, 400, { error: 'اختر كلمة مرور مختلفة عن الحالية.' });
+        }
+        const nextUsers = users.map(user => user.id === currentUser.id
+          ? { ...user, password: hashPassword(body.password), updatedAt: new Date().toISOString() }
+          : user);
+        try { persistUsers(nextUsers); }
+        catch { return sendJson(res, 500, { error: 'تعذر حفظ كلمة المرور بأمان.' }); }
+        attempts.delete(ip);
+        for (const [token, activeSession] of userSessions) {
+          if (activeSession.userId === currentUser.id) userSessions.delete(token);
+        }
+        const token = crypto.randomBytes(32).toString('base64url');
+        userSessions.set(token, { userId: currentUser.id, username: currentUser.username, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+        return sendJson(res, 200, { ok: true }, { 'Set-Cookie': userCookie(token, req) });
+      }
+
       if (url.pathname === '/api/auth/logout') {
         const session = userSessionFor(req);
         if (session) userSessions.delete(session.token);
@@ -311,6 +350,26 @@ function createOwnerServer(options = {}) {
       let body;
       try { body = await readJsonBody(req); }
       catch (error) { return sendJson(res, error.statusCode || 400, { error: error.message }); }
+
+      const userStatusMatch = url.pathname.match(/^\/api\/owner\/users\/([0-9a-f-]{36})\/status$/i);
+      if (userStatusMatch) {
+        const ownerSession = sessionFor(req);
+        if (!ownerSession) return sendJson(res, 401, { error: 'Owner authentication required' });
+        if (state.mustChangePassword) return sendJson(res, 403, { error: 'Password change required' });
+        if (typeof body.disabled !== 'boolean') return sendJson(res, 400, { error: 'disabled must be a boolean.' });
+        const userId = userStatusMatch[1];
+        const target = users.find(user => user.id === userId);
+        if (!target) return sendJson(res, 404, { error: 'Account not found.' });
+        const nextUsers = users.map(user => user.id === userId ? { ...user, disabled: body.disabled, updatedAt: new Date().toISOString() } : user);
+        try { persistUsers(nextUsers); }
+        catch { return sendJson(res, 500, { error: 'Could not safely update the account.' }); }
+        if (body.disabled) {
+          for (const [token, session] of userSessions) {
+            if (session.userId === userId) userSessions.delete(token);
+          }
+        }
+        return sendJson(res, 200, { ok: true, id: userId, disabled: body.disabled });
+      }
 
       if (url.pathname === '/api/owner/login') {
         if (typeof body.username !== 'string' || typeof body.password !== 'string' ||
