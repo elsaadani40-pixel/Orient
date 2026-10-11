@@ -332,7 +332,7 @@ function createOwnerServer(options = {}) {
       return sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD' });
     }
 
-    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/dashboard.html')) {
+    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/owner.html' || url.pathname === '/dashboard.html')) {
       const ownerSession = sessionFor(req);
       if (!ownerSession) {
         res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
