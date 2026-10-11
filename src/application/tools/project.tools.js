@@ -60,7 +60,7 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
       }));
 
       const canRunNodeTests = agent.policy.allowCommands === true &&
-        agent.policy.allowedCommands.includes('node');
+        agent.policy.allowedCommands.has('node');
       const hasTests = canRunNodeTests && await agent.workspace.exists('test');
       if (hasTests) checks.push(commandVerification.createCheck({ id: 'node-test-suite', executable: 'node', args: ['--test'] }));
 
