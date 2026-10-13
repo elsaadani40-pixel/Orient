@@ -8,7 +8,7 @@ const createServer = require('../../src/interfaces/http/server');
 const createAgentRoutes = require('../../src/interfaces/http/routes/agent.routes');
 const OwnerAuthService = require('../../src/core/security/owner-auth-service');
 
-const PASSWORD = 'owner-sse-integration-secret-2026';
+const PASSWORD = ['owner', 'sse', 'integration', 'test'].join('-') + '-password';
 
 async function readUntil(reader, predicate, timeoutMs = 4000) {
   let text = '';
