@@ -58,6 +58,10 @@ class OwnerIdentityRuntimeAdapter {
     return this.identity.verifyCsrf(session, token);
   }
 
+  async changePassword({ token, password, confirmPassword } = {}) {
+    return this.identity.changePassword({ token, password, confirmPassword });
+  }
+
   logout(token) {
     return this.identity.logout(token);
   }
