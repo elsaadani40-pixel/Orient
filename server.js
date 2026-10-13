@@ -400,7 +400,12 @@ function createOwnerServer(options = {}) {
         const nextState = { ...state, password: hashPassword(body.password), mustChangePassword: false, updatedAt: new Date().toISOString() };
         try { persist(nextState); }
         catch { return sendJson(res, 500, { error: 'Could not safely save the new password. No changes were confirmed.' }); }
-        return sendJson(res, 200, { ok: true, passwordChangeRequired: false });
+        // Password rotation invalidates every pre-existing owner session, including
+        // sessions created with the temporary password before the first-run change.
+        for (const token of sessions.keys()) sessions.delete(token);
+        const replacementToken = crypto.randomBytes(32).toString('base64url');
+        sessions.set(replacementToken, { expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+        return sendJson(res, 200, { ok: true, passwordChangeRequired: false }, { 'Set-Cookie': sessionCookie(replacementToken, req) });
       }
 
       if (url.pathname === '/api/owner/logout') {

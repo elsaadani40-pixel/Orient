@@ -80,7 +80,13 @@ test('owner alone can open the dashboard after mandatory password replacement', 
     body: JSON.stringify({ username: 'Admin', password: 'temporary-owner-password-9F!x' })
   });
   assert.equal(login.status, 200);
-  const cookie = login.headers.get('set-cookie').split(';')[0];
+  let cookie = login.headers.get('set-cookie').split(';')[0];
+  const secondLogin = await fetch(base + '/api/owner/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'Admin', password: 'temporary-owner-password-9F!x' })
+  });
+  assert.equal(secondLogin.status, 200);
+  const staleCookie = secondLogin.headers.get('set-cookie').split(';')[0];
 
   for (const protectedPath of ['/owner', '/dashboard.html']) {
     const beforeChange = await fetch(base + protectedPath, { headers: { cookie }, redirect: 'manual' });
@@ -95,6 +101,12 @@ test('owner alone can open the dashboard after mandatory password replacement', 
     body: JSON.stringify({ password: 'permanent-owner-password-2026!', confirmPassword: 'permanent-owner-password-2026!' })
   });
   assert.equal(changed.status, 200);
+  const oldCookie = cookie;
+  cookie = changed.headers.get('set-cookie').split(';')[0];
+  assert.notEqual(cookie, oldCookie, 'password rotation must issue a fresh owner session');
+  assert.equal((await fetch(base + '/api/owner/me', { headers: { cookie: oldCookie } })).status, 401);
+  assert.equal((await fetch(base + '/api/owner/me', { headers: { cookie: staleCookie } })).status, 401);
+  assert.equal((await fetch(base + '/api/owner/me', { headers: { cookie } })).status, 200);
 
   for (const protectedPath of ['/owner', '/owner.html']) {
     const dashboard = await fetch(base + protectedPath, { headers: { cookie }, redirect: 'manual' });
