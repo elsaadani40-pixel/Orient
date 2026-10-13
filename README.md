@@ -69,16 +69,18 @@ npm run check:syntax
 
 ### Run locally
 
-Start the HTTP application:
+Start the unified website + Runtime HTTP listener:
 
 ```bash
-node app.js
+npm run start:web
 ```
 
-By default, the server binds to `127.0.0.1:8080`.
+This is equivalent to `node app.js`. By default, the server binds to `127.0.0.1:8080`.
 
-- Open `http://127.0.0.1:8080` for the local memory interface.
+- Open `http://127.0.0.1:8080/` for the ORIENT landing page.
+- Open `http://127.0.0.1:8080/memory` for the local memory interface.
 - Open `http://127.0.0.1:8080/dashboard` for the local execution dashboard and control plane.
+- Owner-only routes require an authenticated owner session; the presence of a dashboard page is not authorization.
 
 The dashboard exposes bounded, tenant-scoped execution history, per-execution event streams, pending approvals, and explicit cancellation requests. See [the dashboard contract](docs/operations/DASHBOARD-CONTROL-PLANE.md) for API details, security boundaries, and its smoke checklist.
 
@@ -90,7 +92,7 @@ curl -sS -X POST http://127.0.0.1:8080/agent \
   -d '{"input":"احفظ أنني أختبر ORIENT"}'
 ```
 
-The default planner is deterministic and does not require a paid model API. This example uses local JSON persistence. Inspect the returned status and verify the saved memory in the local interface; do not treat an HTTP response alone as proof that every tool or integration is available.
+Without a configured local model provider, the planner uses deterministic rules and requires no paid model API. When Ollama is configured, the planner can use schema-constrained local model planning with Runtime validation. This example uses the configured local persistence adapter. Inspect the returned status and verify the saved memory in the local interface; do not treat an HTTP response alone as proof that every tool or integration is available.
 
 The default server binding is loopback-only. Do not expose it to a network without a complete authentication/session boundary and transport protection.
 
@@ -108,7 +110,8 @@ A sample environment file is provided in [`.env.example`](.env.example). Copy it
 - `src/interfaces` — HTTP interfaces
 - `test/unit` — unit and architecture tests
 - `test/integration` — runtime, recovery, and persistence proofs
-- `docs/architecture` — architecture decisions and ownership boundaries
+- `docs/architecture` — active architecture decisions, contracts, and ownership boundaries
+- `docs/archive/architecture` — historical Phase 10–17 notes retained for traceability
 - `docs/security` — security design notes and constraints
 - `docs/product` — product contract and cross-device roadmap
 - `website/` — static brand landing-page source
