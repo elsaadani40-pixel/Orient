@@ -206,3 +206,65 @@ test('dashboard does not replace the existing memory home route', async (t) => {
   assert.equal(response.status, 200);
   assert.equal(await response.text(), 'existing-memory-home');
 });
+
+
+test('owner-gated workbench serves its same-origin client without website-handler interception', async t => {
+  let passwordChangeRequired = false;
+  const ownerAuth = {
+    enabled: true,
+    authenticate(cookie) {
+      return cookie === 'workbench-test-session' ? { token: cookie } : null;
+    },
+    status() { return { passwordChangeRequired }; }
+  };
+  const server = createServer({
+    memoryRoutes: {
+      home(_req, res) { res.writeHead(200); res.end('memory'); },
+      add() {},
+      delete() {}
+    },
+    agentRoutes: {},
+    ownerAuth,
+    websiteHandler(_req, res) {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('website-handler-intercepted-workbench');
+    }
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+  }));
+
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const denied = await fetch(origin + '/workbench', { redirect: 'manual' });
+  assert.equal(denied.status, 302);
+  assert.equal(denied.headers.get('location'), '/auth?mode=owner');
+
+  const headers = { Cookie: 'orient_owner_session=workbench-test-session' };
+  const page = await fetch(origin + '/workbench', { headers });
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.equal(page.headers.get('x-frame-options'), 'DENY');
+  assert.match(page.headers.get('content-security-policy') || '', /connect-src 'self'/);
+  assert.match(html, /مساحة اختبار المهام/);
+  assert.match(html, /id="taskForm"/);
+  assert.match(html, /src="\/workbench\.js"/);
+  assert.doesNotMatch(html, /website-handler-intercepted-workbench/);
+
+  const script = await fetch(origin + '/workbench.js', { headers });
+  const source = await script.text();
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get('content-security-policy') || '', /default-src 'none'/);
+  assert.match(source, /Idempotency-Key/);
+  assert.doesNotMatch(source, /innerHTML/);
+
+  passwordChangeRequired = true;
+  const rotation = await fetch(origin + '/workbench', { headers, redirect: 'manual' });
+  assert.equal(rotation.status, 302);
+  assert.equal(rotation.headers.get('location'), '/owner.html');
+});

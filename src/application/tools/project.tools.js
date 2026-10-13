@@ -40,9 +40,11 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
           ...policy,
           allowRead: true,
           allowWrite: true,
-          allowCommands: true,
+          // Never elevate command execution beyond the caller's explicit policy.
+          // Project-controlled tests remain disabled unless outer policy allows them.
+          allowCommands: policy.allowCommands === true,
           allowGit: false,
-          allowedCommands: ['node'],
+          allowedCommands: Array.isArray(policy.allowedCommands) ? policy.allowedCommands : [],
           timeoutMs: policy.timeoutMs || 120000
         }
       });
@@ -56,7 +58,9 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
         })
       }));
 
-      const hasTests = await agent.workspace.exists('test');
+      const canRunNodeTests = agent.policy.allowCommands === true &&
+        agent.policy.allowedCommands.has('node');
+      const hasTests = canRunNodeTests && await agent.workspace.exists('test');
       if (hasTests) checks.push(commandVerification.createCheck({ id: 'node-test-suite', executable: 'node', args: ['--test'] }));
 
       return agent.execute({
@@ -86,26 +90,13 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
         if (!applied) allApplied = false;
       }
 
+      // Observed matching files do not prove this operation applied them.
+      // Without a durable operation receipt, fail closed rather than claim success.
       if (allApplied) {
         return {
-          status: 'completed',
-          result: {
-            status: 'verified',
-            reconciled: true,
-            modification: { applied: true, reconciled: true, changes: proposals.map(({ action, path, content }) => ({ action, path, content })) },
-            verification: {
-              status: 'reconciled',
-              passed: observations.length,
-              failed: 0,
-              definitionOfDoneSatisfied: true,
-              checks: observations.map((observation, index) => ({
-                id: 'proposal-applied-' + index,
-                passed: observation.applied,
-                result: observation
-              }))
-            },
-            recovery: { operationId: null, observations }
-          }
+          status: 'conflict',
+          reason: 'operation_receipt_missing',
+          observations
         };
       }
 
