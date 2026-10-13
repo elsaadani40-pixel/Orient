@@ -489,8 +489,9 @@ class PlannerService {
 
   extractProjectChangeProposal(text) {
     const value = String(text || '').trim();
-    if (!/(اقترح|اقتراح|حلل.*مشكلة|change proposal|propose.*change|improvement|التغيير المقترح|proposed change)/i.test(value) || (!/(المشروع|المستودع|repository|project|التغيير المقترح|proposed change)/i.test(value))) return null;
-    const wantsExecution = /(نفذ|apply|implement)/i.test(value);
+    if (!/(اقترح|اقتراح|حلل.*مشكلة|حدد.{0,40}تغيير|حدد.{0,40}التغيير|change proposal|propose.*change|identify.{0,40}change|improvement|التغيير المقترح|proposed change)/i.test(value) || (!/(المشروع|المستودع|repository|project|التغيير المقترح|proposed change)/i.test(value))) return null;
+    const explicitlyNoExecution = /(?:لا\\s+(?:تنفذ|تُنفّذ|تطبق|تُطبّق|تنفيذ|تطبيق)|عدم\\s+(?:تنفيذ|تطبيق)|\\b(?:do not|don't|never)\\s+(?:execute|apply|implement)\\b)/i.test(value);
+    const wantsExecution = !explicitlyNoExecution && /(نفذ|apply|implement|execute)/i.test(value);
     const steps = [
       {
         step: 1,
