@@ -140,11 +140,12 @@ const accessAuditRepository =
   );
 
 const websiteDataDir = process.env.ORIENT_DATA_DIR || require('path').join(__dirname, '.orient-data');
+const ownerBootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD;
 const ownerIdentityService = new OwnerIdentityService({
   // Keep the website's established state path so legacy owner credentials and
   // public accounts are migrated in place rather than silently abandoned.
   stateFile: require('path').join(websiteDataDir, 'owner.json'),
-  bootstrapPassword: process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD
+  bootstrapPassword: ownerBootstrapPassword
 });
 const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService });
 const website = createOwnerServer({
@@ -154,10 +155,14 @@ const website = createOwnerServer({
 });
 if (ownerIdentityService.createdBootstrap) {
   const bootstrapPassword = ownerIdentityService.consumeBootstrapPassword();
-  console.error('ORIENT OWNER FIRST-RUN CREDENTIAL (shown once; keep private)');
-  console.error('Username: Admin');
-  console.error('Temporary password: ' + bootstrapPassword);
-  console.error('Sign in locally and replace this password immediately.');
+  if (ownerBootstrapPassword) {
+    console.error('ORIENT owner bootstrap credential was supplied through the environment; secret output is suppressed.');
+  } else {
+    console.error('ORIENT OWNER FIRST-RUN CREDENTIAL (shown once; keep private)');
+    console.error('Username: Admin');
+    console.error('Temporary password: ' + bootstrapPassword);
+    console.error('Sign in locally and replace this password immediately.');
+  }
 }
 
 const memoryService =
