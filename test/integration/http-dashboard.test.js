@@ -243,6 +243,19 @@ test('task workbench serves a responsive Arabic task console and same-origin API
   assert.match(source, /Idempotency-Key/);
   assert.match(source, /textContent/);
   assert.doesNotMatch(source, /innerHTML/);
+
+  // A post-submit GET failure must not be reported as an ambiguous POST:
+  // that would invite resubmission after the original task was already accepted.
+  const postStart = source.indexOf("result = await request('/api/v1/tasks'");
+  const postCatch = source.indexOf("} catch (error) {", postStart);
+  const taskValidation = source.indexOf('const task = result.task;', postCatch);
+  const clearRetryKey = source.indexOf('state.pendingKey = null;', taskValidation);
+  const refreshAfterAcceptance = source.indexOf('await loadTasks();', clearRetryKey);
+  assert.ok(postStart >= 0 && postCatch > postStart, 'task POST has a bounded error handler');
+  assert.ok(taskValidation > postCatch, 'task response is handled after the POST catch');
+  assert.ok(clearRetryKey > taskValidation, 'retry key is cleared only after a task ID is validated');
+  assert.ok(refreshAfterAcceptance > clearRetryKey, 'read-only refresh happens after accepted-task state is recorded');
+  assert.doesNotMatch(source.slice(postStart, postCatch), /loadTasks|selectTask/, 'read-only refreshes cannot be caught as a failed POST');
 });
 
 test('task workbench and its API remain behind the configured owner session gate', async t => {
@@ -298,4 +311,37 @@ test('task workbench and its API remain behind the configured owner session gate
     items: [],
     page: { limit: 20, offset: 0, total: 0 }
   });
+});
+
+
+test('task workbench preserves an ambiguous POST retry key across a page reload', async t => {
+  const server = createServer({
+    memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('memory'); }, add() {}, delete() {} },
+    agentRoutes: {}
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve());
+  }));
+
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const response = await fetch(origin + '/workbench.js');
+  const source = await response.text();
+  assert.equal(response.status, 200);
+  assert.ok(source.includes("const pendingStorageKey = 'orient.workbench.pending-task.v1'"));
+  assert.ok(source.includes('sessionStorage.setItem(pendingStorageKey'));
+  assert.ok(source.includes('sessionStorage.getItem(pendingStorageKey'));
+  assert.ok(source.includes('state.pendingKey = saved.key'));
+  assert.ok(source.includes('state.pendingGoal = saved.goal'));
+
+  const submitStart = source.indexOf('async function submitTask(event)');
+  const persistBeforePost = source.indexOf('persistPendingTask();', source.indexOf('if (!state.pendingKey)', submitStart));
+  const postStart = source.indexOf("result = await request('/api/v1/tasks'", submitStart);
+  const postCatch = source.indexOf('} catch (error) {', postStart);
+  const clearAfterAck = source.indexOf('state.pendingKey = null;', source.indexOf('const task = result.task;', postCatch));
+  const clearPersist = source.indexOf('persistPendingTask();', clearAfterAck);
+  assert.ok(persistBeforePost > submitStart && persistBeforePost < postStart, 'retry key and goal are persisted before the POST');
+  assert.ok(postCatch > postStart && clearAfterAck > postCatch, 'ambiguous POST failures retain the retry state');
+  assert.ok(clearPersist > clearAfterAck, 'the stored retry state is cleared only after a valid task acknowledgement');
+  assert.ok(source.includes('restorePendingTask();'));
 });
