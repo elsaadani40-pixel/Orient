@@ -114,6 +114,6 @@ test('CLI clears its local session even if remote logout fails', async t => {
     sessionFile,
     fetchImpl: async () => response(403, { code: 'OWNER_CSRF_REJECTED' })
   });
-  await client.logout();
+  await assert.rejects(client.logout(), /remote logout could not be confirmed/);
   assert.equal(fs.existsSync(sessionFile), false);
 });
