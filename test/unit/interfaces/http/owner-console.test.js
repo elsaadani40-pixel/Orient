@@ -29,17 +29,18 @@ async function withServer(ownerAuth, run, agentRoutes = {}) {
   }
 }
 
-async function request(origin, pathname, { method = 'GET', headers = {}, body } = {}) {
+async function request(origin, pathname, { method = 'GET', headers = {}, body, redirect } = {}) {
   return fetch(origin + pathname, {
     method,
     headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
-    body
+    body,
+    ...(redirect ? { redirect } : {})
   });
 }
 
 test('owner console requires an owner session and is served with restrictive security headers', async () => {
   await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
-    const denied = await request(origin, '/owner');
+    const denied = await request(origin, '/owner', { redirect: 'manual' });
     assert.equal(denied.status, 302);
     assert.equal(denied.headers.get('location'), '/auth?mode=owner');
 
