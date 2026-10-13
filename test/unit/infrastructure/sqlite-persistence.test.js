@@ -53,6 +53,8 @@ test('SQLite persistence survives repository recreation and preserves execution 
   );
   assert.equal(second.events.findByExecutionId('exec-sqlite-1').length, 1);
 
+  first.close();
+  second.close();
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -87,6 +89,7 @@ test('SQLite execution pages and event replay are bounded and tenant-scoped', ()
     persistence.events.append({ id: 'b4', executionId: 'exec-a1', type: 'foreign', timestamp: '2026-10-10T10:00:03.000Z', data: { tenantId: 'tenant-b' } }, { tenantId: 'tenant-b' });
     const events = persistence.events.findByExecutionId('exec-a1', { tenantId: 'tenant-a', limit: 2 });
     assert.deepEqual(events.map(event => event.id), ['a2', 'a3']);
+    persistence.close();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -137,6 +140,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
   assert.equal(await secondApproval.consume(issued.approvalId), true);
   assert.equal(await secondApproval.consume(issued.approvalId), false);
 
+  firstPersistence.close();
+  secondPersistence.close();
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -157,6 +162,8 @@ test('SQLite checkpoint sequencing remains monotonic and schema migration marker
   second.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 3 });
   assert.equal(second.checkpoints.findLatest('exec-seq-1').sequence, 3);
 
+  first.close();
+  second.close();
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -173,4 +180,5 @@ test('sqlite transactions roll back all statements after an injected failure', (
   );
 
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
+  db.close();
 });
