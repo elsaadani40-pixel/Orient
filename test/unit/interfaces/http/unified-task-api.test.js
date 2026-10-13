@@ -186,6 +186,9 @@ test('v1 task read endpoints remain behind the shared owner-session gate', async
         return token === 'valid-session'
           ? { sessionId: 'session-1', csrfToken: 'csrf-1', expiresAt: Date.now() + 60000 }
           : null;
+      },
+      verifyCsrf(session, token) {
+        return session?.csrfToken === token;
       }
     }
   });
@@ -338,11 +341,24 @@ test('POST v1 task creation requires the owner session and same-origin request',
     headers: {
       'Content-Type': 'application/json',
       Origin: origin,
-      Cookie: 'orient_owner_session=valid-session'
+      Cookie: 'orient_owner_session=valid-session',
+      'X-ORIENT-CSRF': 'csrf-1'
     },
     body: payload
   });
   assert.equal(authorized.status, 201);
   assert.equal((await authorized.json()).task.id, 'exec-created');
+
+  const missingCsrf = await fetch(`${origin}/api/v1/tasks`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: origin,
+      Cookie: 'orient_owner_session=valid-session'
+    },
+    body: payload
+  });
+  assert.equal(missingCsrf.status, 403);
+  assert.equal((await missingCsrf.json()).code, 'OWNER_CSRF_REJECTED');
   assert.equal(created, 1);
 });
