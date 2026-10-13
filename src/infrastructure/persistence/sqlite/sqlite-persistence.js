@@ -324,8 +324,8 @@ class SqliteApprovalRepository {
 }
 
 class SqlitePersistence {
-  constructor({ filePath, binary = 'sqlite3' } = {}) {
-    this.db = new SqliteDatabase(filePath, { binary });
+  constructor({ filePath } = {}) {
+    this.db = new SqliteDatabase(filePath);
     this.executions = new SqliteExecutionRepository(this.db);
     this.events = new SqliteEventRepository(this.db);
     this.idempotency = new SqliteIdempotencyRepository(this.db);
