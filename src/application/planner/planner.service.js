@@ -239,6 +239,7 @@ class PlannerService {
       try { payload = JSON.parse(payload); } catch { return null; }
     }
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    if (Object.keys(payload).some(key => !['intent', 'confidence', 'reason', 'steps'].includes(key))) return null;
     if (typeof payload.intent !== 'string' || !payload.intent.trim() || payload.intent.length > 120) return null;
     if (typeof payload.reason !== 'string' || !payload.reason.trim() || payload.reason.length > 2000) return null;
     if (typeof payload.confidence !== 'number' || !Number.isFinite(payload.confidence) || payload.confidence < 0 || payload.confidence > 1) return null;
