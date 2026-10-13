@@ -119,7 +119,7 @@ test('verification failure rolls the project back to its pre-execution state', a
   const original = '{"name":"rollback-fixture"}\n';
   fs.writeFileSync(manifestPath, original);
 
-  const runtime = createRuntime(root);
+  const runtime = createRuntime(root, { projectPolicy: { allowCommands: true, allowedCommands: ['node'] } });
   const result = await runtime.execute('حلل المشروع واكتشف مشكلة واقترح تغييرًا آمنًا ثم نفذ التغيير وتحقق منه');
 
   assert.equal(result.type, 'tool_result');
