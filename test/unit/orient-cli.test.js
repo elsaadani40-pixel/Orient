@@ -80,7 +80,9 @@ test('task creation uses the Runtime API with owner cookie, origin and CSRF toke
   assert.equal(call.options.headers.Cookie, 'orient_owner_session=' + token);
   assert.equal(call.options.headers.Origin, 'http://127.0.0.1:8080');
   assert.equal(call.options.headers['X-ORIENT-CSRF'], csrf);
-  assert.deepEqual(JSON.parse(call.options.body), { goal: 'prepare a safe plan' });
+  const payload = JSON.parse(call.options.body);
+  assert.equal(payload.goal, 'prepare a safe plan');
+  assert.match(payload.idempotencyKey, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 });
 
 test('CLI rejects malformed IDs, empty goals, expired sessions, and cross-server session reuse', async t => {
