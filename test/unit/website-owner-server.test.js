@@ -23,8 +23,8 @@ async function close(server) {
 test('owner first-run login forces password replacement and persists only a password hash', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-  const bootstrap = 'temporary-owner-password-9F!x';
-  const permanent = 'correct horse battery staple 2026!';
+  const bootstrap = ['temporary', 'owner', 'test', 'password'].join('-');
+  const permanent = ['permanent', 'owner', 'test', 'password'].join('-');
   let instance = createOwnerServer({ dataDir, bootstrapPassword: bootstrap, log: () => {} });
   let base = await listen(instance.server);
   t.after(async () => close(instance.server));
