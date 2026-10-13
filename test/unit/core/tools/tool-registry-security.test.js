@@ -154,3 +154,47 @@ test('tool registry rejects duplicate registration without replacing the origina
   const result = await registry.execute('secure.test', { value: 6 }, {});
   assert.deepEqual(result, { input: { value: 6 }, executed: true });
 });
+
+
+test('tool registry exposes declared effects and idempotency while keeping legacy tools unknown', () => {
+  const registry = new ToolRegistry();
+  registry.register(tool());
+  registry.register({
+    name: 'workspace.read',
+    description: 'read-only fixture',
+    effects: 'read_only',
+    idempotency: 'idempotent',
+    execute: async () => ({})
+  });
+
+  const listed = registry.list();
+  assert.deepEqual(
+    listed.map(item => ({ name: item.name, effects: item.effects, idempotency: item.idempotency })),
+    [
+      { name: 'secure.test', effects: 'unknown', idempotency: 'unknown' },
+      { name: 'workspace.read', effects: 'read_only', idempotency: 'idempotent' }
+    ]
+  );
+});
+
+test('tool registry rejects invalid declared contracts and reconcilable tools without reconciliation', () => {
+  const registry = new ToolRegistry();
+
+  assert.throws(
+    () => registry.register({
+      name: 'invalid.contract',
+      effects: 'unknown-ish',
+      execute: async () => ({})
+    }),
+    /invalid effects metadata/
+  );
+
+  assert.throws(
+    () => registry.register({
+      name: 'missing.reconciler',
+      idempotency: 'reconcilable',
+      execute: async () => ({})
+    }),
+    /provides no reconcile function/
+  );
+});
