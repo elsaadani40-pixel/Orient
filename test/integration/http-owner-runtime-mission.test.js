@@ -110,6 +110,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     body: JSON.stringify({ password: 'owner-runtime-test-secret-2026' })
   });
   assert.equal(login.status, 200);
+  const loginPayload = await login.json();
   const cookie = login.headers.get('set-cookie').split(';')[0];
 
   const dashboard = await fetch(origin + '/dashboard', { headers: { Cookie: cookie } });
@@ -144,6 +145,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     'content-type': 'application/json',
     Origin: origin,
     Cookie: cookie,
+    'X-ORIENT-CSRF': loginPayload.csrfToken,
     'Idempotency-Key': 'owner-runtime-task-key-0001'
   };
   const taskResponse = await fetch(origin + '/api/v1/tasks', {
