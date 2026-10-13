@@ -29,17 +29,29 @@ async function withServer(ownerAuth, run, agentRoutes = {}) {
   }
 }
 
-async function request(origin, pathname, { method = 'GET', headers = {}, body } = {}) {
+async function request(origin, pathname, { method = 'GET', headers = {}, body, redirect } = {}) {
   return fetch(origin + pathname, {
     method,
     headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
-    body
+    body,
+    ...(redirect ? { redirect } : {})
   });
 }
 
-test('owner console is served with no-store and a restrictive content policy', async () => {
+test('owner console requires an owner session and is served with restrictive security headers', async () => {
   await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
-    const response = await request(origin, '/owner');
+    const denied = await request(origin, '/owner', { redirect: 'manual' });
+    assert.equal(denied.status, 302);
+    assert.equal(denied.headers.get('location'), '/auth?mode=owner');
+
+    const login = await request(origin, '/owner/login', {
+      method: 'POST',
+      headers: { Origin: origin },
+      body: JSON.stringify({ password: PASSWORD })
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const response = await request(origin, '/owner', { headers: { Cookie: cookie } });
     assert.equal(response.status, 200);
     assert.match(response.headers.get('cache-control'), /no-store/);
     assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/);

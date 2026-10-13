@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#080b12">
+<title>ORIENT — دخول المالك</title>
+<style>
+:root{color-scheme:dark;--bg:#080b12;--panel:#101722;--ink:#f3f6fb;--muted:#9caabd;--line:#253344;--mint:#83f2d0;--blue:#80aaff;--danger:#ff9b9b}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 80% 0%,#183d4930,transparent 40%),linear-gradient(180deg,#080b12,#0a1019);color:var(--ink);font:16px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;display:grid;place-items:center;padding:22px}.shell{width:min(100%,460px)}.brand{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:26px;font-weight:800;letter-spacing:.2em;font-size:19px}.mark{display:grid;place-items:center;width:34px;height:34px;border:1px solid #83f2d0aa;border-radius:11px;color:var(--mint)}.panel{border:1px solid #ffffff1a;background:#101722df;border-radius:18px;padding:clamp(22px,6vw,36px);box-shadow:0 28px 90px #0005}.eyebrow{font-size:11px;letter-spacing:.18em;color:var(--mint);font-weight:750}.panel h1{font-size:29px;line-height:1.25;margin:8px 0}.muted{color:var(--muted);font-size:14px;margin:0 0 24px}label{display:block;font-size:13px;margin:16px 0 7px;color:#dbe5f2}input{width:100%;background:#080d15;border:1px solid var(--line);border-radius:9px;padding:13px 14px;color:var(--ink);font:inherit;outline:none}input:focus{border-color:var(--mint);box-shadow:0 0 0 3px #83f2d018}.button{width:100%;border:1px solid var(--mint);border-radius:9px;background:var(--mint);color:#07120f;font-weight:800;padding:13px;margin-top:20px;cursor:pointer;font:inherit}.button:disabled{opacity:.55;cursor:wait}.message{display:none;border:1px solid #ffffff20;background:#ffffff08;border-radius:9px;padding:11px 13px;font-size:13px;margin-top:15px}.message.error{display:block;color:var(--danger);border-color:#ff9b9b55}.message.ok{display:block;color:var(--mint);border-color:#83f2d055}.security{font-size:12px;color:#8190a4;margin-top:20px}.back{display:block;text-align:center;margin-top:18px;color:#b8c6d8;text-decoration:none;font-size:13px}.hidden{display:none!important}.badge{display:inline-block;border:1px solid #83f2d055;border-radius:999px;padding:4px 10px;color:var(--mint);font-size:12px;margin-bottom:8px}
+</style>
+</head>
+<body>
+<main class="shell">
+  <div class="brand"><span class="mark">O</span><span>ORIENT ONE</span></div>
+  <section class="panel" aria-live="polite">
+    <div class="eyebrow">OWNER ACCESS · وصول المالك</div>
+    <section id="loginView">
+      <h1>تسجيل دخول المالك</h1>
+      <p class="muted">استخدم حساب المالك. في أول دخول ستُطلب منك إعادة تعيين كلمة المرور.</p>
+      <form id="loginForm">
+        <label for="username">اسم المستخدم</label><input id="username" name="username" autocomplete="username" value="Admin" required>
+        <label for="loginPassword">كلمة المرور</label><input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+        <button class="button" type="submit">تسجيل الدخول</button>
+      </form>
+    </section>
+    <section id="changeView" class="hidden">
+      <span class="badge">خطوة إلزامية · FIRST SIGN-IN</span>
+      <h1>أنشئ كلمة مرورك الخاصة</h1>
+      <p class="muted">لن يُسمح بالمتابعة قبل حفظ كلمة مرور جديدة. استخدم 14 حرفًا على الأقل، ولا تشاركها مع أحد.</p>
+      <form id="changeForm">
+        <label for="newPassword">كلمة المرور الجديدة</label><input id="newPassword" type="password" autocomplete="new-password" minlength="14" required>
+        <label for="confirmPassword">تأكيد كلمة المرور</label><input id="confirmPassword" type="password" autocomplete="new-password" minlength="14" required>
+        <button class="button" type="submit">حفظ كلمة المرور والمتابعة</button>
+      </form>
+    </section>
+    <section id="homeView" class="hidden">
+      <span class="badge">تم التحقق من الجلسة</span>
+      <h1>مرحبًا بك، Admin</h1>
+      <p class="muted">تم تسجيل الدخول إلى بوابة المالك. هذه بداية طبقة الهوية؛ أدوات الإدارة الفعلية ستُربط بالخدمات والصلاحيات بعد اجتياز اختبارات الأمان.</p>
+      <button id="logoutButton" class="button" type="button">تسجيل الخروج</button>
+    </section>
+    <div id="message" class="message" role="status"></div>
+    <p class="security">تُحفظ كلمة المرور كتجزئة تشفيرية على الجهاز، ولا تُحفظ كنص مكشوف. لا تشغّل هذه الخدمة على الإنترنت العام قبل إعداد HTTPS وحماية نشر مناسبة.</p>
+  </section>
+  <a class="back" href="/">العودة إلى موقع ORIENT ←</a>
+</main>
+<script>
+(() => {
+ const $ = id => document.getElementById(id);
+ let csrfToken = '';
+ const views = ['loginView','changeView','homeView'];
+ function show(view){ views.forEach(id => $(id).classList.toggle('hidden',id!==view)); $('message').className='message'; $('message').textContent=''; }
+ function message(text,kind='error'){ $('message').textContent=text; $('message').className='message '+kind; }
+ async function api(path,body){
+   const response=await fetch(path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json',...(path==='/api/owner/login'?{}:{'x-orient-csrf':csrfToken})},body:body===undefined?undefined:JSON.stringify(body),credentials:'same-origin'});
+   let data={};try{data=await response.json()}catch{}
+   if(!response.ok)throw new Error(data.error||'حدث خطأ غير متوقع');
+   return data;
+ }
+ async function refresh(){
+   try{
+     const me=await api('/api/owner/me');
+     csrfToken=me.csrfToken||'';
+     if(me.passwordChangeRequired)show('changeView');else show('homeView');
+   }catch{show('loginView')}
+ }
+ $('loginForm').addEventListener('submit',async event=>{
+   event.preventDefault();const button=$('loginForm').querySelector('button');button.disabled=true;
+   try{const data=await api('/api/owner/login',{username:$('username').value.trim(),password:$('loginPassword').value});csrfToken=data.csrfToken||'';$('loginPassword').value='';show(data.passwordChangeRequired?'changeView':'homeView');if(data.passwordChangeRequired)message('تم التحقق. عيّن كلمة مرور جديدة للمتابعة.','ok');}
+   catch(error){message(error.message)}
+   finally{button.disabled=false}
+ });
+ $('changeForm').addEventListener('submit',async event=>{
+   event.preventDefault();const password=$('newPassword').value;const confirmPassword=$('confirmPassword').value;
+   if(password.length<14){message('كلمة المرور يجب أن تكون 14 حرفًا على الأقل.');return}
+   if(password!==confirmPassword){message('كلمتا المرور غير متطابقتين.');return}
+   const button=$('changeForm').querySelector('button');button.disabled=true;
+   try{const data=await api('/api/owner/password',{password,confirmPassword});csrfToken=data.csrfToken||'';$('newPassword').value='';$('confirmPassword').value='';location.href='/owner'}
+   catch(error){message(error.message)}
+   finally{button.disabled=false}
+ });
+ $('logoutButton').addEventListener('click',async()=>{try{await api('/api/owner/logout',{})}catch{}show('loginView');message('تم تسجيل الخروج.','ok')});
+ refresh();
+})();
+</script>
+</body>
+</html>
