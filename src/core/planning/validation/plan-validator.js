@@ -90,6 +90,15 @@ class PlanValidator {
         );
       }
 
+      if (step.dependsOn !== null &&
+          (!Number.isInteger(step.dependsOn) || step.dependsOn < 1 || step.dependsOn > index)) {
+        throw new AppError(
+          `الخطوة ${index + 1} تعتمد على خطوة غير سابقة`,
+          500,
+          'PLAN_DEPENDENCY_INVALID'
+        );
+      }
+
       seenStepIds.add(stepId);
     }
 
@@ -101,41 +110,27 @@ class PlanValidator {
 
   normalizeSteps(plan) {
     if (Array.isArray(plan.steps)) {
-      return plan.steps
-        .filter(
-          (step) =>
-            step &&
-            typeof step === 'object'
-        )
-        .map((step, index) => ({
-          step: index + 1,
-          tool:
-            typeof step.tool === 'string'
-              ? step.tool.trim()
-              : null,
-          input:
-            step.input === undefined
-              ? null
-              : step.input,
-          dependsOn:
-            step.dependsOn === undefined
-              ? null
-              : step.dependsOn
-        }));
+      if (plan.steps.some(step => !step || typeof step !== 'object' || Array.isArray(step))) {
+        throw new AppError('إحدى خطوات الخطة ليست كائنًا صالحًا', 500, 'PLAN_STEP_INVALID');
+      }
+      return plan.steps.map((step, index) => ({
+        step: index + 1,
+        tool: typeof step.tool === 'string' ? step.tool.trim() : null,
+        input: step.input === undefined ? null : step.input,
+        dependsOn: step.dependsOn === undefined ? null : step.dependsOn,
+        ...(typeof step.agentId === 'string' ? { agentId: step.agentId } : {}),
+        ...(typeof step.capability === 'string' ? { capability: step.capability } : {}),
+        ...(typeof step.memoryScope === 'string' ? { memoryScope: step.memoryScope } : {})
+      }));
     }
 
     if (plan.tool) {
-      return [
-        {
-          step: 1,
-          tool: plan.tool,
-          input:
-            plan.input === undefined
-              ? null
-              : plan.input,
-          dependsOn: null
-        }
-      ];
+      return [{
+        step: 1,
+        tool: plan.tool,
+        input: plan.input === undefined ? null : plan.input,
+        dependsOn: null
+      }];
     }
 
     return [];
