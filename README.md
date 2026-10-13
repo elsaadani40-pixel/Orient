@@ -12,6 +12,7 @@ ORIENT is being built as one coherent system for researching, planning, executin
 - **Brand website source:** [`website/index.html`](website/index.html) — responsive English/Arabic landing page with RTL support. This is source in the repository; it is not a claim that a public website deployment is live.
 - **Engineering constitution:** [`AGENT.md`](AGENT.md)
 - **Product contract and cross-device roadmap:** [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md)
+- **Cross-platform implementation and release gates:** [`docs/architecture/cross-platform-product-contract.md`](docs/architecture/cross-platform-product-contract.md)
 - **Dashboard and control-plane contract:** [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md)
 - **Security policy:** [`SECURITY.md`](SECURITY.md)
 - **Current threat model and tested boundaries:** [`docs/security/THREAT-MODEL.md`](docs/security/THREAT-MODEL.md)
