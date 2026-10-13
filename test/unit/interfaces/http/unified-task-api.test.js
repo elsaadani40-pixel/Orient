@@ -302,6 +302,9 @@ test('POST v1 task creation requires the owner session and same-origin request',
         return token === 'valid-session'
           ? { sessionId: 'session-1', csrfToken: 'csrf-1', expiresAt: Date.now() + 60000 }
           : null;
+      },
+      verifyCsrf(session, token) {
+        return session?.csrfToken === token;
       }
     }
   });
