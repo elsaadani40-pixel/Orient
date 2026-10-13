@@ -56,6 +56,19 @@ test('SQLite persistence survives repository recreation and preserves execution 
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test('SQLite repositories bind untrusted identifiers as data and support true in-memory databases', () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const memory = new SqliteDatabase(':memory:');
+  assert.equal(memory.filePath, ':memory:');
+  const identifier = "exec'; DROP TABLE executions; --";
+  memory.connection.prepare('INSERT INTO executions(execution_id, payload, updated_at) VALUES (?, ?, ?)').run(
+    identifier, JSON.stringify({ executionId: identifier, metadata: { tenantId: 'local' } }), new Date().toISOString()
+  );
+  assert.equal(memory.query('SELECT execution_id FROM executions WHERE execution_id = ?', [identifier])[0].execution_id, identifier);
+  assert.equal(Number(memory.query('SELECT COUNT(*) AS count FROM executions')[0].count), 1);
+  memory.close();
+});
+
 test('SQLite execution pages and event replay are bounded and tenant-scoped', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-pages-'));
   const filePath = path.join(directory, 'orient.db');
