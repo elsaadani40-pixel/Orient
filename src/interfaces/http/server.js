@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, websiteHandler = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -370,7 +370,11 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         req.method === 'GET' &&
         requestUrl.pathname === '/'
       ) {
-        memoryRoutes.home(req, res, requestUrl);
+        if (typeof websiteHandler === 'function') {
+          await websiteHandler(req, res);
+        } else {
+          memoryRoutes.home(req, res, requestUrl);
+        }
         return;
       }
 
@@ -493,6 +497,11 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       ) {
         const body = await readBody(req);
         await agentRoutes.execute(req, res, body);
+        return;
+      }
+
+      if (typeof websiteHandler === 'function') {
+        await websiteHandler(req, res);
         return;
       }
 
