@@ -39,7 +39,7 @@ async function request(origin, pathname, { method = 'GET', headers = {}, body } 
 
 test('owner console requires an owner session and is served with restrictive headers', async () => {
   await withServer(new OwnerAuthService({ password: PASSWORD }), async ({ origin }) => {
-    const denied = await request(origin, '/owner');
+    const denied = await fetch(origin + '/owner', { redirect: 'manual' });
     assert.equal(denied.status, 302);
     assert.equal(denied.headers.get('location'), '/auth?mode=owner');
 
