@@ -363,7 +363,7 @@ function createOwnerServer(options = {}) {
     if (req.method === 'GET' && url.pathname === '/api/owner/me') {
       const session = sessionFor(req);
       if (!session) return sendJson(res, 401, { error: 'Authentication required' });
-      return sendJson(res, 200, { username: 'Admin', passwordChangeRequired: ownerPasswordChangeRequired() });
+      return sendJson(res, 200, { username: 'Admin', passwordChangeRequired: ownerPasswordChangeRequired(), csrfToken: session.csrfToken, expiresAt: session.expiresAt });
     }
 
     if (req.method === 'POST' && url.pathname.startsWith('/api/owner/')) {
