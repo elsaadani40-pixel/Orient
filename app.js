@@ -139,13 +139,16 @@ const accessAuditRepository =
     require('path').join(config.agentDataDirectory, 'access-audit.jsonl')
   );
 
+const websiteDataDir = process.env.ORIENT_DATA_DIR || require('path').join(__dirname, '.orient-data');
 const ownerIdentityService = new OwnerIdentityService({
-  stateFile: require('path').join(config.agentDataDirectory, 'owner.json'),
+  // Keep the website's established state path so legacy owner credentials and
+  // public accounts are migrated in place rather than silently abandoned.
+  stateFile: require('path').join(websiteDataDir, 'owner.json'),
   bootstrapPassword: process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD
 });
 const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService });
 const website = createOwnerServer({
-  dataDir: config.agentDataDirectory,
+  dataDir: websiteDataDir,
   identity: ownerAuthService,
   log: () => {}
 });
