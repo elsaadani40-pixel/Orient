@@ -47,13 +47,14 @@ test('owner can suspend a user, revoke active sessions, and restore access', asy
     password: 'Temporary-owner-password-12345'
   }, null, baseUrl);
   assert.equal(ownerLogin.status, 200);
-  const ownerCookie = cookieFrom(ownerLogin);
+  let ownerCookie = cookieFrom(ownerLogin);
 
   const passwordChange = await postJson(baseUrl + '/api/owner/password', {
     password: 'Permanent-owner-password-123456',
     confirmPassword: 'Permanent-owner-password-123456'
   }, ownerCookie, baseUrl);
   assert.equal(passwordChange.status, 200);
+  ownerCookie = cookieFrom(passwordChange);
 
   const registration = await postJson(baseUrl + '/api/auth/register', {
     username: 'test-user',
