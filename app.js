@@ -10,8 +10,11 @@ const MemoryAuditRepository =
   require('./src/infrastructure/memory/memory-audit.repository');
 const JsonAccessAuditRepository =
   require('./src/infrastructure/security/json-access-audit.repository');
-const OwnerAuthService =
-  require('./src/core/security/owner-auth-service');
+const OwnerIdentityService =
+  require('./src/core/security/owner-identity-service');
+const OwnerIdentityRuntimeAdapter =
+  require('./src/core/security/owner-identity-runtime-adapter');
+const { createOwnerServer } = require('./server');
 
 const AgentRegistry =
   require('./src/core/agent/boundary/agent-registry');
@@ -136,9 +139,23 @@ const accessAuditRepository =
     require('path').join(config.agentDataDirectory, 'access-audit.jsonl')
   );
 
-const ownerAuthService = new OwnerAuthService({
-  stateFile: require('path').join(config.agentDataDirectory, 'owner-auth-state.json')
+const ownerIdentityService = new OwnerIdentityService({
+  stateFile: require('path').join(config.agentDataDirectory, 'owner.json'),
+  bootstrapPassword: process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD
 });
+const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService });
+const website = createOwnerServer({
+  dataDir: config.agentDataDirectory,
+  identity: ownerAuthService,
+  log: () => {}
+});
+if (ownerIdentityService.createdBootstrap) {
+  const bootstrapPassword = ownerIdentityService.consumeBootstrapPassword();
+  console.error('ORIENT OWNER FIRST-RUN CREDENTIAL (shown once; keep private)');
+  console.error('Username: Admin');
+  console.error('Temporary password: ' + bootstrapPassword);
+  console.error('Sign in locally and replace this password immediately.');
+}
 
 const memoryService =
   new MemoryService(repository, {
@@ -319,7 +336,8 @@ const server =
     memoryRoutes,
     agentRoutes,
     accessAudit: accessAuditRepository,
-    ownerAuth: ownerAuthService
+    ownerAuth: ownerAuthService,
+    websiteHandler: website.handler
   });
 
 async function start() {
