@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, websiteHandler = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -103,6 +103,31 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
     });
 
     try {
+      // Explicit route ownership for the unified listener: website auth/API and
+      // public assets are delegated before Runtime routes, while /owner and all
+      // /owner/* operational endpoints remain owned by the Runtime.
+      const websitePagePaths = new Set([
+        '/', '/index.html', '/auth', '/auth/', '/auth.html',
+        '/account', '/account/', '/account.html', '/owner.html',
+        '/dashboard.html', '/favicon.ico', '/robots.txt', '/sitemap.xml'
+      ]);
+      const websiteApiPath = requestUrl.pathname.startsWith('/api/auth/') ||
+        requestUrl.pathname.startsWith('/api/owner/');
+      const websiteAssetPath = /\\.(?:css|js|svg|png|ico|webp|woff2?)$/i.test(requestUrl.pathname) &&
+        !['/owner-dashboard.js', '/command-scene.js'].includes(requestUrl.pathname);
+      const isRuntimeOwnedPath = requestUrl.pathname === '/owner' ||
+        requestUrl.pathname.startsWith('/owner/') ||
+        requestUrl.pathname.startsWith('/api/v1/') ||
+        requestUrl.pathname.startsWith('/executions/') ||
+        ['/agent', '/dashboard', '/owner-dashboard.js', '/command-scene.js'].includes(requestUrl.pathname);
+      const websiteOwnsRequest = websiteHandler &&
+        !isRuntimeOwnedPath &&
+        (websitePagePaths.has(requestUrl.pathname) || websiteApiPath || websiteAssetPath);
+      if (websiteOwnsRequest) {
+        await websiteHandler(req, res);
+        return;
+      }
+
       if (req.method === 'GET' && requestUrl.pathname === '/owner') {
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
