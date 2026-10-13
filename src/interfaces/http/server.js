@@ -368,6 +368,11 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           });
           return;
         }
+        if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired) {
+          authenticationOutcome = 'owner_password_change_required';
+          sendJson(res, 403, { ok: false, code: 'OWNER_PASSWORD_CHANGE_REQUIRED', message: 'يجب تغيير كلمة مرور المالك قبل تنفيذ أي عملية.' });
+          return;
+        }
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !isSameOrigin(req)) {
           authenticationOutcome = 'csrf_rejected';
           sendJson(res, 403, { ok: false, code: 'OWNER_ORIGIN_REJECTED', message: 'تم رفض مصدر الطلب.' });
