@@ -334,6 +334,10 @@ class SqlitePersistence {
     this.workflows = new SqliteWorkflowRepository(this.db);
     this.workflowLeases = new SqliteWorkflowLeaseRepository(this.db);
   }
+
+  close() {
+    this.db.close();
+  }
 }
 
 module.exports = SqlitePersistence;
