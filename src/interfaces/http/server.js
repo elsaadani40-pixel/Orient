@@ -203,7 +203,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         authenticationOutcome = 'owner_login_success';
         const secure = req.socket?.encrypted ? '; Secure' : '';
         const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
-        sendJson(res, 200, { ok: true, csrfToken: result.csrfToken, expiresAt: result.expiresAt }, {
+        sendJson(res, 200, { ok: true, csrfToken: result.csrfToken, expiresAt: result.expiresAt, passwordChangeRequired: result.passwordChangeRequired === true }, {
           'Set-Cookie': 'orient_owner_session=' + result.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + maxAge + secure
         });
         return;
