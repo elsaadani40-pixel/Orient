@@ -18,7 +18,8 @@ test('owner identity bootstrap stores only a password hash and forces rotation',
   const temporary = 'temporary-owner-password-9F!x';
   const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: temporary });
   assert.equal(identity.createdBootstrap, true);
-  assert.equal(identity.bootstrapPassword, temporary);
+  assert.equal(identity.consumeBootstrapPassword(), temporary);
+  assert.equal(identity.consumeBootstrapPassword(), null);
   assert.equal(identity.status().passwordChangeRequired, true);
   const persisted = fs.readFileSync(stateFile, 'utf8');
   assert.equal(persisted.includes(temporary), false);
