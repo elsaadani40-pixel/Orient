@@ -88,7 +88,10 @@ function createOwnerServer(options = {}) {
       }
     } catch (error) {
       if (error.code !== 'ENOENT') throw new Error('Cannot read owner credentials safely: ' + error.message);
-      const bootstrapPassword = options.bootstrapPassword || crypto.randomBytes(24).toString('base64url');
+      const bootstrapPassword = options.bootstrapPassword || process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD;
+      if (!bootstrapPassword) {
+        throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters); no credential was generated or logged.');
+      }
       state = {
         version: 1,
         username: 'Admin',
@@ -104,10 +107,7 @@ function createOwnerServer(options = {}) {
       } finally { fs.closeSync(fd); }
       try { fs.chmodSync(stateFile, 0o600); } catch {}
       createdBootstrap = true;
-      log('ORIENT OWNER FIRST-RUN CREDENTIAL (shown once; keep private)');
-      log('Username: Admin');
-      log('Temporary password: ' + bootstrapPassword);
-      log('Sign in locally and replace this password immediately.');
+      log('ORIENT owner identity initialized. Sign in as Admin and replace the configured bootstrap password immediately.');
     }
   
   
