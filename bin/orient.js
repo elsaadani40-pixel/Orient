@@ -145,7 +145,9 @@ function createClient({ baseUrl, sessionFile = defaultSessionFile(), fetchImpl =
     });
     const cookie = response.headers.get('set-cookie') || '';
     const match = cookie.match(/(?:^|[,; ]+)orient_owner_session=([A-Za-z0-9_-]{40,100})/);
-    if (!match || typeof data.csrfToken !== 'string' || !Number.isSafeInteger(data.expiresAt)) {
+    if (!match || typeof data.csrfToken !== 'string' ||
+        !/^[A-Za-z0-9_-]{40,100}$/.test(data.csrfToken) ||
+        !Number.isSafeInteger(data.expiresAt)) {
       throw new Error('ORIENT login response did not contain a valid owner session');
     }
     const session = {
