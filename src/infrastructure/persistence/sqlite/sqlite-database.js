@@ -1,78 +1,75 @@
-const fs = require('fs');
-const path = require('path');
-const { execFileSync } = require('child_process');
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 
 class SqliteDatabase {
-  constructor(filePath, { binary = 'sqlite3' } = {}) {
-    if (!filePath) throw new TypeError('filePath is required');
-    this.filePath = path.resolve(filePath);
-    this.binary = binary;
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+  constructor(filePath) {
+    if (typeof filePath !== 'string' || !filePath) throw new TypeError('filePath is required');
+    this.filePath = filePath === ':memory:' ? ':memory:' : path.resolve(filePath);
+    if (this.filePath !== ':memory:') {
+      fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+    }
+    this.connection = new DatabaseSync(this.filePath);
+    this.connection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;');
     this.initialize();
   }
 
-  run(sql) {
-    execFileSync(this.binary, [
-      '-batch',
-      '-bail',
-      this.filePath,
-      sql
-    ], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
+  run(sql, params = []) {
+    if (typeof sql !== 'string' || !sql.trim()) throw new TypeError('SQL statement is required');
+    if (!Array.isArray(params)) throw new TypeError('SQL parameters must be an array');
+    if (params.length === 0 && sql.trim().includes(';') && sql.trim().split(';').filter(part => part.trim()).length > 1) {
+      throw new TypeError('run() accepts one prepared statement; use exec() only for static SQL batches');
+    }
+    return this.connection.prepare(sql).run(...params);
   }
 
-  query(sql) {
-    const output = execFileSync(this.binary, [
-      '-batch',
-      '-json',
-      '-bail',
-      this.filePath,
-      sql
-    ], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    }).trim();
+  query(sql, params = []) {
+    if (typeof sql !== 'string' || !sql.trim()) throw new TypeError('SQL statement is required');
+    if (!Array.isArray(params)) throw new TypeError('SQL parameters must be an array');
+    return this.connection.prepare(sql).all(...params);
+  }
 
-    if (!output) return [];
-    const value = JSON.parse(output);
-    return Array.isArray(value) ? value : [];
+  exec(sql) {
+    if (typeof sql !== 'string' || !sql.trim()) throw new TypeError('SQL batch is required');
+    return this.connection.exec(sql);
   }
 
   transaction(statements) {
     if (!Array.isArray(statements) || !statements.length) return;
+    this.connection.exec('BEGIN IMMEDIATE;');
     try {
-      this.run([
-        'BEGIN IMMEDIATE;',
-        ...statements,
-        'COMMIT;'
-      ].join('\n'));
+      for (const statement of statements) {
+        if (typeof statement === 'string') {
+          // String batches are reserved for static schema/test SQL. Dynamic
+          // values must be passed through { sql, params } prepared statements.
+          this.connection.exec(statement);
+          continue;
+        }
+        if (!statement || typeof statement.sql !== 'string' || !Array.isArray(statement.params || [])) {
+          throw new TypeError('Transaction statements must be SQL strings or { sql, params } objects');
+        }
+        this.connection.prepare(statement.sql).run(...(statement.params || []));
+      }
+      this.connection.exec('COMMIT;');
     } catch (error) {
-      try {
-        this.run('ROLLBACK;');
-      } catch {}
+      try { this.connection.exec('ROLLBACK;'); } catch {}
       throw error;
     }
   }
 
   initialize() {
-    this.run(`
-      PRAGMA busy_timeout=5000;
-      PRAGMA journal_mode=WAL;
-      PRAGMA foreign_keys=ON;
-
+    this.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL
       );
-
       CREATE TABLE IF NOT EXISTS executions (
         execution_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-
       CREATE TABLE IF NOT EXISTS events (
         event_id TEXT PRIMARY KEY,
         execution_id TEXT,
@@ -81,17 +78,13 @@ class SqliteDatabase {
         timestamp TEXT NOT NULL,
         payload TEXT NOT NULL
       );
-
-      CREATE INDEX IF NOT EXISTS idx_events_execution
-        ON events(execution_id);
-
+      CREATE INDEX IF NOT EXISTS idx_events_execution ON events(execution_id);
       CREATE TABLE IF NOT EXISTS idempotency (
         key TEXT PRIMARY KEY,
         payload TEXT NOT NULL,
         status TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-
       CREATE TABLE IF NOT EXISTS checkpoints (
         execution_id TEXT PRIMARY KEY,
         sequence INTEGER NOT NULL,
@@ -101,7 +94,6 @@ class SqliteDatabase {
         snapshot TEXT NOT NULL,
         snapshot_sha256 TEXT NOT NULL
       );
-
       CREATE TABLE IF NOT EXISTS workflows (
         workflow_id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
@@ -109,10 +101,7 @@ class SqliteDatabase {
         updated_at TEXT NOT NULL,
         payload TEXT NOT NULL
       );
-
-      CREATE INDEX IF NOT EXISTS idx_workflows_tenant_state
-        ON workflows(tenant_id, state);
-
+      CREATE INDEX IF NOT EXISTS idx_workflows_tenant_state ON workflows(tenant_id, state);
       CREATE TABLE IF NOT EXISTS workflow_leases (
         workflow_id TEXT PRIMARY KEY,
         lease_id TEXT NOT NULL UNIQUE,
@@ -121,10 +110,7 @@ class SqliteDatabase {
         expires_at TEXT NOT NULL,
         payload TEXT NOT NULL
       );
-
-      CREATE INDEX IF NOT EXISTS idx_workflow_leases_expiry
-        ON workflow_leases(expires_at);
-
+      CREATE INDEX IF NOT EXISTS idx_workflow_leases_expiry ON workflow_leases(expires_at);
       CREATE TABLE IF NOT EXISTS approvals (
         approval_id TEXT PRIMARY KEY,
         execution_id TEXT NOT NULL,
@@ -139,27 +125,14 @@ class SqliteDatabase {
         used_at TEXT,
         metadata TEXT NOT NULL
       );
-
-      CREATE INDEX IF NOT EXISTS idx_approvals_execution
-        ON approvals(execution_id);
-
-      CREATE INDEX IF NOT EXISTS idx_approvals_expiry
-        ON approvals(expires_at);
-
-      INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-        VALUES (1, datetime('now'));
+      CREATE INDEX IF NOT EXISTS idx_approvals_execution ON approvals(execution_id);
+      CREATE INDEX IF NOT EXISTS idx_approvals_expiry ON approvals(expires_at);
+      INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'));
     `);
   }
 
-  static literal(value) {
-    if (value === null || value === undefined) return 'NULL';
-    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-    if (typeof value === 'boolean') return value ? '1' : '0';
-    return `'${String(value).replace(/'/g, "''")}'`;
-  }
-
-  static json(value) {
-    return SqliteDatabase.literal(JSON.stringify(value ?? null));
+  close() {
+    this.connection.close();
   }
 }
 
