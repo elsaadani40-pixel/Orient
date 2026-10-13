@@ -52,20 +52,34 @@ A feature must not introduce a second execution path around this contract.
 
 ## 3. Coordinator boundaries
 
+The six coordinators are deliberately separated by lifecycle ownership. Their count is not a goal in itself: do not merge or add a coordinator unless tests show a real boundary improvement. The canonical path still has one request owner, one AgentLoop, one authorization boundary, and one persistence authority.
+
 ### OrientRuntime
-Owns composition, dependency wiring, lifecycle and top-level runtime entry.
+Owns composition, dependency wiring, lifecycle and top-level runtime entry. It delegates request, workflow, persistence, recovery, and infrastructure concerns rather than implementing their business logic inline.
+
+### RuntimeInfrastructureCoordinator
+Owns construction and shutdown of the workflow scheduler, tenant quota policy/service, and the infrastructure dependencies those require. It does not execute tasks or make plan decisions.
 
 ### RequestExecutionCoordinator
-Owns creation and persistence of an execution context and coordination of a single request execution.
+Owns request-scoped execution-context creation, initial planning handoff, durable resume, and cancellation reconciliation. It does not invoke tools directly or implement the AgentLoop.
 
-### WorkflowExecutionCoordinator
-Owns workflow-level orchestration only. It must not become a second AgentLoop or replace Product Core request execution.
+### AgentExecutionCoordinator
+Owns the bounded plan → AgentLoop → evaluation/replan cycle, plan revision tracking, and replan fingerprint validation. It delegates each tool call to AgentLoop and never grants authorization based on model output.
 
 ### ExecutionPersistenceCoordinator
-Owns persistence/checkpoint mechanics. It must not decide business outcomes.
+Owns tenant-checked execution writes, event persistence, checkpoint persistence, and per-context event offsets. It does not classify failures or decide business outcomes.
+
+### ExecutionRecoveryCoordinator
+Owns recovery classification and durable failure-state commitment through the orchestrator and persistence callbacks. It does not schedule a second execution path or invoke tools.
+
+### WorkflowExecutionCoordinator
+Owns workflow envelopes, scheduler handoff, workflow state/mission events, and mapping a workflow step to the canonical request executor. It must not become a second AgentLoop or replace Product Core request execution.
 
 ### AgentLoop
 Owns bounded step execution, authorization handoff, idempotency/recovery handling, tool invocation and step completion. It does not own planning or evaluation policy.
+
+### Simplification rule
+Prefer removing duplicate logic, unused dependencies, and unclear ownership before moving methods across coordinators. A refactor must preserve cancellation precedence, durable checkpoint ordering, tenant isolation, idempotency, approvals, and resume semantics; regression tests must prove those invariants.
 
 ## 4. Governance invariants
 

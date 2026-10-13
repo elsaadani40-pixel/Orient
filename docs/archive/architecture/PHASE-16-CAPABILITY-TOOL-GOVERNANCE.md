@@ -1,3 +1,5 @@
+> **Historical archive (2026-10-13):** This note is retained for traceability, not as a current implementation contract. Prefer the active architecture ownership matrix, unified task API contract, product contract, and current tests.
+
 # ORIENT ONE — Phase 16: Capability & Tool Governance
 
 ## Objective

@@ -1,5 +1,3 @@
-const crypto = require('crypto');
-
 class ExecutionPersistenceCoordinator {
   constructor({ persistence = null, tenantId = 'local', persistedEventOffsets = null } = {}) {
     this.persistence = persistence;
