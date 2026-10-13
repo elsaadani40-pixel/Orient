@@ -325,6 +325,9 @@ function createOwnerServer(options = {}) {
     if (req.method === 'PATCH' && /^\/api\/owner\/users\/[0-9a-f-]{36}$/i.test(url.pathname)) {
       const session = sessionFor(req);
       if (!session) return sendJson(res, 401, { error: 'Owner authentication required' });
+      if (identity && (!checkOrigin(req) || !identity.verifyCsrf(session, req.headers['x-orient-csrf']))) {
+        return sendJson(res, 403, { error: 'Owner CSRF validation failed', code: 'OWNER_CSRF_REJECTED' });
+      }
       if (ownerPasswordChangeRequired()) return sendJson(res, 403, { error: 'Password change required' });
       if (!checkOrigin(req)) return sendJson(res, 403, { error: 'Request origin rejected' });
       let body;
@@ -372,6 +375,14 @@ function createOwnerServer(options = {}) {
       let body;
       try { body = await readJsonBody(req); }
       catch (error) { return sendJson(res, error.statusCode || 400, { error: error.message }); }
+
+      if (identity && !['/api/owner/login', '/api/owner/password', '/api/owner/logout'].includes(url.pathname)) {
+        const ownerSession = sessionFor(req);
+        if (!ownerSession) return sendJson(res, 401, { error: 'Owner authentication required' });
+        if (!identity.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+          return sendJson(res, 403, { error: 'Owner CSRF validation failed', code: 'OWNER_CSRF_REJECTED' });
+        }
+      }
 
       const userStatusMatch = url.pathname.match(/^\/api\/owner\/users\/([0-9a-f-]{36})\/status$/i);
       if (userStatusMatch) {
