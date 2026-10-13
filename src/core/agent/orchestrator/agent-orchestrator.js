@@ -127,7 +127,8 @@ class AgentOrchestrator {
         input,
         evaluation,
         previousPlan,
-        context
+        context,
+        modelRouter: this.modelRouter
       });
 
     if (!planned) {
