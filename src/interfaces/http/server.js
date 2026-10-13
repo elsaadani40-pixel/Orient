@@ -129,17 +129,19 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/owner') {
-        const pageOwnerCookie = parseCookies(req.headers.cookie).orient_owner_session;
-        const pageOwnerSession = ownerAuth && ownerAuth.enabled ? ownerAuth.authenticate(pageOwnerCookie) : null;
-        if (!pageOwnerSession) {
-          res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
-          res.end();
-          return;
-        }
-        if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired) {
-          res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
-          res.end();
-          return;
+        if (ownerAuth) {
+          const pageOwnerCookie = parseCookies(req.headers.cookie).orient_owner_session;
+          const pageOwnerSession = ownerAuth.enabled ? ownerAuth.authenticate(pageOwnerCookie) : null;
+          if (!pageOwnerSession) {
+            res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
+            res.end();
+            return;
+          }
+          if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired) {
+            res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
+            res.end();
+            return;
+          }
         }
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
