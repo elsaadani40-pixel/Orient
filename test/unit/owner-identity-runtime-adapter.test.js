@@ -42,6 +42,25 @@ test('Runtime adapter rate-limits failed owner logins per source IP', async t =>
   assert.equal((await adapter.login({ password: 'temporary-owner-password-9F!x', sourceIp: '192.0.2.10' })).ok, true);
 });
 
+test('Runtime adapter password rotation invalidates the old session and returns a replacement', async t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
+  const adapter = new OwnerIdentityRuntimeAdapter({ identity });
+  const login = await adapter.login({ password: 'temporary-owner-password-9F!x', sourceIp: '127.0.0.1' });
+  assert.equal(login.ok, true);
+  const rotated = await adapter.changePassword({
+    token: login.token,
+    password: 'a-new-strong-owner-password-8Z!',
+    confirmPassword: 'a-new-strong-owner-password-8Z!'
+  });
+  assert.equal(rotated.ok, true);
+  assert.equal(rotated.passwordChangeRequired, false);
+  assert.equal(adapter.authenticate(login.token), null);
+  assert.ok(adapter.authenticate(rotated.token));
+  assert.equal((await adapter.login({ password: 'temporary-owner-password-9F!x' })).ok, false);
+  assert.equal((await adapter.login({ password: 'a-new-strong-owner-password-8Z!' })).ok, true);
+});
+
 test('Runtime adapter rejects an incompatible identity service at construction', () => {
   assert.throws(() => new OwnerIdentityRuntimeAdapter({ identity: {} }), /compatible OwnerIdentityService/);
 });
