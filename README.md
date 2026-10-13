@@ -14,6 +14,7 @@ ORIENT is being built as one coherent system for researching, planning, executin
 - **Product contract and cross-device roadmap:** [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md)
 - **Cross-platform implementation and release gates:** [`docs/architecture/cross-platform-product-contract.md`](docs/architecture/cross-platform-product-contract.md)
 - **Dashboard and control-plane contract:** [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md)
+- **Task workbench and manual smoke checklist:** [`docs/operations/TASK-WORKBENCH.md`](docs/operations/TASK-WORKBENCH.md)
 - **Security policy:** [`SECURITY.md`](SECURITY.md)
 - **Current threat model and tested boundaries:** [`docs/security/THREAT-MODEL.md`](docs/security/THREAT-MODEL.md)
 - **Contribution rules:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
@@ -85,6 +86,7 @@ On first run, configure `ORIENT_OWNER_BOOTSTRAP_PASSWORD` with a strong password
 - Open `http://127.0.0.1:8080/auth` for public account registration/sign-in.
 - Open `http://127.0.0.1:8080/memory` for the local memory interface.
 - Open `http://127.0.0.1:8080/dashboard` for the local execution dashboard and control plane.
+- Open `http://127.0.0.1:8080/workbench` for the Arabic task workbench. Sign in to the owner console first; task creation, status, and events go through the canonical Runtime API. Choosing a preset only fills the form and never starts execution automatically.
 - Open `http://127.0.0.1:8080/owner` for the authenticated Runtime owner console.
 - For isolated website-only testing, `npm run start:website-standalone` runs `server.js` without Runtime task routes.
 
