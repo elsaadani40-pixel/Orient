@@ -31,6 +31,37 @@ test('OllamaProvider sends a local chat request and returns normalized text', as
   assert.equal(result.provider, 'ollama.local');
 });
 
+test('OllamaProvider forwards JSON schema and function tools and normalizes tool calls', async () => {
+  let requestBody;
+  const provider = new OllamaProvider({
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () => ({
+          message: {
+            content: '',
+            tool_calls: [{
+              function: {
+                name: 'submit_orient_plan',
+                arguments: { intent: 'memory.search', confidence: 0.8, reason: 'lookup', steps: [] }
+              }
+            }]
+          }
+        })
+      };
+    }
+  });
+  const format = { type: 'object', required: ['intent'] };
+  const tools = [{ type: 'function', function: { name: 'submit_orient_plan', parameters: format } }];
+  const result = await provider.complete({ input: 'find a memory', format, tools });
+
+  assert.deepEqual(requestBody.format, format);
+  assert.deepEqual(requestBody.tools, tools);
+  assert.equal(result.toolCalls[0].name, 'submit_orient_plan');
+  assert.equal(result.toolCalls[0].arguments.intent, 'memory.search');
+});
+
 test('OllamaProvider converts HTTP failures into provider errors', async () => {
   const provider = new OllamaProvider({
     fetchImpl: async () => ({
