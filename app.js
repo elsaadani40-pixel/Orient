@@ -40,6 +40,8 @@ const ProjectBuilderAgent =
 
 const createWorkspaceTools =
   require('./src/application/tools/workspace.tools');
+const createProjectTools =
+  require('./src/application/tools/project.tools');
 
 const OrientRuntime =
   require('./src/core/runtime/orient-runtime');
@@ -192,8 +194,23 @@ const projectBuilderAgent = new ProjectBuilderAgent({
   }
 });
 const workspaceTools = createWorkspaceTools(projectBuilderAgent);
+const projectTools = createProjectTools({
+  projectRoot: __dirname,
+  policy: {
+    allowRead: true,
+    allowWrite: true,
+    allowCommands: false,
+    allowGit: false,
+    maxOutput: 30000
+  }
+});
 
-for (const tool of [...memoryTools, ...workspaceTools]) {
+// Prefer the explicitly governed project tools over the legacy workspace
+// aliases with the same names. Registry registration remains startup-only.
+const projectToolNames = new Set(projectTools.map(tool => tool.name));
+const uniqueWorkspaceTools = workspaceTools.filter(tool => !projectToolNames.has(tool.name));
+
+for (const tool of [...memoryTools, ...uniqueWorkspaceTools, ...projectTools]) {
   toolRegistry.register(tool);
 }
 
