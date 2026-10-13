@@ -5,6 +5,7 @@ class OwnerIdentityRuntimeAdapter {
     if (!identity || typeof identity.login !== 'function' ||
         typeof identity.authenticate !== 'function' ||
         typeof identity.verifyCsrf !== 'function' ||
+        typeof identity.changePassword !== 'function' ||
         typeof identity.logout !== 'function') {
       throw new TypeError('A compatible OwnerIdentityService instance is required');
     }
