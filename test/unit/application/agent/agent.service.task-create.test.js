@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const AgentService = require('../../../../src/application/agent/agent.service');
 
-function createRuntime({ execute } = {}) {
+function createRuntime({ execute, status = 'completed' } = {}) {
   const records = new Map();
   let executions = 0;
   const idempotency = {
@@ -46,13 +46,13 @@ function createRuntime({ execute } = {}) {
     async getExecutionStatus(id) {
       return {
         executionId: id,
-        status: 'completed',
+        status,
         currentStep: 2,
         startedAt: '2026-10-10T10:00:00.000Z',
         updatedAt: '2026-10-10T10:00:02.000Z',
-        completedAt: '2026-10-10T10:00:02.000Z',
+        completedAt: status === 'completed' ? '2026-10-10T10:00:02.000Z' : null,
         cancellationRequested: false,
-        agentLifecycle: 'completed',
+        agentLifecycle: status === 'awaiting_approval' ? 'paused' : 'completed',
         tenantId: 'must-not-leak'
       };
     }
@@ -132,5 +132,34 @@ test('runtime failures are persisted as failed idempotency records and cannot re
     fixture.service.createTask({ goal: 'a task', idempotencyKey: 'request-key-0005' }),
     error => error.code === 'IDEMPOTENCY_KEY_CONFLICT'
   );
+  assert.equal(fixture.executions, 1);
+});
+
+
+test('approval-required execution is accepted as a durable task and does not retry the high-risk action', async () => {
+  const fixture = createRuntime({
+    status: 'awaiting_approval',
+    execute: async () => {
+      throw Object.assign(new Error('Owner approval is required'), {
+        code: 'APPROVAL_REQUIRED',
+        executionContext: { executionId: 'execution-pending-approval' }
+      });
+    }
+  });
+
+  const first = await fixture.service.createTask({
+    goal: 'inspect and propose a project change, then execute it with owner approval',
+    idempotencyKey: 'request-key-approval-0001'
+  });
+  const replay = await fixture.service.createTask({
+    goal: 'inspect and propose a project change, then execute it with owner approval',
+    idempotencyKey: 'request-key-approval-0001'
+  });
+
+  assert.equal(first.task.id, 'execution-pending-approval');
+  assert.equal(first.task.status, 'awaiting_approval');
+  assert.equal(first.replayed, false);
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.task, first.task);
   assert.equal(fixture.executions, 1);
 });
