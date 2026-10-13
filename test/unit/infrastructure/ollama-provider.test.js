@@ -46,6 +46,61 @@ test('OllamaProvider converts HTTP failures into provider errors', async () => {
   );
 });
 
+
+test('OllamaProvider preserves caller cancellation as a distinct outcome', async () => {
+  const caller = new AbortController();
+  let receivedSignal;
+
+  const provider = new OllamaProvider({
+    timeoutMs: 1000,
+    fetchImpl: async (url, options) => {
+      receivedSignal = options.signal;
+      return new Promise((resolve, reject) => {
+        const rejectAborted = () => reject(Object.assign(
+          new Error('aborted'),
+          { name: 'AbortError' }
+        ));
+        if (options.signal.aborted) {
+          rejectAborted();
+          return;
+        }
+        options.signal.addEventListener('abort', rejectAborted, { once: true });
+      });
+    }
+  });
+
+  const pending = provider.complete({ input: 'test', signal: caller.signal });
+  caller.abort(new Error('user cancelled'));
+
+  await assert.rejects(
+    pending,
+    error => error.code === 'MODEL_PROVIDER_CANCELLED'
+  );
+  assert.equal(receivedSignal.aborted, true);
+});
+
+test('OllamaProvider reports its own deadline as a timeout, not caller cancellation', async () => {
+  const provider = new OllamaProvider({
+    timeoutMs: 5,
+    fetchImpl: async (url, options) => new Promise((resolve, reject) => {
+      const rejectAborted = () => reject(Object.assign(
+        new Error('aborted'),
+        { name: 'AbortError' }
+      ));
+      if (options.signal.aborted) {
+        rejectAborted();
+        return;
+      }
+      options.signal.addEventListener('abort', rejectAborted, { once: true });
+    })
+  });
+
+  await assert.rejects(
+    () => provider.complete({ input: 'test' }),
+    error => error.code === 'MODEL_PROVIDER_TIMEOUT'
+  );
+});
+
 test('OllamaProvider refuses remote URLs so remote inference cannot masquerade as local', () => {
   for (const baseUrl of [
     'https://example.com',
