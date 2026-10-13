@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const TOKEN = /^[A-Za-z0-9_-]{40,100}$/;
-const HASH = /^[a-f0-9]{128}:[a-f0-9]{32}$/;
+const HASH = /^(?:[a-f0-9]{128}:[a-f0-9]{32}|legacy:[a-f0-9]{128}:[a-f0-9]{32})$/;
 const MIN_PASSWORD = 14;
 
 function passwordHash(password, salt = crypto.randomBytes(16)) {
@@ -13,8 +13,11 @@ function passwordHash(password, salt = crypto.randomBytes(16)) {
 }
 function matches(password, encoded) {
   if (typeof password !== 'string' || typeof encoded !== 'string' || !HASH.test(encoded)) return false;
-  const [expected, salt] = encoded.split(':');
-  const actual = crypto.scryptSync(password, Buffer.from(salt, 'hex'), 64);
+  const legacy = encoded.startsWith('legacy:');
+  const normalized = legacy ? encoded.slice('legacy:'.length) : encoded;
+  const [expected, salt] = normalized.split(':');
+  // Legacy website owner.json used the hex salt as UTF-8 text.
+  const actual = crypto.scryptSync(password, legacy ? salt : Buffer.from(salt, 'hex'), 64);
   return crypto.timingSafeEqual(actual, Buffer.from(expected, 'hex'));
 }
 function tokenDigest(token) {
@@ -66,8 +69,28 @@ class OwnerIdentityService {
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     let value;
     try { value = JSON.parse(raw); } catch { throw Object.assign(new Error('Owner identity state is corrupt'), { code: 'OWNER_IDENTITY_STATE_INVALID' }); }
-    if (raw.length > 2 * 1024 * 1024 || value?.version !== 1 || value.username !== 'Admin' ||
-        typeof value.mustChangePassword !== 'boolean' || !HASH.test(value.passwordHash) || !Array.isArray(value.sessions) || value.sessions.length > 4096) {
+    if (raw.length > 2 * 1024 * 1024) throw Object.assign(new Error('Owner identity state exceeds the size limit'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
+
+    // One-time, lossless migration from the website's former owner.json shape.
+    // Existing sessions are intentionally revoked; the old password verifier is
+    // preserved until password rotation upgrades it to the canonical hash format.
+    if (value?.version === 1 && value.username === 'Admin' &&
+        value.password && typeof value.password === 'object' &&
+        /^[a-f0-9]{128}$/.test(value.password.hash || '') &&
+        /^[a-f0-9]{32}$/.test(value.password.salt || '') &&
+        typeof value.mustChangePassword === 'boolean') {
+      return {
+        version: 1,
+        username: 'Admin',
+        passwordHash: 'legacy:' + value.password.hash + ':' + value.password.salt,
+        mustChangePassword: value.mustChangePassword,
+        sessions: []
+      };
+    }
+
+    if (value?.version !== 1 || value.username !== 'Admin' ||
+        typeof value.mustChangePassword !== 'boolean' || !HASH.test(value.passwordHash) ||
+        !Array.isArray(value.sessions) || value.sessions.length > 4096) {
       throw Object.assign(new Error('Owner identity state schema is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
     }
     return value;
