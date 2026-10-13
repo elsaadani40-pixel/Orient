@@ -168,10 +168,15 @@ function createClient({ baseUrl, sessionFile = defaultSessionFile(), fetchImpl =
     async logout() {
       let session = null;
       try { session = getSession(); } catch {}
-      if (session) {
-        try { await request('/owner/logout', { method: 'POST', session, csrf: true }); }
-        finally { try { fs.rmSync(sessionFile, { force: true }); } catch {} }
-      } else {
+      if (!session) {
+        try { fs.rmSync(sessionFile, { force: true }); } catch {}
+        return;
+      }
+      try {
+        await request('/owner/logout', { method: 'POST', session, csrf: true });
+      } catch (error) {
+        throw new Error('Local session cleared, but remote logout could not be confirmed; the server session may remain valid until expiry or revocation. ' + error.message);
+      } finally {
         try { fs.rmSync(sessionFile, { force: true }); } catch {}
       }
     },
