@@ -197,7 +197,7 @@ function createOwnerServer(options = {}) {
     } catch { return false; }
   }
 
-  const server = http.createServer(async (req, res) => {
+  const handler = async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -463,9 +463,10 @@ function createOwnerServer(options = {}) {
     res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream', 'Cache-Control': path.extname(filePath) === '.html' ? 'no-store' : 'public, max-age=300' });
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(filePath).pipe(res);
-  });
+  };
+  const server = http.createServer(handler);
 
-  return { server, stateFile, dataDir, createdBootstrap };
+  return { server, handler, stateFile, dataDir, createdBootstrap };
 }
 
 if (require.main === module) {
