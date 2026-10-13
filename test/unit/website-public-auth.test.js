@@ -148,12 +148,13 @@ test('owner can disable and re-enable a public account, and disabling revokes it
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ username: 'Admin', password: 'temporary-owner-password-9F!x' })
   });
-  const ownerCookie = ownerLogin.headers.get('set-cookie').split(';')[0];
+  let ownerCookie = ownerLogin.headers.get('set-cookie').split(';')[0];
   const passwordChange = await fetch(base + '/api/owner/password', {
     method: 'POST', headers: { 'content-type': 'application/json', cookie: ownerCookie },
     body: JSON.stringify({ password: 'permanent-owner-password-2026!', confirmPassword: 'permanent-owner-password-2026!' })
   });
   assert.equal(passwordChange.status, 200);
+  ownerCookie = passwordChange.headers.get('set-cookie').split(';')[0];
 
   const disable = await fetch(base + '/api/owner/users/' + userId + '/status', {
     method: 'POST', headers: { 'content-type': 'application/json', cookie: ownerCookie },
