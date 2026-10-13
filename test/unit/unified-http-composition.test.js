@@ -25,7 +25,7 @@ test('unified HTTP composition delegates website routes without shadowing Runtim
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('website:' + req.url);
   };
-  const server = createServer({ websiteHandler });
+  const server = createServer({ websiteHandler, agentRoutes: { async tasks(_req, res) { res.writeHead(200); res.end('runtime-tasks'); } } });
   const base = await listen(server);
   t.after(() => close(server));
 
@@ -51,11 +51,12 @@ test('website delegation does not intercept Runtime task API routes', async t =>
     res.writeHead(200);
     res.end('website');
   };
-  const server = createServer({ websiteHandler, ownerAuth: null });
+  const server = createServer({ websiteHandler, ownerAuth: null, agentRoutes: { async tasks(_req, res) { res.writeHead(200); res.end('runtime-tasks'); } } });
   const base = await listen(server);
   t.after(() => close(server));
 
   const response = await fetch(base + '/api/v1/tasks');
-  assert.equal(response.status, 500);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'runtime-tasks');
   assert.deepEqual(delegated, []);
 });
