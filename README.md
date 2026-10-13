@@ -14,6 +14,7 @@ ORIENT is being built as one coherent system for researching, planning, executin
 - **Product contract and cross-device roadmap:** [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md)
 - **Dashboard and control-plane contract:** [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md)
 - **Security policy:** [`SECURITY.md`](SECURITY.md)
+- **Current threat model and tested boundaries:** [`docs/security/THREAT-MODEL.md`](docs/security/THREAT-MODEL.md)
 - **Contribution rules:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Automated checks:** [GitHub Actions](https://github.com/elsaadani40-pixel/Orient/actions)
 
