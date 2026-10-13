@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const config = require('./src/core/config');
 const logger = require('./src/core/logging/logger');
 
@@ -139,8 +141,12 @@ const accessAuditRepository =
     require('path').join(config.agentDataDirectory, 'access-audit.jsonl')
   );
 
-const websiteDataDir = process.env.ORIENT_DATA_DIR || require('path').join(__dirname, '.orient-data');
+const websiteDataDir = process.env.ORIENT_DATA_DIR || path.join(__dirname, '.orient-data');
 const ownerBootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD;
+const ownerStateFile = path.join(websiteDataDir, 'owner.json');
+if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
+  throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters). Set it in the local environment before starting ORIENT.');
+}
 const ownerIdentityService = new OwnerIdentityService({
   // Keep the website's established state path so legacy owner credentials and
   // public accounts are migrated in place rather than silently abandoned.
@@ -154,15 +160,9 @@ const website = createOwnerServer({
   log: () => {}
 });
 if (ownerIdentityService.createdBootstrap) {
-  const bootstrapPassword = ownerIdentityService.consumeBootstrapPassword();
-  if (ownerBootstrapPassword) {
-    console.error('ORIENT owner bootstrap credential was supplied through the environment; secret output is suppressed.');
-  } else {
-    console.error('ORIENT OWNER FIRST-RUN CREDENTIAL (shown once; keep private)');
-    console.error('Username: Admin');
-    console.error('Temporary password: ' + bootstrapPassword);
-    console.error('Sign in locally and replace this password immediately.');
-  }
+  // The configured bootstrap secret is never written to logs or stdout.
+  ownerIdentityService.consumeBootstrapPassword();
+  console.error('ORIENT owner identity initialized for Admin. Change the configured bootstrap password after first sign-in.');
 }
 
 const memoryService =
