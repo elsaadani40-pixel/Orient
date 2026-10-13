@@ -51,6 +51,10 @@ class OwnerIdentityRuntimeAdapter {
     return result;
   }
 
+  status() {
+    return this.identity.status();
+  }
+
   authenticate(token) {
     return this.identity.authenticate(token);
   }
