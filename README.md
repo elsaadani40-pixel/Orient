@@ -14,6 +14,7 @@ ORIENT is being built as one coherent system for researching, planning, executin
 - **Product contract and cross-device roadmap:** [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md)
 - **Dashboard and control-plane contract:** [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md)
 - **Security policy:** [`SECURITY.md`](SECURITY.md)
+- **Current threat model and tested boundaries:** [`docs/security/THREAT-MODEL.md`](docs/security/THREAT-MODEL.md)
 - **Contribution rules:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Automated checks:** [GitHub Actions](https://github.com/elsaadani40-pixel/Orient/actions)
 
@@ -75,12 +76,18 @@ Start the unified website + Runtime HTTP listener:
 npm run start:web
 ```
 
-This is equivalent to `node app.js`. By default, the server binds to `127.0.0.1:8080`.
+This is equivalent to `node app.js`. By default, the server binds to `127.0.0.1:8080`. The `npm start` and `npm run start:web` commands both start the unified website + Runtime listener.
+
+On first run, configure `ORIENT_OWNER_BOOTSTRAP_PASSWORD` with a strong password of at least 14 characters before starting the app; `ORIENT_OWNER_PASSWORD` is accepted as a compatibility alias. Example for a one-off local shell session: `export ORIENT_OWNER_BOOTSTRAP_PASSWORD='use-a-unique-strong-secret-here'` then `npm start`. Use a unique secret, keep shell history and environment access private, and never commit the value. ORIENT persists a password hash rather than the bootstrap plaintext and requires the owner to rotate the password on first sign-in.
 
 - Open `http://127.0.0.1:8080/` for the ORIENT landing page.
+- Open `http://127.0.0.1:8080/auth` for public account registration/sign-in.
 - Open `http://127.0.0.1:8080/memory` for the local memory interface.
 - Open `http://127.0.0.1:8080/dashboard` for the local execution dashboard and control plane.
-- Owner-only routes require an authenticated owner session; the presence of a dashboard page is not authorization.
+- Open `http://127.0.0.1:8080/owner` for the authenticated Runtime owner console.
+- For isolated website-only testing, `npm run start:website-standalone` runs `server.js` without Runtime task routes.
+
+Owner-only routes require an authenticated owner session; the presence of a dashboard page is not authorization.
 
 The dashboard exposes bounded, tenant-scoped execution history, per-execution event streams, pending approvals, and explicit cancellation requests. See [the dashboard contract](docs/operations/DASHBOARD-CONTROL-PLANE.md) for API details, security boundaries, and its smoke checklist.
 
