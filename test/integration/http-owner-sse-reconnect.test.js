@@ -8,7 +8,7 @@ const createServer = require('../../src/interfaces/http/server');
 const createAgentRoutes = require('../../src/interfaces/http/routes/agent.routes');
 const OwnerAuthService = require('../../src/core/security/owner-auth-service');
 
-const PASSWORD = ['owner', 'sse', 'integration', 'test'].join('-') + '-password';
+const OWNER_SSE_TEST_CREDENTIAL = ['owner', 'sse', 'integration', 'test'].join('-') + '-password';
 
 async function readUntil(reader, predicate, timeoutMs = 4000) {
   let text = '';
@@ -37,7 +37,7 @@ test('owner-authenticated SSE reconnect resumes after Last-Event-ID without repl
       return events.slice(-limit);
     }
   };
-  const ownerAuth = new OwnerAuthService({ password: PASSWORD });
+  const ownerAuth = new OwnerAuthService({ password: OWNER_SSE_TEST_CREDENTIAL });
   const server = createServer({
     memoryRoutes: { home() {}, add() {}, delete() {} },
     agentRoutes: createAgentRoutes(agentService),
@@ -58,7 +58,7 @@ test('owner-authenticated SSE reconnect resumes after Last-Event-ID without repl
   const login = await fetch(origin + '/owner/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json', Origin: origin },
-    body: JSON.stringify({ password: PASSWORD })
+    body: JSON.stringify({ password: OWNER_SSE_TEST_CREDENTIAL })
   });
   assert.equal(login.status, 200);
   const cookie = login.headers.get('set-cookie').split(';')[0];
