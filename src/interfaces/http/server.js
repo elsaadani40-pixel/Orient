@@ -450,7 +450,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       }
       if (
         req.method === 'GET' &&
-        requestUrl.pathname === '/'
+        (requestUrl.pathname === '/memory' || (requestUrl.pathname === '/' && !websiteHandler))
       ) {
         memoryRoutes.home(req, res, requestUrl);
         return;
