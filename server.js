@@ -394,6 +394,21 @@ function createOwnerServer(options = {}) {
       }
 
       if (url.pathname === '/api/owner/login') {
+        if (identity) {
+          if (body.username !== 'Admin' || typeof body.password !== 'string') {
+            return sendJson(res, 401, { error: 'Invalid username or password' });
+          }
+          const result = await identity.login({ username: 'Admin', password: body.password });
+          if (!result.ok) {
+            const status = result.code === 'OWNER_SESSION_LIMIT_REACHED' ? 429 : 401;
+            return sendJson(res, status, { error: 'Invalid username or password', code: result.code });
+          }
+          const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+          return sendJson(res, 200, {
+            ok: true, username: 'Admin', csrfToken: result.csrfToken,
+            expiresAt: result.expiresAt, passwordChangeRequired: result.passwordChangeRequired
+          }, { 'Set-Cookie': sessionCookie(result.token, req).replace('Max-Age=28800', 'Max-Age=' + maxAge) });
+        }
         if (typeof body.username !== 'string' || typeof body.password !== 'string' ||
             body.username !== 'Admin' || !verifyPassword(body.password, state.password)) {
           const next = attempt.until > Date.now() ? attempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
@@ -410,6 +425,23 @@ function createOwnerServer(options = {}) {
       if (url.pathname === '/api/owner/password') {
         const session = sessionFor(req);
         if (!session) return sendJson(res, 401, { error: 'Authentication required' });
+        if (identity) {
+          if (!checkOrigin(req) || !identity.verifyCsrf(session, req.headers['x-orient-csrf'])) {
+            return sendJson(res, 403, { error: 'Owner CSRF validation failed', code: 'OWNER_CSRF_REJECTED' });
+          }
+          const result = await identity.changePassword({
+            token: session.token, password: body.password, confirmPassword: body.confirmPassword
+          });
+          if (!result.ok) {
+            const status = result.code === 'OWNER_AUTH_REQUIRED' ? 401 :
+              result.code === 'OWNER_PASSWORD_POLICY_REJECTED' || result.code === 'OWNER_PASSWORD_CONFIRMATION_MISMATCH' || result.code === 'OWNER_PASSWORD_REUSE_REJECTED' ? 400 : 500;
+            return sendJson(res, status, { error: 'Could not change owner password', code: result.code });
+          }
+          const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+          return sendJson(res, 200, { ok: true, passwordChangeRequired: false, csrfToken: result.csrfToken, expiresAt: result.expiresAt }, {
+            'Set-Cookie': sessionCookie(result.token, req).replace('Max-Age=28800', 'Max-Age=' + maxAge)
+          });
+        }
         if (typeof body.password !== 'string' || body.password.length < PASSWORD_MIN_LENGTH || body.password.length > 1024) {
           return sendJson(res, 400, { error: 'Use a password of at least 14 characters.' });
         }
@@ -432,7 +464,13 @@ function createOwnerServer(options = {}) {
 
       if (url.pathname === '/api/owner/logout') {
         const session = sessionFor(req);
-        if (session) sessions.delete(session.token);
+        if (identity) {
+          if (!session) return sendJson(res, 401, { error: 'Authentication required' });
+          if (!checkOrigin(req) || !identity.verifyCsrf(session, req.headers['x-orient-csrf'])) {
+            return sendJson(res, 403, { error: 'Owner CSRF validation failed', code: 'OWNER_CSRF_REJECTED' });
+          }
+          identity.logout(session.token);
+        } else if (session) sessions.delete(session.token);
         return sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearCookie(req) });
       }
       return sendJson(res, 404, { error: 'Not found' });
