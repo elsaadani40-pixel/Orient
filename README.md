@@ -84,7 +84,7 @@ By default, the unified server binds to `127.0.0.1:8080`. Start it with `npm sta
 - Open `http://127.0.0.1:8080/auth` for public account registration/sign-in; owner access uses the dedicated owner mode.
 - Open `http://127.0.0.1:8080/owner` for the authenticated Runtime owner console.
 
-The first run generates an owner bootstrap password and prints it once to the local terminal only when no environment-supplied password was configured. Replace it immediately after sign-in. The canonical owner identity is shared by website and Runtime; public-user cookies are not accepted as owner sessions.
+On first run, configure `ORIENT_OWNER_BOOTSTRAP_PASSWORD` with a strong password of at least 14 characters before starting the app; `ORIENT_OWNER_PASSWORD` is accepted as a compatibility alias. Example for a one-off local shell session: `export ORIENT_OWNER_BOOTSTRAP_PASSWORD='use-a-unique-strong-secret-here'` then `npm start`. The secret is never printed to logs and only a password hash is persisted. Change the bootstrap password immediately after first sign-in. The canonical owner identity is shared by website and Runtime; public-user cookies are not accepted as owner sessions. Keep shell history and environment access private, and never commit the value.
 
 For isolated website-only testing, `npm run start:website-standalone` runs `server.js` without Runtime task routes. Use the unified commands above when testing website-to-Runtime integration.
 
