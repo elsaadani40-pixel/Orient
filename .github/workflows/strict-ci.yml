@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22, 24]
+        node: [22, 24]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -90,11 +90,11 @@ jobs:
             --property=OOMPolicy=kill \
             -- /usr/bin/true
 
-      - name: Verify SQLite runtime
+      - name: Verify native SQLite runtime
         shell: bash
         run: |
           set -euo pipefail
-          sqlite3 --version
+          node -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(':memory:'); db.exec('SELECT 1'); db.close();"
 
       - name: Verify repository hygiene
         shell: bash
@@ -135,6 +135,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node --check app.js
+          node --check server.js
           while IFS= read -r file; do
             node --check "$file"
           done < <(find src test -type f -name '*.js' -print | sort)
@@ -155,7 +157,7 @@ jobs:
           fi
 
   postgres-integration:
-    name: PostgreSQL Integration (Node 20)
+    name: PostgreSQL Integration (Node 22)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -177,7 +179,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           check-latest: true
 
       - name: Install PostgreSQL client dependency
@@ -228,13 +230,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles apparmor-utils sqlite3
+          sudo apt-get install --yes --no-install-recommends bubblewrap apparmor-profiles apparmor-utils
           test -x /usr/bin/bwrap
           test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
           sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
           bwrap --version
-          sqlite3 --version
 
       - name: Start user systemd manager and verify cgroup quota enforcement
         shell: bash

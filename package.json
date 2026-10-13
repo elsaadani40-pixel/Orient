@@ -5,7 +5,7 @@
   "description": "ORIENT — governed personal AI runtime and durable agent execution platform",
   "type": "commonjs",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "test": "node --test",
