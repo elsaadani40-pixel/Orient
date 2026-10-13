@@ -196,7 +196,13 @@ function createClient({ baseUrl, sessionFile = defaultSessionFile(), fetchImpl =
       }
       const session = getSession();
       const { data } = await request('/api/v1/tasks', {
-        method: 'POST', body: { goal: goal.trim() }, session, csrf: true
+        method: 'POST',
+        body: {
+          goal: goal.trim(),
+          idempotencyKey: require('node:crypto').randomUUID()
+        },
+        session,
+        csrf: true
       });
       return data;
     }
