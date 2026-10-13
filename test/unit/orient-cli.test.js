@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createClient, resolveBaseUrl, readSession } = require('../../bin/orient');
+const { createClient, resolveBaseUrl, readSession, writeSession } = require('../../bin/orient');
 
 function tempSession(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-cli-test-'));
@@ -29,6 +29,26 @@ test('ORIENT CLI only allows HTTPS remote origins and loopback HTTP', () => {
   assert.throws(() => resolveBaseUrl('http://orient.example'), /HTTPS/);
   assert.throws(() => resolveBaseUrl('http://127.0.0.1:8080/path'), /only an origin/);
   assert.throws(() => resolveBaseUrl('https://user:secret@orient.example'), /only an origin/);
+});
+
+test('relative custom session paths do not change working-directory permissions', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-cli-relative-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.chmodSync(dir, 0o755);
+  const previousCwd = process.cwd();
+  try {
+    process.chdir(dir);
+    writeSession('session.json', {
+      baseUrl: 'http://127.0.0.1:8080',
+      token: 't'.repeat(43),
+      csrfToken: 'c'.repeat(43),
+      expiresAt: Date.now() + 60000
+    });
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o755);
+    assert.equal(fs.statSync(path.join(dir, 'session.json')).mode & 0o777, 0o600);
+  } finally {
+    process.chdir(previousCwd);
+  }
 });
 
 test('login stores only session material with restrictive file mode and binds it to the server origin', async t => {
