@@ -119,3 +119,21 @@ test('CLI clears its local session even if remote logout fails', async t => {
   await assert.rejects(client.logout(), /remote logout could not be confirmed/);
   assert.equal(fs.existsSync(sessionFile), false);
 });
+
+test('CLI rejects malformed server-issued CSRF tokens without persisting a session', async t => {
+  const sessionFile = tempSession(t);
+  const client = createClient({
+    baseUrl: 'http://127.0.0.1:8080',
+    sessionFile,
+    fetchImpl: async () => response(200, {
+      csrfToken: 'invalid token from response',
+      expiresAt: Date.now() + 60000,
+      passwordChangeRequired: false
+    }, {
+      'set-cookie': 'orient_owner_session=' + 't'.repeat(43) + '; Path=/; HttpOnly; SameSite=Strict'
+    })
+  });
+
+  await assert.rejects(client.login('test-password'), /valid owner session/);
+  assert.equal(fs.existsSync(sessionFile), false);
+});
