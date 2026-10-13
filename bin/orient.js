@@ -27,14 +27,21 @@ function defaultSessionFile() {
 }
 
 function writeSession(file, session) {
-  const dir = path.dirname(file);
+  // Resolve relative overrides before deriving the parent; otherwise dirname("session.json")
+  // is "." and chmod could unexpectedly change the caller's working-directory permissions.
+  const target = path.resolve(file);
+  const dir = path.dirname(target);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync(dir, 0o700); } catch {}
-  const temporary = file + '.' + process.pid + '.' + require('node:crypto').randomBytes(6).toString('hex') + '.tmp';
+  // Only tighten the permissions of ORIENT's own default state directory. A custom
+  // session path may live in a user-managed directory whose permissions we must not alter.
+  if (dir === path.resolve(os.homedir(), '.orient')) {
+    try { fs.chmodSync(dir, 0o700); } catch {}
+  }
+  const temporary = target + '.' + process.pid + '.' + require('node:crypto').randomBytes(6).toString('hex') + '.tmp';
   try {
     fs.writeFileSync(temporary, JSON.stringify(session) + '\n', { flag: 'wx', mode: 0o600 });
-    fs.renameSync(temporary, file);
-    try { fs.chmodSync(file, 0o600); } catch {}
+    fs.renameSync(temporary, target);
+    try { fs.chmodSync(target, 0o600); } catch {}
   } catch (error) {
     try { fs.rmSync(temporary, { force: true }); } catch {}
     throw error;
