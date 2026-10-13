@@ -53,7 +53,7 @@ CI results are commit-specific. A green run on an earlier commit does not make a
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 22 or newer (the SQLite persistence adapter uses the built-in `node:sqlite` module)
 - npm
 - PostgreSQL only when using PostgreSQL persistence
 
