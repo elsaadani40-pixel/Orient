@@ -23,6 +23,8 @@ test('public registration creates a regular account and never grants owner dashb
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-public-auth-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const instance = createOwnerServer({ dataDir, bootstrapPassword: 'temporary-owner-password-9F!x', log: () => {} });
+  assert.equal(typeof instance.handler, 'function', 'website routes must be exposable for single-server composition');
+  assert.equal(instance.server.listeners('request')[0], instance.handler, 'standalone and composed modes must use the exact same request handler');
   const base = await listen(instance.server);
   t.after(() => close(instance.server));
 
