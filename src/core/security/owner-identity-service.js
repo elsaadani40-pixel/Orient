@@ -35,13 +35,13 @@ class OwnerIdentityService {
     this.now = now;
     this.sessions = new Map();
     this.createdBootstrap = false;
-    this.bootstrapPassword = null;
+    this._bootstrapPassword = null;
     this.state = this.read();
     if (!this.state) {
       const secret = bootstrapPassword || crypto.randomBytes(24).toString('base64url');
       if (typeof secret !== 'string' || secret.length < MIN_PASSWORD || secret.length > 1024) throw new RangeError('Bootstrap password must be at least 14 characters');
       this.state = { version: 1, username: 'Admin', passwordHash: passwordHash(secret), mustChangePassword: true, sessions: [] };
-      this.bootstrapPassword = secret;
+      this._bootstrapPassword = secret;
       this.createdBootstrap = true;
       this.save();
     } else {
@@ -52,6 +52,12 @@ class OwnerIdentityService {
       }
       this.save();
     }
+  }
+
+  consumeBootstrapPassword() {
+    const password = this._bootstrapPassword;
+    this._bootstrapPassword = null;
+    return password;
   }
 
   read() {
