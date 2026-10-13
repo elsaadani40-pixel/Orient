@@ -53,7 +53,18 @@ class AgentService {
 
     let task;
     try {
-      const result = await this.execute(clean);
+      let result;
+      try {
+        result = await this.execute(clean);
+      } catch (error) {
+        // Approval-required executions have a durable ID and are paused, not failed.
+        // Accept the task without retrying the high-risk side effect.
+        const approvalExecutionId = error?.code === 'APPROVAL_REQUIRED'
+          ? error.executionContext?.executionId
+          : null;
+        if (typeof approvalExecutionId !== 'string' || !approvalExecutionId) throw error;
+        result = { execution: { executionId: approvalExecutionId }, awaitingApproval: true };
+      }
       const executionId = result?.execution?.executionId || result?.executionId;
       if (typeof executionId !== 'string' || !executionId) {
         throw new AppError('لم يُرجع Runtime معرّف مهمة قابلًا للتحقق', 502, 'TASK_EXECUTION_ID_MISSING');
