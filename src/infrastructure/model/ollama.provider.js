@@ -84,6 +84,17 @@ class OllamaProvider {
     }, this.timeoutMs);
 
     try {
+      const requestBody = {
+        model: request.model || this.model,
+        messages: Array.isArray(request.messages)
+          ? request.messages
+          : [{ role: 'user', content: String(request.input || '') }],
+        stream: false,
+        options: request.options || undefined
+      };
+      if (request.format !== undefined) requestBody.format = request.format;
+      if (Array.isArray(request.tools) && request.tools.length) requestBody.tools = request.tools;
+
       const response = await this.fetch(
         `${this.baseUrl}/api/chat`,
         {
@@ -92,14 +103,7 @@ class OllamaProvider {
           headers: {
             'content-type': 'application/json'
           },
-          body: JSON.stringify({
-            model: request.model || this.model,
-            messages: Array.isArray(request.messages)
-              ? request.messages
-              : [{ role: 'user', content: String(request.input || '') }],
-            stream: false,
-            options: request.options || undefined
-          }),
+          body: JSON.stringify(requestBody),
           signal: controller.signal
         }
       );
@@ -112,17 +116,25 @@ class OllamaProvider {
       }
 
       const payload = await response.json();
-      const text = payload?.message?.content;
+      const message = payload?.message;
+      const text = typeof message?.content === 'string' ? message.content : '';
+      const toolCalls = Array.isArray(message?.tool_calls)
+        ? message.tool_calls.map(call => ({
+            name: typeof call?.function?.name === 'string' ? call.function.name : '',
+            arguments: call?.function?.arguments
+          }))
+        : [];
 
-      if (typeof text !== 'string') {
+      if (!text && toolCalls.length === 0) {
         throw Object.assign(
-          new Error('Ollama returned no model content'),
+          new Error('Ollama returned neither model content nor tool calls'),
           { code: 'MODEL_PROVIDER_INVALID_RESPONSE' }
         );
       }
 
       return {
         text,
+        toolCalls,
         provider: this.id,
         model: request.model || this.model,
         usage: payload.usage || null

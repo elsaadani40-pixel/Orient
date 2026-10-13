@@ -100,3 +100,32 @@ test('single-tool plans are normalized into execution steps', () => {
   assert.equal(result.steps.length, 1);
   assert.equal(result.steps[0].tool, 'memory.search');
 });
+
+test('step dependencies must point only to earlier steps', () => {
+  const validator = createValidator();
+  assert.throws(
+    () => validator.validate({
+      intent: 'test',
+      steps: [{ tool: 'tool.a', dependsOn: 1 }]
+    }),
+    error => error.code === 'PLAN_DEPENDENCY_INVALID'
+  );
+  assert.throws(
+    () => validator.validate({
+      intent: 'test',
+      steps: [
+        { tool: 'tool.a', dependsOn: null },
+        { tool: 'tool.b', dependsOn: 3 }
+      ]
+    }),
+    error => error.code === 'PLAN_DEPENDENCY_INVALID'
+  );
+});
+
+test('invalid step objects are rejected instead of silently filtered', () => {
+  const validator = createValidator();
+  assert.throws(
+    () => validator.validate({ intent: 'test', steps: [null] }),
+    error => error.code === 'PLAN_STEP_INVALID'
+  );
+});

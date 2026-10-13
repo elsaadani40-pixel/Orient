@@ -176,7 +176,7 @@ const toolRegistry =
   new ToolRegistry();
 
 const planner =
-  new PlannerService();
+  new PlannerService({ toolRegistry });
 
 const memoryTools =
   createMemoryTools(memoryService);
