@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const OwnerIdentityService = require('../../src/core/security/owner-identity-service');
@@ -65,4 +66,37 @@ test('invalid owner state fails closed instead of silently resetting credentials
   const { stateFile } = fixture(t);
   fs.writeFileSync(stateFile, '{"version":1,"passwordHash":"invalid"}');
   assert.throws(() => new OwnerIdentityService({ stateFile }), { code: 'OWNER_IDENTITY_STATE_INVALID' });
+});
+
+test('legacy website owner.json migrates without losing the existing password and forces password rotation', async t => {
+  const { stateFile } = fixture(t);
+  const legacyPassword = 'legacy-temporary-owner-password-2026!';
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(legacyPassword, salt, 64).toString('hex');
+  fs.writeFileSync(stateFile, JSON.stringify({
+    version: 1,
+    username: 'Admin',
+    password: { salt, hash },
+    mustChangePassword: true,
+    createdAt: new Date(0).toISOString()
+  }), { mode: 0o600 });
+
+  const identity = new OwnerIdentityService({ stateFile });
+  assert.equal(identity.status().passwordChangeRequired, true);
+  const migrated = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  assert.equal(typeof migrated.password, 'undefined');
+  assert.match(migrated.passwordHash, /^legacy:[a-f0-9]{128}:[a-f0-9]{32}$/);
+  const login = await identity.login({ username: 'Admin', password: legacyPassword });
+  assert.equal(login.ok, true);
+  assert.equal(login.passwordChangeRequired, true);
+
+  const changed = await identity.changePassword({
+    token: login.token,
+    password: 'new-permanent-owner-password-2026!',
+    confirmPassword: 'new-permanent-owner-password-2026!'
+  });
+  assert.equal(changed.ok, true);
+  assert.match(JSON.parse(fs.readFileSync(stateFile, 'utf8')).passwordHash, /^[a-f0-9]{128}:[a-f0-9]{32}$/);
+  assert.equal((await identity.login({ username: 'Admin', password: legacyPassword })).ok, false);
+  assert.equal((await identity.login({ username: 'Admin', password: 'new-permanent-owner-password-2026!' })).ok, true);
 });
