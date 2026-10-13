@@ -271,14 +271,14 @@ class PlannerService {
     };
   }
 
-  replan({
+  async replan({
     input,
     evaluation = null,
     previousPlan = null,
-    context = null
+    context = null,
+    modelRouter = null
   } = {}) {
     const text = String(input || '').trim();
-
     if (!text) {
       throw new AppError(
         'لا يمكن إعادة التخطيط بدون الطلب الأصلي',
@@ -287,46 +287,62 @@ class PlannerService {
       );
     }
 
-    /*
-     * Replanning is intentionally conservative.
-     *
-     * The planner may receive a new input from the evaluation layer
-     * in future versions. If none exists, we do not fabricate a
-     * different plan from the same information.
-     */
-    const candidateInput =
-      evaluation &&
+    const candidateInput = evaluation &&
       typeof evaluation === 'object' &&
       typeof evaluation.nextInput === 'string' &&
       evaluation.nextInput.trim()
         ? evaluation.nextInput.trim()
         : null;
+    const requestsReplan = evaluation &&
+      typeof evaluation === 'object' &&
+      (evaluation.outcome === 'replan' || evaluation.nextAction === 'replan');
+    const canUseModel = modelRouter && typeof modelRouter.list === 'function' && modelRouter.list().length > 0;
 
-    if (!candidateInput || candidateInput === text) {
-      return null;
-    }
+    if (!candidateInput && (!requestsReplan || !canUseModel)) return null;
+    if (candidateInput === text && !requestsReplan) return null;
 
-    const planned =
-      this.plan(candidateInput);
+    const observationSummary = Array.isArray(context?.observations)
+      ? context.observations.slice(-3).map(observation => ({
+          step: Number.isInteger(observation?.step) ? observation.step : null,
+          tool: typeof observation?.tool === 'string' ? observation.tool.slice(0, 120) : null,
+          success: typeof observation?.success === 'boolean' ? observation.success : null,
+          outcome: typeof observation?.outcome === 'string' ? observation.outcome.slice(0, 80) : null,
+          errorCode: typeof observation?.error?.code === 'string'
+            ? observation.error.code.slice(0, 120)
+            : typeof observation?.code === 'string' ? observation.code.slice(0, 120) : null,
+          reason: typeof observation?.reason === 'string' ? observation.reason.slice(0, 500) : null
+        }))
+      : [];
+    const replanContext = {
+      previousPlan: {
+        intent: typeof previousPlan?.intent === 'string' ? previousPlan.intent.slice(0, 120) : null,
+        tools: Array.isArray(previousPlan?.steps)
+          ? previousPlan.steps.slice(0, this.maxSteps).map(step => typeof step?.tool === 'string' ? step.tool : null)
+          : []
+      },
+      evaluation: {
+        outcome: typeof evaluation?.outcome === 'string' ? evaluation.outcome.slice(0, 80) : null,
+        reason: typeof evaluation?.reason === 'string' ? evaluation.reason.slice(0, 1000) : null,
+        blockers: Array.isArray(evaluation?.blockers) ? evaluation.blockers.slice(0, 10).map(item => String(item).slice(0, 120)) : [],
+        recommendations: Array.isArray(evaluation?.recommendations) ? evaluation.recommendations.slice(0, 10).map(item => String(item).slice(0, 120)) : [],
+        nextInput: typeof evaluation?.nextInput === 'string' ? evaluation.nextInput.slice(0, 2000) : null
+      },
+      observations: observationSummary
+    };
+
+    const nextInput = candidateInput || text;
+    const planned = await this.plan(nextInput, {
+      modelRouter,
+      context,
+      replan: replanContext
+    });
 
     return {
       ...planned,
       replan: true,
-      replanReason:
-        evaluation &&
-        evaluation.reason
-          ? evaluation.reason
-          : 'تم إنشاء خطة بديلة بناءً على نتيجة التقييم',
-      previousPlanIntent:
-        previousPlan &&
-        previousPlan.intent
-          ? previousPlan.intent
-          : null,
-      contextRequestId:
-        context &&
-        context.requestId
-          ? context.requestId
-          : null
+      replanReason: replanContext.evaluation.reason || 'Execution observation requires a revised plan',
+      previousPlanIntent: replanContext.previousPlan.intent,
+      contextRequestId: context && context.requestId ? context.requestId : null
     };
   }
 
