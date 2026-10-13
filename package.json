@@ -10,7 +10,9 @@
   "scripts": {
     "test": "node --test",
     "check:syntax": "find src test -type f -name '*.js' -print0 | xargs -0 -n1 node --check",
-    "start:web": "node server.js"
+    "start:web": "node app.js",
+    "start": "node app.js",
+    "start:website-standalone": "node server.js"
   },
   "dependencies": {
     "pg": "^8.23.1"
