@@ -25,6 +25,7 @@ test('owner identity bootstrap stores only a password hash and forces rotation',
   assert.equal(persisted.includes(temporary), false);
   assert.match(JSON.parse(persisted).passwordHash, /^[a-f0-9]{128}:[a-f0-9]{32}$/);
   assert.equal((fs.statSync(directory).mode & 0o077), 0);
+  assert.equal((fs.statSync(stateFile).mode & 0o077), 0, 'owner state file must not be readable by group or others');
 });
 
 test('password rotation revokes old owner sessions and returns one replacement session', async t => {
