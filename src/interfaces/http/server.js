@@ -113,7 +113,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       ]);
       const websiteApiPath = requestUrl.pathname.startsWith('/api/auth/') ||
         requestUrl.pathname.startsWith('/api/owner/');
-      const websiteAssetPath = /\\.(?:css|js|svg|png|ico|webp|woff2?)$/i.test(requestUrl.pathname) &&
+      const websiteAssetPath = /\.(?:css|js|svg|png|ico|webp|woff2?)$/i.test(requestUrl.pathname) &&
         !['/owner-dashboard.js', '/command-scene.js'].includes(requestUrl.pathname);
       const isRuntimeOwnedPath = requestUrl.pathname === '/owner' ||
         requestUrl.pathname.startsWith('/owner/') ||
