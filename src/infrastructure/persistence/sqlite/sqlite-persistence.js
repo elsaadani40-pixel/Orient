@@ -23,7 +23,7 @@ class SqliteExecutionRepository {
   }
 
   findById(executionId, { tenantId = null } = {}) {
-    const rows = this.db.query(`SELECT payload FROM executions WHERE execution_id=${SqliteDatabase.literal(executionId)} LIMIT 1;`);
+    const rows = this.db.query('SELECT payload FROM executions WHERE execution_id = ? LIMIT 1', [executionId]);
     if (!rows.length) return null;
     const item = JSON.parse(rows[0].payload);
     return tenantId && item.metadata?.tenantId !== tenantId && !(tenantId === 'local' && !item.metadata?.tenantId) ? null : item;
@@ -36,14 +36,15 @@ class SqliteExecutionRepository {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
     const boundedOffset = Number.isInteger(offset) ? Math.max(0, Math.min(offset, 10000)) : 0;
     let where = '';
+    const params = [];
     if (tenantId) {
-      const tenant = SqliteDatabase.literal(tenantId);
       where = tenantId === 'local'
-        ? " WHERE (json_extract(payload, '$.metadata.tenantId')=" + tenant + " OR json_extract(payload, '$.metadata.tenantId') IS NULL)"
-        : " WHERE json_extract(payload, '$.metadata.tenantId')=" + tenant;
+        ? " WHERE (json_extract(payload, '$.metadata.tenantId') = ? OR json_extract(payload, '$.metadata.tenantId') IS NULL)"
+        : " WHERE json_extract(payload, '$.metadata.tenantId') = ?";
+      params.push(tenantId);
     }
-    const total = Number(this.db.query('SELECT COUNT(*) AS total FROM executions' + where + ';')[0]?.total || 0);
-    const rows = this.db.query('SELECT payload FROM executions' + where + ' ORDER BY updated_at DESC, execution_id DESC LIMIT ' + boundedLimit + ' OFFSET ' + boundedOffset + ';');
+    const total = Number(this.db.query('SELECT COUNT(*) AS total FROM executions' + where, params)[0]?.total || 0);
+    const rows = this.db.query('SELECT payload FROM executions' + where + ' ORDER BY updated_at DESC, execution_id DESC LIMIT ? OFFSET ?', [...params, boundedLimit, boundedOffset]);
     return { total, limit: boundedLimit, offset: boundedOffset, executions: rows.map(row => JSON.parse(row.payload)) };
   }
 
@@ -57,7 +58,7 @@ class SqliteExecutionRepository {
     if (tenantId && normalized.metadata?.tenantId !== tenantId) throw new Error('Execution tenant mismatch');
     const exists = this.findById(normalized.executionId, { tenantId });
     if (exists) throw new Error(`Execution already exists: ${normalized.executionId}`);
-    this.db.run(`INSERT INTO executions(execution_id,payload,updated_at) VALUES (${SqliteDatabase.literal(normalized.executionId)},${SqliteDatabase.json(normalized)},${SqliteDatabase.literal(normalized.updatedAt)});`);
+    this.db.run('INSERT INTO executions(execution_id,payload,updated_at) VALUES (?, ?, ?)', [normalized.executionId, JSON.stringify(normalized), normalized.updatedAt]);
     return normalized;
   }
 
@@ -65,14 +66,14 @@ class SqliteExecutionRepository {
     const current = this.findById(executionId, { tenantId });
     if (!current) return null;
     const updated = this.normalize({ ...current, ...patch, id: current.id, executionId: current.executionId, updatedAt: new Date().toISOString() });
-    this.db.run(`UPDATE executions SET payload=${SqliteDatabase.json(updated)}, updated_at=${SqliteDatabase.literal(updated.updatedAt)} WHERE execution_id=${SqliteDatabase.literal(executionId)};`);
+    this.db.run('UPDATE executions SET payload = ?, updated_at = ? WHERE execution_id = ?', [JSON.stringify(updated), updated.updatedAt, executionId]);
     return updated;
   }
 
   deleteById(executionId, { tenantId = null } = {}) {
     const before = this.findById(executionId, { tenantId });
     if (!before) return false;
-    this.db.run(`DELETE FROM executions WHERE execution_id=${SqliteDatabase.literal(executionId)};`);
+    this.db.run('DELETE FROM executions WHERE execution_id = ?', [executionId]);
     return true;
   }
 
@@ -97,7 +98,7 @@ class SqliteEventRepository {
     const normalized = this.normalize(event);
     if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
     if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
-    this.db.run(`INSERT OR IGNORE INTO events(event_id,execution_id,goal_id,type,timestamp,payload) VALUES (${SqliteDatabase.literal(normalized.id)},${SqliteDatabase.literal(normalized.executionId)},${SqliteDatabase.literal(normalized.goalId)},${SqliteDatabase.literal(normalized.type)},${SqliteDatabase.literal(normalized.timestamp)},${SqliteDatabase.json(normalized)});`);
+    this.db.run('INSERT OR IGNORE INTO events(event_id,execution_id,goal_id,type,timestamp,payload) VALUES (?, ?, ?, ?, ?, ?)', [normalized.id, normalized.executionId, normalized.goalId, normalized.type, normalized.timestamp, JSON.stringify(normalized)]);
     return normalized;
   }
   appendMany(events, { tenantId = null } = {}) {
@@ -107,10 +108,10 @@ class SqliteEventRepository {
       const normalized = this.normalize(event);
       if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
       if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
-      const exists = this.db.query(`SELECT 1 FROM events WHERE event_id=${SqliteDatabase.literal(normalized.id)} LIMIT 1;`).length;
+      const exists = this.db.query('SELECT 1 FROM events WHERE event_id = ? LIMIT 1', [normalized.id]).length;
       if (!exists) {
         unique.push(normalized);
-        statements.push(`INSERT INTO events(event_id,execution_id,goal_id,type,timestamp,payload) VALUES (${SqliteDatabase.literal(normalized.id)},${SqliteDatabase.literal(normalized.executionId)},${SqliteDatabase.literal(normalized.goalId)},${SqliteDatabase.literal(normalized.type)},${SqliteDatabase.literal(normalized.timestamp)},${SqliteDatabase.json(normalized)});`);
+        statements.push({ sql: 'INSERT INTO events(event_id,execution_id,goal_id,type,timestamp,payload) VALUES (?, ?, ?, ?, ?, ?)', params: [normalized.id, normalized.executionId, normalized.goalId, normalized.type, normalized.timestamp, JSON.stringify(normalized)] });
       }
     }
     if (statements.length) this.db.transaction(statements);
@@ -118,19 +119,20 @@ class SqliteEventRepository {
   }
   findAll({ tenantId = null } = {}) { return this.db.query('SELECT payload FROM events ORDER BY timestamp ASC;').map(row => JSON.parse(row.payload)).filter(item => !tenantId || item.data?.tenantId === tenantId || (tenantId === 'local' && !item.data?.tenantId)); }
   findByExecutionId(id, { tenantId = null, limit = null } = {}) {
-    let where = ' WHERE execution_id=' + SqliteDatabase.literal(id);
+    let where = ' WHERE execution_id = ?';
+    const params = [id];
     if (tenantId) {
-      const tenant = SqliteDatabase.literal(tenantId);
       where += tenantId === 'local'
-        ? " AND (json_extract(payload, '$.data.tenantId')=" + tenant + " OR json_extract(payload, '$.data.tenantId') IS NULL)"
-        : " AND json_extract(payload, '$.data.tenantId')=" + tenant;
+        ? " AND (json_extract(payload, '$.data.tenantId') = ? OR json_extract(payload, '$.data.tenantId') IS NULL)"
+        : " AND json_extract(payload, '$.data.tenantId') = ?";
+      params.push(tenantId);
     }
     if (Number.isInteger(limit) && limit > 0) {
       const boundedLimit = Math.min(limit, 200);
-      return this.db.query('SELECT payload FROM events' + where + ' ORDER BY timestamp DESC, event_id DESC LIMIT ' + boundedLimit + ';')
+      return this.db.query('SELECT payload FROM events' + where + ' ORDER BY timestamp DESC, event_id DESC LIMIT ?', [...params, boundedLimit])
         .map(row => JSON.parse(row.payload)).reverse();
     }
-    return this.db.query('SELECT payload FROM events' + where + ' ORDER BY timestamp ASC, event_id ASC;')
+    return this.db.query('SELECT payload FROM events' + where + ' ORDER BY timestamp ASC, event_id ASC', params)
       .map(row => JSON.parse(row.payload));
   }
   findByGoalId(id, { tenantId = null } = {}) { return this.findAll({ tenantId }).filter(item => item.goalId === id); }
@@ -148,7 +150,7 @@ class SqliteIdempotencyRepository {
     return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
   findByKey(key, { tenantId = null } = {}) {
-    const rows = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)} LIMIT 1;`);
+    const rows = this.db.query('SELECT payload FROM idempotency WHERE key = ? LIMIT 1', [key]);
     if (!rows.length) return null;
     const item = JSON.parse(rows[0].payload);
     return tenantId && item.tenantId !== tenantId && !(tenantId === 'local' && !item.tenantId) ? null : item;
@@ -156,7 +158,7 @@ class SqliteIdempotencyRepository {
   find(args) { return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || null }); }
   begin(args) {
     const key = this.buildKey(args);
-    const raw = this.db.query(`SELECT payload FROM idempotency WHERE key=${SqliteDatabase.literal(key)} LIMIT 1;`);
+    const raw = this.db.query('SELECT payload FROM idempotency WHERE key = ? LIMIT 1', [key]);
     if (raw.length) {
       const existingRecord = JSON.parse(raw[0].payload);
       if (args?.tenantId && existingRecord.tenantId !== args.tenantId && !(args.tenantId === 'local' && !existingRecord.tenantId)) throw new Error('Idempotency tenant mismatch');
@@ -179,9 +181,9 @@ class SqliteIdempotencyRepository {
       startedAt: new Date().toISOString(),
       completedAt: null
     };
-    const inserted = this.db.query(`INSERT OR IGNORE INTO idempotency(key,payload,status,updated_at) VALUES (${SqliteDatabase.literal(key)},${SqliteDatabase.json(record)},'running',${SqliteDatabase.literal(record.startedAt)}); SELECT changes() AS changes;`);
+    const inserted = this.db.run("INSERT OR IGNORE INTO idempotency(key,payload,status,updated_at) VALUES (?, ?, 'running', ?)", [key, JSON.stringify(record), record.startedAt]);
     const actual = this.findByKey(key, { tenantId: args?.tenantId || null });
-    if (!inserted.length || Number(inserted[inserted.length - 1].changes) !== 1) {
+    if (Number(inserted.changes) !== 1) {
       return { created: false, key, record: actual };
     }
     return { created: true, key, record: actual };
@@ -189,16 +191,16 @@ class SqliteIdempotencyRepository {
   complete(key, result, { tenantId = null } = {}) {
     const record = this.findByKey(key, { tenantId }); if (!record) return null;
     record.status = 'completed'; record.result = result ?? null; record.completedAt = new Date().toISOString();
-    this.db.run(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='completed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)};`);
+    this.db.run("UPDATE idempotency SET payload = ?, status = 'completed', updated_at = ? WHERE key = ?", [JSON.stringify(record), record.completedAt, key]);
     return record;
   }
   fail(key, error, { tenantId = null } = {}) {
     const record = this.findByKey(key, { tenantId }); if (!record) return null;
     record.status = 'failed'; record.error = { code: error?.code || 'EXECUTION_FAILED', message: error?.message || String(error || '') }; record.completedAt = new Date().toISOString();
-    this.db.run(`UPDATE idempotency SET payload=${SqliteDatabase.json(record)},status='failed',updated_at=${SqliteDatabase.literal(record.completedAt)} WHERE key=${SqliteDatabase.literal(key)};`);
+    this.db.run("UPDATE idempotency SET payload = ?, status = 'failed', updated_at = ? WHERE key = ?", [JSON.stringify(record), record.completedAt, key]);
     return record;
   }
-  delete(key, { tenantId = null } = {}) { const found=this.findByKey(key, { tenantId }); if(!found)return false; this.db.run(`DELETE FROM idempotency WHERE key=${SqliteDatabase.literal(key)};`); return true; }
+  delete(key, { tenantId = null } = {}) { const found=this.findByKey(key, { tenantId }); if(!found)return false; this.db.run('DELETE FROM idempotency WHERE key = ?', [key]); return true; }
   clear() { this.db.run('DELETE FROM idempotency;'); }
   count() { return this.db.query('SELECT COUNT(*) AS count FROM idempotency;')[0].count; }
 }
@@ -209,7 +211,7 @@ class SqliteCheckpointRepository {
   save(snapshot, { reason = 'step_completed', tenantId = null } = {}) {
     if (!snapshot?.executionId) throw new TypeError('snapshot.executionId is required');
     if (tenantId && snapshot.tenantId !== tenantId && snapshot.metadata?.tenantId !== tenantId) throw new Error('Checkpoint tenant mismatch');
-    const existingRows = this.db.query(`SELECT snapshot FROM checkpoints WHERE execution_id=${SqliteDatabase.literal(snapshot.executionId)} LIMIT 1;`);
+    const existingRows = this.db.query('SELECT snapshot FROM checkpoints WHERE execution_id = ? LIMIT 1', [snapshot.executionId]);
     if (existingRows.length && tenantId) {
       const existingSnapshot = JSON.parse(existingRows[0].snapshot);
       const existingTenantId = existingSnapshot.tenantId || existingSnapshot.metadata?.tenantId || (tenantId === 'local' ? 'local' : null);
@@ -222,29 +224,24 @@ class SqliteCheckpointRepository {
 
     // Sequence allocation and replacement happen under one SQLite write transaction.
     // This prevents concurrent writers from allocating the same checkpoint sequence.
-    this.db.transaction([
-      `INSERT INTO checkpoints(execution_id,sequence,checkpoint_id,reason,created_at,snapshot,snapshot_sha256)
-       SELECT ${SqliteDatabase.literal(snapshot.executionId)},
-              COALESCE((SELECT MAX(sequence) FROM checkpoints WHERE execution_id=${SqliteDatabase.literal(snapshot.executionId)}),0)+1,
-              ${SqliteDatabase.literal(checkpointId)},
-              ${SqliteDatabase.literal(reason)},
-              ${SqliteDatabase.literal(createdAt)},
-              ${SqliteDatabase.json(normalizedSnapshot)},
-              ${SqliteDatabase.literal(snapshotSha256)}
+    this.db.transaction([{
+      sql: `INSERT INTO checkpoints(execution_id,sequence,checkpoint_id,reason,created_at,snapshot,snapshot_sha256)
+       SELECT ?, COALESCE((SELECT MAX(sequence) FROM checkpoints WHERE execution_id = ?), 0) + 1, ?, ?, ?, ?, ?
        ON CONFLICT(execution_id) DO UPDATE SET
          sequence=excluded.sequence,
          checkpoint_id=excluded.checkpoint_id,
          reason=excluded.reason,
          created_at=excluded.created_at,
          snapshot=excluded.snapshot,
-         snapshot_sha256=excluded.snapshot_sha256;`
-    ]);
+         snapshot_sha256=excluded.snapshot_sha256`,
+      params: [snapshot.executionId, snapshot.executionId, checkpointId, reason, createdAt, JSON.stringify(normalizedSnapshot), snapshotSha256]
+    }]);
 
     const persisted = this.findLatest(snapshot.executionId, { verify: false, tenantId });
     return persisted;
   }
   findLatest(executionId, { verify = true, tenantId = null } = {}) {
-    const rows = this.db.query(`SELECT * FROM checkpoints WHERE execution_id=${SqliteDatabase.literal(executionId)} LIMIT 1;`);
+    const rows = this.db.query('SELECT * FROM checkpoints WHERE execution_id = ? LIMIT 1', [executionId]);
     if (!rows.length) return null;
     const row=rows[0], snapshot=JSON.parse(row.snapshot);
     if (tenantId && snapshot.tenantId && snapshot.tenantId !== tenantId) return null;
@@ -255,7 +252,7 @@ class SqliteCheckpointRepository {
     }
     return { checkpointId:row.checkpoint_id, executionId:row.execution_id, sequence:Number(row.sequence), reason:row.reason, createdAt:row.created_at, snapshot, snapshotSha256:row.snapshot_sha256 };
   }
-  delete(executionId, { tenantId = null } = {}) { const found=this.findLatest(executionId,{verify:false, tenantId}); if(!found)return false; this.db.run(`DELETE FROM checkpoints WHERE execution_id=${SqliteDatabase.literal(executionId)};`); return true; }
+  delete(executionId, { tenantId = null } = {}) { const found=this.findLatest(executionId,{verify:false, tenantId}); if(!found)return false; this.db.run('DELETE FROM checkpoints WHERE execution_id = ?', [executionId]); return true; }
   clear() { this.db.run('DELETE FROM checkpoints;'); }
   count() { return this.db.query('SELECT COUNT(*) AS count FROM checkpoints;')[0].count; }
 }
@@ -283,7 +280,7 @@ class SqliteApprovalRepository {
   }
   findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null } = {}) {
     if (!executionId) return [];
-    return this.db.query('SELECT * FROM approvals WHERE execution_id=' + SqliteDatabase.literal(String(executionId)) + ' ORDER BY issued_at DESC;')
+    return this.db.query('SELECT * FROM approvals WHERE execution_id = ? ORDER BY issued_at DESC', [String(executionId)])
       .map(row => this.mapRow(row))
       .filter(record => !tenantId || record.tenantId === tenantId)
       .filter(record => step === null || Number(record.step) === Number(step))
@@ -292,24 +289,26 @@ class SqliteApprovalRepository {
   }
   findPending({ tenantId = null, limit = 100, now = Date.now() } = {}) {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
-    const nowIso = SqliteDatabase.literal(new Date(now).toISOString());
-    let where = ' WHERE used=0 AND expires_at>' + nowIso;
+    const nowIso = new Date(now).toISOString();
+    let where = ' WHERE used = 0 AND expires_at > ?';
+    const params = [nowIso];
     if (tenantId) {
-      const tenant = SqliteDatabase.literal(tenantId);
       where += tenantId === 'local'
-        ? " AND (json_extract(metadata, '$.tenantId')=" + tenant + " OR json_extract(metadata, '$.tenantId') IS NULL)"
-        : " AND json_extract(metadata, '$.tenantId')=" + tenant;
+        ? " AND (json_extract(metadata, '$.tenantId') = ? OR json_extract(metadata, '$.tenantId') IS NULL)"
+        : " AND json_extract(metadata, '$.tenantId') = ?";
+      params.push(tenantId);
     }
-    return this.db.query('SELECT * FROM approvals' + where + ' ORDER BY issued_at ASC, approval_id ASC LIMIT ' + boundedLimit + ';')
+    params.push(boundedLimit);
+    return this.db.query('SELECT * FROM approvals' + where + ' ORDER BY issued_at ASC, approval_id ASC LIMIT ?', params)
       .map(row => this.mapRow(row))
       .filter(record => !record.used && (!record.expiresAt || now < Date.parse(record.expiresAt)));
   }  save(approval, { tenantId = null } = {}) {
     if (tenantId && approval.tenantId !== tenantId && approval.metadata?.tenantId !== tenantId) throw new Error('Approval tenant mismatch');
-    this.db.run(`INSERT INTO approvals(approval_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata) VALUES (${SqliteDatabase.literal(approval.approvalId)},${SqliteDatabase.literal(approval.executionId)},${approval.step},${approval.planRevision},${SqliteDatabase.literal(approval.tool)},${SqliteDatabase.literal(approval.capability)},${SqliteDatabase.json(approval.scope)},${SqliteDatabase.literal(approval.issuedAt)},${SqliteDatabase.literal(approval.expiresAt)},${approval.used ? 1 : 0},${SqliteDatabase.literal(approval.usedAt || null)},${SqliteDatabase.json(approval.metadata)});`);
+    this.db.run('INSERT INTO approvals(approval_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [approval.approvalId, approval.executionId, approval.step, approval.planRevision, approval.tool, approval.capability, JSON.stringify(approval.scope ?? {}), approval.issuedAt, approval.expiresAt, approval.used ? 1 : 0, approval.usedAt || null, JSON.stringify(approval.metadata ?? {})]);
     return { ...approval };
   }
   findById(approvalId, { tenantId = null } = {}) {
-    const rows=this.db.query(`SELECT * FROM approvals WHERE approval_id=${SqliteDatabase.literal(approvalId)} LIMIT 1;`);
+    const rows=this.db.query('SELECT * FROM approvals WHERE approval_id = ? LIMIT 1', [approvalId]);
     if(!rows.length)return null;
     const record = this.mapRow(rows[0]);
     if (tenantId && record.tenantId !== tenantId) return null;
@@ -318,8 +317,8 @@ class SqliteApprovalRepository {
   consume(approvalId, usedAt, tenantId = null) {
     const current = this.findById(approvalId, { tenantId });
     if (!current) return false;
-    const result=this.db.query(`UPDATE approvals SET used=1,used_at=${SqliteDatabase.literal(usedAt)} WHERE approval_id=${SqliteDatabase.literal(approvalId)} AND used=0; SELECT changes() AS changes;`);
-    return Boolean(result.length && Number(result[result.length - 1].changes) === 1);
+    const result = this.db.run('UPDATE approvals SET used = 1, used_at = ? WHERE approval_id = ? AND used = 0', [usedAt, approvalId]);
+    return Number(result.changes) === 1;
   }
   count() { return this.db.query('SELECT COUNT(*) AS count FROM approvals;')[0].count; }
 }
