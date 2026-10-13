@@ -81,8 +81,6 @@ function createOwnerServer(options = {}) {
     // Do not create a parallel owner password record or in-memory owner sessions.
     state = { version: 1, username: 'Admin', mustChangePassword: identity.status().passwordChangeRequired };
   } else {
-    let state;
-    let createdBootstrap = false;
     try {
       state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
       if (state.version !== 1 || !state.password || typeof state.mustChangePassword !== 'boolean') {
