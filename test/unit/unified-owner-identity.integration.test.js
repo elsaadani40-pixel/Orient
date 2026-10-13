@@ -112,6 +112,29 @@ test('website and Runtime share one owner identity, force rotation, and reject p
   assert.equal(publicRuntimeRead.status, 401);
   assert.equal((await publicRuntimeRead.json()).code, 'OWNER_AUTH_REQUIRED');
 
+  const runtimeLogin = await fetch(base + '/owner/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: base },
+    body: JSON.stringify({ password: permanentPassword })
+  });
+  assert.equal(runtimeLogin.status, 200);
+  const runtimeLoginData = await runtimeLogin.json();
+  const runtimeCookie = cookie(runtimeLogin);
+
+  const runtimeRotation = await fetch(base + '/owner/password', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: base, cookie: runtimeCookie, 'x-orient-csrf': runtimeLoginData.csrfToken },
+    body: JSON.stringify({ password: 'runtime-rotated-owner-password-7Q!', confirmPassword: 'runtime-rotated-owner-password-7Q!' })
+  });
+  assert.equal(runtimeRotation.status, 200);
+  const runtimeRotationData = await runtimeRotation.json();
+  const nextRuntimeCookie = cookie(runtimeRotation);
+  assert.equal(runtimeRotationData.passwordChangeRequired, false);
+  assert.equal((await fetch(base + '/owner/session', { headers: { cookie: runtimeCookie } })).status, 401);
+  const websiteSeesRuntimeSession = await fetch(base + '/api/owner/me', { headers: { cookie: nextRuntimeCookie } });
+  assert.equal(websiteSeesRuntimeSession.status, 200);
+  assert.equal((await websiteSeesRuntimeSession.json()).csrfToken, runtimeRotationData.csrfToken);
+
   const oldOwnerCookieRead = await fetch(base + '/owner/session', {
     headers: { cookie: login.headers.get('set-cookie').split(';')[0] }
   });
