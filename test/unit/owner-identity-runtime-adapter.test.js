@@ -61,6 +61,15 @@ test('Runtime adapter password rotation invalidates the old session and returns 
   assert.equal((await adapter.login({ password: 'a-new-strong-owner-password-8Z!' })).ok, true);
 });
 
+test('Runtime adapter never accepts a public-user token as an owner session', t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
+  const adapter = new OwnerIdentityRuntimeAdapter({ identity });
+  const publicUserToken = require('node:crypto').randomBytes(32).toString('base64url');
+  assert.equal(adapter.authenticate(publicUserToken), null);
+  assert.equal(adapter.logout(publicUserToken), false);
+});
+
 test('Runtime adapter rejects an incompatible identity service at construction', () => {
   assert.throws(() => new OwnerIdentityRuntimeAdapter({ identity: {} }), /compatible OwnerIdentityService/);
 });
