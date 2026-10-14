@@ -20,11 +20,35 @@ class JsonMemoryRepository {
     const directory = path.dirname(this.filePath);
     fs.mkdirSync(directory, { recursive: true });
 
-    // Publish a fully-written store atomically. Creating the final path with
-    // "wx" and then writing it would expose an empty/partial file to peers.
+    // Serialize first-time initialization with an atomic directory lock. Unlike
+    // hard links, mkdir is supported by Android app-private filesystems.
+    const initLockPath = this.filePath + '.init-lock';
+    const deadline = Date.now() + this.lockTimeoutMs;
+    let ownsInitLock = false;
+    while (!ownsInitLock) {
+      try {
+        fs.mkdirSync(initLockPath, { mode: 0o700 });
+        ownsInitLock = true;
+      } catch (error) {
+        if (error.code !== 'EEXIST') {
+          throw new Error('Memory storage initialization lock failed: ' + error.message);
+        }
+        if (fs.existsSync(this.filePath)) return;
+        if (Date.now() >= deadline) {
+          const lockError = new Error('Memory storage initialization lock timeout');
+          lockError.code = 'MEMORY_STORAGE_INIT_LOCK_TIMEOUT';
+          throw lockError;
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      }
+    }
+
     const temporaryFile = this.filePath + '.init.' + process.pid + '.' + crypto.randomUUID();
     let fd = null;
     try {
+      // Recheck after acquiring the lock: another constructor may have won.
+      if (fs.existsSync(this.filePath)) return;
+
       fd = fs.openSync(temporaryFile, 'wx', 0o600);
       fs.writeFileSync(fd, '[]\n', 'utf8');
       fs.fsyncSync(fd);
@@ -32,11 +56,27 @@ class JsonMemoryRepository {
       fd = null;
 
       try {
-        // link(2) is atomic and no-clobber: EEXIST means another process won.
+        // Prefer atomic no-clobber publication on filesystems that support it.
         fs.linkSync(temporaryFile, this.filePath);
       } catch (error) {
         if (error.code === 'EEXIST') return;
-        throw error;
+        if (error.code !== 'EPERM' && error.code !== 'EACCES' && error.code !== 'ENOTSUP') {
+          throw error;
+        }
+        // Every current-version initializer holds initLockPath, so rename is
+        // atomic and cannot race another cooperating initializer. Do not use
+        // this fallback for the mutable memory data or ownership lock files.
+        if (fs.existsSync(this.filePath)) return;
+        fs.renameSync(temporaryFile, this.filePath);
+      }
+
+      try {
+        const directoryFd = fs.openSync(directory, 'r');
+        try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+      } catch (error) {
+        if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(error.code)) {
+          throw new Error('Memory storage directory sync failed: ' + error.message);
+        }
       }
     } catch (error) {
       throw new Error('Memory storage initialization failed: ' + error.message);
@@ -44,27 +84,17 @@ class JsonMemoryRepository {
       if (fd !== null) {
         try { fs.closeSync(fd); } catch {}
       }
-      try {
-        fs.unlinkSync(temporaryFile);
-      } catch (error) {
+      try { fs.unlinkSync(temporaryFile); } catch (error) {
         if (error.code !== 'ENOENT') {
           throw new Error('Memory storage initialization cleanup failed: ' + error.message);
         }
       }
-    }
-
-    // Persist the directory entry where supported. Unexpected I/O errors are
-    // surfaced rather than silently claiming durable initialization.
-    try {
-      const directoryFd = fs.openSync(directory, 'r');
-      try {
-        fs.fsyncSync(directoryFd);
-      } finally {
-        fs.closeSync(directoryFd);
-      }
-    } catch (error) {
-      if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(error.code)) {
-        throw new Error('Memory storage directory sync failed: ' + error.message);
+      if (ownsInitLock) {
+        try { fs.rmdirSync(initLockPath); } catch (error) {
+          if (error.code !== 'ENOENT') {
+            throw new Error('Memory storage initialization lock cleanup failed: ' + error.message);
+          }
+        }
       }
     }
   }
@@ -160,9 +190,40 @@ class JsonMemoryRepository {
           fs.linkSync(candidatePath, this.lockPath);
           acquired = true;
         } catch (publishError) {
-          if (publishError.code !== 'EEXIST' && publishError.code !== 'EPERM' &&
-              publishError.code !== 'EACCES' && publishError.code !== 'EISDIR') throw publishError;
-          if (publishError.code !== 'EEXIST' && !fs.existsSync(this.lockPath)) throw publishError;
+          if (publishError.code === 'EEXIST') {
+            // Another contender owns the lock.
+          } else if (['EPERM', 'EACCES', 'ENOTSUP'].includes(publishError.code)) {
+            // Some Android/Termux filesystems reject hard links. Exclusive
+            // creation still atomically claims the lock path; peers must treat
+            // a temporarily incomplete owner record as occupied, never free.
+            let lockFd = null;
+            let lockFdStat = null;
+            try {
+              lockFd = fs.openSync(this.lockPath, 'wx', 0o600);
+              lockFdStat = fs.fstatSync(lockFd);
+              fs.writeFileSync(lockFd, JSON.stringify(owner) + '\n', 'utf8');
+              fs.fsyncSync(lockFd);
+              acquired = true;
+            } catch (fallbackError) {
+              if (fallbackError.code !== 'EEXIST') {
+                if (lockFd !== null && lockFdStat) {
+                  try {
+                    const current = fs.lstatSync(this.lockPath);
+                    if (current.dev === lockFdStat.dev && current.ino === lockFdStat.ino) {
+                      fs.unlinkSync(this.lockPath);
+                    }
+                  } catch (cleanupError) {
+                    if (!['ENOENT', 'EACCES', 'EPERM'].includes(cleanupError.code)) throw cleanupError;
+                  }
+                }
+                if (!fs.existsSync(this.lockPath)) throw fallbackError;
+              }
+            } finally {
+              if (lockFd !== null) fs.closeSync(lockFd);
+            }
+          } else {
+            throw publishError;
+          }
         }
       } finally {
         try { fs.unlinkSync(candidatePath); } catch (error) {
