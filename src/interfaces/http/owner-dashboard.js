@@ -297,7 +297,7 @@
         return;
       }
       setLoggedIn(true);
-      await Promise.all([loadAudit(), loadApprovals()]);
+      await Promise.all([loadRuntimeStatus(), loadAudit(), loadApprovals()]);
     } catch (error) {
       if (error.status === 503) {
         loginStatus.textContent = 'مصادقة المالك غير مهيأة. اضبط ORIENT_OWNER_PASSWORD محليًا ثم أعد تشغيل الخدمة.';
