@@ -138,6 +138,16 @@ test('website owner session creates and reads a task through the real Runtime', 
   const publicDenied = await fetch(origin + '/api/v1/tasks', { headers: { Cookie: cookie(registration) } });
   assert.equal(publicDenied.status, 401);
 
+  const ownerConsole = await fetch(origin + '/owner', { headers: { Cookie: ownerCookie } });
+  assert.equal(ownerConsole.status, 200);
+  const ownerConsoleHtml = await ownerConsole.text();
+  assert.match(ownerConsoleHtml, /id="runtime-status"/);
+  assert.match(ownerConsoleHtml, /href="\/workbench"/);
+
+  const workbench = await fetch(origin + '/workbench', { headers: { Cookie: ownerCookie } });
+  assert.equal(workbench.status, 200);
+  assert.match(await workbench.text(), /مساحة اختبار المهام/);
+
   const taskHeaders = {
     'content-type': 'application/json',
     Origin: origin,
