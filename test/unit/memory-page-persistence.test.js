@@ -65,3 +65,9 @@ test('memory add and delete redirects return to the memory page, not the public 
   assert.equal(deleteResponse.headers.Location, '/memory');
   assert.deepEqual(calls.map(call => call.operation), ['add', 'delete']);
 });
+
+test('dashboard memory navigation points to the authenticated memory route', () => {
+  const dashboard = fs.readFileSync(path.join(__dirname, '../../src/interfaces/http/dashboard.html'), 'utf8');
+  assert.match(dashboard, /href="\/memory"[^>]*>فتح واجهة الذاكرة/);
+  assert.doesNotMatch(dashboard, /href="\/"[^>]*>فتح واجهة الذاكرة/);
+});
