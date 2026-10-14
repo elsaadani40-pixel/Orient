@@ -233,7 +233,7 @@ td {
   </div>
 </form>
 
-<form class="search" method="GET" action="/">
+<form class="search" method="GET" action="/memory">
   <input
     type="text"
     name="q"
@@ -282,7 +282,7 @@ function createMemoryRoutes(memoryService, config) {
       memoryService.add(text, {}, memoryContext);
 
       res.writeHead(303, {
-        Location: '/'
+        Location: '/memory'
       });
 
       res.end();
@@ -294,7 +294,7 @@ function createMemoryRoutes(memoryService, config) {
       memoryService.delete(id, memoryContext);
 
       res.writeHead(303, {
-        Location: '/'
+        Location: '/memory'
       });
 
       res.end();
