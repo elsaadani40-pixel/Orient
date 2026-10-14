@@ -50,7 +50,7 @@ class JsonMemoryRepository {
       if (fs.existsSync(this.filePath)) return;
 
       fd = fs.openSync(temporaryFile, 'wx', 0o600);
-      fs.writeFileSync(fd, '[]\\n', 'utf8');
+      fs.writeFileSync(fd, '[]\n', 'utf8');
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = null;
@@ -201,7 +201,7 @@ class JsonMemoryRepository {
             try {
               lockFd = fs.openSync(this.lockPath, 'wx', 0o600);
               lockFdStat = fs.fstatSync(lockFd);
-              fs.writeFileSync(lockFd, JSON.stringify(owner) + '\\n', 'utf8');
+              fs.writeFileSync(lockFd, JSON.stringify(owner) + '\n', 'utf8');
               fs.fsyncSync(lockFd);
               acquired = true;
             } catch (fallbackError) {
