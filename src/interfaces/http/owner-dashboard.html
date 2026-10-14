@@ -28,6 +28,11 @@
       <div class="row"><h2 style="margin:0">مركز الأمان</h2><span id="session-status" class="status">الجلسة محمية</span><a id="dashboard-link" class="btn secondary" href="/dashboard">لوحة التشغيل</a><a id="workbench-link" class="btn secondary" href="/workbench">اختبار المهام</a><button id="refresh" class="btn secondary">تحديث السجل</button><button id="logout" class="btn secondary">تسجيل الخروج</button></div>
       <p class="muted">يعرض سجل الوصول والموافقات المعلقة. لا يسجل سجل الوصول محتوى المهام أو كلمات المرور أو رموز الجلسات؛ وتُعرض تفاصيل التغييرات المقترحة في قسم المراجعة الخاص بالمالك فقط.</p>
     </div>
+    <div class="card" id="runtime-card">
+      <div class="row"><h2 style="margin:0">اتصال محرك ORIENT</h2><span id="runtime-status" class="status">جارٍ التحقق من Runtime…</span><button id="refresh-runtime" class="btn secondary" type="button">فحص الاتصال</button></div>
+      <p id="runtime-detail" class="muted">سيتم التحقق من واجهة المهام المحمية وقراءة عدد المهام الفعلي من الخادم، دون عرض محتوى المهام هنا.</p>
+      <div class="row"><a class="btn" href="/workbench">فتح مساحة المهام الفعلية</a><a class="btn secondary" href="/dashboard">فتح لوحة التشغيل</a></div>
+    </div>
     <div class="card">
       <h2>أحداث الوصول الأخيرة</h2>
       <div id="audit-status" class="muted" role="status">جارٍ تحميل السجل…</div>
