@@ -43,6 +43,33 @@
     return payload;
   }
 
+  async function loadRuntimeStatus() {
+    const status = document.getElementById('runtime-status');
+    const detail = document.getElementById('runtime-detail');
+    status.textContent = 'جارٍ التحقق من Runtime…';
+    detail.textContent = 'جارٍ قراءة ملخص المهام الفعلي من واجهة Runtime المحمية.';
+    try {
+      const result = await request('/api/v1/tasks?limit=1&offset=0', { method: 'GET' });
+      const total = Number(result.page?.total);
+      if (!Number.isSafeInteger(total) || total < 0) {
+        throw new Error('استجابة Runtime لا تحتوي على إجمالي مهام صالح.');
+      }
+      status.textContent = 'متصل · Runtime يستجيب';
+      status.style.color = 'var(--green, #6ce0a0)';
+      detail.textContent = 'تم التحقق من واجهة المهام المحمية. عدد المهام المسجل فعليًا: ' + total +
+        '. هذه قراءة من الخادم وليست حالة تجريبية ثابتة.';
+    } catch (error) {
+      status.textContent = 'تعذر التحقق من Runtime';
+      status.style.color = 'var(--red, #ff9292)';
+      detail.textContent = 'لم ينجح فحص واجهة المهام: ' + error.message +
+        '. لا يُعرض النظام على أنه متصل ما لم ينجح هذا الطلب.';
+      if (error.status === 401) {
+        csrfToken = null;
+        setLoggedIn(false);
+      }
+    }
+  }
+
   async function loadAudit() {
     auditStatus.textContent = 'جارٍ تحميل السجل…';
     auditRows.replaceChildren();
@@ -238,13 +265,14 @@
         return;
       }
       setLoggedIn(true);
-      await Promise.all([loadAudit(), loadApprovals()]);
+      await Promise.all([loadRuntimeStatus(), loadAudit(), loadApprovals()]);
     } catch (error) {
       loginStatus.textContent = error.message;
     }
   });
 
   document.getElementById('refresh').addEventListener('click', loadAudit);
+  document.getElementById('refresh-runtime').addEventListener('click', loadRuntimeStatus);
   document.getElementById('refresh-approvals').addEventListener('click', loadApprovals);
   document.getElementById('logout').addEventListener('click', async () => {
     try {
@@ -269,7 +297,7 @@
         return;
       }
       setLoggedIn(true);
-      await Promise.all([loadAudit(), loadApprovals()]);
+      await Promise.all([loadRuntimeStatus(), loadAudit(), loadApprovals()]);
     } catch (error) {
       if (error.status === 503) {
         loginStatus.textContent = 'مصادقة المالك غير مهيأة. اضبط ORIENT_OWNER_PASSWORD محليًا ثم أعد تشغيل الخدمة.';
