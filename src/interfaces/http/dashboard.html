@@ -77,8 +77,8 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
 
  <section class="grid" aria-label="مؤشرات الحالة">
   <article class="card"><div class="metric-label">اتصال الخادم</div><div class="metric" id="serverMetric">—</div><div class="metric-foot">فحص HTTP محلي</div></article>
-  <article class="card"><div class="metric-label">طلبات أعادت استجابة ناجحة في هذه الجلسة</div><div class="metric" id="runMetric">0</div><div class="metric-foot">عداد واجهة فقط، وليس سجلًا دائمًا</div></article>
-  <article class="card"><div class="metric-label">آخر استجابة ناجحة</div><div class="metric" id="lastMetric">—</div><div class="metric-foot">لا تُستنتج الحالة دون استجابة</div></article>
+  <article class="card"><div class="metric-label">إجمالي التنفيذات المسجلة</div><div class="metric" id="runMetric">—</div><div class="metric-foot" id="runMetricFoot">يُقرأ من سجل الخادم الدائم</div></article>
+  <article class="card"><div class="metric-label">آخر تنفيذ مسجل</div><div class="metric" id="lastMetric">—</div><div class="metric-foot" id="lastMetricFoot">وقت موثق من سجل الخادم</div></article>
   <article class="card"><div class="metric-label">وضع النموذج</div><div class="metric">محلي أولًا</div><div class="metric-foot">لا يوجد اعتماد إلزامي على API مدفوع</div></article>
  </section>
  <section id="view-overview" class="section two">
@@ -97,7 +97,6 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
 (() => {
  const $ = id => document.getElementById(id);
  const coreState = $('heroCoreState');
- let sent = 0;
  document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b === button));
   document.querySelectorAll('[id^="view-"]').forEach(s => s.classList.add('hidden'));
@@ -105,6 +104,34 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
   $('pageTitle').textContent = ({overview:'مركز القيادة',agent:'تشغيل الوكيل',memory:'الذاكرة',security:'الأمان والحوكمة'})[button.dataset.view];
   if (button.dataset.view === 'security') { void loadExecutionHistory(); void loadPendingApprovals(); }
  }));
+ async function loadPersistentMetrics() {
+  try {
+   const response = await fetch('/executions?limit=1&offset=0', {cache:'no-store',headers:{'Accept':'application/json'}});
+   const body = await response.text();
+   let data; try { data = JSON.parse(body); } catch { throw new Error('استجابة سجل التنفيذات ليست JSON صالحًا.'); }
+   if (!response.ok) throw new Error('HTTP ' + response.status);
+   if (!Array.isArray(data.executions) || !Number.isFinite(Number(data.total))) throw new Error('تنسيق سجل التنفيذات غير معروف.');
+   $('runMetric').textContent = String(Math.max(0, Number(data.total)));
+   $('runMetricFoot').textContent = 'عدد السجلات الدائمة في مساحة المستأجر الحالية';
+   const latest = data.executions[0];
+   if (latest) {
+    const timestamp = latest.updatedAt || latest.startedAt || latest.createdAt;
+    const parsed = timestamp ? new Date(timestamp) : null;
+    $('lastMetric').textContent = parsed && Number.isFinite(parsed.getTime())
+      ? parsed.toLocaleString('ar-EG')
+      : 'وقت غير متاح';
+    $('lastMetricFoot').textContent = 'الحالة: ' + String(latest.status || 'غير معروفة');
+   } else {
+    $('lastMetric').textContent = 'لا يوجد';
+    $('lastMetricFoot').textContent = 'لم يسجل الخادم أي تنفيذ بعد';
+   }
+  } catch (error) {
+   $('runMetric').textContent = '—';
+   $('runMetricFoot').textContent = 'تعذر قراءة السجل الدائم: ' + error.message;
+   $('lastMetric').textContent = 'غير متاح';
+   $('lastMetricFoot').textContent = 'لم يتم استنتاج بيانات غير متوفرة';
+  }
+ }
  async function checkServer() {
   try {
    const response = await fetch('/', {method:'GET',cache:'no-store',headers:{'Accept':'text/html'}});
@@ -136,8 +163,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
    let parsed; try { parsed = JSON.parse(body); } catch { parsed = body; }
    if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2));
    output.textContent = typeof parsed === 'string' ? parsed : JSON.stringify(parsed,null,2);
-   sent += 1; $('runMetric').textContent = String(sent);
-   $('lastMetric').textContent = new Date().toLocaleTimeString('ar-EG');
+   await loadPersistentMetrics();
   } catch (error) {
    output.textContent = 'فشل إرسال المهمة: ' + error.message + '\nلم يتم تسجيل نتيجة ناجحة.';
   } finally { if (submit) submit.disabled = false; }
@@ -342,6 +368,7 @@ body{background:radial-gradient(ellipse at 50% -18%,#1b3c61 0,transparent 44%),r
  $('loadExecutionStatus').addEventListener('click', () => loadExecutionResource('status'));
  $('loadExecutionApprovals').addEventListener('click', () => loadExecutionResource('approvals'));
  checkServer();
+ void loadPersistentMetrics();
 })();
 </script>
 <script src="/command-scene.js" defer></script>
