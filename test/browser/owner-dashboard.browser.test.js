@@ -22,7 +22,7 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
 
   await ownerPage.goto(baseUrl + '/auth?mode=owner');
   await ownerPage.getByLabel('اسم المستخدم').fill('Admin');
-  await ownerPage.getByLabel('كلمة المرور').fill(bootstrapPassword);
+  await ownerPage.getByLabel('كلمة المرور', { exact: true }).fill(bootstrapPassword);
   await ownerPage.getByRole('button', { name: 'دخول لوحة المالك' }).click();
   await ownerPage.waitForURL('**/owner.html');
 
