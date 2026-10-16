@@ -285,8 +285,42 @@ jobs:
         shell: bash
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
+          ORIENT_OWNER_BOOTSTRAP_PASSWORD: "temporary-owner-password-9F!x"
+          PORT: "8080"
+          ORIENT_HOST: "127.0.0.1"
         run: |
           set -euo pipefail
+          data_dir="$(mktemp -d)"
+          log_file="$(mktemp)"
+          export ORIENT_DATA_DIR="$data_dir"
+          node server.js >"$log_file" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            rm -rf "$data_dir" "$log_file"
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 40); do
+            if curl --silent --fail http://127.0.0.1:8080/auth?mode=owner >/dev/null; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat "$log_file"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat "$log_file"
+            echo "Owner website failed to become ready"
+            exit 1
+          fi
+
+          export ORIENT_BASE_URL="http://127.0.0.1:8080"
           npm test -- --test-timeout=120000 --test-reporter=spec
 
   android-companion:
