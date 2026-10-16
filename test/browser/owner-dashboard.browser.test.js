@@ -39,9 +39,11 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
 
   const ownerState = JSON.parse(fs.readFileSync(dataDir + '/owner.json', 'utf8'));
   assert.equal(ownerState.mustChangePassword, false);
-  assert.notEqual(ownerState.password, 'orient-browser-owner-password-2026!');
-  assert.equal(typeof ownerState.password?.salt, 'string');
-  assert.equal(typeof ownerState.password?.hash, 'string');
+  assert.equal(typeof ownerState.passwordHash, 'string');
+  assert.match(ownerState.passwordHash, /^[a-f0-9]{128}:[a-f0-9]{32}$/);
+  assert.equal(Object.hasOwn(ownerState, 'password'), false);
+  assert.ok(Array.isArray(ownerState.sessions));
+  assert.equal(JSON.stringify(ownerState).includes('orient-browser-owner-password-2026!'), false);
 
   await ownerPage.getByRole('button', { name: 'تسجيل الخروج' }).click();
   await ownerPage.waitForURL('**/auth?mode=owner');
