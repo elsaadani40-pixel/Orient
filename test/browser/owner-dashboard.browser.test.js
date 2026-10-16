@@ -34,8 +34,9 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   await ownerPage.getByRole('heading', { name: 'لوحة تحكم المالك' }).waitFor();
   await ownerPage.getByRole('heading', { name: 'اتصال محرك ORIENT' }).waitFor();
   await ownerPage.getByRole('button', { name: 'فحص الاتصال' }).waitFor();
-  await ownerPage.locator('#runtime-status.error').waitFor({ timeout: 10000 });
-  assert.match(await ownerPage.locator('#runtime-detail').innerText(), /فشل فحص واجهة المهام/);
+  await ownerPage.locator('#runtime-status.status').waitFor({ timeout: 15000 });
+  assert.match(await ownerPage.locator('#runtime-status').innerText(), /متصل/);
+  assert.match(await ownerPage.locator('#runtime-detail').innerText(), /إجمالي المهام المسجل فعليًا: 0/);
 
   const ownerState = JSON.parse(fs.readFileSync(dataDir + '/owner.json', 'utf8'));
   assert.equal(ownerState.mustChangePassword, false);
