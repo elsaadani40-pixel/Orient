@@ -132,6 +132,34 @@ test('owner identity persistence syncs the state file and containing directory',
   );
 });
 
+
+test('failed session creation compensates a post-rename durability error without persisting an unreachable session', t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
+  const originalFsync = fs.fsyncSync;
+  let failDirectorySync = true;
+  fs.fsyncSync = function (fd) {
+    if (failDirectorySync && fs.fstatSync(fd).isDirectory()) {
+      failDirectorySync = false;
+      const error = new Error('simulated directory fsync failure');
+      error.code = 'EIO';
+      throw error;
+    }
+    return originalFsync.call(fs, fd);
+  };
+
+  try {
+    assert.throws(() => identity.createSession(), error =>
+      error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.committed === true);
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.equal(identity.sessions.size, 0, 'failed session creation must not leave an accepted in-memory session');
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sessions, [],
+    'compensating write must remove the session whose token was never returned');
+});
+
 test('directory-sync failure after rename does not restore revoked owner sessions', async t => {
   const { stateFile } = fixture(t);
   const identity = new OwnerIdentityService({
