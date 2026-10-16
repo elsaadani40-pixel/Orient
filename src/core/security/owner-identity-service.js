@@ -174,7 +174,7 @@ class OwnerIdentityService {
     const previous = this.sessions;
     this.sessions = new Map();
     const next = { ...this.state, passwordHash: passwordHash(password), mustChangePassword: false, passwordChangedAt: new Date(this.now()).toISOString() };
-    try { this.save(next); } catch (error) { this.sessions = previous; throw error; }
+    try { this.save(next); } catch (error) { if (!error.committed) this.sessions = previous; throw error; }
     return { ok: true, ...this.createSession(), passwordChangeRequired: false };
   }
 
