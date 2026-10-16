@@ -101,14 +101,30 @@ class OwnerIdentityService {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const value = { ...next, sessions: [...this.sessions].map(([digest, session]) => ({ digest, ...session })) };
     const tmp = this.stateFile + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
+    let fd = null;
+    let renamed = false;
     try {
-      fs.writeFileSync(tmp, JSON.stringify(value) + '\n', { flag: 'wx', mode: 0o600 });
+      fd = fs.openSync(tmp, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
+      fs.fchmodSync(fd, 0o600);
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = null;
+
       fs.renameSync(tmp, this.stateFile);
+      renamed = true;
       try { fs.chmodSync(this.stateFile, 0o600); } catch {}
+
+      const dirFd = fs.openSync(dir, 'r');
+      try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
       this.state = value;
     } catch (error) {
-      try { fs.rmSync(tmp, { force: true }); } catch {}
-      throw Object.assign(new Error('Could not persist owner identity safely'), { code: 'OWNER_IDENTITY_PERSIST_FAILED', cause: error });
+      if (fd !== null) { try { fs.closeSync(fd); } catch {} }
+      if (!renamed) { try { fs.rmSync(tmp, { force: true }); } catch {} }
+      throw Object.assign(new Error('Could not persist owner identity safely'), {
+        code: 'OWNER_IDENTITY_PERSIST_FAILED',
+        cause: error
+      });
     }
   }
 
