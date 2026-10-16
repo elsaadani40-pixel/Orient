@@ -42,13 +42,14 @@ jobs:
         env:
           ORIENT_OWNER_BOOTSTRAP_PASSWORD: "temporary-owner-password-9F!x"
           PORT: "8080"
-          ORIENT_HOST: "127.0.0.1"
+          HOST: "127.0.0.1"
+          ORIENT_PERSISTENCE: "json"
         run: |
           set -euo pipefail
           data_dir="$(mktemp -d)"
           log_file="$(mktemp)"
           export ORIENT_DATA_DIR="$data_dir"
-          node server.js >"$log_file" 2>&1 &
+          node app.js >"$log_file" 2>&1 &
           server_pid=$!
           cleanup() {
             kill "$server_pid" 2>/dev/null || true
