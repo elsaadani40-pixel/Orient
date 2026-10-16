@@ -138,6 +138,14 @@ test('website owner session creates and reads a task through the real Runtime', 
   const publicDenied = await fetch(origin + '/api/v1/tasks', { headers: { Cookie: cookie(registration) } });
   assert.equal(publicDenied.status, 401);
 
+  const ownerDashboard = await fetch(origin + '/dashboard.html', { headers: { Cookie: ownerCookie } });
+  assert.equal(ownerDashboard.status, 200);
+  const dashboardHtml = await ownerDashboard.text();
+  assert.match(dashboardHtml, /id="runtime-status"/);
+  assert.match(dashboardHtml, /id="refresh-runtime"/);
+  assert.match(dashboardHtml, /api\/v1\/tasks\?limit=1&offset=0/);
+  assert.match(dashboardHtml, /href="\/workbench"/);
+
   const taskHeaders = {
     'content-type': 'application/json',
     Origin: origin,
@@ -162,6 +170,7 @@ test('website owner session creates and reads a task through the real Runtime', 
   });
   assert.equal(listResponse.status, 200);
   const list = await listResponse.json();
+  assert.ok(Number.isSafeInteger(list.page?.total) && list.page.total >= 1, 'task list must expose a valid total for the owner dashboard Runtime indicator');
   assert.ok(list.items.some(item => item.id === created.task.id));
   assert.ok(list.items.every(item => !Object.hasOwn(item, 'tenantId')));
 
