@@ -101,14 +101,39 @@ class OwnerIdentityService {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const value = { ...next, sessions: [...this.sessions].map(([digest, session]) => ({ digest, ...session })) };
     const tmp = this.stateFile + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
+    let fd = null;
+    let renamed = false;
     try {
-      fs.writeFileSync(tmp, JSON.stringify(value) + '\n', { flag: 'wx', mode: 0o600 });
+      fd = fs.openSync(tmp, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
+      fs.fchmodSync(fd, 0o600);
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = null;
+
       fs.renameSync(tmp, this.stateFile);
-      try { fs.chmodSync(this.stateFile, 0o600); } catch {}
+      renamed = true;
+      // Once rename succeeds, keep in-memory state aligned with the destination
+      // even if the directory durability barrier fails. Callers must not roll
+      // back session state as though the write never happened.
       this.state = value;
+      try { fs.chmodSync(this.stateFile, 0o600); } catch {}
+
+      // Node does not expose a portable directory-fsync operation on Windows.
+      // Keep file fsync + atomic replacement there; on POSIX, require the
+      // directory barrier and surface failures as committed-but-not-confirmed.
+      if (process.platform !== 'win32') {
+        const dirFd = fs.openSync(dir, 'r');
+        try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+      }
     } catch (error) {
-      try { fs.rmSync(tmp, { force: true }); } catch {}
-      throw Object.assign(new Error('Could not persist owner identity safely'), { code: 'OWNER_IDENTITY_PERSIST_FAILED', cause: error });
+      if (fd !== null) { try { fs.closeSync(fd); } catch {} }
+      if (!renamed) { try { fs.rmSync(tmp, { force: true }); } catch {} }
+      throw Object.assign(new Error('Could not persist owner identity safely'), {
+        code: 'OWNER_IDENTITY_PERSIST_FAILED',
+        committed: renamed,
+        cause: error
+      });
     }
   }
 
@@ -116,8 +141,20 @@ class OwnerIdentityService {
     const token = crypto.randomBytes(32).toString('base64url');
     const csrfToken = crypto.randomBytes(32).toString('base64url');
     const expiresAt = this.now() + this.sessionTtlMs;
-    this.sessions.set(tokenDigest(token), { csrfToken, expiresAt });
-    try { this.save(); } catch (error) { this.sessions.delete(tokenDigest(token)); throw error; }
+    const digest = tokenDigest(token);
+    this.sessions.set(digest, { csrfToken, expiresAt });
+    try {
+      this.save();
+    } catch (error) {
+      this.sessions.delete(digest);
+      // A post-rename directory-sync error means the session was committed but
+      // the caller will not receive its token. Attempt a compensating durable
+      // write so that the unreachable session is not resurrected after restart.
+      if (error.committed) {
+        try { this.save(); } catch {}
+      }
+      throw error;
+    }
     return { token, csrfToken, expiresAt };
   }
 
@@ -154,7 +191,7 @@ class OwnerIdentityService {
     const previous = this.sessions;
     this.sessions = new Map();
     const next = { ...this.state, passwordHash: passwordHash(password), mustChangePassword: false, passwordChangedAt: new Date(this.now()).toISOString() };
-    try { this.save(next); } catch (error) { this.sessions = previous; throw error; }
+    try { this.save(next); } catch (error) { if (!error.committed) this.sessions = previous; throw error; }
     return { ok: true, ...this.createSession(), passwordChangeRequired: false };
   }
 

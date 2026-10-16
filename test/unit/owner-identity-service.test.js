@@ -100,3 +100,118 @@ test('legacy website owner.json migrates without losing the existing password an
   assert.equal((await identity.login({ username: 'Admin', password: legacyPassword })).ok, false);
   assert.equal((await identity.login({ username: 'Admin', password: 'new-permanent-owner-password-2026!' })).ok, true);
 });
+
+test('owner identity persistence syncs the state file and containing directory', t => {
+  const { directory, stateFile } = fixture(t);
+  let fileSyncs = 0;
+  let directorySyncs = 0;
+  const originalFsync = fs.fsyncSync;
+
+  fs.fsyncSync = function (fd) {
+    if (fs.fstatSync(fd).isDirectory()) directorySyncs += 1;
+    else fileSyncs += 1;
+    return originalFsync.call(fs, fd);
+  };
+
+  try {
+    new OwnerIdentityService({
+      stateFile,
+      bootstrapPassword: 'temporary-owner-password-9F!x'
+    });
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.ok(fileSyncs >= 1, 'state file must be flushed before rename');
+  if (process.platform === 'win32') {
+    assert.equal(directorySyncs, 0, 'Windows has no portable directory-fsync support in Node');
+  } else {
+    assert.ok(directorySyncs >= 1, 'containing directory must be flushed after rename');
+  }
+  assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
+  assert.deepEqual(
+    fs.readdirSync(directory).filter(name => name.endsWith('.tmp')),
+    [],
+    'successful persistence must not leave temporary files behind'
+  );
+});
+
+
+test('failed session creation compensates a post-rename durability error without persisting an unreachable session', t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
+  const originalFsync = fs.fsyncSync;
+  let failDirectorySync = true;
+  fs.fsyncSync = function (fd) {
+    if (failDirectorySync && fs.fstatSync(fd).isDirectory()) {
+      failDirectorySync = false;
+      const error = new Error('simulated directory fsync failure');
+      error.code = 'EIO';
+      throw error;
+    }
+    return originalFsync.call(fs, fd);
+  };
+
+  try {
+    assert.throws(() => identity.createSession(), error =>
+      error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.committed === true);
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.equal(identity.sessions.size, 0, 'failed session creation must not leave an accepted in-memory session');
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sessions, [],
+    'compensating write must remove the session whose token was never returned');
+});
+
+test('directory-sync failure after rename does not restore revoked owner sessions', async t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  const login = await identity.login({
+    username: 'Admin',
+    password: 'temporary-owner-password-9F!x'
+  });
+  assert.equal(login.ok, true);
+
+  const originalFsync = fs.fsyncSync;
+  let failedDirectorySync = false;
+  fs.fsyncSync = function (fd) {
+    if (!failedDirectorySync && fs.fstatSync(fd).isDirectory()) {
+      failedDirectorySync = true;
+      const error = new Error('simulated directory fsync failure');
+      error.code = 'EIO';
+      throw error;
+    }
+    return originalFsync.call(fs, fd);
+  };
+
+  let failure;
+  try {
+    await assert.rejects(
+      identity.changePassword({
+        token: login.token,
+        password: 'new-permanent-owner-password-2026!',
+        confirmPassword: 'new-permanent-owner-password-2026!'
+      }),
+      error => {
+        failure = error;
+        return error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.committed === true;
+      }
+    );
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.ok(failedDirectorySync, 'the directory durability barrier must be attempted');
+  assert.ok(failure);
+  assert.equal(identity.authenticate(login.token), null, 'old sessions remain revoked after rename committed');
+  const relogin = await identity.login({
+    username: 'Admin',
+    password: 'new-permanent-owner-password-2026!'
+  });
+  assert.equal(relogin.ok, true, 'the committed password must match in-memory state');
+});
+
