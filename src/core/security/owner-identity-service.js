@@ -136,8 +136,20 @@ class OwnerIdentityService {
     const token = crypto.randomBytes(32).toString('base64url');
     const csrfToken = crypto.randomBytes(32).toString('base64url');
     const expiresAt = this.now() + this.sessionTtlMs;
-    this.sessions.set(tokenDigest(token), { csrfToken, expiresAt });
-    try { this.save(); } catch (error) { this.sessions.delete(tokenDigest(token)); throw error; }
+    const digest = tokenDigest(token);
+    this.sessions.set(digest, { csrfToken, expiresAt });
+    try {
+      this.save();
+    } catch (error) {
+      this.sessions.delete(digest);
+      // A post-rename directory-sync error means the session was committed but
+      // the caller will not receive its token. Attempt a compensating durable
+      // write so that the unreachable session is not resurrected after restart.
+      if (error.committed) {
+        try { this.save(); } catch {}
+      }
+      throw error;
+    }
     return { token, csrfToken, expiresAt };
   }
 
