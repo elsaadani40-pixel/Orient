@@ -113,16 +113,20 @@ class OwnerIdentityService {
 
       fs.renameSync(tmp, this.stateFile);
       renamed = true;
+      // Once rename succeeds, keep in-memory state aligned with the destination
+      // even if the directory durability barrier fails. Callers must not roll
+      // back session state as though the write never happened.
+      this.state = value;
       try { fs.chmodSync(this.stateFile, 0o600); } catch {}
 
       const dirFd = fs.openSync(dir, 'r');
       try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
-      this.state = value;
     } catch (error) {
       if (fd !== null) { try { fs.closeSync(fd); } catch {} }
       if (!renamed) { try { fs.rmSync(tmp, { force: true }); } catch {} }
       throw Object.assign(new Error('Could not persist owner identity safely'), {
         code: 'OWNER_IDENTITY_PERSIST_FAILED',
+        committed: renamed,
         cause: error
       });
     }
