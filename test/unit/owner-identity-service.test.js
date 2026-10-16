@@ -132,3 +132,54 @@ test('owner identity persistence syncs the state file and containing directory',
   );
 });
 
+test('directory-sync failure after rename does not restore revoked owner sessions', async t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  const login = await identity.login({
+    username: 'Admin',
+    password: 'temporary-owner-password-9F!x'
+  });
+  assert.equal(login.ok, true);
+
+  const originalFsync = fs.fsyncSync;
+  let failedDirectorySync = false;
+  fs.fsyncSync = function (fd) {
+    if (!failedDirectorySync && fs.fstatSync(fd).isDirectory()) {
+      failedDirectorySync = true;
+      const error = new Error('simulated directory fsync failure');
+      error.code = 'EIO';
+      throw error;
+    }
+    return originalFsync.call(fs, fd);
+  };
+
+  let failure;
+  try {
+    await assert.rejects(
+      identity.changePassword({
+        token: login.token,
+        password: 'new-permanent-owner-password-2026!',
+        confirmPassword: 'new-permanent-owner-password-2026!'
+      }),
+      error => {
+        failure = error;
+        return error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.committed === true;
+      }
+    );
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.ok(failedDirectorySync, 'the directory durability barrier must be attempted');
+  assert.ok(failure);
+  assert.equal(identity.authenticate(login.token), null, 'old sessions remain revoked after rename committed');
+  const relogin = await identity.login({
+    username: 'Admin',
+    password: 'new-permanent-owner-password-2026!'
+  });
+  assert.equal(relogin.ok, true, 'the committed password must match in-memory state');
+});
+
