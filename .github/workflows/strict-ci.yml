@@ -225,6 +225,13 @@ jobs:
           set -euo pipefail
           npm ci --ignore-scripts --no-audit --no-fund
 
+      - name: Install pinned browser-test runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+
       - name: Install OS sandbox runtime and narrow AppArmor profile
         shell: bash
         run: |
