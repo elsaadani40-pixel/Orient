@@ -123,7 +123,11 @@ test('owner identity persistence syncs the state file and containing directory',
   }
 
   assert.ok(fileSyncs >= 1, 'state file must be flushed before rename');
-  assert.ok(directorySyncs >= 1, 'containing directory must be flushed after rename');
+  if (process.platform === 'win32') {
+    assert.equal(directorySyncs, 0, 'Windows has no portable directory-fsync support in Node');
+  } else {
+    assert.ok(directorySyncs >= 1, 'containing directory must be flushed after rename');
+  }
   assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
   assert.deepEqual(
     fs.readdirSync(directory).filter(name => name.endsWith('.tmp')),
