@@ -119,8 +119,13 @@ class OwnerIdentityService {
       this.state = value;
       try { fs.chmodSync(this.stateFile, 0o600); } catch {}
 
-      const dirFd = fs.openSync(dir, 'r');
-      try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+      // Node does not expose a portable directory-fsync operation on Windows.
+      // Keep file fsync + atomic replacement there; on POSIX, require the
+      // directory barrier and surface failures as committed-but-not-confirmed.
+      if (process.platform !== 'win32') {
+        const dirFd = fs.openSync(dir, 'r');
+        try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+      }
     } catch (error) {
       if (fd !== null) { try { fs.closeSync(fd); } catch {} }
       if (!renamed) { try { fs.rmSync(tmp, { force: true }); } catch {} }
