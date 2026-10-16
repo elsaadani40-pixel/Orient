@@ -100,3 +100,35 @@ test('legacy website owner.json migrates without losing the existing password an
   assert.equal((await identity.login({ username: 'Admin', password: legacyPassword })).ok, false);
   assert.equal((await identity.login({ username: 'Admin', password: 'new-permanent-owner-password-2026!' })).ok, true);
 });
+
+test('owner identity persistence syncs the state file and containing directory', t => {
+  const { directory, stateFile } = fixture(t);
+  let fileSyncs = 0;
+  let directorySyncs = 0;
+  const originalFsync = fs.fsyncSync;
+
+  fs.fsyncSync = function (fd) {
+    if (fs.fstatSync(fd).isDirectory()) directorySyncs += 1;
+    else fileSyncs += 1;
+    return originalFsync.call(fs, fd);
+  };
+
+  try {
+    new OwnerIdentityService({
+      stateFile,
+      bootstrapPassword: 'temporary-owner-password-9F!x'
+    });
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.ok(fileSyncs >= 1, 'state file must be flushed before rename');
+  assert.ok(directorySyncs >= 1, 'containing directory must be flushed after rename');
+  assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
+  assert.deepEqual(
+    fs.readdirSync(directory).filter(name => name.endsWith('.tmp')),
+    [],
+    'successful persistence must not leave temporary files behind'
+  );
+});
+
