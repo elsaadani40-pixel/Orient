@@ -42,5 +42,5 @@ test('website passes the socket peer address to the shared owner login limiter',
   assert.equal(response.status, 401);
   assert.equal(typeof observedSourceIp, 'string');
   assert.notEqual(observedSourceIp, 'unknown', 'HTTP requests must not share the adapter fallback lockout bucket');
-  assert.match(observedSourceIp, /127\\.0\\.0\\.1|::1|::ffff:127\\.0\\.0\\.1/);
+  assert.match(observedSourceIp, /127\.0\.0\.1|::1|::ffff:127\.0\.0\.1/);
 });
