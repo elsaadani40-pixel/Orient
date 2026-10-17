@@ -36,7 +36,10 @@ class MemoryAuditRepository {
     const raw = fs.readFileSync(this.filePath, 'utf8');
     if (!raw.trim()) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) {
+      throw new Error('Memory audit store must contain a JSON array');
+    }
+    return parsed;
   }
 
   setEventSink(eventSink) {
