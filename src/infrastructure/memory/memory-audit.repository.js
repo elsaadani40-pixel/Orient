@@ -34,7 +34,7 @@ class MemoryAuditRepository {
       // truncating the log before either writer acquires the append lock.
       const descriptor = fs.openSync(this.filePath, 'wx', 0o600);
       try {
-        fs.writeFileSync(descriptor, '[]\\n', 'utf8');
+        fs.writeFileSync(descriptor, '[]\n', 'utf8');
       } finally {
         fs.closeSync(descriptor);
       }
