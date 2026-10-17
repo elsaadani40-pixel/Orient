@@ -1,4 +1,4 @@
-# ORIENT ONE
+# ORIENT
 
 **A governed, local-first personal AI operating system — under active engineering.**
 
