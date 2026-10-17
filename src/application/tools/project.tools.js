@@ -11,12 +11,16 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
     name: 'project.audit', description: 'فحص مشروع محلي قراءة فقط واستخراج حالته الهندسية والفجوات',
     capabilities: ['workspace.read'], risk: 'low',
     sandbox: { required: true, profile: { network: false, filesystem: 'workspace-read-only' } },
+    effects: 'read_only',
+    idempotency: 'idempotent',
     execute: async () => new ProjectBuilderAgent({ projectRoot, policy: readOnlyPolicy }).audit()
   });
   const proposeChanges = new ToolInterface({
     name: 'project.propose_changes', description: 'تحليل مشروع قراءة فقط واكتشاف مشكلة فعلية ثم إنتاج Change Proposal آمن بدون تنفيذ',
     capabilities: ['workspace.read'], risk: 'low',
     sandbox: { required: true, profile: { network: false, filesystem: 'workspace-read-only' } },
+    effects: 'read_only',
+    idempotency: 'idempotent',
     execute: async () => {
       const agent = new ProjectBuilderAgent({ projectRoot, policy: readOnlyPolicy });
       const analyzer = new ProjectImprovementAnalyzer({ workspace: agent.workspace, discovery: agent.discovery });
@@ -29,6 +33,8 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
     capabilities: ['workspace.write'],
     risk: 'high',
     sandbox: { required: true, profile: { filesystem: { allowRead: [projectRoot], allowWrite: [projectRoot] }, network: { allowedDomains: [] }, unixSockets: { allowed: [] } } },
+    effects: 'local_mutation',
+    idempotency: 'unknown',
     execute: async (input = {}) => {
       const proposalResult = input && input.proposals ? input : input;
       const proposals = Array.isArray(proposalResult.proposals) ? proposalResult.proposals : [];

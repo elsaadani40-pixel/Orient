@@ -1,6 +1,21 @@
 const AppError = require('../errors/AppError');
 const { createToolExecutionAuthorizer } = require('./tool-execution-authorization');
 
+const TOOL_EFFECTS = new Set([
+  'read_only',
+  'local_mutation',
+  'external_side_effect',
+  'mixed',
+  'unknown'
+]);
+const TOOL_IDEMPOTENCY = new Set([
+  'idempotent',
+  'keyed',
+  'reconcilable',
+  'non_idempotent',
+  'unknown'
+]);
+
 class ToolRegistry {
   constructor() {
     this.tools = new Map();
@@ -35,6 +50,17 @@ class ToolRegistry {
       );
     }
 
+    const effects = tool.effects ?? 'unknown';
+    const idempotency = tool.idempotency ?? 'unknown';
+    if (!TOOL_EFFECTS.has(effects)) {
+      throw new TypeError(`Tool "${tool.name}" has invalid effects metadata`);
+    }
+    if (!TOOL_IDEMPOTENCY.has(idempotency)) {
+      throw new TypeError(`Tool "${tool.name}" has invalid idempotency metadata`);
+    }
+    if (idempotency === 'reconcilable' && typeof tool.reconcile !== 'function') {
+      throw new TypeError(`Tool "${tool.name}" declares reconcilable idempotency but provides no reconcile function`);
+    }
 
     const execute = tool.execute.bind(tool);
     const registeredTool = Object.freeze({
@@ -46,6 +72,8 @@ class ToolRegistry {
       capabilities: Array.isArray(tool.capabilities)
         ? Object.freeze([...tool.capabilities])
         : Object.freeze([]),
+      effects,
+      idempotency,
       sandbox: tool.sandbox
         ? Object.freeze({
             required: tool.sandbox.required === true,
@@ -79,6 +107,8 @@ class ToolRegistry {
         ? [...tool.capabilities]
         : [],
       risk: tool.risk || null,
+      effects: tool.effects || 'unknown',
+      idempotency: tool.idempotency || 'unknown',
       sandbox: tool.sandbox
         ? {
             required: tool.sandbox.required === true,

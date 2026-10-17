@@ -114,6 +114,8 @@ function createWorkspaceTools(projectBuilder) {
     description: 'قراءة ملف نصي مسموح داخل مساحة عمل ORIENT ONE مع حماية المسارات الحساسة',
     capabilities: ['workspace.read'],
     risk: 'low',
+    effects: 'read_only',
+    idempotency: 'idempotent',
     execute: async (input) => {
       const payload = inputObject(input);
       const relativePath = normalizeRelativePath(typeof input === 'string' ? input : payload.path);
@@ -140,6 +142,8 @@ function createWorkspaceTools(projectBuilder) {
     description: 'عرض ملفات ومجلدات مساحة العمل المسموحة دون كشف المسارات الحساسة',
     capabilities: ['workspace.read'],
     risk: 'low',
+    effects: 'read_only',
+    idempotency: 'idempotent',
     execute: async (input) => {
       const payload = inputObject(input);
       const relativePath = normalizeRelativePath(typeof input === 'string' ? input : payload.path);
@@ -168,6 +172,8 @@ function createWorkspaceTools(projectBuilder) {
     description: 'بحث نصي حرفي داخل ملفات المشروع المسموحة؛ لا ينفذ أوامر ولا يتصل بالإنترنت',
     capabilities: ['workspace.read'],
     risk: 'low',
+    effects: 'read_only',
+    idempotency: 'idempotent',
     execute: async (input) => {
       const payload = inputObject(input);
       const query = String(typeof input === 'string' ? input : payload.query || '').trim();

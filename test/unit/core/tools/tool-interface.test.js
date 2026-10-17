@@ -15,6 +15,8 @@ test('ToolInterface preserves legacy construction and exposes security metadata'
   assert.deepEqual(tool.capabilities, []);
   assert.equal(tool.risk, null);
   assert.equal(tool.sandbox, null);
+  assert.equal(tool.effects, 'unknown');
+  assert.equal(tool.idempotency, 'unknown');
 });
 
 test('ToolInterface normalizes capability and sandbox metadata', () => {
@@ -51,7 +53,6 @@ test('ToolInterface rejects malformed capability metadata', () => {
   );
 });
 
-
 test('ToolInterface security metadata is immutable', () => {
   const tool = new ToolInterface({
     name: 'secure',
@@ -66,4 +67,53 @@ test('ToolInterface security metadata is immutable', () => {
   assert.equal(tool.risk, 'high');
   assert.throws(() => Object.defineProperty(tool, 'risk', { value: 'low' }), TypeError);
   assert.throws(() => Object.defineProperty(tool, 'capabilities', { value: ['*'] }), TypeError);
+});
+
+test('ToolInterface validates side-effect and idempotency declarations', () => {
+  const tool = new ToolInterface({
+    name: 'project.inspect',
+    execute: async () => ({ ok: true }),
+    effects: 'read_only',
+    idempotency: 'idempotent'
+  });
+
+  assert.equal(tool.effects, 'read_only');
+  assert.equal(tool.idempotency, 'idempotent');
+
+  assert.throws(
+    () => new ToolInterface({
+      name: 'bad.effects',
+      execute: async () => null,
+      effects: 'probably-safe'
+    }),
+    /effects must be one of/
+  );
+  assert.throws(
+    () => new ToolInterface({
+      name: 'bad.idempotency',
+      execute: async () => null,
+      idempotency: 'maybe'
+    }),
+    /idempotency must be one of/
+  );
+});
+
+test('ToolInterface does not allow reconcilable idempotency without a reconciler', () => {
+  assert.throws(
+    () => new ToolInterface({
+      name: 'unsafe.reconcile',
+      execute: async () => null,
+      idempotency: 'reconcilable'
+    }),
+    /provides no reconcile function/
+  );
+
+  const tool = new ToolInterface({
+    name: 'reconciled',
+    execute: async () => null,
+    idempotency: 'reconcilable',
+    reconcile: async () => ({ status: 'unknown' })
+  });
+  assert.equal(tool.idempotency, 'reconcilable');
+  assert.equal(typeof tool.reconcile, 'function');
 });
