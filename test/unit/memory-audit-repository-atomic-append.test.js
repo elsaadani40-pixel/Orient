@@ -48,3 +48,23 @@ test('concurrent processes append every audit event without losing updates', asy
   assert.equal(events.length, workerCount * writesPerWorker);
   assert.equal(new Set(events.map(event => `${event.workerId}:${event.sequence}`)).size, events.length);
 });
+
+test('same-process concurrent append requests retain every unique event', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-audit-local-'));
+  const filePath = path.join(directory, 'audit.json');
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new MemoryAuditRepository(filePath);
+  const count = 64;
+
+  await Promise.all(Array.from({ length: count }, (_, sequence) =>
+    Promise.resolve().then(() => repository.append({
+      action: 'test.same-process',
+      workerId: 'single-process',
+      sequence
+    }))
+  ));
+
+  const events = repository.read();
+  assert.equal(events.length, count);
+  assert.equal(new Set(events.map(event => event.sequence)).size, count);
+});
