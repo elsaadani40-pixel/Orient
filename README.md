@@ -106,6 +106,21 @@ Without a configured local model provider, the planner uses deterministic rules 
 
 The default server binding is loopback-only. Do not expose it to a network without a complete authentication/session boundary and transport protection.
 
+### Optional Runtime CLI
+
+The `orient` CLI is a thin authenticated client for the existing Runtime task API. It does not run shell commands or create a separate task engine.
+
+```bash
+npm run orient -- --help
+npm run orient -- login
+npm run orient -- tasks list
+npm run orient -- task show TASK_ID
+npm run orient -- task create "Prepare a plan for my next workday"
+npm run orient -- logout
+```
+
+The first owner sign-in requires the configured bootstrap password. Complete the mandatory password rotation in the website before using Runtime operations. The CLI stores only an expiring owner session token and CSRF token in `~/.orient/cli-session.json` with restrictive file permissions. Set `ORIENT_CLI_SESSION_FILE` to use a different session file, or `ORIENT_URL` to select a server origin. Remote origins must use HTTPS; plain HTTP is accepted only for loopback development. Treat the session file as a credential and never share or commit it.
+
 ### Optional PostgreSQL persistence
 
 Set `ORIENT_PERSISTENCE=postgres` and `ORIENT_DATABASE_URL` (or `DATABASE_URL`) in your local environment. Use a dedicated development/test database and least-privilege credentials. Never commit real connection strings or credentials.
