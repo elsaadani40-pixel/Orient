@@ -68,3 +68,13 @@ test('same-process concurrent append requests retain every unique event', async 
   assert.equal(events.length, count);
   assert.equal(new Set(events.map(event => event.sequence)).size, count);
 });
+
+test('read rejects valid JSON with an invalid audit-store shape', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-audit-invalid-'));
+  const filePath = path.join(directory, 'audit.json');
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new MemoryAuditRepository(filePath);
+  fs.writeFileSync(filePath, JSON.stringify({ unexpected: 'object' }), 'utf8');
+
+  assert.throws(() => repository.read(), /Memory audit store must contain a JSON array/);
+});
