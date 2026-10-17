@@ -57,6 +57,19 @@ class MemoryAuditRepository {
             createdAt: Date.now(),
             token: crypto.randomUUID()
           }), 'utf8');
+          fs.fsyncSync(descriptor);
+        } catch (error) {
+          // If lock initialization fails, remove only the lock file created by
+          // this descriptor; otherwise later writers would wait on an unusable
+          // empty lock until timeout.
+          try {
+            const opened = fs.fstatSync(descriptor);
+            const current = fs.lstatSync(lockPath);
+            if (opened.dev === current.dev && opened.ino === current.ino) {
+              fs.unlinkSync(lockPath);
+            }
+          } catch {}
+          throw error;
         } finally {
           fs.closeSync(descriptor);
         }
