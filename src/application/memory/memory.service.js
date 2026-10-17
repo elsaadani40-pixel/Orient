@@ -281,7 +281,12 @@ class MemoryService {
       );
     }
 
+    // Non-lexical ranking signals (recency, importance, confidence) are
+    // tie-breakers for actual matches, not permission to return unrelated
+    // records. Without this gate, nearly every active memory gets a positive
+    // baseline relevance score for every non-empty query.
     return memories
+      .filter(memory => lexicalScore(cleanQuery, memory.text) > 0)
       .map(memory => ({
         ...memory,
         relevance: relevanceScore(memory, cleanQuery, options)
