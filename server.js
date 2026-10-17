@@ -407,7 +407,7 @@ function createOwnerServer(options = {}) {
           if (body.username !== 'Admin' || typeof body.password !== 'string') {
             return sendJson(res, 401, { error: 'Invalid username or password' });
           }
-          const result = await identity.login({ username: 'Admin', password: body.password });
+          const result = await identity.login({ username: 'Admin', password: body.password, sourceIp: ip });
           if (!result.ok) {
             const status = result.code === 'OWNER_SESSION_LIMIT_REACHED' ? 429 : 401;
             return sendJson(res, status, { error: 'Invalid username or password', code: result.code });
