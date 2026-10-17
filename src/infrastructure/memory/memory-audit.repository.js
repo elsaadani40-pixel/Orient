@@ -4,20 +4,9 @@ const crypto = require('crypto');
 
 const LOCK_RETRY_MS = 10;
 const LOCK_TIMEOUT_MS = 10000;
-const STALE_LOCK_MS = 30000;
 
 function sleepSync(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-}
-
-function processIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === 'EPERM';
-  }
 }
 
 class MemoryAuditRepository {
@@ -78,27 +67,9 @@ class MemoryAuditRepository {
         }
       }
 
-      // Do not evict a live owner's lock. Reclaim only an abandoned lock
-      // after the grace period, so another writer cannot overwrite active work.
-      try {
-        const statBefore = fs.statSync(lockPath);
-        const raw = fs.readFileSync(lockPath, 'utf8');
-        let owner = null;
-        try { owner = JSON.parse(raw); } catch {}
-        const oldEnough = Date.now() - statBefore.mtimeMs > STALE_LOCK_MS;
-        const abandoned = owner && !processIsAlive(Number(owner.pid));
-        if (abandoned || (!owner && oldEnough)) {
-          const statAfter = fs.statSync(lockPath);
-          const rawAfter = fs.readFileSync(lockPath, 'utf8');
-          if (statBefore.ino === statAfter.ino && raw === rawAfter) {
-            fs.unlinkSync(lockPath);
-            continue;
-          }
-        }
-      } catch (error) {
-        if (error.code === 'ENOENT') continue;
-        if (error.code !== 'EACCES') throw error;
-      }
+      // Never unlink a lock based on a check-then-delete sequence: another
+      // process could acquire the path between those operations. If a process
+      // dies while holding the lock, fail closed after the bounded timeout.
 
       if (Date.now() >= deadline) {
         throw new Error('Timed out waiting for memory audit write lock');
