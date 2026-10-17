@@ -29,8 +29,17 @@ class MemoryAuditRepository {
 
   ensureStorage() {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    if (!fs.existsSync(this.filePath)) {
-      fs.writeFileSync(this.filePath, '[]\n', 'utf8');
+    try {
+      // Exclusive creation prevents concurrent first-time writers from
+      // truncating the log before either writer acquires the append lock.
+      const descriptor = fs.openSync(this.filePath, 'wx', 0o600);
+      try {
+        fs.writeFileSync(descriptor, '[]\\n', 'utf8');
+      } finally {
+        fs.closeSync(descriptor);
+      }
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
     }
   }
 
