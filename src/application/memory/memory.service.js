@@ -60,7 +60,17 @@ function sourceReliability(source = {}) {
 
 function evidenceStrength(memory) {
   if (!Array.isArray(memory.evidence) || !memory.evidence.length) return 0;
-  const weighted = memory.evidence.map(item =>
+
+  // Repeated copies of the same identified evidence are not independent support.
+  // Deduplicate before both the mean and count bonus so retries/imports cannot
+  // inflate confidence merely by replaying an existing evidence record.
+  const uniqueEvidence = [...new Map(
+    memory.evidence.map((item, index) => [
+      item.id ? `id:${item.id}` : `unidentified:${index}`,
+      item
+    ])
+  ).values()];
+  const weighted = uniqueEvidence.map(item =>
     clamp(item.confidence, 0.5) * sourceReliability(item.source)
   );
   const mean = weighted.reduce((sum, value) => sum + value, 0) / weighted.length;
