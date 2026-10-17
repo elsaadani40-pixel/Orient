@@ -88,6 +88,21 @@ On first run, configure `ORIENT_OWNER_BOOTSTRAP_PASSWORD` with a strong password
 
 For isolated website-only testing, `npm run start:website-standalone` runs `server.js` without Runtime task routes. Use the unified commands above when testing website-to-Runtime integration.
 
+### Runtime CLI
+
+The optional CLI uses the same authenticated Runtime task API; it does not execute shell commands or create a second task engine.
+
+```bash
+npm run orient -- --help
+npm run orient -- login
+npm run orient -- tasks list
+npm run orient -- task show TASK_ID
+npm run orient -- task create "Prepare a plan for my next workday"
+npm run orient -- logout
+```
+
+The CLI prompts for the owner password without echoing it in an interactive terminal. It stores only the expiring owner session and CSRF token in `~/.orient/cli-session.json` with restrictive local file permissions. Set `ORIENT_CLI_SESSION_FILE` to choose another session path, or `ORIENT_URL` to target an HTTPS deployment. Plain HTTP is accepted only for loopback development. On first run, rotate the temporary owner password in the website before using Runtime operations.
+
 The dashboard exposes bounded, tenant-scoped execution history, per-execution event streams, pending approvals, and explicit cancellation requests. See [the dashboard contract](docs/operations/DASHBOARD-CONTROL-PLANE.md) for API details, security boundaries, and its smoke checklist.
 
 To submit a task through the canonical agent runtime from another terminal:

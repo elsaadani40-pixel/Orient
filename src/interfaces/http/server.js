@@ -380,6 +380,15 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           sendJson(res, 403, { ok: false, code: 'OWNER_ORIGIN_REJECTED', message: 'تم رفض مصدر الطلب.' });
           return;
         }
+        // State-changing v1 API requests require a session-bound CSRF token in
+        // addition to same-origin validation. Read-only task endpoints remain GET-only.
+        if (req.method === 'POST' && requestUrl.pathname.startsWith('/api/v1/') &&
+            (typeof ownerAuth.verifyCsrf !== 'function' ||
+             !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf']))) {
+          authenticationOutcome = 'csrf_rejected';
+          sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+          return;
+        }
         authenticationOutcome = 'authenticated';
       }
 
