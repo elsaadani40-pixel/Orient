@@ -115,7 +115,8 @@ test('website owner session creates and reads a task through the real Runtime', 
   });
   assert.equal(login.status, 200);
   const loginBody = await login.json();
-  let ownerCookie = cookie(login);
+  const bootstrapOwnerCookie = cookie(login);
+  let ownerCookie = bootstrapOwnerCookie;
 
   const blocked = await fetch(origin + '/api/v1/tasks', { headers: { Cookie: ownerCookie } });
   assert.equal(blocked.status, 403);
@@ -128,6 +129,10 @@ test('website owner session creates and reads a task through the real Runtime', 
   assert.equal(rotation.status, 200);
   const rotationBody = await rotation.json();
   ownerCookie = cookie(rotation);
+  const staleOwnerSession = await fetch(origin + '/api/owner/me', {
+    headers: { Cookie: bootstrapOwnerCookie }
+  });
+  assert.equal(staleOwnerSession.status, 401, 'password rotation must revoke the previous owner session');
 
   const registration = await fetch(origin + '/api/auth/register', {
     method: 'POST',
@@ -135,8 +140,59 @@ test('website owner session creates and reads a task through the real Runtime', 
     body: JSON.stringify({ username: 'PublicRuntimeTest', password: 'public-test-password-2026!' })
   });
   assert.equal(registration.status, 201);
-  const publicDenied = await fetch(origin + '/api/v1/tasks', { headers: { Cookie: cookie(registration) } });
+  const publicCookie = cookie(registration);
+  const publicDenied = await fetch(origin + '/api/v1/tasks', { headers: { Cookie: publicCookie } });
   assert.equal(publicDenied.status, 401);
+  const publicOwnerApiDenied = await fetch(origin + '/api/owner/users', { headers: { Cookie: publicCookie } });
+  assert.equal(publicOwnerApiDenied.status, 401, 'public sessions must not access owner account-management APIs');
+
+  // The public site, registration, personal account, owner console and
+  // Runtime workbench must all be reachable through this one HTTP origin.
+  for (const pathname of ['/', '/auth', '/auth.html', '/account.html']) {
+    const response = await fetch(origin + pathname, {
+      headers: { Cookie: publicCookie },
+      redirect: 'manual'
+    });
+    assert.equal(response.status, 200, pathname + ' must be served by the integrated listener');
+  }
+
+  const ownerPage = await fetch(origin + '/owner', { headers: { Cookie: ownerCookie }, redirect: 'manual' });
+  assert.equal(ownerPage.status, 200);
+  assert.match(await ownerPage.text(), /Owner|ORIENT|owner/i);
+  const workbench = await fetch(origin + '/workbench', { headers: { Cookie: ownerCookie }, redirect: 'manual' });
+  assert.equal(workbench.status, 200);
+  assert.match(await workbench.text(), /workbench|task|ORIENT/i);
+  for (const pathname of ['/owner', '/workbench']) {
+    const response = await fetch(origin + pathname, {
+      headers: { Cookie: publicCookie },
+      redirect: 'manual'
+    });
+    assert.equal(response.status, 302, pathname + ' must not grant public users owner/runtime page access');
+    assert.match(response.headers.get('location') || '', /^\/auth\?mode=owner$/);
+  }
+
+  // Disabling a public account must revoke existing sessions permanently;
+  // re-enabling the account must not revive the old cookie.
+  const usersResponse = await fetch(origin + '/api/owner/users', { headers: { Cookie: ownerCookie } });
+  assert.equal(usersResponse.status, 200);
+  const users = await usersResponse.json();
+  const publicUser = users.users.find(user => user.username === 'PublicRuntimeTest');
+  assert.ok(publicUser?.id);
+  for (const disabled of [true, false]) {
+    const response = await fetch(origin + '/api/owner/users/' + publicUser.id + '/status', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        Origin: origin,
+        Cookie: ownerCookie,
+        'X-ORIENT-CSRF': rotationBody.csrfToken
+      },
+      body: JSON.stringify({ disabled })
+    });
+    assert.equal(response.status, 200);
+  }
+  const stalePublicSession = await fetch(origin + '/api/auth/me', { headers: { Cookie: publicCookie } });
+  assert.equal(stalePublicSession.status, 401);
 
   const ownerDashboard = await fetch(origin + '/dashboard.html', { headers: { Cookie: ownerCookie } });
   assert.equal(ownerDashboard.status, 200);
