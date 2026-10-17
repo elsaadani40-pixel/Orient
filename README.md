@@ -20,14 +20,14 @@ ORIENT is being built as one coherent system for researching, planning, executin
 - **Contribution rules:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Automated checks:** [GitHub Actions](https://github.com/elsaadani40-pixel/Orient/actions)
 
-### Browser workbench status
+### Browser workbench and integration status
 
-The responsive web task workbench and its governed project-builder integration are being developed in reviewable pull requests, not silently treated as released features:
+The unified website and canonical Runtime are integrated on `main`. Use `npm start` (or `npm run start:web`) to serve the landing page, public authentication, personal account, owner console, dashboard, memory interface, and task workbench from one local origin. The workbench submits tasks through the governed Runtime API; project audit, proposal, and owner-approved execution tools are registered in the server-side runtime.
 
-- [Arabic web task workbench — PR #211](https://github.com/elsaadani40-pixel/Orient/pull/211)
-- [Workbench to governed project builder — PR #221](https://github.com/elsaadani40-pixel/Orient/pull/221)
+- [Integrated website/Runtime session acceptance — PR #260](https://github.com/elsaadani40-pixel/Orient/pull/260) — merged after exact-head automated checks passed.
+- [Integration/release gate — issue #225](https://github.com/elsaadani40-pixel/Orient/issues/225) — remains open for manual browser/device acceptance and deployment-readiness review.
 
-Both are drafts. The project-builder integration is stacked on PR #211. Do not merge it ahead of its dependency; complete the required CI, real-browser phone/tablet/desktop acceptance, approval/resume/cancellation checks, and deployment/security review first.
+**What this does not mean:** automated CI does not prove that owner login, approvals, resume/cancellation, and retry behavior have been manually verified on a phone, tablet, and desktop. No public deployment URL is claimed. Keep public hosting blocked until HTTPS, session persistence, operational controls, and the security boundary have been reviewed.
 
 ## Architecture principles
 
