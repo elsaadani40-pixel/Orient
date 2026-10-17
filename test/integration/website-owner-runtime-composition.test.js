@@ -115,7 +115,8 @@ test('website owner session creates and reads a task through the real Runtime', 
   });
   assert.equal(login.status, 200);
   const loginBody = await login.json();
-  let ownerCookie = cookie(login);
+  const bootstrapOwnerCookie = cookie(login);
+  let ownerCookie = bootstrapOwnerCookie;
 
   const blocked = await fetch(origin + '/api/v1/tasks', { headers: { Cookie: ownerCookie } });
   assert.equal(blocked.status, 403);
@@ -128,6 +129,10 @@ test('website owner session creates and reads a task through the real Runtime', 
   assert.equal(rotation.status, 200);
   const rotationBody = await rotation.json();
   ownerCookie = cookie(rotation);
+  const staleOwnerSession = await fetch(origin + '/api/owner/me', {
+    headers: { Cookie: bootstrapOwnerCookie }
+  });
+  assert.equal(staleOwnerSession.status, 401, 'password rotation must revoke the previous owner session');
 
   const registration = await fetch(origin + '/api/auth/register', {
     method: 'POST',
@@ -138,6 +143,8 @@ test('website owner session creates and reads a task through the real Runtime', 
   const publicCookie = cookie(registration);
   const publicDenied = await fetch(origin + '/api/v1/tasks', { headers: { Cookie: publicCookie } });
   assert.equal(publicDenied.status, 401);
+  const publicOwnerApiDenied = await fetch(origin + '/api/owner/users', { headers: { Cookie: publicCookie } });
+  assert.equal(publicOwnerApiDenied.status, 401, 'public sessions must not access owner account-management APIs');
 
   // The public site, registration, personal account, owner console and
   // Runtime workbench must all be reachable through this one HTTP origin.
