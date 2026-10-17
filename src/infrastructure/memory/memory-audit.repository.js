@@ -89,12 +89,29 @@ class MemoryAuditRepository {
     try {
       const events = this.read();
       events.push(record);
-      fs.writeFileSync(
-        temporaryFile,
-        JSON.stringify(events, null, 2) + '\n',
-        { encoding: 'utf8', mode: 0o600 }
-      );
+      const descriptor = fs.openSync(temporaryFile, 'wx', 0o600);
+      try {
+        fs.writeFileSync(descriptor, JSON.stringify(events, null, 2) + '\n', 'utf8');
+        fs.fsyncSync(descriptor);
+      } finally {
+        fs.closeSync(descriptor);
+      }
       fs.renameSync(temporaryFile, this.filePath);
+
+      // Persist the rename where directory fsync is supported. Some platforms
+      // do not allow opening directories; only those documented limitations
+      // are ignored, while unexpected I/O failures remain visible.
+      let directoryDescriptor;
+      try {
+        directoryDescriptor = fs.openSync(path.dirname(this.filePath), 'r');
+        fs.fsyncSync(directoryDescriptor);
+      } catch (error) {
+        if (!['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM', 'EACCES'].includes(error.code)) {
+          throw error;
+        }
+      } finally {
+        if (directoryDescriptor !== undefined) fs.closeSync(directoryDescriptor);
+      }
     } catch (error) {
       try {
         if (fs.existsSync(temporaryFile)) fs.unlinkSync(temporaryFile);
