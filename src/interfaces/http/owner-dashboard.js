@@ -233,6 +233,10 @@
       csrfToken = result.csrfToken;
       passwordInput.value = '';
       loginStatus.textContent = '';
+      if (result.passwordChangeRequired) {
+        window.location.replace('/owner.html');
+        return;
+      }
       setLoggedIn(true);
       await Promise.all([loadAudit(), loadApprovals()]);
     } catch (error) {
@@ -260,6 +264,10 @@
     try {
       const result = await request('/owner/session', { method: 'GET' });
       csrfToken = result.csrfToken;
+      if (result.passwordChangeRequired) {
+        window.location.replace('/owner.html');
+        return;
+      }
       setLoggedIn(true);
       await Promise.all([loadAudit(), loadApprovals()]);
     } catch (error) {

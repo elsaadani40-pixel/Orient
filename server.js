@@ -72,33 +72,45 @@ function createOwnerServer(options = {}) {
 
   let state;
   let createdBootstrap = false;
-  try {
-    state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    if (state.version !== 1 || !state.password || typeof state.mustChangePassword !== 'boolean') {
-      throw new Error('Invalid owner state format');
+  const identity = options.identity || null;
+  if (identity) {
+    for (const method of ['login', 'authenticate', 'verifyCsrf', 'changePassword', 'logout', 'status']) {
+      if (typeof identity[method] !== 'function') throw new TypeError('A compatible shared owner identity service is required');
     }
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw new Error('Cannot read owner credentials safely: ' + error.message);
-    const bootstrapPassword = options.bootstrapPassword || crypto.randomBytes(24).toString('base64url');
-    state = {
-      version: 1,
-      username: 'Admin',
-      password: hashPassword(bootstrapPassword),
-      mustChangePassword: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    const fd = fs.openSync(stateFile, 'wx', 0o600);
+    // The canonical identity service owns owner.json and its session lifecycle.
+    // Do not create a parallel owner password record or in-memory owner sessions.
+    state = { version: 1, username: 'Admin', mustChangePassword: identity.status().passwordChangeRequired };
+  } else {
     try {
-      fs.writeFileSync(fd, JSON.stringify(state, null, 2) + '\n', { encoding: 'utf8' });
-      fs.fsyncSync(fd);
-    } finally { fs.closeSync(fd); }
-    try { fs.chmodSync(stateFile, 0o600); } catch {}
-    createdBootstrap = true;
-    log('ORIENT OWNER FIRST-RUN CREDENTIAL (shown once; keep private)');
-    log('Username: Admin');
-    log('Temporary password: ' + bootstrapPassword);
-    log('Sign in locally and replace this password immediately.');
+      state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      if (state.version !== 1 || !state.password || typeof state.mustChangePassword !== 'boolean') {
+        throw new Error('Invalid owner state format');
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw new Error('Cannot read owner credentials safely: ' + error.message);
+      const bootstrapPassword = options.bootstrapPassword || process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD;
+      if (!bootstrapPassword) {
+        throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters); no credential was generated or logged.');
+      }
+      state = {
+        version: 1,
+        username: 'Admin',
+        password: hashPassword(bootstrapPassword),
+        mustChangePassword: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      const fd = fs.openSync(stateFile, 'wx', 0o600);
+      try {
+        fs.writeFileSync(fd, JSON.stringify(state, null, 2) + '\n', { encoding: 'utf8' });
+        fs.fsyncSync(fd);
+      } finally { fs.closeSync(fd); }
+      try { fs.chmodSync(stateFile, 0o600); } catch {}
+      createdBootstrap = true;
+      log('ORIENT owner identity initialized. Sign in as Admin and replace the configured bootstrap password immediately.');
+    }
+  
+  
   }
 
   const usersFile = path.join(dataDir, 'users.json');
@@ -166,10 +178,18 @@ function createOwnerServer(options = {}) {
     state = nextState;
   }
 
+  function ownerPasswordChangeRequired() {
+    return identity ? identity.status().passwordChangeRequired : state.mustChangePassword;
+  }
+
   function sessionFor(req) {
     const cookie = req.headers.cookie || '';
     const match = cookie.match(/(?:^|;\s*)orient_owner_session=([A-Za-z0-9_-]+)/);
     if (!match) return null;
+    if (identity) {
+      const session = identity.authenticate(match[1]);
+      return session ? { token: match[1], ...session } : null;
+    }
     const session = sessions.get(match[1]);
     if (!session || session.expiresAt <= Date.now()) {
       sessions.delete(match[1]);
@@ -207,7 +227,7 @@ function createOwnerServer(options = {}) {
 
     if (req.method === 'GET' && url.pathname === '/api/auth/me') {
       const owner = sessionFor(req);
-      if (owner) return sendJson(res, 200, { username: 'Admin', role: 'owner', passwordChangeRequired: state.mustChangePassword });
+      if (owner) return sendJson(res, 200, { username: 'Admin', role: 'owner', passwordChangeRequired: ownerPasswordChangeRequired() });
       const session = userSessionFor(req);
       if (session) return sendJson(res, 200, { username: session.username, role: 'user' });
       return sendJson(res, 401, { error: 'Authentication required' });
@@ -303,7 +323,10 @@ function createOwnerServer(options = {}) {
     if (req.method === 'PATCH' && /^\/api\/owner\/users\/[0-9a-f-]{36}$/i.test(url.pathname)) {
       const session = sessionFor(req);
       if (!session) return sendJson(res, 401, { error: 'Owner authentication required' });
-      if (state.mustChangePassword) return sendJson(res, 403, { error: 'Password change required' });
+      if (identity && (!checkOrigin(req) || !identity.verifyCsrf(session, req.headers['x-orient-csrf']))) {
+        return sendJson(res, 403, { error: 'Owner CSRF validation failed', code: 'OWNER_CSRF_REJECTED' });
+      }
+      if (ownerPasswordChangeRequired()) return sendJson(res, 403, { error: 'Password change required' });
       if (!checkOrigin(req)) return sendJson(res, 403, { error: 'Request origin rejected' });
       let body;
       try { body = await readJsonBody(req); }
@@ -327,18 +350,18 @@ function createOwnerServer(options = {}) {
     if (req.method === 'GET' && url.pathname === '/api/owner/users') {
       const session = sessionFor(req);
       if (!session) return sendJson(res, 401, { error: 'Owner authentication required' });
-      if (state.mustChangePassword) return sendJson(res, 403, { error: 'Password change required' });
+      if (ownerPasswordChangeRequired()) return sendJson(res, 403, { error: 'Password change required' });
       return sendJson(res, 200, { count: users.length, users: users.map(({ id, username, role, createdAt, disabled }) => ({ id, username, role, createdAt, disabled })) });
     }
 
     if (req.method === 'GET' && url.pathname === '/api/owner/status') {
-      return sendJson(res, 200, { ownerExists: true, passwordChangeRequired: state.mustChangePassword });
+      return sendJson(res, 200, { ownerExists: true, passwordChangeRequired: ownerPasswordChangeRequired() });
     }
 
     if (req.method === 'GET' && url.pathname === '/api/owner/me') {
       const session = sessionFor(req);
       if (!session) return sendJson(res, 401, { error: 'Authentication required' });
-      return sendJson(res, 200, { username: 'Admin', passwordChangeRequired: state.mustChangePassword });
+      return sendJson(res, 200, { username: 'Admin', passwordChangeRequired: ownerPasswordChangeRequired(), csrfToken: session.csrfToken, expiresAt: session.expiresAt });
     }
 
     if (req.method === 'POST' && url.pathname.startsWith('/api/owner/')) {
@@ -351,11 +374,19 @@ function createOwnerServer(options = {}) {
       try { body = await readJsonBody(req); }
       catch (error) { return sendJson(res, error.statusCode || 400, { error: error.message }); }
 
+      if (identity && !['/api/owner/login', '/api/owner/password', '/api/owner/logout'].includes(url.pathname)) {
+        const ownerSession = sessionFor(req);
+        if (!ownerSession) return sendJson(res, 401, { error: 'Owner authentication required' });
+        if (!identity.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+          return sendJson(res, 403, { error: 'Owner CSRF validation failed', code: 'OWNER_CSRF_REJECTED' });
+        }
+      }
+
       const userStatusMatch = url.pathname.match(/^\/api\/owner\/users\/([0-9a-f-]{36})\/status$/i);
       if (userStatusMatch) {
         const ownerSession = sessionFor(req);
         if (!ownerSession) return sendJson(res, 401, { error: 'Owner authentication required' });
-        if (state.mustChangePassword) return sendJson(res, 403, { error: 'Password change required' });
+        if (ownerPasswordChangeRequired()) return sendJson(res, 403, { error: 'Password change required' });
         if (typeof body.disabled !== 'boolean') return sendJson(res, 400, { error: 'disabled must be a boolean.' });
         const userId = userStatusMatch[1];
         const target = users.find(user => user.id === userId);
@@ -372,6 +403,21 @@ function createOwnerServer(options = {}) {
       }
 
       if (url.pathname === '/api/owner/login') {
+        if (identity) {
+          if (body.username !== 'Admin' || typeof body.password !== 'string') {
+            return sendJson(res, 401, { error: 'Invalid username or password' });
+          }
+          const result = await identity.login({ username: 'Admin', password: body.password, sourceIp: ip });
+          if (!result.ok) {
+            const status = result.code === 'OWNER_SESSION_LIMIT_REACHED' ? 429 : 401;
+            return sendJson(res, status, { error: 'Invalid username or password', code: result.code });
+          }
+          const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+          return sendJson(res, 200, {
+            ok: true, username: 'Admin', csrfToken: result.csrfToken,
+            expiresAt: result.expiresAt, passwordChangeRequired: result.passwordChangeRequired
+          }, { 'Set-Cookie': sessionCookie(result.token, req).replace('Max-Age=28800', 'Max-Age=' + maxAge) });
+        }
         if (typeof body.username !== 'string' || typeof body.password !== 'string' ||
             body.username !== 'Admin' || !verifyPassword(body.password, state.password)) {
           const next = attempt.until > Date.now() ? attempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
@@ -382,19 +428,36 @@ function createOwnerServer(options = {}) {
         attempts.delete(ip);
         const token = crypto.randomBytes(32).toString('base64url');
         sessions.set(token, { expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
-        return sendJson(res, 200, { ok: true, username: 'Admin', passwordChangeRequired: state.mustChangePassword }, { 'Set-Cookie': sessionCookie(token, req) });
+        return sendJson(res, 200, { ok: true, username: 'Admin', passwordChangeRequired: ownerPasswordChangeRequired() }, { 'Set-Cookie': sessionCookie(token, req) });
       }
 
       if (url.pathname === '/api/owner/password') {
         const session = sessionFor(req);
         if (!session) return sendJson(res, 401, { error: 'Authentication required' });
+        if (identity) {
+          if (!checkOrigin(req) || !identity.verifyCsrf(session, req.headers['x-orient-csrf'])) {
+            return sendJson(res, 403, { error: 'Owner CSRF validation failed', code: 'OWNER_CSRF_REJECTED' });
+          }
+          const result = await identity.changePassword({
+            token: session.token, password: body.password, confirmPassword: body.confirmPassword
+          });
+          if (!result.ok) {
+            const status = result.code === 'OWNER_AUTH_REQUIRED' ? 401 :
+              result.code === 'OWNER_PASSWORD_POLICY_REJECTED' || result.code === 'OWNER_PASSWORD_CONFIRMATION_MISMATCH' || result.code === 'OWNER_PASSWORD_REUSE_REJECTED' ? 400 : 500;
+            return sendJson(res, status, { error: 'Could not change owner password', code: result.code });
+          }
+          const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+          return sendJson(res, 200, { ok: true, passwordChangeRequired: false, csrfToken: result.csrfToken, expiresAt: result.expiresAt }, {
+            'Set-Cookie': sessionCookie(result.token, req).replace('Max-Age=28800', 'Max-Age=' + maxAge)
+          });
+        }
         if (typeof body.password !== 'string' || body.password.length < PASSWORD_MIN_LENGTH || body.password.length > 1024) {
           return sendJson(res, 400, { error: 'Use a password of at least 14 characters.' });
         }
         if (body.password !== body.confirmPassword) {
           return sendJson(res, 400, { error: 'Passwords do not match.' });
         }
-        if (state.mustChangePassword && verifyPassword(body.password, state.password)) {
+        if (ownerPasswordChangeRequired() && verifyPassword(body.password, state.password)) {
           return sendJson(res, 400, { error: 'Choose a new password, not the temporary password.' });
         }
         const nextState = { ...state, password: hashPassword(body.password), mustChangePassword: false, updatedAt: new Date().toISOString() };
@@ -410,7 +473,13 @@ function createOwnerServer(options = {}) {
 
       if (url.pathname === '/api/owner/logout') {
         const session = sessionFor(req);
-        if (session) sessions.delete(session.token);
+        if (identity) {
+          if (!session) return sendJson(res, 401, { error: 'Authentication required' });
+          if (!checkOrigin(req) || !identity.verifyCsrf(session, req.headers['x-orient-csrf'])) {
+            return sendJson(res, 403, { error: 'Owner CSRF validation failed', code: 'OWNER_CSRF_REJECTED' });
+          }
+          identity.logout(session.token);
+        } else if (session) sessions.delete(session.token);
         return sendJson(res, 200, { ok: true }, { 'Set-Cookie': clearCookie(req) });
       }
       return sendJson(res, 404, { error: 'Not found' });
@@ -440,7 +509,7 @@ function createOwnerServer(options = {}) {
         res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
         return res.end();
       }
-      if (state.mustChangePassword) {
+      if (ownerPasswordChangeRequired()) {
         if (url.pathname !== '/owner.html') {
           res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
           return res.end();

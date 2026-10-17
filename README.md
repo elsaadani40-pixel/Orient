@@ -14,6 +14,7 @@ ORIENT is being built as one coherent system for researching, planning, executin
 - **Product contract and cross-device roadmap:** [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md)
 - **Dashboard and control-plane contract:** [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md)
 - **Security policy:** [`SECURITY.md`](SECURITY.md)
+- **Current threat model and tested boundaries:** [`docs/security/THREAT-MODEL.md`](docs/security/THREAT-MODEL.md)
 - **Contribution rules:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Automated checks:** [GitHub Actions](https://github.com/elsaadani40-pixel/Orient/actions)
 
@@ -75,10 +76,17 @@ Start the HTTP application:
 node app.js
 ```
 
-By default, the server binds to `127.0.0.1:8080`.
+By default, the unified server binds to `127.0.0.1:8080`. Start it with `npm start` (or `npm run start:web`); both commands run `app.js`, which composes the website and Runtime on one HTTP listener.
 
-- Open `http://127.0.0.1:8080` for the local memory interface.
+- Open `http://127.0.0.1:8080/` for the bilingual ORIENT website.
+- Open `http://127.0.0.1:8080/memory` for the local memory interface.
 - Open `http://127.0.0.1:8080/dashboard` for the local execution dashboard and control plane.
+- Open `http://127.0.0.1:8080/auth` for public account registration/sign-in; owner access uses the dedicated owner mode.
+- Open `http://127.0.0.1:8080/owner` for the authenticated Runtime owner console.
+
+On first run, configure `ORIENT_OWNER_BOOTSTRAP_PASSWORD` with a strong password of at least 14 characters before starting the app; `ORIENT_OWNER_PASSWORD` is accepted as a compatibility alias. Example for a one-off local shell session: `export ORIENT_OWNER_BOOTSTRAP_PASSWORD='use-a-unique-strong-secret-here'` then `npm start`. The secret is never printed to logs and only a password hash is persisted. Change the bootstrap password immediately after first sign-in. The canonical owner identity is shared by website and Runtime; public-user cookies are not accepted as owner sessions. Keep shell history and environment access private, and never commit the value.
+
+For isolated website-only testing, `npm run start:website-standalone` runs `server.js` without Runtime task routes. Use the unified commands above when testing website-to-Runtime integration.
 
 The dashboard exposes bounded, tenant-scoped execution history, per-execution event streams, pending approvals, and explicit cancellation requests. See [the dashboard contract](docs/operations/DASHBOARD-CONTROL-PLANE.md) for API details, security boundaries, and its smoke checklist.
 
@@ -132,21 +140,10 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). Keep changes focused, tested, document
 
 ORIENT is licensed under the [MIT License](LICENSE). The license applies to the repository's original code and documentation; third-party components remain subject to their own licenses. The `private: true` setting in `package.json` prevents accidental npm publication; it does not make this GitHub repository private.
 
-## Run the website account experience locally
+## Website and owner account security
 
-The separate website server is being integrated through the reviewable web-workbench pull requests. From the branch containing that work, run:
+The website and Runtime are composed through one HTTP listener when started with `npm start` or `npm run start:web`. Public registrations receive only the ordinary user role. The owner identity service is shared across both route sets, and first-run password rotation is required before Runtime operations are available.
 
-```bash
-npm ci
-npm run start:web
-```
+The website account store and canonical owner state live under `.orient-data/` by default (or `ORIENT_DATA_DIR` when configured), which must remain private and excluded from Git. Account disabling revokes active public-user sessions; owner password rotation revokes all previous owner sessions. Owner-changing requests require CSRF verification.
 
-Open `http://127.0.0.1:8080/` for the Arabic/English landing page. The first startup prints a temporary owner password to the terminal; keep that output private, sign in as `Admin`, and replace the temporary password immediately with a strong password of at least 14 characters. Owner credentials are stored locally as a salted scrypt hash under `.orient-data/`, which is excluded from Git.
-
-- `/auth` provides public registration and sign-in; public accounts receive the ordinary user role.
-- `/account` is the signed-in user's account page.
-- `/owner` and owner-only APIs require an authenticated owner session; public user sessions must not gain owner access.
-- Account disabling and password rotation must revoke the affected sessions.
-- The website server binds to loopback by default. It is not a public deployment and must not be exposed directly to the internet. Public hosting still requires a reviewed HTTPS, session, persistence, monitoring, and authorization configuration.
-
-The web workbench, account flows, and project-builder integration remain subject to their stated CI and real-browser acceptance gates. Do not interpret source code or green CI as proof of a live deployment.
+The standalone website command is for isolated account-page checks only; it does not include the Runtime task API. This branch remains a draft integration PR. Green CI verifies automated contracts but does not establish real-browser/device acceptance or a live public deployment. Do not expose the local server directly to the internet; public hosting requires reviewed HTTPS, persistent session handling, monitoring, and authorization configuration.

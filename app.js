@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const config = require('./src/core/config');
 const logger = require('./src/core/logging/logger');
 
@@ -10,8 +12,11 @@ const MemoryAuditRepository =
   require('./src/infrastructure/memory/memory-audit.repository');
 const JsonAccessAuditRepository =
   require('./src/infrastructure/security/json-access-audit.repository');
-const OwnerAuthService =
-  require('./src/core/security/owner-auth-service');
+const OwnerIdentityService =
+  require('./src/core/security/owner-identity-service');
+const OwnerIdentityRuntimeAdapter =
+  require('./src/core/security/owner-identity-runtime-adapter');
+const { createOwnerServer } = require('./server');
 
 const AgentRegistry =
   require('./src/core/agent/boundary/agent-registry');
@@ -136,9 +141,29 @@ const accessAuditRepository =
     require('path').join(config.agentDataDirectory, 'access-audit.jsonl')
   );
 
-const ownerAuthService = new OwnerAuthService({
-  stateFile: require('path').join(config.agentDataDirectory, 'owner-auth-state.json')
+const websiteDataDir = process.env.ORIENT_DATA_DIR || path.join(__dirname, '.orient-data');
+const ownerBootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD;
+const ownerStateFile = path.join(websiteDataDir, 'owner.json');
+if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
+  throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters). Set it in the local environment before starting ORIENT.');
+}
+const ownerIdentityService = new OwnerIdentityService({
+  // Keep the website's established state path so legacy owner credentials and
+  // public accounts are migrated in place rather than silently abandoned.
+  stateFile: require('path').join(websiteDataDir, 'owner.json'),
+  bootstrapPassword: ownerBootstrapPassword
 });
+const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService });
+const website = createOwnerServer({
+  dataDir: websiteDataDir,
+  identity: ownerAuthService,
+  log: () => {}
+});
+if (ownerIdentityService.createdBootstrap) {
+  // The configured bootstrap secret is never written to logs or stdout.
+  ownerIdentityService.consumeBootstrapPassword();
+  console.error('ORIENT owner identity initialized for Admin. Change the configured bootstrap password after first sign-in.');
+}
 
 const memoryService =
   new MemoryService(repository, {
@@ -319,7 +344,8 @@ const server =
     memoryRoutes,
     agentRoutes,
     accessAudit: accessAuditRepository,
-    ownerAuth: ownerAuthService
+    ownerAuth: ownerAuthService,
+    websiteHandler: website.handler
   });
 
 async function start() {

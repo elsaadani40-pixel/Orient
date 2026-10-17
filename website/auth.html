@@ -21,7 +21,7 @@ function render(){const owner=mode==='owner',register=mode==='register';$('tabs'
 function fail(text){$('message').textContent=text;$('message').className='message show'}
 $('loginTab').onclick=()=>{mode='login';render()};$('registerTab').onclick=()=>{mode='register';render()};
 $('authForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('submit');btn.disabled=true;try{const username=$('username').value.trim(),password=$('password').value;let endpoint,body;if(mode==='owner'){endpoint='/api/owner/login';body={username,password}}else if(mode==='register'){if(password.length<12)throw Error('استخدم كلمة مرور لا تقل عن 12 حرفًا.');if(password!==$('confirmPassword').value)throw Error('كلمتا المرور غير متطابقتين.');endpoint='/api/auth/register';body={username,password}}else{endpoint='/api/auth/login';body={username,password}}
-const r=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'تعذر إكمال الطلب.');location.href=mode==='owner'?'/owner':'/account';}catch(err){fail(err.message||'تعذر الاتصال بالخادم.')}finally{btn.disabled=false}});
+const r=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'تعذر إكمال الطلب.');location.href=mode==='owner'?(data.passwordChangeRequired?'/owner.html':'/owner'):'/account';}catch(err){fail(err.message||'تعذر الاتصال بالخادم.')}finally{btn.disabled=false}});
 if(mode==='owner'){$('username').value='Admin';$('username').autocomplete='username'}render();
 })();
 </script></body></html>

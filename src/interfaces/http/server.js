@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, websiteHandler = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -103,7 +103,46 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
     });
 
     try {
+      // Explicit route ownership for the unified listener: website auth/API and
+      // public assets are delegated before Runtime routes, while /owner and all
+      // /owner/* operational endpoints remain owned by the Runtime.
+      const websitePagePaths = new Set([
+        '/', '/index.html', '/auth', '/auth/', '/auth.html',
+        '/account', '/account/', '/account.html', '/owner.html',
+        '/dashboard.html', '/favicon.ico', '/robots.txt', '/sitemap.xml'
+      ]);
+      const websiteApiPath = requestUrl.pathname.startsWith('/api/auth/') ||
+        requestUrl.pathname.startsWith('/api/owner/');
+      const websiteAssetPath = /\.(?:css|js|svg|png|ico|webp|woff2?)$/i.test(requestUrl.pathname) &&
+        !['/owner-dashboard.js', '/command-scene.js'].includes(requestUrl.pathname);
+      const isRuntimeOwnedPath = requestUrl.pathname === '/owner' ||
+        requestUrl.pathname.startsWith('/owner/') ||
+        requestUrl.pathname.startsWith('/api/v1/') ||
+        requestUrl.pathname.startsWith('/executions/') ||
+        ['/agent', '/dashboard', '/owner-dashboard.js', '/command-scene.js'].includes(requestUrl.pathname);
+      const websiteOwnsRequest = websiteHandler &&
+        !isRuntimeOwnedPath &&
+        (websitePagePaths.has(requestUrl.pathname) || websiteApiPath || websiteAssetPath);
+      if (websiteOwnsRequest) {
+        await websiteHandler(req, res);
+        return;
+      }
+
       if (req.method === 'GET' && requestUrl.pathname === '/owner') {
+        if (ownerAuth) {
+          const pageOwnerCookie = parseCookies(req.headers.cookie).orient_owner_session;
+          const pageOwnerSession = ownerAuth.enabled ? ownerAuth.authenticate(pageOwnerCookie) : null;
+          if (!pageOwnerSession) {
+            res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
+            res.end();
+            return;
+          }
+          if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired) {
+            res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
+            res.end();
+            return;
+          }
+        }
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'X-Content-Type-Options': 'nosniff',
@@ -166,7 +205,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         authenticationOutcome = 'owner_login_success';
         const secure = req.socket?.encrypted ? '; Secure' : '';
         const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
-        sendJson(res, 200, { ok: true, csrfToken: result.csrfToken, expiresAt: result.expiresAt }, {
+        sendJson(res, 200, { ok: true, csrfToken: result.csrfToken, expiresAt: result.expiresAt, passwordChangeRequired: result.passwordChangeRequired === true }, {
           'Set-Cookie': 'orient_owner_session=' + result.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + maxAge + secure
         });
         return;
@@ -187,7 +226,45 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         authenticationOutcome = 'authenticated';
 
         if (req.method === 'GET' && requestUrl.pathname === '/owner/session') {
-          sendJson(res, 200, { ok: true, csrfToken: ownerSession.csrfToken, expiresAt: ownerSession.expiresAt });
+          sendJson(res, 200, {
+            ok: true, csrfToken: ownerSession.csrfToken, expiresAt: ownerSession.expiresAt,
+            passwordChangeRequired: typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired
+          });
+          return;
+        }
+
+        if (req.method === 'POST' && requestUrl.pathname === '/owner/password') {
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          const rawBody = await readBody(req, 4096);
+          let payload;
+          try { payload = JSON.parse(rawBody || '{}'); } catch (_) {
+            sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
+            return;
+          }
+          const result = await ownerAuth.changePassword({
+            token: ownerCookie, password: payload.password, confirmPassword: payload.confirmPassword
+          });
+          if (!result.ok) {
+            const status = result.code === 'OWNER_AUTH_REQUIRED' ? 401 :
+              ['OWNER_PASSWORD_POLICY_REJECTED', 'OWNER_PASSWORD_CONFIRMATION_MISMATCH', 'OWNER_PASSWORD_REUSE_REJECTED'].includes(result.code) ? 400 : 500;
+            sendJson(res, status, { ok: false, code: result.code, message: 'تعذر تغيير كلمة المرور.' });
+            return;
+          }
+          const secure = req.socket?.encrypted ? '; Secure' : '';
+          const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+          sendJson(res, 200, { ok: true, csrfToken: result.csrfToken, expiresAt: result.expiresAt, passwordChangeRequired: false }, {
+            'Set-Cookie': 'orient_owner_session=' + result.token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + maxAge + secure
+          });
+          return;
+        }
+
+        if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired &&
+            !['/owner/logout'].includes(requestUrl.pathname)) {
+          sendJson(res, 403, { ok: false, code: 'OWNER_PASSWORD_CHANGE_REQUIRED', message: 'يجب تغيير كلمة مرور المالك قبل المتابعة.' });
           return;
         }
 
@@ -293,6 +370,11 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           });
           return;
         }
+        if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired) {
+          authenticationOutcome = 'owner_password_change_required';
+          sendJson(res, 403, { ok: false, code: 'OWNER_PASSWORD_CHANGE_REQUIRED', message: 'يجب تغيير كلمة مرور المالك قبل تنفيذ أي عملية.' });
+          return;
+        }
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !isSameOrigin(req)) {
           authenticationOutcome = 'csrf_rejected';
           sendJson(res, 403, { ok: false, code: 'OWNER_ORIGIN_REJECTED', message: 'تم رفض مصدر الطلب.' });
@@ -368,7 +450,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       }
       if (
         req.method === 'GET' &&
-        requestUrl.pathname === '/'
+        (requestUrl.pathname === '/memory' || (requestUrl.pathname === '/' && !websiteHandler))
       ) {
         memoryRoutes.home(req, res, requestUrl);
         return;
