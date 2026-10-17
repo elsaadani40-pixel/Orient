@@ -78,7 +78,7 @@ class MemoryAuditRepository {
         try { owner = JSON.parse(raw); } catch {}
         const oldEnough = Date.now() - statBefore.mtimeMs > STALE_LOCK_MS;
         const abandoned = owner && !processIsAlive(Number(owner.pid));
-        if (oldEnough && (abandoned || !owner)) {
+        if (abandoned || (!owner && oldEnough)) {
           const statAfter = fs.statSync(lockPath);
           const rawAfter = fs.readFileSync(lockPath, 'utf8');
           if (statBefore.ino === statAfter.ino && raw === rawAfter) {
