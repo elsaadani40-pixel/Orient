@@ -1,20 +1,29 @@
 'use strict';
 
 /**
- * Inbound adapter boundary for external communication channels.
+ * Authenticated ingress boundary for external communication channels.
  *
- * A channel adapter may normalize an untrusted message, but it must not
- * execute tools, construct approval decisions, or choose Runtime identity.
- * Runtime identity and authorization remain configured by the host.
+ * The channel payload is untrusted. A host-supplied authenticator must derive
+ * the principal from trusted provider credentials/signatures, not payload
+ * identity fields. A host-supplied resolver must return the Runtime scoped to
+ * that authenticated principal. This adapter never grants approvals or tools.
  */
 class ChannelAdapter {
-  constructor({ channelId, runtime, maxMessageChars = 100000 } = {}) {
+  constructor({
+    channelId,
+    authenticate,
+    runtimeForPrincipal,
+    maxMessageChars = 100000
+  } = {}) {
     if (typeof channelId !== 'string' ||
         !/^[a-z][a-z0-9._-]{0,63}$/.test(channelId)) {
       throw new TypeError('channelId must be a stable lowercase identifier');
     }
-    if (!runtime || typeof runtime.execute !== 'function') {
-      throw new TypeError('A compatible ORIENT Runtime is required');
+    if (typeof authenticate !== 'function') {
+      throw new TypeError('A trusted channel authenticator is required');
+    }
+    if (typeof runtimeForPrincipal !== 'function') {
+      throw new TypeError('A principal-scoped Runtime resolver is required');
     }
     if (!Number.isSafeInteger(maxMessageChars) ||
         maxMessageChars < 1 || maxMessageChars > 1000000) {
@@ -22,7 +31,8 @@ class ChannelAdapter {
     }
 
     this.channelId = channelId;
-    this.runtime = runtime;
+    this.authenticate = authenticate;
+    this.runtimeForPrincipal = runtimeForPrincipal;
     this.maxMessageChars = maxMessageChars;
     Object.freeze(this);
   }
@@ -52,9 +62,23 @@ class ChannelAdapter {
       });
     }
 
-    // Deliberately forward only the normalized message. Never trust channel
-    // payloads to select tenant/user identity or inject approvals/options.
-    const result = await this.runtime.execute(message);
+    // Authentication must verify trusted provider credentials/signatures.
+    // Caller-supplied userId/tenantId fields are never used as identity.
+    const principal = await this.authenticate(envelope, { channelId: this.channelId });
+    if (!principal || typeof principal !== 'object' || Array.isArray(principal)) {
+      throw Object.assign(new Error('Inbound sender is not authenticated'), {
+        code: 'CHANNEL_UNAUTHENTICATED'
+      });
+    }
+
+    const runtime = await this.runtimeForPrincipal(principal);
+    if (!runtime || typeof runtime.execute !== 'function') {
+      throw Object.assign(new Error('No Runtime is available for this principal'), {
+        code: 'CHANNEL_RUNTIME_UNAVAILABLE'
+      });
+    }
+
+    const result = await runtime.execute(message);
     return Object.freeze({
       channelId: this.channelId,
       result
