@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#080c13">
+<meta name="description" content="ORIENT private owner chat for governed Runtime tasks.">
+<title>ORIENT · المحادثة الذكية</title>
+<style>
+:root{color-scheme:dark;--bg:#080c13;--panel:#111a27;--line:#29384c;--text:#edf4ff;--muted:#9aabc1;--mint:#78f0d1;--blue:#8ab4ff;--amber:#ffd27a;--red:#ff9696;--green:#6ce0a0}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -20%,#1a3b5a 0,transparent 46%),var(--bg);color:var(--text);font:15px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}a{color:var(--mint);text-decoration:none}.shell{max-width:1100px;margin:auto;min-height:100dvh;padding:16px;display:flex;flex-direction:column}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0 16px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:11px}.mark{display:grid;place-items:center;width:42px;height:42px;border:1px solid #78f0d166;border-radius:13px;color:var(--mint);font-weight:900;font-size:20px}.brand strong{letter-spacing:.16em}.brand small{display:block;color:var(--muted);font-size:11px}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #385477;background:#183452;color:var(--text);border-radius:10px;padding:9px 13px;font-weight:700}.btn.secondary{background:#111a27;border-color:var(--line)}.btn.primary{background:var(--mint);color:#06120f;border-color:var(--mint)}.status{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px;margin:12px 0}.dot{width:8px;height:8px;border-radius:50%;background:var(--amber)}.dot.ok{background:var(--green)}.dot.bad{background:var(--red)}.notice{border:1px solid #4b5b72;background:#0d1622;border-radius:12px;padding:12px 14px;color:var(--muted);font-size:12px;margin:8px 0 14px}.notice strong{color:var(--text)}.chat{flex:1;min-height:260px;display:flex;flex-direction:column;gap:12px;padding:10px 0 18px}.welcome{margin:auto;text-align:center;max-width:600px;padding:28px 14px}.orb{width:74px;height:74px;border-radius:50%;margin:0 auto 20px;background:radial-gradient(circle at 30% 25%,#e1fff8,#78f0d1 14%,#176e79 42%,#101a2a 76%);box-shadow:0 0 42px #78f0d144}.welcome h1{font-size:clamp(26px,5vw,40px);line-height:1.2;margin:0 0 12px}.welcome p{color:var(--muted)}.suggestions{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:20px}.suggestions button{border:1px solid var(--line);border-radius:99px;background:#101b29;color:#dce8f7;padding:8px 12px;font-size:12px}.bubble{max-width:min(88%,780px);border:1px solid var(--line);border-radius:16px;padding:13px 15px;white-space:pre-wrap;overflow-wrap:anywhere}.bubble.user{align-self:flex-start;background:#132c42;border-color:#315472}.bubble.runtime{align-self:flex-end;background:#101a27}.bubble .meta{font-size:11px;color:var(--muted);margin-bottom:6px;display:flex;justify-content:space-between;gap:14px}.bubble .content{white-space:pre-wrap}.task-state{border-top:1px solid var(--line);margin-top:10px;padding-top:9px;font-size:12px;color:var(--muted)}.task-state strong{color:var(--text)}.events{display:grid;gap:6px;margin-top:8px}.event{border:1px solid #27364a;border-radius:8px;padding:7px 9px;font-size:11px;color:#c8d7eb}.event small{display:block;color:var(--muted)}.composer-wrap{position:sticky;bottom:0;background:linear-gradient(180deg,transparent,var(--bg) 20%);padding:18px 0 8px}.composer{border:1px solid #3a4e67;border-radius:18px;background:#0d1520;padding:12px;box-shadow:0 14px 45px #0004}.composer textarea{display:block;width:100%;min-height:72px;max-height:220px;resize:vertical;border:0;outline:0;background:transparent;color:var(--text);padding:8px;font:inherit}.composer-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:10px}.left-tools,.right-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.file-input{max-width:190px;font-size:11px;color:var(--muted)}.file-list{display:flex;gap:6px;flex-wrap:wrap;padding:6px 4px}.file-chip{border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:11px;color:var(--muted)}.error{color:var(--red)}.hint{font-size:11px;color:var(--muted)}.footer{text-align:center;color:var(--muted);font-size:11px;padding:14px 0}.hidden{display:none!important}@media(max-width:600px){.shell{padding:10px}.brand small{max-width:170px}.top{align-items:flex-start}.actions .btn{padding:8px;font-size:11px}.bubble{max-width:96%}.composer textarea{min-height:82px}.file-input{max-width:150px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<main class="shell">
+<header class="top">
+  <div class="brand"><div class="mark" aria-hidden="true">O</div><div><strong>ORIENT</strong><small>محادثة المالك · Runtime محكوم</small></div></div>
+  <div class="actions"><a class="btn secondary" href="/owner">مركز المالك</a><a class="btn secondary" href="/workbench">سجل المهام</a></div>
+</header>
+<div class="status" role="status" aria-live="polite"><span id="dot" class="dot"></span><span id="connection">جارٍ التحقق من جلسة المالك…</span></div>
+<div class="notice"><strong>شفافية التنفيذ:</strong> هذه الواجهة ترسل الطلب إلى Runtime الحقيقي وتعرض حالة المهمة وأحداثها. واجهة الإجابة النصية النهائية وفهم الصور/الصوت/المستندات الثنائية تحتاج عقود معالجة ومخرجات إضافية؛ لن ندّعي تحليل مرفق لم تتم معالجته.</div>
+<section id="chat" class="chat" aria-label="محادثة ORIENT" aria-live="polite">
+  <div id="welcome" class="welcome"><div class="orb" aria-hidden="true"></div><h1>أهلًا بك في مساحة عمل ORIENT</h1><p>اكتب المطلوب، وسأرسل المهمة إلى Runtime المحكوم بالصلاحيات وأعرض ما يعيده النظام من حالة وأحداث دون اختلاق نتيجة.</p><div class="suggestions"><button type="button" data-prompt="افحص مستودع ORIENT قراءة فقط وحدد أهم الفجوات مع أدلة واختبارات مقترحة.">افحص ORIENT</button><button type="button" data-prompt="راجع المهمة الحالية، اشرح المخاطر ومعايير النجاح، ولا تغيّر أي ملف قبل موافقتي.">حلّل قبل التنفيذ</button><button type="button" data-prompt="اقرأ الملفات النصية المرفقة وحدد ما تحتويه من مشكلات أو نقاط تحتاج إلى متابعة.">حلل ملفات نصية</button></div></div>
+</section>
+<div class="composer-wrap">
+  <form id="composer" class="composer">
+    <label for="work-mode" class="hint">طريقة العمل</label>
+    <select id="work-mode" class="input" aria-label="طريقة عمل ORIENT">
+      <option value="strict" selected>هندسة صارمة: خطوة واحدة، تحقق، ثم التالية</option>
+      <option value="readonly">فحص قراءة فقط دون تعديل</option>
+      <option value="plan">تحليل وخطة ومعايير قبول دون تنفيذ</option>
+    </select>
+    <textarea id="message" maxlength="4000" aria-label="رسالتك إلى ORIENT" placeholder="اكتب هدفك أو الخطوة التالية… (Enter للإرسال، Shift+Enter لسطر جديد)" required></textarea>
+    <div id="files" class="file-list" aria-live="polite"></div>
+    <div class="composer-bottom"><div class="left-tools"><label class="btn secondary" for="attachments">إرفاق ملفات نصية</label><input id="attachments" class="file-input" type="file" multiple accept=".txt,.md,.json,.csv,.log,.js,.ts,.tsx,.jsx,.html,.css,.xml,.yaml,.yml,.toml,.py,.kt,.sh,.sql,.diff,.patch" aria-label="إرفاق ملفات نصية"><span class="hint">حتى 5 ملفات نصية · إجمالي 12KB</span></div><div class="right-tools"><span id="counter" class="hint">0 / 4000</span><button id="send" class="btn primary" type="submit">إرسال المهمة ↑</button></div></div>
+  </form>
+  <div id="composer-status" class="hint" role="status" aria-live="polite">المحادثة مرتبطة بجلسة المالك؛ لا تحفظ نصوص الرسائل في تخزين المتصفح.</div>
+</div>
+<footer class="footer">ORIENT · الجلسة خاصة بالمالك · لا تُرسل صورًا أو تسجيلات على أنها محللة حتى تتوفر معالجة متعددة الوسائط متحققة.</footer>
+</main>
+<script src="/chat.js" defer></script>
+</body>
+</html>

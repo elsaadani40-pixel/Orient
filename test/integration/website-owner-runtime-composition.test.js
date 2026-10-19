@@ -158,7 +158,9 @@ test('website owner session creates and reads a task through the real Runtime', 
 
   const ownerPage = await fetch(origin + '/owner', { headers: { Cookie: ownerCookie }, redirect: 'manual' });
   assert.equal(ownerPage.status, 200);
-  assert.match(await ownerPage.text(), /Owner|ORIENT|owner/i);
+  const ownerPageHtml = await ownerPage.text();
+  assert.match(ownerPageHtml, /Owner|ORIENT|owner/i);
+  assert.ok(ownerPageHtml.includes('href="/chat"'), 'owner console must link to the protected chat workspace');
   const workbench = await fetch(origin + '/workbench', { headers: { Cookie: ownerCookie }, redirect: 'manual' });
   assert.equal(workbench.status, 200);
   assert.match(await workbench.text(), /workbench|task|ORIENT/i);
@@ -193,6 +195,21 @@ test('website owner session creates and reads a task through the real Runtime', 
   }
   const stalePublicSession = await fetch(origin + '/api/auth/me', { headers: { Cookie: publicCookie } });
   assert.equal(stalePublicSession.status, 401);
+
+  const unauthenticatedChatPage = await fetch(origin + '/chat', { redirect: 'manual' });
+  assert.equal(unauthenticatedChatPage.status, 302, 'chat page must require an owner session');
+
+  const ownerChatPage = await fetch(origin + '/chat', { headers: { Cookie: ownerCookie } });
+  assert.equal(ownerChatPage.status, 200);
+  const chatHtml = await ownerChatPage.text();
+  assert.match(chatHtml, /id="composer"/);
+  assert.match(chatHtml, /id="attachments"/);
+  assert.match(chatHtml, /src="\/chat.js"/);
+  assert.match(chatHtml, /لا تُرسل صورًا أو تسجيلات على أنها محللة/);
+
+  const ownerChatScript = await fetch(origin + '/chat.js', { headers: { Cookie: ownerCookie } });
+  assert.equal(ownerChatScript.status, 200);
+  assert.match(await ownerChatScript.text(), /\/owner\/chat/);
 
   const ownerDashboard = await fetch(origin + '/dashboard.html', { headers: { Cookie: ownerCookie } });
   assert.equal(ownerDashboard.status, 200);
