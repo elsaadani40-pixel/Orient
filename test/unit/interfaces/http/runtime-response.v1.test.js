@@ -7,7 +7,7 @@ const {
   createRuntimeResponseV1,
   MAX_ASSISTANT_TEXT_CHARS,
   MAX_EVIDENCE_REFERENCES
-} = require('../../src/interfaces/http/contracts/runtime-response.v1');
+} = require('../../../../src/interfaces/http/contracts/runtime-response.v1');
 
 test('creates a versioned response without inventing an assistant answer', () => {
   assert.deepEqual(createRuntimeResponseV1({
