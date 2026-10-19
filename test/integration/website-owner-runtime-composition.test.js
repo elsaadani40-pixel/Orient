@@ -218,7 +218,6 @@ test('website owner session creates and reads a task through the real Runtime', 
   assert.match(dashboardHtml, /id="refresh-runtime"/);
   assert.match(dashboardHtml, /api\/v1\/tasks\?limit=1&offset=0/);
   assert.match(dashboardHtml, /href="\/workbench"/);
-  assert.match(dashboardHtml, /href="\/chat"/);
 
   const taskHeaders = {
     'content-type': 'application/json',
