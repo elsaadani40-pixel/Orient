@@ -311,6 +311,16 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
+        const ownerChatResponseMatch = requestUrl.pathname.match(/^\\/owner\\/chat\\/([A-Za-z0-9_-]{1,200})\\/response$/);
+        if (req.method === 'GET' && ownerChatResponseMatch) {
+          if (!agentRoutes || typeof agentRoutes.taskResponse !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'RUNTIME_RESPONSE_UNAVAILABLE', message: 'نتيجة Runtime غير متاحة حاليًا.' });
+            return;
+          }
+          await agentRoutes.taskResponse(req, res, ownerChatResponseMatch[1]);
+          return;
+        }
+
         if (req.method === 'POST' && requestUrl.pathname === '/owner/chat') {
           if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
             authenticationOutcome = 'csrf_rejected';
