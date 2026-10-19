@@ -1,4 +1,5 @@
 const AppError = require('../../../core/errors/AppError');
+const { createRuntimeResponseV1 } = require('../contracts/runtime-response.v1');
 
 function createAgentRoutes(agentService) {
   return {
@@ -91,6 +92,39 @@ function createAgentRoutes(agentService) {
         'X-ORIENT-API-Version': 'v1'
       });
       res.end(JSON.stringify({ apiVersion: 'v1', task }));
+    },
+
+    async taskResponse(req, res, executionId) {
+      const result = await agentService.getExecutionStatus(executionId);
+      const events = await agentService.getExecutionEvents(executionId, { limit: 100 });
+      const approvals = typeof agentService.getExecutionApprovals === 'function'
+        ? await agentService.getExecutionApprovals(executionId)
+        : [];
+      const evidenceReferences = (Array.isArray(events) ? events : [])
+        .filter(event => typeof event?.id === 'string' && event.id.length > 0)
+        .slice(-100)
+        .map(event => ({
+          id: event.id,
+          type: 'runtime.event',
+          label: typeof event.type === 'string' ? event.type.replace(/[\\r\\n\\0]/g, '').slice(0, 200) : null
+        }));
+      // Tool output is not automatically a user-facing answer. Until the Runtime
+      // has an explicit final-answer producer, this endpoint never serializes raw
+      // execution.result, plan, inputs, observations, or tool payloads.
+      const response = createRuntimeResponseV1({
+        assistantText: null,
+        taskId: result.executionId,
+        status: result.status,
+        evidenceReferences,
+        approvalRequired: Array.isArray(approvals) && approvals.length > 0
+      });
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+        'X-ORIENT-API-Version': 'v1'
+      });
+      res.end(JSON.stringify(response));
     },
 
     async taskEvents(req, res, executionId) {
