@@ -194,6 +194,21 @@ test('website owner session creates and reads a task through the real Runtime', 
   const stalePublicSession = await fetch(origin + '/api/auth/me', { headers: { Cookie: publicCookie } });
   assert.equal(stalePublicSession.status, 401);
 
+  const unauthenticatedChatPage = await fetch(origin + '/chat', { redirect: 'manual' });
+  assert.equal(unauthenticatedChatPage.status, 302, 'chat page must require an owner session');
+
+  const ownerChatPage = await fetch(origin + '/chat', { headers: { Cookie: ownerCookie } });
+  assert.equal(ownerChatPage.status, 200);
+  const chatHtml = await ownerChatPage.text();
+  assert.match(chatHtml, /id="composer"/);
+  assert.match(chatHtml, /id="attachments"/);
+  assert.match(chatHtml, /src="\/chat.js"/);
+  assert.match(chatHtml, /لا تُرسل صورًا أو تسجيلات على أنها محللة/);
+
+  const ownerChatScript = await fetch(origin + '/chat.js', { headers: { Cookie: ownerCookie } });
+  assert.equal(ownerChatScript.status, 200);
+  assert.match(await ownerChatScript.text(), /\/owner\/chat/);
+
   const ownerDashboard = await fetch(origin + '/dashboard.html', { headers: { Cookie: ownerCookie } });
   assert.equal(ownerDashboard.status, 200);
   const dashboardHtml = await ownerDashboard.text();
