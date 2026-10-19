@@ -324,6 +324,23 @@ test('website owner session creates and reads a task through the real Runtime', 
   assert.equal(detail.task.status, 'completed');
   assert.equal(Object.hasOwn(detail.task, 'tenantId'), false);
 
+  const publicResponseDenied = await fetch(origin + '/owner/chat/' + encodeURIComponent(created.task.id) + '/response', {
+    headers: { Cookie: publicCookie }
+  });
+  assert.equal(publicResponseDenied.status, 401, 'public users must not retrieve owner Runtime output');
+
+  const finalOutputResponse = await fetch(origin + '/owner/chat/' + encodeURIComponent(created.task.id) + '/response', {
+    headers: { Cookie: ownerCookie }
+  });
+  assert.equal(finalOutputResponse.status, 200);
+  const finalOutput = await finalOutputResponse.json();
+  assert.equal(finalOutput.apiVersion, 'v1');
+  assert.equal(finalOutput.task.id, created.task.id);
+  assert.equal(finalOutput.task.status, 'completed');
+  assert.equal(finalOutput.assistant.text, null, 'must not invent an assistant answer from raw tool output');
+  assert.ok(Array.isArray(finalOutput.evidenceReferences));
+  assert.equal(Object.hasOwn(finalOutput, 'result'), false, 'must not expose raw Runtime result payload');
+
   const ownerState = JSON.parse(fs.readFileSync(path.join(dataDir, 'owner.json'), 'utf8'));
   assert.equal(typeof ownerState.passwordHash, 'string');
   assert.equal(Object.hasOwn(ownerState, 'password'), false);

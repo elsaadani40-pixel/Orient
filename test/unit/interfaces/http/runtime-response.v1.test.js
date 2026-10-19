@@ -45,6 +45,10 @@ test('rejects missing, oversized, or control-character task identifiers', () => 
   }
 });
 
+test('accepts the canonical Runtime created status', () => {
+  assert.equal(createRuntimeResponseV1({ taskId: 't-created', status: 'created' }).task.status, 'created');
+});
+
 test('rejects unknown Runtime status instead of silently normalizing it', () => {
   assert.throws(() => createRuntimeResponseV1({ taskId: 't1', status: 'success-ish' }), /status/);
 });

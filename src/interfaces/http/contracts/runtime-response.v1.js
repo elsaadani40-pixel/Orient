@@ -2,7 +2,7 @@
 
 const API_VERSION = 'v1';
 const TASK_STATUSES = new Set([
-  'queued', 'pending', 'running', 'paused', 'awaiting_approval',
+  'created', 'queued', 'pending', 'running', 'paused', 'awaiting_approval',
   'completed', 'failed', 'cancelled', 'rejected'
 ]);
 const MAX_ASSISTANT_TEXT_CHARS = 20000;
