@@ -324,7 +324,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
-          if (!message || message.length > 4000 || /[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]/.test(message)) {
+          if (!message || message.length > 4000 || /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(message)) {
             sendJson(res, 400, { ok: false, code: 'INVALID_CHAT_MESSAGE', message: 'الرسالة مطلوبة وبحد أقصى 4000 حرف.' });
             return;
           }
