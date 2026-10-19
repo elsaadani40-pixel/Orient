@@ -106,7 +106,7 @@ function createAgentRoutes(agentService) {
         .map(event => ({
           id: event.id,
           type: 'runtime.event',
-          label: typeof event.type === 'string' ? event.type.replace(/[\\r\\n\\0]/g, '').slice(0, 200) : null
+          label: typeof event.type === 'string' ? event.type.replace(/[\r\n\0]/g, '').slice(0, 200) : null
         }));
       // Tool output is not automatically a user-facing answer. Until the Runtime
       // has an explicit final-answer producer, this endpoint never serializes raw
