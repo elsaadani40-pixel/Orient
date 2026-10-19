@@ -160,7 +160,7 @@ test('website owner session creates and reads a task through the real Runtime', 
   assert.equal(ownerPage.status, 200);
   const ownerPageHtml = await ownerPage.text();
   assert.match(ownerPageHtml, /Owner|ORIENT|owner/i);
-  assert.match(ownerPageHtml, /href="\\/chat"/, 'owner console must link to the protected chat workspace');
+  assert.ok(ownerPageHtml.includes('href="/chat"'), 'owner console must link to the protected chat workspace');
   const workbench = await fetch(origin + '/workbench', { headers: { Cookie: ownerCookie }, redirect: 'manual' });
   assert.equal(workbench.status, 200);
   assert.match(await workbench.text(), /workbench|task|ORIENT/i);
