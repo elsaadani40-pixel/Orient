@@ -311,7 +311,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
-        const ownerChatResponseMatch = requestUrl.pathname.match(/^\\/owner\\/chat\\/([A-Za-z0-9_-]{1,200})\\/response$/);
+        const ownerChatResponseMatch = requestUrl.pathname.match(/^\/owner\/chat\/([A-Za-z0-9_-]{1,200})\/response$/);
         if (req.method === 'GET' && ownerChatResponseMatch) {
           if (!agentRoutes || typeof agentRoutes.taskResponse !== 'function') {
             sendJson(res, 503, { ok: false, code: 'RUNTIME_RESPONSE_UNAVAILABLE', message: 'نتيجة Runtime غير متاحة حاليًا.' });
