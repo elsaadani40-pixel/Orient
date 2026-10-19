@@ -25,6 +25,12 @@
 </section>
 <div class="composer-wrap">
   <form id="composer" class="composer">
+    <label for="work-mode" class="hint">طريقة العمل</label>
+    <select id="work-mode" class="input" aria-label="طريقة عمل ORIENT">
+      <option value="strict" selected>هندسة صارمة: خطوة واحدة، تحقق، ثم التالية</option>
+      <option value="readonly">فحص قراءة فقط دون تعديل</option>
+      <option value="plan">تحليل وخطة ومعايير قبول دون تنفيذ</option>
+    </select>
     <textarea id="message" maxlength="4000" aria-label="رسالتك إلى ORIENT" placeholder="اكتب هدفك أو الخطوة التالية… (Enter للإرسال، Shift+Enter لسطر جديد)" required></textarea>
     <div id="files" class="file-list" aria-live="polite"></div>
     <div class="composer-bottom"><div class="left-tools"><label class="btn secondary" for="attachments">إرفاق ملفات نصية</label><input id="attachments" class="file-input" type="file" multiple accept=".txt,.md,.json,.csv,.log,.js,.ts,.tsx,.jsx,.html,.css,.xml,.yaml,.yml,.toml,.py,.kt,.sh,.sql,.diff,.patch" aria-label="إرفاق ملفات نصية"><span class="hint">حتى 5 ملفات نصية · إجمالي 12KB</span></div><div class="right-tools"><span id="counter" class="hint">0 / 4000</span><button id="send" class="btn primary" type="submit">إرسال المهمة ↑</button></div></div>
