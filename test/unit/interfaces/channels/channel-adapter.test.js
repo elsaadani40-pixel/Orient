@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const ChannelAdapter = require('../../../src/interfaces/channels/channel-adapter');
+const ChannelAdapter = require('../../../../src/interfaces/channels/channel-adapter');
 
 test('channel adapter forwards normalized text only through the canonical Runtime', async () => {
   const calls = [];
