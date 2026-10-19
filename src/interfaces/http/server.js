@@ -114,9 +114,10 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       const websiteApiPath = requestUrl.pathname.startsWith('/api/auth/') ||
         requestUrl.pathname.startsWith('/api/owner/');
       const websiteAssetPath = /\.(?:css|js|svg|png|ico|webp|woff2?)$/i.test(requestUrl.pathname) &&
-        !['/owner-dashboard.js', '/command-scene.js', '/workbench.js'].includes(requestUrl.pathname);
+        !['/owner-dashboard.js', '/command-scene.js', '/workbench.js', '/chat.js'].includes(requestUrl.pathname);
       const isRuntimeOwnedPath = requestUrl.pathname === '/owner' ||
         requestUrl.pathname === '/workbench' || requestUrl.pathname === '/workbench.js' ||
+        requestUrl.pathname === '/chat' || requestUrl.pathname === '/chat.js' ||
         requestUrl.pathname.startsWith('/owner/') ||
         requestUrl.pathname.startsWith('/api/v1/') ||
         requestUrl.pathname.startsWith('/executions/') ||
@@ -175,7 +176,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         : null;
 
       if (req.method === 'GET' &&
-          (requestUrl.pathname === '/workbench' || requestUrl.pathname === '/workbench.js')) {
+          (requestUrl.pathname === '/workbench' || requestUrl.pathname === '/workbench.js' || requestUrl.pathname === '/chat' || requestUrl.pathname === '/chat.js')) {
         if (!ownerSession) {
           res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
           res.end();
@@ -184,6 +185,11 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired) {
           res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
           res.end();
+          return;
+        }
+        if (requestUrl.pathname === '/chat.js') {
+          res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'; script-src 'self'; base-uri 'none'" });
+          res.end(require('node:fs').readFileSync(require('node:path').join(__dirname, 'chat.js'), 'utf8'));
           return;
         }
         if (requestUrl.pathname === '/workbench.js') {
@@ -206,7 +212,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           'Referrer-Policy': 'no-referrer',
           'X-Frame-Options': 'DENY'
         });
-        res.end(require('node:fs').readFileSync(require('node:path').join(__dirname, 'workbench.html'), 'utf8'));
+        res.end(require('node:fs').readFileSync(require('node:path').join(__dirname, requestUrl.pathname === '/chat' ? 'chat.html' : 'workbench.html'), 'utf8'));
         return;
       }
 
