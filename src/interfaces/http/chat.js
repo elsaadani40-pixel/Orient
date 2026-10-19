@@ -77,6 +77,20 @@
       root.append(row);
     }
   }
+  function renderFinalAnswer(container, answer) {
+    if (typeof answer !== 'string' || !answer.trim() || container.querySelector('.final-answer')) return;
+    const section = document.createElement('section');
+    section.className = 'final-answer';
+    section.setAttribute('aria-label', 'إجابة ORIENT النهائية');
+    const heading = document.createElement('strong');
+    heading.textContent = 'إجابة ORIENT';
+    const content = document.createElement('div');
+    content.className = 'content';
+    content.textContent = answer;
+    section.append(heading, content);
+    container.append(section);
+    section.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block:'end' });
+  }
   async function monitorTask(task, bubble) {
     const stateLine = document.createElement('div');
     stateLine.className = 'task-state';
@@ -92,6 +106,16 @@
           request('/api/v1/tasks/' + encodeURIComponent(task.id)),
           request('/api/v1/tasks/' + encodeURIComponent(task.id) + '/events?limit=50')
         ]);
+        let response = null;
+        try {
+          response = await request('/owner/chat/' + encodeURIComponent(task.id) + '/response');
+        } catch (error) {
+          if (error.status === 401 || error.status === 403) throw error;
+          // Status and sanitized events remain useful if the optional answer
+          // retrieval endpoint is temporarily unavailable.
+        }
+        const answer = response?.apiVersion === 'v1' ? response?.assistant?.text : null;
+        if (typeof answer === 'string' && answer.trim()) renderFinalAnswer(bubble, answer);
         const actual = detail.task || {};
         const status = String(actual.status || task.status || 'unknown').toLowerCase();
         stateLine.replaceChildren();
@@ -110,7 +134,9 @@
           const truth = document.createElement('p');
           truth.className = 'hint';
           truth.textContent = status === 'completed'
-            ? 'أعلن Runtime اكتمال المهمة. هذه النسخة تعرض الحالة والأحداث فقط؛ لم يوفّر API بعد نص إجابة نهائية قابلًا للعرض.'
+            ? (bubble.querySelector('.final-answer')
+              ? 'أعلن Runtime اكتمال المهمة وعرض النص النهائي الذي أعاده عقد الاستجابة.'
+              : 'أعلن Runtime اكتمال المهمة، لكنه لم يوفّر نص إجابة نهائية. لن أستنتج إجابة من أحداث الأدوات.')
             : 'أعلن Runtime حالة نهائية غير ناجحة. راجع أحداث التنفيذ ومركز المالك للموافقات أو التشخيص.';
           stateLine.append(truth);
           return;
