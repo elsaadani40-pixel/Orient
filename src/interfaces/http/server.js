@@ -305,6 +305,39 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
+        if (req.method === 'POST' && requestUrl.pathname === '/owner/chat') {
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          if (!String(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
+            sendJson(res, 415, { ok: false, code: 'JSON_REQUIRED', message: 'يلزم إرسال رسالة بصيغة JSON.' });
+            return;
+          }
+          const rawBody = await readBody(req, 16384);
+          let payload;
+          try {
+            payload = JSON.parse(rawBody || '{}');
+          } catch (_) {
+            sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
+            return;
+          }
+          const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
+          if (!message || message.length > 4000 || /[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]/.test(message)) {
+            sendJson(res, 400, { ok: false, code: 'INVALID_CHAT_MESSAGE', message: 'الرسالة مطلوبة وبحد أقصى 4000 حرف.' });
+            return;
+          }
+          if (!agentRoutes || typeof agentRoutes.createTask !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'RUNTIME_UNAVAILABLE', message: 'Runtime غير متاح حاليًا.' });
+            return;
+          }
+          // Identity, tenant, workspace, role, capability and approval are
+          // deliberately derived server-side; only the bounded message becomes a goal.
+          await agentRoutes.createTask(req, res, JSON.stringify({ goal: message }));
+          return;
+        }
+
         if (req.method === 'GET' && requestUrl.pathname === '/owner/audit') {
           if (!accessAudit || typeof accessAudit.listRecent !== 'function') {
             sendJson(res, 503, { ok: false, code: 'AUDIT_VIEW_UNAVAILABLE', message: 'سجل التدقيق غير متاح.' });
