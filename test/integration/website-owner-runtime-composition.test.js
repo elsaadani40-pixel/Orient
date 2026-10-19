@@ -209,6 +209,74 @@ test('website owner session creates and reads a task through the real Runtime', 
     'X-ORIENT-CSRF': rotationBody.csrfToken,
     'Idempotency-Key': 'website-runtime-composition-task-0001'
   };
+  const chatWithoutCsrf = await fetch(origin + '/owner/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', Origin: origin, Cookie: ownerCookie },
+    body: JSON.stringify({ message: 'لا يجب تنفيذ هذا الطلب دون CSRF' })
+  });
+  assert.equal(chatWithoutCsrf.status, 403, 'owner chat must require the existing owner CSRF token');
+
+  const chatWrongOrigin = await fetch(origin + '/owner/chat', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: 'https://attacker.invalid',
+      Cookie: ownerCookie,
+      'X-ORIENT-CSRF': rotationBody.csrfToken
+    },
+    body: JSON.stringify({ message: 'لا يجب تنفيذ هذا الطلب من مصدر آخر' })
+  });
+  assert.equal(chatWrongOrigin.status, 403, 'owner chat must reject cross-origin requests');
+
+  const chatInvalidMessage = await fetch(origin + '/owner/chat', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: ownerCookie,
+      'X-ORIENT-CSRF': rotationBody.csrfToken
+    },
+    body: JSON.stringify({ message: '   ', tenantId: 'attacker-tenant', role: 'admin', approval: { approved: true } })
+  });
+  assert.equal(chatInvalidMessage.status, 400, 'blank chat messages must be rejected');
+
+  const publicChatDenied = await fetch(origin + '/owner/chat', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: publicCookie,
+      'X-ORIENT-CSRF': rotationBody.csrfToken
+    },
+    body: JSON.stringify({ message: 'public users must not reach the owner Runtime' })
+  });
+  assert.equal(publicChatDenied.status, 401, 'public account sessions must not access owner chat');
+
+  const chatResponse = await fetch(origin + '/owner/chat', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: ownerCookie,
+      'X-ORIENT-CSRF': rotationBody.csrfToken,
+      'Idempotency-Key': 'website-owner-chat-ingress-0001'
+    },
+    body: JSON.stringify({
+      message: 'افحص المشروع من خلال Runtime',
+      tenantId: 'attacker-tenant',
+      userId: 'attacker-user',
+      workspaceId: 'attacker-workspace',
+      role: 'admin',
+      approval: { approved: true },
+      capabilities: ['*']
+    })
+  });
+  assert.equal(chatResponse.status, 201, 'authenticated owner chat must enter the canonical Runtime task service');
+  const chatResult = await chatResponse.json();
+  assert.equal(chatResult.apiVersion, 'v1');
+  assert.ok(chatResult.task?.id);
+  assert.equal(chatResult.task.status, 'completed');
+
   const createResponse = await fetch(origin + '/api/v1/tasks', {
     method: 'POST',
     headers: taskHeaders,
