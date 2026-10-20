@@ -15,7 +15,7 @@ test('creates a versioned response without inventing an assistant answer', () =>
     status: 'running'
   }), {
     apiVersion: 'v1',
-    assistant: { text: null },
+    assistant: { text: null, status: 'pending' },
     task: { id: 'task-123', status: 'running' },
     evidenceReferences: [],
     approvalRequired: false
@@ -32,6 +32,7 @@ test('preserves an actual Runtime answer and bounded evidence references', () =>
     approvalRequired: true
   });
   assert.equal(response.assistant.text, 'تم التحقق من النتيجة.');
+  assert.equal(response.assistant.status, 'available');
   assert.equal(response.evidenceReferences[0].id, 'event-4');
   assert.equal(response.approvalRequired, true);
   assert.ok(Object.isFrozen(response));
@@ -71,4 +72,21 @@ test('rejects malformed or excessive evidence references', () => {
 test('rejects non-boolean approval state and malformed evidence labels', () => {
   assert.throws(() => createRuntimeResponseV1({ taskId: 't1', status: 'queued', approvalRequired: 'yes' }), /boolean/);
   assert.throws(() => createRuntimeResponseV1({ taskId: 't1', status: 'completed', evidenceReferences: [{ id: 'e1', type: 'runtime.event', label: 'bad\nlabel' }] }), /label/);
+});
+
+test('marks a completed task without a final answer as unavailable', () => {
+  const response = createRuntimeResponseV1({ taskId: 'task-done', status: 'completed' });
+  assert.deepEqual(response.assistant, { text: null, status: 'unavailable' });
+});
+
+test('rejects inconsistent final-answer status and content combinations', () => {
+  assert.throws(() => createRuntimeResponseV1({
+    taskId: 'task-1', status: 'completed', assistantStatus: 'available'
+  }), /requires non-empty assistant text/);
+  assert.throws(() => createRuntimeResponseV1({
+    taskId: 'task-2', status: 'running', assistantText: 'unverified', assistantStatus: 'pending'
+  }), /must be null/);
+  assert.throws(() => createRuntimeResponseV1({
+    taskId: 'task-3', status: 'running', assistantStatus: 'unknown'
+  }), /assistantStatus/);
 });

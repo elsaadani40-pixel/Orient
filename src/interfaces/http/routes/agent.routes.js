@@ -113,6 +113,7 @@ function createAgentRoutes(agentService) {
       // execution.result, plan, inputs, observations, or tool payloads.
       const response = createRuntimeResponseV1({
         assistantText: null,
+        assistantStatus: result.status === 'completed' ? 'unavailable' : 'pending',
         taskId: result.executionId,
         status: result.status,
         evidenceReferences,

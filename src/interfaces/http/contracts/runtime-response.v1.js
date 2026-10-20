@@ -15,6 +15,7 @@ function invalid(message, code = 'RUNTIME_RESPONSE_INVALID') {
 
 function createRuntimeResponseV1({
   assistantText = null,
+  assistantStatus = null,
   taskId,
   status,
   evidenceReferences = [],
@@ -28,6 +29,16 @@ function createRuntimeResponseV1({
   }
   if (assistantText !== null && (typeof assistantText !== 'string' || assistantText.length > MAX_ASSISTANT_TEXT_CHARS)) {
     throw invalid('assistantText must be null or a bounded string.');
+  }
+  const resolvedAssistantStatus = assistantStatus || (typeof assistantText === 'string' && assistantText.trim() ? 'available' : status === 'completed' ? 'unavailable' : 'pending');
+  if (!['pending', 'available', 'unavailable'].includes(resolvedAssistantStatus)) {
+    throw invalid('assistantStatus must be pending, available, or unavailable.');
+  }
+  if (resolvedAssistantStatus === 'available' && (typeof assistantText !== 'string' || !assistantText.trim())) {
+    throw invalid('available assistant status requires non-empty assistant text.');
+  }
+  if (resolvedAssistantStatus !== 'available' && assistantText !== null) {
+    throw invalid('assistant text must be null unless assistant status is available.');
   }
   if (!Array.isArray(evidenceReferences) || evidenceReferences.length > MAX_EVIDENCE_REFERENCES) {
     throw invalid('evidenceReferences must be a bounded array.');
@@ -54,7 +65,7 @@ function createRuntimeResponseV1({
 
   return Object.freeze({
     apiVersion: API_VERSION,
-    assistant: Object.freeze({ text: assistantText }),
+    assistant: Object.freeze({ text: assistantText, status: resolvedAssistantStatus }),
     task: Object.freeze({ id: taskId, status }),
     evidenceReferences: Object.freeze(safeEvidence),
     approvalRequired
