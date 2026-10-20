@@ -115,7 +115,7 @@ class AgentService {
     }
 
     const tenantId = this.runtime.tenantId || 'local';
-    const operationId = 'api-v1-final-answer:' + tenantId + ':' + executionId;
+    const operationId = finalAnswerOperationId(tenantId, executionId);
     const existing = await repository.findByKey(operationId, { tenantId });
     if (existing?.status === 'completed') return normalizeFinalAnswer(existing.result);
     if (existing) return { text: null, status: existing.status === 'failed' ? 'unavailable' : 'pending' };
@@ -232,7 +232,7 @@ class AgentService {
 }
 
 
-function normalizeFinalAnswer(value) {
+function finalAnswerOperationId(tenantId, executionId) {\n  const digest = require('node:crypto').createHash('sha256')\n    .update(JSON.stringify([tenantId, executionId]), 'utf8').digest('hex');\n  return 'api-v1-final-answer:' + digest;\n}\n\nfunction normalizeFinalAnswer(value) {
   if (!value || typeof value !== 'object') return { text: null, status: 'unavailable' };
   if (value.status === 'available' && typeof value.text === 'string' && value.text.trim() && value.text.length <= 12000) {
     return { text: value.text, status: 'available' };
