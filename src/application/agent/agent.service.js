@@ -150,4 +150,33 @@ class AgentService {
   }
 }
 
+
+function normalizeFinalAnswer(value) {
+  if (!value || typeof value !== 'object') return { text: null, status: 'unavailable' };
+  if (value.status === 'available' && typeof value.text === 'string' && value.text.trim() && value.text.length <= 12000) {
+    return { text: value.text, status: 'available' };
+  }
+  return { text: null, status: value.status === 'pending' ? 'pending' : 'unavailable' };
+}
+
+function sanitizeAnswerEvidence(value, depth = 0) {
+  const blockedKey = /password|secret|token|authorization|cookie|credential|api.?key|private.?key/i;
+  if (value === null || value === undefined || typeof value === 'boolean' || typeof value === 'number') return value ?? null;
+  if (typeof value === 'string') {
+    return value
+      .replace(/(bearer\s+)[a-z0-9._~+\/-]+/ig, '$1[REDACTED]')
+      .replace(/(api[_-]?key\s*[:=]\s*)[^\s,;]+/ig, '$1[REDACTED]')
+      .slice(0, 2000);
+  }
+  if (depth >= 4) return '[nested evidence omitted]';
+  if (Array.isArray(value)) return value.slice(0, 20).map(item => sanitizeAnswerEvidence(item, depth + 1));
+  if (typeof value !== 'object') return String(value).slice(0, 200);
+  const output = {};
+  for (const [key, item] of Object.entries(value).slice(0, 40)) {
+    if (blockedKey.test(key)) continue;
+    output[String(key).slice(0, 100)] = sanitizeAnswerEvidence(item, depth + 1);
+  }
+  return output;
+}
+
 module.exports = AgentService;
