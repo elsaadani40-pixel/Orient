@@ -41,9 +41,12 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
 
   // Exercise the real owner chat UI with deterministic API fixtures. The
   // final answer contains HTML-looking text and must remain plain text in the DOM.
+  let chatPostIntercepted = false;
+  let answerIntercepted = false;
   await ownerPage.route('**/*', async route => {
     const request = route.request();
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/owner/chat') {
+      chatPostIntercepted = true;
       await route.fulfill({
         status: 201,
         contentType: 'application/json',
@@ -52,6 +55,7 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
       return;
     }
     if (request.method() === 'GET' && new URL(request.url()).pathname === '/owner/chat/browser-final-answer/response') {
+      answerIntercepted = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -88,6 +92,9 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   await ownerPage.getByText('جلسة المالك مؤكدة', { exact: false }).waitFor({ timeout: 10000 });
   await ownerPage.getByLabel('رسالتك إلى ORIENT').fill('اختبار عرض الإجابة النهائية');
   await ownerPage.getByRole('button', { name: 'إرسال المهمة' }).click();
+  assert.equal(chatPostIntercepted, true, 'owner chat POST fixture must intercept the submitted request');
+  await ownerPage.waitForTimeout(250);
+  assert.equal(answerIntercepted, true, 'owner final-answer fixture must intercept the response poll');
   const finalAnswer = ownerPage.locator('.final-answer .content');
   await finalAnswer.waitFor({ timeout: 10000 });
   assert.equal(await finalAnswer.textContent(), 'نص آمن <img src=x data-test=literal>');
