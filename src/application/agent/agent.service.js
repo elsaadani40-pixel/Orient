@@ -232,7 +232,13 @@ class AgentService {
 }
 
 
-function finalAnswerOperationId(tenantId, executionId) {\n  const digest = require('node:crypto').createHash('sha256')\n    .update(JSON.stringify([tenantId, executionId]), 'utf8').digest('hex');\n  return 'api-v1-final-answer:' + digest;\n}\n\nfunction normalizeFinalAnswer(value) {
+function finalAnswerOperationId(tenantId, executionId) {
+  const digest = require('node:crypto').createHash('sha256')
+    .update(JSON.stringify([tenantId, executionId]), 'utf8').digest('hex');
+  return 'api-v1-final-answer:' + digest;
+}
+
+function normalizeFinalAnswer(value) {
   if (!value || typeof value !== 'object') return { text: null, status: 'unavailable' };
   if (value.status === 'available' && typeof value.text === 'string' && value.text.trim() && value.text.length <= 12000) {
     return { text: value.text, status: 'available' };
