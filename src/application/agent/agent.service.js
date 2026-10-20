@@ -156,7 +156,7 @@ class AgentService {
                 content: JSON.stringify({
                   originalRequest: goal,
                   executionStatus: execution.status,
-                  executionEvidence: evidence
+                  executionEvidence: JSON.stringify(evidence).slice(0, 12000)
                 })
               }
             ]
