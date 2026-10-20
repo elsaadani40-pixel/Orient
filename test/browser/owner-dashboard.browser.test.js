@@ -38,6 +38,62 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   assert.match(await ownerPage.locator('#runtime-status').innerText(), /متصل/);
   assert.match(await ownerPage.locator('#runtime-detail').innerText(), /إجمالي المهام المسجل فعليًا: 0/);
 
+
+  // Exercise the real owner chat UI with deterministic API fixtures. The
+  // final answer contains HTML-looking text and must remain plain text in the DOM.
+  await ownerPage.route('**/owner/chat**', async route => {
+    const request = route.request();
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/owner/chat') {
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ apiVersion: 'v1', task: { id: 'browser-final-answer', status: 'running' }, replayed: false })
+      });
+      return;
+    }
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/owner/chat/browser-final-answer/response') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          apiVersion: 'v1',
+          assistant: { text: 'نص آمن <img src=x data-test=literal>', status: 'available' },
+          task: { id: 'browser-final-answer', status: 'completed' },
+          evidenceReferences: [],
+          approvalRequired: false
+        })
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await ownerPage.route('**/api/v1/tasks/browser-final-answer**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/events')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ apiVersion: 'v1', items: [], page: { limit: 50, nextCursor: null, hasMore: false, gapDetected: false } })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ apiVersion: 'v1', task: { id: 'browser-final-answer', status: 'completed' } })
+    });
+  });
+
+  await ownerPage.goto(baseUrl + '/chat');
+  await ownerPage.getByText('جلسة المالك مؤكدة', { exact: false }).waitFor({ timeout: 10000 });
+  await ownerPage.getByLabel('رسالتك إلى ORIENT').fill('اختبار عرض الإجابة النهائية');
+  await ownerPage.getByRole('button', { name: 'إرسال المهمة' }).click();
+  const finalAnswer = ownerPage.locator('.final-answer .content');
+  await finalAnswer.waitFor({ timeout: 10000 });
+  assert.equal(await finalAnswer.textContent(), 'نص آمن <img src=x data-test=literal>');
+  assert.equal(await ownerPage.locator('.final-answer img').count(), 0);
+  assert.equal(await ownerPage.locator('.final-answer').getAttribute('aria-label'), 'إجابة ORIENT النهائية');
+
   const ownerState = JSON.parse(fs.readFileSync(dataDir + '/owner.json', 'utf8'));
   assert.equal(ownerState.mustChangePassword, false);
   assert.equal(typeof ownerState.passwordHash, 'string');
