@@ -16,7 +16,7 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
 
-  const ownerContext = await browser.newContext();
+  const ownerContext = await browser.newContext({ serviceWorkers: 'block' });
   t.after(() => ownerContext.close());
   const ownerPage = await ownerContext.newPage();
 
