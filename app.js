@@ -87,6 +87,9 @@ const createPersistence =
 const { OwnerWorkProfileStore } =
   require('./src/infrastructure/persistence/owner-work-profile-store');
 
+const { OwnerChatConversationStore } =
+  require('./src/infrastructure/persistence/owner-chat-conversation-store');
+
 
 const AgentOrchestrator =
   require('./src/core/agent/orchestrator/agent-orchestrator');
@@ -151,6 +154,9 @@ const ownerBootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || pr
 const ownerStateFile = path.join(websiteDataDir, 'owner.json');
 const ownerWorkProfileStore = new OwnerWorkProfileStore({
   filePath: path.join(websiteDataDir, 'owner-work-profile.json')
+});
+const ownerChatConversationStore = new OwnerChatConversationStore({
+  filePath: path.join(websiteDataDir, 'owner-chat-conversation.json')
 });
 if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
   throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters). Set it in the local environment before starting ORIENT.');
@@ -369,6 +375,7 @@ const server =
     accessAudit: accessAuditRepository,
     ownerAuth: ownerAuthService,
     ownerProfile: ownerWorkProfileStore,
+    ownerChatStore: ownerChatConversationStore,
     websiteHandler: website.handler
   });
 
