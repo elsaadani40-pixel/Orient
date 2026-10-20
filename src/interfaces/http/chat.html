@@ -20,6 +20,19 @@
 </header>
 <div class="status" role="status" aria-live="polite"><span id="dot" class="dot"></span><span id="connection">جارٍ التحقق من جلسة المالك…</span></div>
 <div class="notice"><strong>شفافية التنفيذ:</strong> هذه الواجهة ترسل الطلب إلى Runtime الحقيقي وتعرض حالة المهمة وأحداثها. واجهة الإجابة النصية النهائية وفهم الصور/الصوت/المستندات الثنائية تحتاج عقود معالجة ومخرجات إضافية؛ لن ندّعي تحليل مرفق لم تتم معالجته.</div>
+<details id="owner-profile" class="notice">
+  <summary><strong>ملف عمل المالك المحفوظ</strong> · تفضيلات قابلة للتعديل على الخادم</summary>
+  <p>هذه التفضيلات تنظّم أسلوب العمل فقط؛ لا تمنح صلاحيات إضافية ولا تتجاوز الموافقات أو سياسات الأمان.</p>
+  <label for="profile-mode" class="hint">الوضع الافتراضي</label>
+  <select id="profile-mode" aria-label="الوضع الافتراضي لملف عمل المالك">
+    <option value="standard">عادي</option>
+    <option value="read-only-audit">تدقيق قراءة فقط</option>
+    <option value="plan-only">تخطيط دون تنفيذ</option>
+  </select>
+  <label for="profile-preferences" class="hint">تفضيلات طريقة العمل (حتى 4000 حرف)</label>
+  <textarea id="profile-preferences" maxlength="4000" rows="4" style="display:block;width:100%;margin:8px 0;background:#080c13;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px" placeholder="اكتب تفضيلات العمل التي تريد حفظها على الخادم…"></textarea>
+  <div class="actions"><button id="profile-save" class="btn primary" type="button">حفظ ملف العمل</button><span id="profile-status" class="hint" role="status" aria-live="polite">جارٍ تحميل الملف المحفوظ…</span></div>
+</details>
 <section id="chat" class="chat" aria-label="محادثة ORIENT" aria-live="polite">
   <div id="welcome" class="welcome"><div class="orb" aria-hidden="true"></div><h1>أهلًا بك في مساحة عمل ORIENT</h1><p>اكتب المطلوب، وسأرسل المهمة إلى Runtime المحكوم بالصلاحيات وأعرض ما يعيده النظام من حالة وأحداث دون اختلاق نتيجة.</p><div class="suggestions"><button type="button" data-prompt="افحص مستودع ORIENT قراءة فقط وحدد أهم الفجوات مع أدلة واختبارات مقترحة.">افحص ORIENT</button><button type="button" data-prompt="راجع المهمة الحالية، اشرح المخاطر ومعايير النجاح، ولا تغيّر أي ملف قبل موافقتي.">حلّل قبل التنفيذ</button><button type="button" data-prompt="اقرأ الملفات النصية المرفقة وحدد ما تحتويه من مشكلات أو نقاط تحتاج إلى متابعة.">حلل ملفات نصية</button></div></div>
 </section>
