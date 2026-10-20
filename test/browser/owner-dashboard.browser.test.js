@@ -41,7 +41,7 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
 
   // Exercise the real owner chat UI with deterministic API fixtures. The
   // final answer contains HTML-looking text and must remain plain text in the DOM.
-  await ownerPage.route('**/owner/chat**', async route => {
+  await ownerPage.route('**/*', async route => {
     const request = route.request();
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/owner/chat') {
       await route.fulfill({
