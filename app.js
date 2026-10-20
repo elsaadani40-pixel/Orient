@@ -364,9 +364,23 @@ const memoryRoutes =
   );
 
 const agentRoutes =
-  createAgentRoutes(
-    agentService
-  );
+  createAgentRoutes(agentService, {
+    async onFinalAnswer({ executionId, text }) {
+      if (typeof text !== 'string' || !text.trim()) return;
+      const safeExecutionId = String(executionId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+      try {
+        await ownerChatConversationStore.append({
+          id: 'assistant-' + safeExecutionId,
+          role: 'assistant',
+          content: text
+        });
+      } catch (error) {
+        logger.error('Owner chat final answer persistence failed', {
+          code: error?.code || 'OWNER_CHAT_ANSWER_WRITE_FAILED'
+        });
+      }
+    }
+  });
 
 const server =
   createServer({
