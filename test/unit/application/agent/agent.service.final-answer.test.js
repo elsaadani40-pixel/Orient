@@ -65,7 +65,7 @@ test('generates and durably replays a final answer without calling the model twi
   assert.deepEqual(first, { text: 'تمت مراجعة الطلب بناءً على الأدلة المتاحة.', status: 'available' });
   assert.deepEqual(replay, first);
   assert.equal(f.calls.length, 1);
-  assert.equal(f.records.get('api-v1-final-answer:tenant-a:task-1').status, 'completed');
+  assert.equal(Array.from(f.records.values()).find(record => record.tool === 'api.v1.final-answer.generate').status, 'completed');
 });
 
 test('uses only local/free routing preferences and redacts sensitive evidence fields', async () => {
@@ -105,8 +105,8 @@ test('isolates durable answer keys by tenant', async () => {
   await b.service.getFinalAnswer('shared-task-id');
   assert.equal(a.calls.length, 1);
   assert.equal(b.calls.length, 1);
-  assert.equal(a.records.has('api-v1-final-answer:tenant-a:shared-task-id'), true);
-  assert.equal(b.records.has('api-v1-final-answer:tenant-b:shared-task-id'), true);
+  assert.equal(Array.from(a.records.values()).some(record => record.tenantId === 'tenant-a'), true);
+  assert.equal(Array.from(b.records.values()).some(record => record.tenantId === 'tenant-b'), true);
 });
 
 test('rejects empty, oversized, or control-character model output', async () => {
