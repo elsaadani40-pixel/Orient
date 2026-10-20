@@ -294,6 +294,24 @@ test('website owner session creates and reads a task through the real Runtime', 
   assert.ok(chatResult.task?.id);
   assert.equal(chatResult.task.status, 'completed');
 
+  // A retry after an uncertain network outcome must replay the original task,
+  // not create a second Runtime execution for the same owner/key/goal.
+  const chatReplayResponse = await fetch(origin + '/owner/chat', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: ownerCookie,
+      'X-ORIENT-CSRF': rotationBody.csrfToken,
+      'Idempotency-Key': 'website-owner-chat-ingress-0001'
+    },
+    body: JSON.stringify({ message: 'افحص المشروع من خلال Runtime' })
+  });
+  assert.equal(chatReplayResponse.status, 200, 'a retry with the same idempotency key must replay the accepted task');
+  const chatReplay = await chatReplayResponse.json();
+  assert.equal(chatReplay.replayed, true);
+  assert.equal(chatReplay.task.id, chatResult.task.id, 'idempotent retry must return the original task ID');
+
   const createResponse = await fetch(origin + '/api/v1/tasks', {
     method: 'POST',
     headers: taskHeaders,
