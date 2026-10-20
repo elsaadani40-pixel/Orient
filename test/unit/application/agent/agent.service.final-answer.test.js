@@ -115,3 +115,62 @@ test('rejects empty, oversized, or control-character model output', async () => 
     assert.deepEqual(await f.service.getFinalAnswer('task-invalid'), { text: null, status: 'unavailable' });
   }
 });
+
+
+test('HTTP Runtime response exposes only the persisted final answer and safe references', async () => {
+  const createAgentRoutes = require('../../../../src/interfaces/http/routes/agent.routes');
+  let statusCode;
+  let responseBody;
+  let headers;
+  const res = {
+    writeHead(code, values) { statusCode = code; headers = values; },
+    end(value) { responseBody = value; }
+  };
+  const routes = createAgentRoutes({
+    async getExecutionStatus() {
+      return { executionId: 'task-http-safe', status: 'completed', result: { apiToken: 'never-expose-this' } };
+    },
+    async getExecutionEvents() {
+      return [{ id: 'event-1', type: 'execution.completed', data: { privateKey: 'never-expose-this' } }];
+    },
+    async getExecutionApprovals() { return []; },
+    async getFinalAnswer() {
+      return { text: 'تم تنفيذ الفحص وفق الأدلة المتاحة.', status: 'available' };
+    }
+  });
+
+  await routes.taskResponse({ url: '/owner/chat/task-http-safe/response' }, res, 'task-http-safe');
+
+  assert.equal(statusCode, 200);
+  assert.equal(headers['Cache-Control'], 'no-store');
+  assert.equal(headers['X-ORIENT-API-Version'], 'v1');
+  const payload = JSON.parse(responseBody);
+  assert.deepEqual(payload.assistant, {
+    text: 'تم تنفيذ الفحص وفق الأدلة المتاحة.',
+    status: 'available'
+  });
+  assert.equal(payload.task.id, 'task-http-safe');
+  assert.equal(payload.task.status, 'completed');
+  assert.equal(JSON.stringify(payload).includes('never-expose-this'), false);
+  assert.equal(JSON.stringify(payload).includes('privateKey'), false);
+});
+
+test('HTTP Runtime response truthfully represents an unavailable local answer', async () => {
+  const createAgentRoutes = require('../../../../src/interfaces/http/routes/agent.routes');
+  let responseBody;
+  const res = {
+    writeHead() {},
+    end(value) { responseBody = value; }
+  };
+  const routes = createAgentRoutes({
+    async getExecutionStatus() { return { executionId: 'task-offline', status: 'completed' }; },
+    async getExecutionEvents() { return []; },
+    async getExecutionApprovals() { return []; },
+    async getFinalAnswer() { return { text: null, status: 'unavailable' }; }
+  });
+
+  await routes.taskResponse({ url: '/owner/chat/task-offline/response' }, res, 'task-offline');
+  const payload = JSON.parse(responseBody);
+  assert.deepEqual(payload.assistant, { text: null, status: 'unavailable' });
+  assert.equal(JSON.stringify(payload).includes('provider internal detail'), false);
+});
