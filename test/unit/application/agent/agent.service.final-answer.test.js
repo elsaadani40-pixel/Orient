@@ -110,7 +110,7 @@ test('isolates durable answer keys by tenant', async () => {
 });
 
 test('rejects empty, oversized, or control-character model output', async () => {
-  for (const modelResult of [{ text: '  ' }, { text: 'x'.repeat(12001) }, { text: 'bad\\u0001answer' }]) {
+  for (const modelResult of [{ text: '  ' }, { text: 'x'.repeat(12001) }, { text: 'bad\u0001answer' }]) {
     const f = fixture({ modelResult });
     assert.deepEqual(await f.service.getFinalAnswer('task-invalid'), { text: null, status: 'unavailable' });
   }
