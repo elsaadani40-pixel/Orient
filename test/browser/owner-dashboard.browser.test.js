@@ -16,7 +16,7 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
 
-  const ownerContext = await browser.newContext();
+  const ownerContext = await browser.newContext({ serviceWorkers: 'block' });
   t.after(() => ownerContext.close());
   const ownerPage = await ownerContext.newPage();
 
@@ -38,13 +38,81 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   assert.match(await ownerPage.locator('#runtime-status').innerText(), /متصل/);
   assert.match(await ownerPage.locator('#runtime-detail').innerText(), /إجمالي المهام المسجل فعليًا: 0/);
 
+
+  // Exercise the real owner chat UI with deterministic API fixtures. The
+  // final answer contains HTML-looking text and must remain plain text in the DOM.
+  let chatPostIntercepted = false;
+  let answerIntercepted = false;
+  await ownerPage.route('**/*', async route => {
+    const request = route.request();
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/owner/chat') {
+      chatPostIntercepted = true;
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ apiVersion: 'v1', task: { id: 'browser-final-answer', status: 'running' }, replayed: false })
+      });
+      return;
+    }
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/owner/chat/browser-final-answer/response') {
+      answerIntercepted = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          apiVersion: 'v1',
+          assistant: { text: 'نص آمن <img src=x data-test=literal>', status: 'available' },
+          task: { id: 'browser-final-answer', status: 'completed' },
+          evidenceReferences: [],
+          approvalRequired: false
+        })
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await ownerPage.route('**/api/v1/tasks/**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (!pathname.startsWith('/api/v1/tasks/browser-final-answer')) return route.continue();
+    if (pathname.endsWith('/events')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ apiVersion: 'v1', items: [], page: { limit: 50, nextCursor: null, hasMore: false, gapDetected: false } })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ apiVersion: 'v1', task: { id: 'browser-final-answer', status: 'completed' } })
+    });
+  });
+
+  await ownerPage.goto(baseUrl + '/chat');
+  await ownerPage.getByText('جلسة المالك مؤكدة', { exact: false }).waitFor({ timeout: 10000 });
+  await ownerPage.getByLabel('رسالتك إلى ORIENT').fill('اختبار عرض الإجابة النهائية');
+  await ownerPage.getByRole('button', { name: 'إرسال المهمة' }).click();
+  assert.equal(chatPostIntercepted, true, 'owner chat POST fixture must intercept the submitted request');
+  await ownerPage.waitForTimeout(250);
+  assert.equal(answerIntercepted, true, 'owner final-answer fixture must intercept the response poll');
+  const finalAnswer = ownerPage.locator('.final-answer .content');
+  await finalAnswer.waitFor({ timeout: 10000 });
+  assert.equal(await finalAnswer.textContent(), 'نص آمن <img src=x data-test=literal>');
+  assert.equal(await ownerPage.locator('.final-answer img').count(), 0);
+  assert.equal(await ownerPage.locator('.final-answer').getAttribute('aria-label'), 'إجابة ORIENT النهائية');
+
+  // Return to the dashboard because the chat page has no dashboard logout control.
+  await ownerPage.goto(baseUrl + '/owner.html');
+  await ownerPage.getByRole('button', { name: 'تسجيل الخروج' }).waitFor({ timeout: 10000 });
+
   const ownerState = JSON.parse(fs.readFileSync(dataDir + '/owner.json', 'utf8'));
   assert.equal(ownerState.mustChangePassword, false);
   assert.equal(typeof ownerState.passwordHash, 'string');
   assert.match(ownerState.passwordHash, /^[a-f0-9]{128}:[a-f0-9]{32}$/);
   assert.equal(Object.hasOwn(ownerState, 'password'), false);
   assert.ok(Array.isArray(ownerState.sessions));
-  assert.equal(JSON.stringify(ownerState).includes('orient-browser-owner-password-2026!'), false);
+  assert.equal(JSON.stringify(ownerState).includes(bootstrapPassword), false);
 
   await ownerPage.getByRole('button', { name: 'تسجيل الخروج' }).click();
   await ownerPage.waitForURL('**/auth?mode=owner');
