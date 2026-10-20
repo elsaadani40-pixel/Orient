@@ -174,3 +174,30 @@ test('HTTP Runtime response truthfully represents an unavailable local answer', 
   assert.deepEqual(payload.assistant, { text: null, status: 'unavailable' });
   assert.equal(JSON.stringify(payload).includes('provider internal detail'), false);
 });
+
+
+test('concurrent final-answer requests claim one durable generation and expose pending until persisted', async () => {
+  const f = fixture();
+  let releaseModel;
+  let markStarted;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  f.service.runtime.agentOrchestrator.completeModel = async () => {
+    f.calls.push({ concurrent: true });
+    markStarted();
+    return new Promise(resolve => { releaseModel = resolve; });
+  };
+
+  const firstRequest = f.service.getFinalAnswer('task-concurrent');
+  await started;
+  const concurrentRequest = await f.service.getFinalAnswer('task-concurrent');
+  assert.deepEqual(concurrentRequest, { text: null, status: 'pending' });
+  assert.equal(f.calls.length, 1);
+
+  releaseModel({ text: 'تم حفظ الإجابة مرة واحدة.' });
+  const firstAnswer = await firstRequest;
+  assert.deepEqual(firstAnswer, { text: 'تم حفظ الإجابة مرة واحدة.', status: 'available' });
+
+  const replay = await f.service.getFinalAnswer('task-concurrent');
+  assert.deepEqual(replay, firstAnswer);
+  assert.equal(f.calls.length, 1);
+});
