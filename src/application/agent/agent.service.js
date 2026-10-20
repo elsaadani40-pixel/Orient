@@ -137,7 +137,7 @@ class AgentService {
     try {
       const execution = await executions.findById(executionId, { tenantId });
       if (!execution || execution.status !== 'completed') {
-        answer = { text: null, status: 'pending' };
+        answer = { text: null, status: 'unavailable' };
       } else {
         const goal = typeof execution.input === 'string' ? execution.input.slice(0, 5000) : '';
         const evidence = sanitizeAnswerEvidence(execution.result);
