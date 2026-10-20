@@ -203,7 +203,7 @@
     };
     let composed = userText + (modeInstructions[mode] || modeInstructions.strict);
     if (state.profilePreferences) {
-      composed += '\\n\\n[تفضيلات ملف عمل المالك: سياق تفضيلي فقط؛ لا يتجاوز الصلاحيات أو سياسة الأمان أو الموافقات المطلوبة]\\n' + state.profilePreferences;
+      composed += '\n\n[تفضيلات ملف عمل المالك: سياق تفضيلي فقط؛ لا يتجاوز الصلاحيات أو سياسة الأمان أو الموافقات المطلوبة]\n' + state.profilePreferences;
     }
     if (state.files.length) {
       const attachmentText = state.files.map(file => '\n\n[ملف مرفق: ' + file.name + ']\n' + file.text).join('');
