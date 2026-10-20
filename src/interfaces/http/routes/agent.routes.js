@@ -108,12 +108,15 @@ function createAgentRoutes(agentService) {
           type: 'runtime.event',
           label: typeof event.type === 'string' ? event.type.replace(/[\r\n\0]/g, '').slice(0, 200) : null
         }));
-      // Tool output is not automatically a user-facing answer. Until the Runtime
-      // has an explicit final-answer producer, this endpoint never serializes raw
-      // execution.result, plan, inputs, observations, or tool payloads.
+      // The service returns only a validated, durable final answer; raw execution
+      // results, plans, inputs, observations, and tool payloads never leave this boundary.
+      let finalAnswer = { text: null, status: result.status === 'completed' ? 'unavailable' : 'pending' };
+      if (result.status === 'completed' && typeof agentService.getFinalAnswer === 'function') {
+        finalAnswer = await agentService.getFinalAnswer(executionId);
+      }
       const response = createRuntimeResponseV1({
-        assistantText: null,
-        assistantStatus: result.status === 'completed' ? 'unavailable' : 'pending',
+        assistantText: finalAnswer.text,
+        assistantStatus: finalAnswer.status,
         taskId: result.executionId,
         status: result.status,
         evidenceReferences,
