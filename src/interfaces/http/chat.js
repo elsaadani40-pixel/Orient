@@ -115,6 +115,7 @@
           // retrieval endpoint is temporarily unavailable.
         }
         const answer = response?.apiVersion === 'v1' ? response?.assistant?.text : null;
+        const answerStatus = response?.apiVersion === 'v1' ? response?.assistant?.status : null;
         if (typeof answer === 'string' && answer.trim()) renderFinalAnswer(bubble, answer);
         const actual = detail.task || {};
         const status = String(actual.status || task.status || 'unknown').toLowerCase();
@@ -136,7 +137,9 @@
           truth.textContent = status === 'completed'
             ? (bubble.querySelector('.final-answer')
               ? 'أعلن Runtime اكتمال المهمة وعرض النص النهائي الذي أعاده عقد الاستجابة.'
-              : 'أعلن Runtime اكتمال المهمة، لكنه لم يوفّر نص إجابة نهائية. لن أستنتج إجابة من أحداث الأدوات.')
+              : (answerStatus === 'unavailable'
+                ? 'اكتمل التنفيذ، لكن لم تتوفر إجابة نهائية من النموذج. لم يتم اختلاق إجابة من نتائج الأدوات.'
+                : 'أعلن Runtime اكتمال المهمة، لكنه لم يوفّر نص إجابة نهائية. لن أستنتج إجابة من أحداث الأدوات.'))
             : 'أعلن Runtime حالة نهائية غير ناجحة. راجع أحداث التنفيذ ومركز المالك للموافقات أو التشخيص.';
           stateLine.append(truth);
           return;
