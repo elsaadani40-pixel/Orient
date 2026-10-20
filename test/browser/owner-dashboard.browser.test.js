@@ -71,8 +71,9 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
     }
     await route.continue();
   });
-  await ownerPage.route('**/api/v1/tasks/browser-final-answer**', async route => {
+  await ownerPage.route('**/api/v1/tasks/**', async route => {
     const pathname = new URL(route.request().url()).pathname;
+    if (!pathname.startsWith('/api/v1/tasks/browser-final-answer')) return route.continue();
     if (pathname.endsWith('/events')) {
       await route.fulfill({
         status: 200,
