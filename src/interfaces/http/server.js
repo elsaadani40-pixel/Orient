@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, websiteHandler = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, websiteHandler = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -308,6 +308,54 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired &&
             !['/owner/logout'].includes(requestUrl.pathname)) {
           sendJson(res, 403, { ok: false, code: 'OWNER_PASSWORD_CHANGE_REQUIRED', message: 'يجب تغيير كلمة مرور المالك قبل المتابعة.' });
+          return;
+        }
+
+        if (requestUrl.pathname === '/owner/profile' && ['GET', 'PUT'].includes(req.method)) {
+          if (!ownerProfile || typeof ownerProfile.get !== 'function' || typeof ownerProfile.update !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'OWNER_PROFILE_UNAVAILABLE', message: 'ملف عمل المالك غير متاح حاليًا.' });
+            return;
+          }
+          if (req.method === 'GET') {
+            try {
+              sendJson(res, 200, { ok: true, profile: await ownerProfile.get() });
+            } catch (error) {
+              logger.error('Owner work profile read failed', { code: error.code || 'OWNER_PROFILE_READ_FAILED' });
+              sendJson(res, 503, { ok: false, code: 'OWNER_PROFILE_UNAVAILABLE', message: 'تعذر قراءة ملف عمل المالك.' });
+            }
+            return;
+          }
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          if (!String(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
+            sendJson(res, 415, { ok: false, code: 'JSON_REQUIRED', message: 'يلزم إرسال ملف العمل بصيغة JSON.' });
+            return;
+          }
+          let payload;
+          try {
+            payload = JSON.parse(await readBody(req, 8192) || '{}');
+          } catch (error) {
+            if (error.code === 'REQUEST_TOO_LARGE') {
+              sendJson(res, 413, { ok: false, code: 'REQUEST_TOO_LARGE', message: 'حجم ملف العمل أكبر من المسموح.' });
+              return;
+            }
+            sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
+            return;
+          }
+          try {
+            const profile = await ownerProfile.update(payload);
+            sendJson(res, 200, { ok: true, profile });
+          } catch (error) {
+            const invalid = String(error.code || '').startsWith('OWNER_PROFILE_') && error.code !== 'OWNER_PROFILE_STORAGE_INVALID';
+            sendJson(res, invalid ? 400 : 503, {
+              ok: false,
+              code: error.code || 'OWNER_PROFILE_WRITE_FAILED',
+              message: invalid ? 'بيانات ملف العمل غير صالحة.' : 'تعذر حفظ ملف عمل المالك.'
+            });
+          }
           return;
         }
 
