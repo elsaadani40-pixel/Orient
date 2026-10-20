@@ -101,3 +101,48 @@ test('agent approvals route returns only service-provided durable approval state
   assert.equal(res.headers['Cache-Control'], 'no-store');
   assert.deepEqual(res.body, expected);
 });
+
+
+test('completed task response persists only the validated final assistant answer', async () => {
+  const saved = [];
+  const routes = createAgentRoutes({
+    getExecutionStatus: async executionId => ({ executionId, status: 'completed' }),
+    getExecutionEvents: async () => [],
+    getExecutionApprovals: async () => [],
+    getFinalAnswer: async () => ({ text: 'Verified answer', status: 'available' })
+  }, {
+    onFinalAnswer: async entry => { saved.push(entry); }
+  });
+  const res = {
+    writeHead(status, headers) { this.status = status; this.headers = headers; },
+    end(body) { this.body = JSON.parse(body); }
+  };
+
+  await routes.taskResponse({}, res, 'exec-42');
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers['Cache-Control'], 'no-store');
+  assert.equal(res.body.assistant.text, 'Verified answer');
+  assert.deepEqual(saved, [{ executionId: 'exec-42', text: 'Verified answer' }]);
+});
+
+test('task response does not persist an answer before Runtime completion', async () => {
+  const saved = [];
+  const routes = createAgentRoutes({
+    getExecutionStatus: async executionId => ({ executionId, status: 'running' }),
+    getExecutionEvents: async () => [],
+    getExecutionApprovals: async () => [],
+    getFinalAnswer: async () => ({ text: null, status: 'pending' })
+  }, {
+    onFinalAnswer: async entry => { saved.push(entry); }
+  });
+  const res = {
+    writeHead(status, headers) { this.status = status; this.headers = headers; },
+    end(body) { this.body = JSON.parse(body); }
+  };
+
+  await routes.taskResponse({}, res, 'exec-43');
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(saved, []);
+});
