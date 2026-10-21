@@ -525,39 +525,49 @@ start().catch((error) => {
   process.exitCode = 1;
 });
 
+const shutdownInOrder = require('./src/core/runtime/shutdown-in-order');
+
 function shutdown(signal) {
   logger.info(
     'Server shutting down',
     { signal }
   );
 
-  eventStoreSubscriber.stop();
-
-  try {
-    runtime.shutdown({ cancelQueued: false });
-  } catch (error) {
-    logger.error('Runtime shutdown failed', {
-      code: error?.code || 'RUNTIME_SHUTDOWN_FAILED',
-      message: error?.message || String(error)
-    });
-  }
-
   const forceExit = setTimeout(() => {
     process.exit(1);
   }, config.shutdownGraceMs);
   forceExit.unref();
 
-  server.close(() => {
+  void shutdownInOrder({
+    // server.close stops accepting new requests and resolves after active
+    // connections have drained; only then may Runtime and persistence stop.
+    closeIngress: () => new Promise((resolve) => server.close(resolve)),
+    stopObservations: () => eventStoreSubscriber.stop(),
+    // Production async workers remain disabled until safety gate #189 passes.
+    stopWorkers: async () => {},
+    shutdownRuntime: () => runtime.shutdown({ cancelQueued: false }),
+    closePersistence: () => (
+      typeof persistenceRuntime.close === 'function'
+        ? persistenceRuntime.close()
+        : Promise.resolve()
+    ),
+    onError(stage, error) {
+      const labels = {
+        'http-ingress': 'HTTP ingress shutdown failed',
+        observations: 'Event subscriber shutdown failed',
+        workers: 'Worker shutdown failed',
+        runtime: 'Runtime shutdown failed',
+        persistence: 'Persistence shutdown failed'
+      };
+      logger.error(labels[stage] || 'Shutdown stage failed', {
+        stage,
+        code: error?.code || 'SHUTDOWN_STAGE_FAILED',
+        message: error?.message || String(error)
+      });
+    }
+  }).finally(() => {
     clearTimeout(forceExit);
-    Promise.resolve()
-      .then(() => persistenceRuntime.close())
-      .catch((error) => {
-        logger.error('Persistence shutdown failed', {
-          code: error?.code || 'PERSISTENCE_SHUTDOWN_FAILED',
-          message: error?.message || String(error)
-        });
-      })
-      .finally(() => process.exit(0));
+    process.exit(0);
   });
 }
 
