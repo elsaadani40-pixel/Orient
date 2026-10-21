@@ -254,6 +254,23 @@
       $('message').focus();
     }
   }
+  $('clear-history').addEventListener('click', async () => {
+    if (!window.confirm('هل تريد حذف سجل المحادثة المحفوظ؟ لن يؤدي ذلك إلى إلغاء المهام الجارية.')) return;
+    const button = $('clear-history');
+    button.disabled = true;
+    try {
+      const result = await request('/owner/chat/history', { method: 'DELETE' });
+      if (result.cleared !== true) throw new Error('لم يؤكد الخادم حذف السجل.');
+      const welcome = $('welcome');
+      $('chat').replaceChildren(welcome);
+      welcome.classList.remove('hidden');
+      setStatus('تم حذف سجل المحادثة المحفوظ. المهام الجارية لا تزال تعمل ولم تُلغَ.');
+    } catch (error) {
+      setStatus('تعذر حذف سجل المحادثة: ' + error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
   $('profile-save').addEventListener('click', () => { void saveOwnerProfile(); });
   $('composer').addEventListener('submit', submit);
   $('message').addEventListener('input', () => {
