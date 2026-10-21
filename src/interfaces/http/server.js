@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, websiteHandler = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -317,7 +317,12 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           try {
-            sendJson(res, 200, { ok: true, messages: await ownerChatStore.list() });
+            let messages = await ownerChatStore.list();
+            if (typeof ownerChatHistoryResolver === 'function') {
+              await ownerChatHistoryResolver(messages);
+              messages = await ownerChatStore.list();
+            }
+            sendJson(res, 200, { ok: true, messages });
           } catch (error) {
             logger.error('Owner chat history read failed', { code: error.code || 'OWNER_CHAT_HISTORY_READ_FAILED' });
             sendJson(res, 503, { ok: false, code: 'OWNER_CHAT_HISTORY_UNAVAILABLE', message: 'تعذر قراءة سجل المحادثة.' });
