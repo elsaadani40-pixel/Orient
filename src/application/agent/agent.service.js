@@ -210,6 +210,10 @@ class AgentService {
     return this.runtime.listPendingApprovals(options);
   }
 
+  decideApproval(options = {}) {
+    return this.runtime.decideApproval(options);
+  }
+
   getExecutionEvents(executionId, options = {}) {
     return this.runtime.getExecutionEvents(executionId, options);
   }
