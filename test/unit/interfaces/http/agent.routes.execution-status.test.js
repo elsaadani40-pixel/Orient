@@ -119,7 +119,7 @@ test('task creation links the idempotent owner message to the Runtime execution'
     end(body) { this.body = JSON.parse(body); }
   };
 
-  await routes.createTask({ headers: { 'idempotency-key': 'owner-message-1' } }, res, {
+  await routes.createTask({ headers: { 'idempotency-key': 'owner-message-1' }, ownerChatMessageId: 'owner-message-1' }, res, {
     goal: 'Perform a bounded task'
   });
 
@@ -127,6 +127,7 @@ test('task creation links the idempotent owner message to the Runtime execution'
   assert.equal(res.body.task.id, 'exec-77');
   assert.deepEqual(linked, [{
     executionId: 'exec-77',
+    messageId: 'owner-message-1',
     idempotencyKey: 'owner-message-1',
     replayed: false
   }]);
