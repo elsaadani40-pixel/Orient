@@ -302,7 +302,7 @@ class SqliteApprovalRepository {
     params.push(boundedLimit);
     return this.db.query('SELECT * FROM approvals' + where + ' ORDER BY issued_at ASC, approval_id ASC LIMIT ?', params)
       .map(row => this.mapRow(row))
-      .filter(record => !record.used && (!record.expiresAt || now < Date.parse(record.expiresAt)));
+      .filter(record => !record.used && !record.decision && (!record.expiresAt || now < Date.parse(record.expiresAt)));
   }  save(approval, { tenantId = null } = {}) {
     if (tenantId && approval.tenantId !== tenantId && approval.metadata?.tenantId !== tenantId) throw new Error('Approval tenant mismatch');
     this.db.run('INSERT INTO approvals(approval_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [approval.approvalId, approval.executionId, approval.step, approval.planRevision, approval.tool, approval.capability, JSON.stringify(approval.scope ?? {}), approval.issuedAt, approval.expiresAt, approval.used ? 1 : 0, approval.usedAt || null, JSON.stringify(approval.metadata ?? {})]);
