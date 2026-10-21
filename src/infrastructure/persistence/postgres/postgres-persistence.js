@@ -801,8 +801,8 @@ class PostgresApprovalRepository {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
     const nowIso = new Date(now).toISOString();
     const result = tenantId
-      ? await this.db.query('SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 ORDER BY issued_at ASC, approval_id ASC LIMIT $3', [tenantId, nowIso, boundedLimit])
-      : await this.db.query('SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 ORDER BY issued_at ASC, approval_id ASC LIMIT $2', [nowIso, boundedLimit]);
+      ? await this.db.query('SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3', [tenantId, nowIso, boundedLimit])
+      : await this.db.query('SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2', [nowIso, boundedLimit]);
     return result.rows.map(row => this.mapRow(row));
   }
 
