@@ -171,7 +171,7 @@ class WorkflowExecutionCoordinator {
       instance.metadata.approvalDecisionStatus = 'approved';
     } else if (status === 'cancelled') {
       instance.transition(WorkflowInstance.STATES.CANCELLED);
-      instance.metadata.approvalDecisionStatus = 'rejected';
+      instance.metadata.approvalDecisionStatus = instance.metadata.approvalDecisionStatus === 'rejected' ? 'rejected' : 'cancelled';
     } else {
       instance.steps[stepId].state = WorkflowDefinition.STEP_STATES.FAILED;
       instance.steps[stepId].error = {
@@ -224,7 +224,7 @@ class WorkflowExecutionCoordinator {
     instance.metadata = {
       ...instance.metadata,
       approvalBlocked: false,
-      approvalDecisionStatus: 'rejected',
+      approvalDecisionStatus: ['owner_rejected', 'approval_rejected'].includes(String(reason)) ? 'rejected' : 'cancelled',
       approvalResolvedAt: new Date().toISOString(),
       cancellationReason: String(reason).slice(0, 300)
     };
