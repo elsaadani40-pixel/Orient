@@ -153,6 +153,21 @@ test('owner HTTP decision resumes the same high-risk mission after runtime resta
     assert.equal(challenge.tool, 'project.execute_change');
     assert.ok(challenge.approvalId, 'runtime must persist the approval challenge before returning');
 
+    const csrfRejected = await fetch(origin + '/owner/approvals/' + encodeURIComponent(challenge.approvalId) + '/decision', {
+      method: 'POST',
+      headers: {
+        cookie: login.headers.get('set-cookie').split(';')[0],
+        origin,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        executionId: challenge.executionId,
+        decision: 'approved'
+      })
+    });
+    assert.equal(csrfRejected.status, 403, 'approval decisions must reject missing CSRF proof');
+    assert.equal((await csrfRejected.json()).code, 'OWNER_CSRF_REJECTED');
+
     const decision = await fetch(origin + '/owner/approvals/' + encodeURIComponent(challenge.approvalId) + '/decision', {
       method: 'POST',
       headers: {
