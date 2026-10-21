@@ -68,7 +68,7 @@ test('receipt from another tenant cannot reconcile the same operation ID', async
     const input = {
       proposals: [{ action: 'create', path: 'src/generated.txt', content: 'approved content\n' }]
     };
-    await fs.writeFile(path.join(root, 'src/generated.txt'), 'approved content\\n');
+    await fs.writeFile(path.join(root, 'src/generated.txt'), 'approved content\n');
     const context = { operationId: 'shared-operation', tenantId: 'tenant-a' };
     store.write({
       ...context,
