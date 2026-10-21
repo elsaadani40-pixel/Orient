@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const clientPath = path.join(__dirname, '..', '..', '..', 'src', 'interfaces', 'http', 'chat.js');
+const clientPath = path.join(__dirname, '..', '..', '..', '..', 'src', 'interfaces', 'http', 'chat.js');
 const source = fs.readFileSync(clientPath, 'utf8');
 
 test('chat client renders approval-required state from the versioned Runtime response', () => {
