@@ -381,7 +381,8 @@ const agentRoutes =
         await ownerChatConversationStore.append({
           id: 'assistant-' + safeExecutionId,
           role: 'assistant',
-          content: text
+          content: text,
+          taskId: safeExecutionId
         });
       } catch (error) {
         logger.error('Owner chat final answer persistence failed', {
