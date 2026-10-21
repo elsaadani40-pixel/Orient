@@ -51,7 +51,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     recoveryEngine: new RecoveryEngine()
   });
 
-  const approvalService = new ApprovalService({ tenantId: 'tenant-owner-runtime' });
+  const approvalService = new ApprovalService({ repository: persistence.approvals, tenantId: 'tenant-owner-runtime' });
   const authorizationService = new AuthorizationService({
     capabilityMapper: new CapabilityMapper({
       mappings: {
@@ -111,6 +111,128 @@ test('authenticated dashboard request completes a harmless mission through the r
   });
   assert.equal(login.status, 200);
   const cookie = login.headers.get('set-cookie').split(';')[0];
+  const loginPayload = await login.json();
+  assert.equal(typeof loginPayload.csrfToken, 'string');
+
+  // Exercise the real owner decision endpoint, not only its route handler.
+  // The actor field is deliberately spoofed in the request body; identity must
+  // come from the authenticated server-side owner session.
+  const httpApproval = await approvalService.issue({
+    executionId: 'http-approval-execution',
+    step: 1,
+    tool: 'calendar.create',
+    capability: 'calendar.write',
+    tenantId: 'tenant-owner-runtime',
+    ttlMs: 60000
+  });
+  const decisionUrl = origin + '/owner/approvals/' + encodeURIComponent(httpApproval.approvalId) + '/decision';
+  const deniedDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', Origin: origin },
+    body: JSON.stringify({ executionId: 'http-approval-execution', decision: 'approved' })
+  });
+  assert.equal(deniedDecision.status, 401, 'approval decisions must require an owner session');
+
+  const csrfDeniedDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': 'invalid-csrf-token'
+    },
+    body: JSON.stringify({ executionId: 'http-approval-execution', decision: 'approved' })
+  });
+  assert.equal(csrfDeniedDecision.status, 403, 'approval decisions must reject invalid CSRF tokens');
+
+  const wrongOriginDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: 'https://attacker.invalid',
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken
+    },
+    body: JSON.stringify({ executionId: 'http-approval-execution', decision: 'approved' })
+  });
+  assert.equal(wrongOriginDecision.status, 403, 'approval decisions must reject cross-origin requests');
+
+  const malformedDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken
+    },
+    body: '{'
+  });
+  assert.equal(malformedDecision.status, 400, 'approval decisions must reject malformed JSON');
+
+  const wrongExecutionDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken
+    },
+    body: JSON.stringify({ executionId: 'different-execution', decision: 'approved' })
+  });
+  assert.equal(wrongExecutionDecision.status, 409, 'approval decisions must be bound to their original execution');
+
+  const decisionResponse = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken
+    },
+    body: JSON.stringify({
+      executionId: 'http-approval-execution',
+      decision: 'approved',
+      actorId: 'public:spoofed-client-identity'
+    })
+  });
+  assert.equal(decisionResponse.status, 200);
+  const decisionResult = await decisionResponse.json();
+  assert.equal(decisionResult.ok, true);
+  assert.equal(decisionResult.decision.status, 'approved');
+  const persistedApproved = await approvalService.getApprovedForExecution({
+    approvalId: httpApproval.approvalId,
+    executionId: 'http-approval-execution',
+    tenantId: 'tenant-owner-runtime'
+  });
+  assert.equal(persistedApproved?.decision?.actorId, 'owner:Admin',
+    'decision actor must be persisted server-side rather than accepted from the request body');
+
+  // Re-open the durable JSON repository and reconstruct ApprovalService to
+  // prove the owner decision survives a service/process restart boundary.
+  const restartedPersistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
+  const restartedApprovals = new ApprovalService({
+    repository: restartedPersistence.approvals,
+    tenantId: 'tenant-owner-runtime'
+  });
+  const recoveredApproval = await restartedApprovals.getApprovedForExecution({
+    approvalId: httpApproval.approvalId,
+    executionId: 'http-approval-execution',
+    tenantId: 'tenant-owner-runtime'
+  });
+  assert.equal(recoveredApproval?.decision?.status, 'approved');
+  assert.equal(recoveredApproval?.decision?.actorId, 'owner:Admin');
+
+  const conflictingDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken
+    },
+    body: JSON.stringify({ executionId: 'http-approval-execution', decision: 'rejected' })
+  });
+  assert.equal(conflictingDecision.status, 409, 'a durable approval decision must not be overwritten by a conflicting choice');
 
   const dashboard = await fetch(origin + '/dashboard', { headers: { Cookie: cookie } });
   assert.equal(dashboard.status, 200);

@@ -238,6 +238,49 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
+    async decideApproval(req, res, approvalId, body, actorId) {
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new AppError('Invalid approval decision body', 400, 'INVALID_JSON');
+      }
+      const executionId = typeof body.executionId === 'string' ? body.executionId.trim() : '';
+      const decision = body.decision;
+      if (!executionId || executionId.length > 200 || !['approved', 'rejected'].includes(decision)) {
+        throw new AppError('Approval decision requires executionId and an approved/rejected decision', 400, 'INVALID_APPROVAL_DECISION');
+      }
+      if (typeof actorId !== 'string' || actorId !== 'owner:Admin') {
+        throw new AppError('Owner authorization is required', 403, 'APPROVAL_DECISION_FORBIDDEN');
+      }
+      let result;
+      try {
+        result = await agentService.decideApproval({ approvalId, executionId, decision, actorId });
+      } catch (error) {
+        const decisionErrors = {
+          APPROVAL_NOT_FOUND: [404, 'Approval not found'],
+          // Avoid leaking whether an approval exists in another tenant.
+          APPROVAL_TENANT_MISMATCH: [404, 'Approval not found'],
+          APPROVAL_EXECUTION_MISMATCH: [409, 'Approval execution does not match'],
+          APPROVAL_DECISION_CONFLICT: [409, 'Approval already has a different decision'],
+          APPROVAL_ALREADY_USED: [409, 'Approval has already been consumed'],
+          APPROVAL_EXPIRED: [410, 'Approval has expired'],
+          APPROVAL_DECISION_FORBIDDEN: [403, 'Approval decision is not authorized'],
+          APPROVAL_ID_REQUIRED: [400, 'approvalId is required'],
+          APPROVAL_DECISION_INVALID: [400, 'Decision must be approved or rejected'],
+          APPROVAL_ACTOR_REQUIRED: [400, 'Decision actor is required'],
+          APPROVAL_DECISION_PERSISTENCE_UNSUPPORTED: [503, 'Durable approval decisions are unavailable'],
+          APPROVAL_SERVICE_REQUIRED: [503, 'Approval decisions are unavailable']
+        };
+        const mapped = decisionErrors[error?.code];
+        if (!mapped) throw error;
+        throw new AppError(mapped[1], mapped[0], error.code);
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+      });
+      res.end(JSON.stringify({ ok: true, ...result }));
+    },
+
     async pendingApprovals(req, res) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
