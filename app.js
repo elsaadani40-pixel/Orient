@@ -363,6 +363,27 @@ const memoryRoutes =
     config
   );
 
+async function persistOwnerFinalAnswer(executionId) {
+  if (typeof executionId !== 'string' || !executionId) return;
+  try {
+    const status = await agentService.getExecutionStatus(executionId);
+    if (status.status !== 'completed') return;
+    const answer = await agentService.getFinalAnswer(executionId);
+    if (typeof answer?.text !== 'string' || !answer.text.trim()) return;
+    const safeExecutionId = executionId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+    await ownerChatConversationStore.append({
+      id: 'assistant-' + safeExecutionId,
+      role: 'assistant',
+      content: answer.text,
+      taskId: safeExecutionId
+    });
+  } catch (error) {
+    logger.error('Owner chat final answer persistence failed', {
+      code: error?.code || 'OWNER_CHAT_ANSWER_WRITE_FAILED'
+    });
+  }
+}
+
 const agentRoutes =
   createAgentRoutes(agentService, {
     async onTaskCreated({ executionId, messageId }) {
@@ -373,6 +394,9 @@ const agentRoutes =
           code: error?.code || 'OWNER_CHAT_TASK_LINK_FAILED'
         });
       }
+      // Persist immediately when task execution already completed, rather than
+      // relying exclusively on a connected browser polling the response route.
+      await persistOwnerFinalAnswer(executionId);
     },
     async onFinalAnswer({ executionId, text }) {
       if (typeof text !== 'string' || !text.trim()) return;
