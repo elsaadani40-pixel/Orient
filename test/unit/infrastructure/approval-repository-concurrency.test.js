@@ -199,3 +199,54 @@ test('durable approval decision is immutable across independent processes', asyn
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('JSON approval save cannot overwrite an existing immutable decision or consumed state', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-no-overwrite-'));
+  const file = path.join(dir, 'approvals.json');
+  const repo = new ApprovalRepository(file);
+  const now = Date.now();
+  const original = {
+    approvalId: 'approval-no-overwrite',
+    executionId: 'execution-no-overwrite',
+    step: 1,
+    planRevision: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: { target: 'original' },
+    issuedAt: new Date(now - 1000).toISOString(),
+    expiresAt: new Date(now + 60000).toISOString(),
+    used: false,
+    tenantId: 'tenant-a',
+    metadata: { tenantId: 'tenant-a' }
+  };
+
+  try {
+    await repo.save(original, { tenantId: 'tenant-a' });
+    await repo.recordDecision('approval-no-overwrite', {
+      status: 'approved',
+      actorId: 'owner-a',
+      decidedAt: new Date(now).toISOString()
+    }, 'tenant-a', () => now);
+
+    await assert.rejects(
+      () => repo.save({
+        ...original,
+        scope: { target: 'attacker-replacement' },
+        used: false,
+        decision: null,
+        expiresAt: new Date(now + 3600000).toISOString()
+      }, { tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_ALREADY_EXISTS'
+    );
+
+    const stored = await repo.findById('approval-no-overwrite', { tenantId: 'tenant-a' });
+    assert.equal(stored.scope.target, 'original');
+    assert.equal(stored.decision.status, 'approved');
+    assert.equal(stored.decision.actorId, 'owner-a');
+    assert.equal(stored.used, false);
+    assert.equal(stored.expiresAt, original.expiresAt);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
