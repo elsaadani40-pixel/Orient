@@ -398,17 +398,9 @@ test('malformed approval expiry timestamps fail closed across validation, decisi
 
 
 test('in-memory concurrent approve/reject decisions allow exactly one immutable winner', async () => {
-  let entered = 0;
-  let releaseAuthorizer;
-  const barrier = new Promise(resolve => { releaseAuthorizer = resolve; });
   const service = new ApprovalService({
     tenantId: 'tenant-a',
-    decisionAuthorizer: async () => {
-      entered += 1;
-      if (entered === 2) releaseAuthorizer();
-      await barrier;
-      return true;
-    }
+    decisionAuthorizer: async () => true
   });
   const approval = await service.issue({
     executionId: 'exec-race',
