@@ -102,6 +102,10 @@ class SqliteDatabase {
         payload TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_workflows_tenant_state ON workflows(tenant_id, state);
+
+      CREATE INDEX IF NOT EXISTS idx_workflows_approval_execution
+        ON workflows(tenant_id, json_extract(payload, '$.metadata.approvalExecutionId'))
+        WHERE json_extract(payload, '$.metadata.approvalBlocked') = 1;
       CREATE TABLE IF NOT EXISTS workflow_leases (
         workflow_id TEXT PRIMARY KEY,
         lease_id TEXT NOT NULL UNIQUE,

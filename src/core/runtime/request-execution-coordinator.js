@@ -545,32 +545,64 @@ class RequestExecutionCoordinator {
       // After a real process restart the caller may not resend the approval;
       // recover the still-valid approval that was issued for this exact
       // execution/step/tool/revision before entering AgentLoop.
-      let durableApproval = approval;
-      if (!durableApproval && this.approvalService?.findReusable) {
-        const pending = context.metadata?.pendingStepInputs || {};
-        const pendingSteps = Object.keys(pending)
-          .map(Number)
-          .filter(Number.isInteger)
-          .sort((a, b) => a - b);
-        const pendingStep = pendingSteps[0];
-        const pendingPlanStep = pendingStep ? plan.steps[pendingStep - 1] : null;
-        if (pendingStep && pendingPlanStep?.tool) {
-          durableApproval = await this.approvalService.findReusable({
-            executionId,
-            step: pendingStep,
-            tool: pendingPlanStep.tool,
-            planRevision,
-            tenantId: this.tenantId
+      const pending = context.metadata?.pendingStepInputs || {};
+      const pendingSteps = Object.keys(pending)
+        .map(Number)
+        .filter(Number.isInteger)
+        .sort((a, b) => a - b);
+      const pendingStep = pendingSteps[0];
+      const pendingPlanStep = pendingStep ? plan.steps[pendingStep - 1] : null;
+      let durableApproval = null;
+
+      if (approval?.approvalId) {
+        durableApproval = await this.approvalService?.getApprovedForExecution?.({
+          approvalId: approval.approvalId,
+          executionId,
+          tenantId: this.tenantId
+        }) || null;
+        if (!durableApproval) {
+          throw Object.assign(new Error('A durable approved decision for this exact execution is required'), {
+            code: 'APPROVAL_NOT_APPROVED'
           });
-          if (durableApproval) {
-            context.record('approval.recovered', {
-              step: pendingStep,
-              planRevision,
-              approvalId: durableApproval.approvalId,
-              source: 'durable_approval_store'
-            });
-          }
         }
+      } else if (pendingStep && pendingPlanStep?.tool && this.approvalService?.findReusable) {
+        durableApproval = await this.approvalService.findReusable({
+          executionId,
+          step: pendingStep,
+          tool: pendingPlanStep.tool,
+          planRevision,
+          tenantId: this.tenantId
+        });
+        if (durableApproval) {
+          context.record('approval.recovered', {
+            step: pendingStep,
+            planRevision,
+            approvalId: durableApproval.approvalId,
+            source: 'durable_approved_decision_store'
+          });
+        }
+      }
+
+      // A checkpoint can still show a pending approval input after the
+      // approved tool step was marked running and its idempotency reservation
+      // was persisted. Let AgentLoop reconcile that exact operation; it verifies
+      // the tenant-scoped idempotency record before bypassing a fresh approval
+      // check and fails closed if the record is missing.
+      const pendingOperationAlreadyStarted = Boolean(
+        pendingStep &&
+        pendingPlanStep?.tool &&
+        Array.isArray(context.steps) &&
+        context.steps.some(persistedStep =>
+          persistedStep?.status === 'running' &&
+          Number(persistedStep.step) === pendingStep &&
+          Number(persistedStep.planRevision || 1) === planRevision &&
+          persistedStep.tool === pendingPlanStep.tool
+        )
+      );
+      if (pendingStep && !durableApproval && !pendingOperationAlreadyStarted) {
+        throw Object.assign(new Error('Execution is waiting for an explicit durable approval decision'), {
+          code: 'APPROVAL_NOT_APPROVED'
+        });
       }
 
       const approvalReference = durableApproval?.approvalId
@@ -678,7 +710,9 @@ class RequestExecutionCoordinator {
       // Preserve the resumable checkpoint rather than committing a terminal
       // failure after another worker may have acquired ownership.
       if (error?.code === 'CHECKPOINT_RESUME_LEASE_RENEWAL_UNSUPPORTED' ||
-          error?.code === 'CHECKPOINT_RESUME_LEASE_LOST') {
+          error?.code === 'CHECKPOINT_RESUME_LEASE_LOST' ||
+          error?.code === 'APPROVAL_NOT_APPROVED' ||
+          error?.code === 'APPROVAL_EXPIRED') {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
           await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }
