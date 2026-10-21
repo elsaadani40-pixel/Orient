@@ -48,8 +48,8 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
         error.code = 'PROJECT_OPERATION_IDENTITY_REQUIRED';
         throw error;
       }
-      const workspaceId = require('node:crypto').createHash('sha256').update(path.resolve(projectRoot), 'utf8').digest('hex');
-      const changeSetHash = require('node:crypto').createHash('sha256').update(JSON.stringify(proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
+      const workspaceId = crypto.createHash('sha256').update(path.resolve(projectRoot), 'utf8').digest('hex');
+      const changeSetHash = crypto.createHash('sha256').update(JSON.stringify(proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
         action, path: proposalPath, content, ...(expectedContentSha256 ? { expectedContentSha256 } : {})
       }))), 'utf8').digest('hex');
 
@@ -103,8 +103,8 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       if (!operationReceiptStore || !operationId || !tenantId) {
         return { status: 'conflict', reason: 'operation_receipt_missing' };
       }
-      const workspaceId = require('node:crypto').createHash('sha256').update(path.resolve(projectRoot), 'utf8').digest('hex');
-      const changeSetHash = require('node:crypto').createHash('sha256').update(JSON.stringify(proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
+      const workspaceId = crypto.createHash('sha256').update(path.resolve(projectRoot), 'utf8').digest('hex');
+      const changeSetHash = crypto.createHash('sha256').update(JSON.stringify(proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
         action, path: proposalPath, content, ...(expectedContentSha256 ? { expectedContentSha256 } : {})
       }))), 'utf8').digest('hex');
       let receipt;
