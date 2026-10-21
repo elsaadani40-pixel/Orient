@@ -26,6 +26,17 @@ class SqliteWorkflowRepository {
     return rows.length ? JSON.parse(rows[0].payload) : null;
   }
 
+  findByApprovalExecutionId({ executionId, tenantId = null } = {}) {
+    if (!executionId) return null;
+    const tenantClause = tenantId ? ' AND tenant_id=' + this.db.constructor.literal(tenantId) : '';
+    const rows = this.db.query(
+      'SELECT payload FROM workflows WHERE json_extract(payload, \'$.metadata.approvalBlocked\')=1' +
+      ' AND json_extract(payload, \'$.metadata.approvalExecutionId\')=' + this.db.constructor.literal(String(executionId)) +
+      tenantClause + ' ORDER BY updated_at DESC LIMIT 1;'
+    );
+    return rows.length ? JSON.parse(rows[0].payload) : null;
+  }
+
   findAll({ tenantId = null } = {}) {
     const sql = 'SELECT payload FROM workflows' + (tenantId ? ' WHERE tenant_id = ?' : '') + ' ORDER BY updated_at DESC';
     return this.db.query(sql, tenantId ? [tenantId] : []).map(row => JSON.parse(row.payload));
