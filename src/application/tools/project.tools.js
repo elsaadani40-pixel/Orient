@@ -100,22 +100,20 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       if (proposals.length === 0) return { status: 'conflict', reason: 'no_change_proposals' };
       const operationId = typeof context.operationId === 'string' ? context.operationId : '';
       const tenantId = typeof context.tenantId === 'string' ? context.tenantId : '';
-      if (!operationReceiptStore || !operationId || !tenantId) {
-        return { status: 'conflict', reason: 'operation_receipt_missing' };
-      }
       const workspaceId = crypto.createHash('sha256').update(path.resolve(projectRoot), 'utf8').digest('hex');
       const changeSetHash = crypto.createHash('sha256').update(JSON.stringify(proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
         action, path: proposalPath, content, ...(expectedContentSha256 ? { expectedContentSha256 } : {})
       }))), 'utf8').digest('hex');
-      let receipt;
-      try {
-        receipt = operationReceiptStore.read({ operationId, tenantId });
-      } catch (error) {
-        return { status: 'conflict', reason: error.code || 'operation_receipt_invalid' };
-      }
-      if (!receipt) return { status: 'conflict', reason: 'operation_receipt_missing' };
-      if (receipt.workspaceId !== workspaceId || receipt.changeSetHash !== changeSetHash) {
-        return { status: 'conflict', reason: 'operation_receipt_identity_conflict' };
+      let receipt = null;
+      if (operationReceiptStore && operationId && tenantId) {
+        try {
+          receipt = operationReceiptStore.read({ operationId, tenantId });
+        } catch (error) {
+          return { status: 'conflict', reason: error.code || 'operation_receipt_invalid' };
+        }
+        if (receipt && (receipt.workspaceId !== workspaceId || receipt.changeSetHash !== changeSetHash)) {
+          return { status: 'conflict', reason: 'operation_receipt_identity_conflict' };
+        }
       }
 
       const workspaceAgent = new ProjectBuilderAgent({
@@ -137,6 +135,13 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       // Observed matching files do not prove this operation applied them.
       // Without a durable operation receipt, fail closed rather than claim success.
       if (allApplied) {
+        if (!receipt) {
+          return {
+            status: 'conflict',
+            reason: 'operation_receipt_missing',
+            observations
+          };
+        }
         return {
           status: 'completed',
           result: receipt.result
