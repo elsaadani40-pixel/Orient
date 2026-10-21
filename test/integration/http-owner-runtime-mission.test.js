@@ -171,6 +171,21 @@ test('authenticated dashboard request completes a harmless mission through the r
   assert.equal(persistedApproved?.decision?.actorId, 'owner:Admin',
     'decision actor must be persisted server-side rather than accepted from the request body');
 
+  // Re-open the durable JSON repository and reconstruct ApprovalService to
+  // prove the owner decision survives a service/process restart boundary.
+  const restartedPersistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
+  const restartedApprovals = new ApprovalService({
+    repository: restartedPersistence.approvals,
+    tenantId: 'tenant-owner-runtime'
+  });
+  const recoveredApproval = await restartedApprovals.getApprovedForExecution({
+    approvalId: httpApproval.approvalId,
+    executionId: 'http-approval-execution',
+    tenantId: 'tenant-owner-runtime'
+  });
+  assert.equal(recoveredApproval?.decision?.status, 'approved');
+  assert.equal(recoveredApproval?.decision?.actorId, 'owner:Admin');
+
   const conflictingDecision = await fetch(decisionUrl, {
     method: 'POST',
     headers: {
