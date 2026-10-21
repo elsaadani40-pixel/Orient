@@ -173,7 +173,7 @@ test('high-risk crash after side effect does not execute the side effect twice',
 
   const persistenceRoot = path.join(root, '.orient-state');
   const persistence = new JsonPersistence({ rootDir: persistenceRoot });
-  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8', decisionAuthorizer: async () => true });
   let runtime = createRuntime(root, { approvalService: approvals, persistence });
   const { challenge, approval } = await approveChallenge(runtime, approvals, root);
 
@@ -272,7 +272,7 @@ test('concurrent resume attempts are serialized by the durable lease', async t =
   fs.writeFileSync(manifestPath, '{"name":"mission-8-concurrent-resume"}\n');
 
   const persistence = new JsonPersistence({ rootDir: path.join(root, '.orient-state') });
-  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8', decisionAuthorizer: async () => true });
   const runtimeA = createRuntime(root, { approvalService: approvals, persistence });
   const { challenge, approval } = await approveChallenge(runtimeA, approvals, root);
   const runtimeB = createRuntime(root, { approvalService: approvals, persistence });
