@@ -81,6 +81,17 @@ class OrientRuntime {
           })
         : null);
 
+    // Injected ApprovalService instances must receive the same fail-closed owner
+    // decision policy as Runtime-created instances. Preserve an explicitly
+    // configured authorizer supplied by a trusted composition root.
+    if (this.approvalService && this.approvalService.decisionAuthorizer == null) {
+      this.approvalService.decisionAuthorizer = ({ actorId, tenantId: decisionTenantId, approval }) =>
+        actorId === 'owner:Admin' &&
+        decisionTenantId === this.tenantIdForApprovalDecision(tenantId) &&
+        (approval?.tenantId === this.tenantIdForApprovalDecision(tenantId) ||
+          approval?.metadata?.tenantId === this.tenantIdForApprovalDecision(tenantId));
+    }
+
     if (this.authorizationService && !this.authorizationService.approvalService) {
       this.authorizationService.approvalService = this.approvalService;
     }
@@ -340,6 +351,10 @@ class OrientRuntime {
         cancellationRequested: Boolean(execution.cancellationRequested)
       }))
     };
+  }
+
+  tenantIdForApprovalDecision(tenantId) {
+    return tenantId || 'local';
   }
 
   async decideApproval({ approvalId, executionId, decision, actorId } = {}) {
