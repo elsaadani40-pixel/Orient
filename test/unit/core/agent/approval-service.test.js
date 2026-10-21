@@ -178,3 +178,24 @@ test('invalid approval expiry fails closed across validation, pending lists and 
   assert.equal((await service.listPending()).length, 0);
   assert.equal(await service.consume(approval.approvalId), false);
 });
+
+
+test('valid Date expiry values from database drivers remain supported', async () => {
+  const service = new ApprovalService({ clock: () => 1000 });
+  const approval = await service.issue({
+    executionId: 'exec-date-expiry',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write'
+  });
+
+  service.approvals.get(approval.approvalId).expiresAt = new Date(2000);
+  const checked = await service.validate({
+    approval,
+    executionId: 'exec-date-expiry',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write'
+  });
+  assert.equal(checked.allowed, true);
+});
