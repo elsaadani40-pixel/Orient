@@ -220,7 +220,7 @@ test('high-risk project execution requires a real approval, then executes throug
   const manifestPath = path.join(root, 'package.json');
   fs.writeFileSync(manifestPath, '{"name":"high-risk-fixture"}\n');
 
-  const approvals = new ApprovalService({ tenantId: 'tenant-mission' });
+  const approvals = new ApprovalService({ tenantId: 'tenant-mission', decisionAuthorizer: async () => true });
   const runtime = createRuntime(root, { secure: true, approvalService: approvals, projectPolicy: { allowCommands: true, allowedCommands: ['node'] } });
 
   let challenge;
@@ -249,6 +249,13 @@ test('high-risk project execution requires a real approval, then executes throug
     agentId: challenge.agentId,
     operationId: challenge.operationId,
     scope: { planRevision: challenge.planRevision }
+  });
+  await approvals.decide({
+    approvalId: approval.approvalId,
+    executionId: challenge.executionId,
+    decision: 'approved',
+    actorId: 'test-owner',
+    tenantId: challenge.tenantId
   });
 
   const resumed = await runtime.resume(challenge.executionId, { approval });
