@@ -231,7 +231,7 @@
       const result = await request('/owner/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
-        body: JSON.stringify({ message: composed })
+        body: JSON.stringify({ message: composed, displayMessage: userText || ('اقرأ الملفات المرفقة: ' + originalFiles.map(file => file.name).join('، ')) })
       });
       const task = result.task;
       if (!task || typeof task.id !== 'string' || !task.id) throw new Error('استجابة الخادم لا تحتوي على معرّف مهمة صالح؛ افحص سجل المهام قبل إعادة الإرسال.');
