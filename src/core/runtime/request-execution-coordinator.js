@@ -710,7 +710,9 @@ class RequestExecutionCoordinator {
       // Preserve the resumable checkpoint rather than committing a terminal
       // failure after another worker may have acquired ownership.
       if (error?.code === 'CHECKPOINT_RESUME_LEASE_RENEWAL_UNSUPPORTED' ||
-          error?.code === 'CHECKPOINT_RESUME_LEASE_LOST') {
+          error?.code === 'CHECKPOINT_RESUME_LEASE_LOST' ||
+          error?.code === 'APPROVAL_NOT_APPROVED' ||
+          error?.code === 'APPROVAL_EXPIRED') {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
           await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
         }
