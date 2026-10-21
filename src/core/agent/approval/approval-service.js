@@ -48,6 +48,7 @@ class ApprovalService {
     this.tenantId = tenantId;
     this.decisionAuthorizer = decisionAuthorizer;
     this.approvals = new Map();
+    this.decisionLocks = new Map();
   }
 
   async issue({
@@ -169,7 +170,31 @@ class ApprovalService {
   }
 
 
-  async decide({ approvalId, decision, actorId, executionId, tenantId = this.tenantId } = {}) {
+  async decide(args = {}) {
+    const approvalId = args?.approvalId;
+    if (typeof approvalId !== 'string' || !approvalId.trim()) {
+      throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    }
+
+    // Serialize decisions within this process. Durable repositories must still
+    // enforce compare-and-set atomically across processes.
+    const previous = this.decisionLocks.get(approvalId) || Promise.resolve();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const tail = previous.then(() => gate);
+    this.decisionLocks.set(approvalId, tail);
+    await previous;
+    try {
+      return await this._decideUnlocked(args);
+    } finally {
+      release();
+      if (this.decisionLocks.get(approvalId) === tail) {
+        this.decisionLocks.delete(approvalId);
+      }
+    }
+  }
+
+  async _decideUnlocked({ approvalId, decision, actorId, executionId, tenantId = this.tenantId } = {}) {
     if (typeof approvalId !== 'string' || !approvalId.trim()) {
       throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
     }
