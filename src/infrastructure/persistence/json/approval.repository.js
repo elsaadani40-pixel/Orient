@@ -3,12 +3,12 @@ const path = require('path');
 const crypto = require('crypto');
 
 function matchesTenant(record, tenantId) {
-  if (!tenantId) return true;
   const primaryTenantId = record?.tenantId;
   const metadataTenantId = record?.metadata?.tenantId;
-  // Conflicting tenant identities are invalid, even when one field matches
-  // the requested tenant. Never let fallback metadata override the owner field.
+  // Conflicting tenant identities are invalid, even without a tenant filter.
+  // Never let fallback metadata override the owner field.
   if (primaryTenantId && metadataTenantId && primaryTenantId !== metadataTenantId) return false;
+  if (!tenantId) return true;
   return primaryTenantId === tenantId || metadataTenantId === tenantId;
 }
 
