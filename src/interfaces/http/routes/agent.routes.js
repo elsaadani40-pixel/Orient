@@ -238,6 +238,27 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
+    async decideApproval(req, res, approvalId, body, actorId) {
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new AppError('Invalid approval decision body', 400, 'INVALID_JSON');
+      }
+      const executionId = typeof body.executionId === 'string' ? body.executionId.trim() : '';
+      const decision = body.decision;
+      if (!executionId || executionId.length > 200 || !['approved', 'rejected'].includes(decision)) {
+        throw new AppError('Approval decision requires executionId and an approved/rejected decision', 400, 'INVALID_APPROVAL_DECISION');
+      }
+      if (typeof actorId !== 'string' || actorId !== 'owner:Admin') {
+        throw new AppError('Owner authorization is required', 403, 'APPROVAL_DECISION_FORBIDDEN');
+      }
+      const result = await agentService.decideApproval({ approvalId, executionId, decision, actorId });
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+      });
+      res.end(JSON.stringify({ ok: true, ...result }));
+    },
+
     async pendingApprovals(req, res) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
