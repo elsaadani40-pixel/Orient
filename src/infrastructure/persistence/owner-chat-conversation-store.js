@@ -36,7 +36,11 @@ function normalizeMessage(input) {
   if (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) {
     throw invalid('Conversation message timestamp is invalid');
   }
-  return { id, role, content: content.trim(), createdAt };
+  const taskId = input.taskId === undefined || input.taskId === null ? null : input.taskId;
+  if (taskId !== null && (typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(taskId))) {
+    throw invalid('Conversation task id is invalid');
+  }
+  return { id, role, content: content.trim(), createdAt, taskId };
 }
 
 class OwnerChatConversationStore {
@@ -91,6 +95,30 @@ class OwnerChatConversationStore {
       };
       await this.writeRecord(next);
       return { message: { ...message }, replayed: false };
+    });
+    this.writeQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  async attachTaskId(messageId, taskId) {
+    if (typeof messageId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(messageId) ||
+        typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(taskId)) {
+      throw invalid('Conversation message or task id is invalid');
+    }
+    const operation = this.writeQueue.then(async () => {
+      const record = await this.readRecord();
+      const index = record.messages.findIndex(message => message.id === messageId);
+      if (index < 0) {
+        throw invalid('Conversation message was not found', 'OWNER_CHAT_MESSAGE_NOT_FOUND');
+      }
+      const existing = record.messages[index].taskId || null;
+      if (existing && existing !== taskId) {
+        throw invalid('Conversation message is already linked to another task', 'OWNER_CHAT_TASK_LINK_CONFLICT');
+      }
+      if (existing === taskId) return { message: { ...record.messages[index] }, replayed: true };
+      record.messages[index] = { ...record.messages[index], taskId };
+      await this.writeRecord(record);
+      return { message: { ...record.messages[index] }, replayed: false };
     });
     this.writeQueue = operation.catch(() => {});
     return operation;
