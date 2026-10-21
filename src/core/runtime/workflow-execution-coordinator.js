@@ -56,7 +56,8 @@ class WorkflowExecutionCoordinator {
       workspaceId: this.workspaceId,
       input: { text }
     });
-    instance.metadata.priority = priority;
+    // Keep the public task ID aligned with the durable workflow record.
+    instance.metadata = { ...instance.metadata, taskId: instance.workflowId, priority };
     return { instance, text };
   }
 
@@ -80,6 +81,7 @@ class WorkflowExecutionCoordinator {
     }
 
     return {
+      taskId: instance.metadata.taskId || instance.workflowId,
       workflowId: instance.workflowId,
       state: instance.state,
       tenantId: instance.tenantId,
