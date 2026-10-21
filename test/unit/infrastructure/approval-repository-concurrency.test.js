@@ -302,3 +302,40 @@ test('JSON approval repository rejects records with conflicting tenant identitie
   }
 });
 
+test('JSON approval repository rejects an unparsable decision timestamp', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-invalid-decision-time-'));
+  const file = path.join(dir, 'approvals.json');
+  const repo = new ApprovalRepository(file);
+  const now = Date.now();
+  try {
+    await repo.save({
+      approvalId: 'approval-invalid-decision-time',
+      executionId: 'execution-invalid-decision-time',
+      step: 1,
+      planRevision: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: {},
+      issuedAt: new Date(now - 1000).toISOString(),
+      expiresAt: new Date(now + 60000).toISOString(),
+      used: false,
+      tenantId: 'tenant-a',
+      metadata: { tenantId: 'tenant-a' }
+    }, { tenantId: 'tenant-a' });
+
+    await assert.rejects(
+      () => repo.recordDecision('approval-invalid-decision-time', {
+        status: 'approved',
+        actorId: 'owner-a',
+        decidedAt: 'not-a-valid-timestamp'
+      }, 'tenant-a', () => now),
+      error => error.code === 'APPROVAL_DECISION_INVALID'
+    );
+
+    const stored = await repo.findById('approval-invalid-decision-time', { tenantId: 'tenant-a' });
+    assert.equal(stored.decision, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
