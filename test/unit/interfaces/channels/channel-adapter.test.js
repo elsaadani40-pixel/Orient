@@ -4,12 +4,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const ChannelAdapter = require('../../../../src/interfaces/channels/channel-adapter');
 
-function createAdapter({ authenticate, runtimeForPrincipal, maxMessageChars } = {}) {
+function createAdapter({ authenticate, runtimeForPrincipal, sanitizeResult, maxMessageChars, maxResponseChars } = {}) {
   return new ChannelAdapter({
     channelId: 'web.chat',
     authenticate: authenticate || (async () => ({ subject: 'user-1', tenant: 'tenant-1' })),
-    runtimeForPrincipal: runtimeForPrincipal || (() => ({ async execute(message) { return { message }; } })),
-    ...(maxMessageChars === undefined ? {} : { maxMessageChars })
+    runtimeForPrincipal: runtimeForPrincipal || (() => ({ async execute(message) { return { responseText: message }; } })),
+    sanitizeResult: sanitizeResult || (value => value && value.responseText),
+    ...(maxMessageChars === undefined ? {} : { maxMessageChars }),
+    ...(maxResponseChars === undefined ? {} : { maxResponseChars })
   });
 }
 
@@ -19,7 +21,7 @@ test('channel adapter authenticates sender and dispatches only to that principal
   const runtime = {
     async execute(...args) {
       calls.push(args);
-      return { requestId: 'runtime-request-1', type: 'result' };
+      return { responseText: 'Your notes are summarized.', internalSecret: 'must-not-leak', toolOutput: { raw: true } };
     }
   };
   let authenticatedEnvelope;
@@ -29,6 +31,7 @@ test('channel adapter authenticates sender and dispatches only to that principal
       authenticatedEnvelope = envelope;
       return principal;
     },
+    sanitizeResult: value => value && value.responseText,
     runtimeForPrincipal: async value => {
       resolvedPrincipal = value;
       return runtime;
@@ -48,22 +51,25 @@ test('channel adapter authenticates sender and dispatches only to that principal
   assert.deepEqual(calls, [['summarize my notes']]);
   assert.deepEqual(response, {
     channelId: 'web.chat',
-    result: { requestId: 'runtime-request-1', type: 'result' }
+    result: 'Your notes are summarized.'
   });
   assert.equal(Object.isFrozen(response), true);
+  assert.equal(JSON.stringify(response).includes('must-not-leak'), false);
+  assert.equal(JSON.stringify(response).includes('toolOutput'), false);
 });
 
 test('channel adapter rejects invalid configuration', () => {
   const validRuntimeResolver = () => ({ execute() {} });
-  assert.throws(() => new ChannelAdapter({ channelId: 'Web Chat', authenticate() {}, runtimeForPrincipal: validRuntimeResolver }), /channelId/);
-  assert.throws(() => new ChannelAdapter({ channelId: 'web.chat', runtimeForPrincipal: validRuntimeResolver }), /authenticator/);
-  assert.throws(() => new ChannelAdapter({ channelId: 'web.chat', authenticate() {} }), /Runtime resolver/);
-  assert.throws(() => new ChannelAdapter({ channelId: 'web.chat', authenticate() {}, runtimeForPrincipal: validRuntimeResolver, maxMessageChars: 0 }), /maxMessageChars/);
+  const validSanitizer = value => String(value ?? 'ok');
+  assert.throws(() => new ChannelAdapter({ channelId: 'Web Chat', authenticate() {}, runtimeForPrincipal: validRuntimeResolver, sanitizeResult: validSanitizer }), /channelId/);
+  assert.throws(() => new ChannelAdapter({ channelId: 'web.chat', runtimeForPrincipal: validRuntimeResolver, sanitizeResult: validSanitizer }), /authenticator/);
+  assert.throws(() => new ChannelAdapter({ channelId: 'web.chat', authenticate() {}, sanitizeResult: validSanitizer }), /Runtime resolver/);
+  assert.throws(() => new ChannelAdapter({ channelId: 'web.chat', authenticate() {}, runtimeForPrincipal: validRuntimeResolver, sanitizeResult: validSanitizer, maxMessageChars: 0 }), /maxMessageChars/);
 });
 
 test('channel adapter rejects malformed, empty, and non-text messages before authentication', async () => {
   let authCalls = 0;
-  const adapter = createAdapter({ authenticate: async () => { authCalls += 1; return { subject: 'user-1' }; } });
+  const adapter = createAdapter({ authenticate: async () => { authCalls += 1; return { subject: 'user-1' }; }, sanitizeResult: value => value?.responseText || 'ok' });
 
   await assert.rejects(() => adapter.receive(null), error => error.code === 'CHANNEL_ENVELOPE_INVALID');
   await assert.rejects(() => adapter.receive([]), error => error.code === 'CHANNEL_ENVELOPE_INVALID');
@@ -76,7 +82,8 @@ test('channel adapter enforces inbound message size limit before authentication'
   let authCalls = 0;
   const adapter = createAdapter({
     maxMessageChars: 4,
-    authenticate: async () => { authCalls += 1; return { subject: 'user-1' }; }
+    authenticate: async () => { authCalls += 1; return { subject: 'user-1' }; },
+    sanitizeResult: value => value?.responseText || 'ok'
   });
 
   await assert.rejects(
@@ -90,7 +97,9 @@ test('channel adapter fails closed for unauthenticated senders and never resolve
   let resolveCalls = 0;
   const adapter = createAdapter({
     authenticate: async () => null,
-    runtimeForPrincipal: async () => { resolveCalls += 1; return { async execute() {} }; }
+    sanitizeResult: value => value?.responseText || 'ok',
+    runtimeForPrincipal: async () => { resolveCalls += 1; return { async execute() {} }; },
+    sanitizeResult: value => value?.responseText || 'ok'
   });
 
   await assert.rejects(
@@ -117,4 +126,11 @@ test('channel adapter propagates authentication failures without invoking a Runt
 
   await assert.rejects(() => adapter.receive({ message: 'do something' }), /invalid provider signature/);
   assert.equal(resolveCalls, 0);
+});
+
+test('channel adapter rejects malformed and oversized sanitized output', async () => {
+  const malformed = createAdapter({ sanitizeResult: () => ({ text: 'unsafe object' }) });
+  await assert.rejects(() => malformed.receive({ message: 'hello' }), error => error.code === 'CHANNEL_RESPONSE_INVALID');
+  const oversized = createAdapter({ maxResponseChars: 4, sanitizeResult: () => '12345' });
+  await assert.rejects(() => oversized.receive({ message: 'hello' }), error => error.code === 'CHANNEL_RESPONSE_TOO_LARGE');
 });
