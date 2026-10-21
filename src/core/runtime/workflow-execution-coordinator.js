@@ -81,7 +81,6 @@ class WorkflowExecutionCoordinator {
     }
 
     return {
-      taskId: instance.metadata.taskId || instance.workflowId,
       workflowId: instance.workflowId,
       state: instance.state,
       tenantId: instance.tenantId,
