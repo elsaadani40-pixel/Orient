@@ -77,6 +77,8 @@ class OrientRuntime {
             decisionAuthorizer: ({ actorId, tenantId: decisionTenantId, approval }) =>
               actorId === 'owner:Admin' &&
               decisionTenantId === (tenantId || 'local') &&
+              !(approval?.tenantId && approval?.metadata?.tenantId &&
+                approval.tenantId !== approval.metadata.tenantId) &&
               (approval?.tenantId === (tenantId || 'local') || approval?.metadata?.tenantId === (tenantId || 'local'))
           })
         : null);
@@ -88,6 +90,8 @@ class OrientRuntime {
       this.approvalService.decisionAuthorizer = ({ actorId, tenantId: decisionTenantId, approval }) =>
         actorId === 'owner:Admin' &&
         decisionTenantId === (tenantId || 'local') &&
+        !(approval?.tenantId && approval?.metadata?.tenantId &&
+          approval.tenantId !== approval.metadata.tenantId) &&
         (approval?.tenantId === (tenantId || 'local') ||
           approval?.metadata?.tenantId === (tenantId || 'local'));
     }
