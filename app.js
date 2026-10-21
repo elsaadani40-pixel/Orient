@@ -155,9 +155,7 @@ const ownerStateFile = path.join(websiteDataDir, 'owner.json');
 const ownerWorkProfileStore = new OwnerWorkProfileStore({
   filePath: path.join(websiteDataDir, 'owner-work-profile.json')
 });
-const ownerChatConversationStore = new OwnerChatConversationStore({
-  filePath: path.join(websiteDataDir, 'owner-chat-conversation.json')
-});
+let ownerChatConversationStore;
 if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
   throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters). Set it in the local environment before starting ORIENT.');
 }
@@ -334,6 +332,12 @@ const agentOrchestrator =
 
 const persistenceRuntime = createPersistence(config);
 const persistence = persistenceRuntime.adapter;
+
+// PostgreSQL deployments use the transactional repository backed by the same
+// persistence pool and lifecycle; JSON deployments retain the local file store.
+ownerChatConversationStore = persistence.ownerChat || new OwnerChatConversationStore({
+  filePath: path.join(websiteDataDir, 'owner-chat-conversation.json')
+});
 
 const runtime =
   new OrientRuntime({
