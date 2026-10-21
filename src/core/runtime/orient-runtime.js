@@ -87,9 +87,9 @@ class OrientRuntime {
     if (this.approvalService && this.approvalService.decisionAuthorizer == null) {
       this.approvalService.decisionAuthorizer = ({ actorId, tenantId: decisionTenantId, approval }) =>
         actorId === 'owner:Admin' &&
-        decisionTenantId === this.tenantIdForApprovalDecision(tenantId) &&
-        (approval?.tenantId === this.tenantIdForApprovalDecision(tenantId) ||
-          approval?.metadata?.tenantId === this.tenantIdForApprovalDecision(tenantId));
+        decisionTenantId === (tenantId || 'local') &&
+        (approval?.tenantId === (tenantId || 'local') ||
+          approval?.metadata?.tenantId === (tenantId || 'local'));
     }
 
     if (this.authorizationService && !this.authorizationService.approvalService) {
@@ -351,10 +351,6 @@ class OrientRuntime {
         cancellationRequested: Boolean(execution.cancellationRequested)
       }))
     };
-  }
-
-  tenantIdForApprovalDecision(tenantId) {
-    return tenantId || 'local';
   }
 
   async decideApproval({ approvalId, executionId, decision, actorId } = {}) {
