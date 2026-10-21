@@ -87,6 +87,9 @@ const createPersistence =
 const { OwnerWorkProfileStore } =
   require('./src/infrastructure/persistence/owner-work-profile-store');
 
+const { OwnerChatConversationStore } =
+  require('./src/infrastructure/persistence/owner-chat-conversation-store');
+
 
 const AgentOrchestrator =
   require('./src/core/agent/orchestrator/agent-orchestrator');
@@ -151,6 +154,9 @@ const ownerBootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || pr
 const ownerStateFile = path.join(websiteDataDir, 'owner.json');
 const ownerWorkProfileStore = new OwnerWorkProfileStore({
   filePath: path.join(websiteDataDir, 'owner-work-profile.json')
+});
+const ownerChatConversationStore = new OwnerChatConversationStore({
+  filePath: path.join(websiteDataDir, 'owner-chat-conversation.json')
 });
 if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
   throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters). Set it in the local environment before starting ORIENT.');
@@ -357,10 +363,58 @@ const memoryRoutes =
     config
   );
 
+async function persistOwnerFinalAnswer(executionId) {
+  if (typeof executionId !== 'string' || !executionId) return;
+  try {
+    const status = await agentService.getExecutionStatus(executionId);
+    if (status.status !== 'completed') return;
+    const answer = await agentService.getFinalAnswer(executionId);
+    if (typeof answer?.text !== 'string' || !answer.text.trim()) return;
+    const safeExecutionId = executionId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+    await ownerChatConversationStore.append({
+      id: 'assistant-' + safeExecutionId,
+      role: 'assistant',
+      content: answer.text,
+      taskId: safeExecutionId
+    });
+  } catch (error) {
+    logger.error('Owner chat final answer persistence failed', {
+      code: error?.code || 'OWNER_CHAT_ANSWER_WRITE_FAILED'
+    });
+  }
+}
+
 const agentRoutes =
-  createAgentRoutes(
-    agentService
-  );
+  createAgentRoutes(agentService, {
+    async onTaskCreated({ executionId, messageId }) {
+      try {
+        await ownerChatConversationStore.attachTaskId(messageId, executionId);
+      } catch (error) {
+        logger.error('Owner chat task linkage failed', {
+          code: error?.code || 'OWNER_CHAT_TASK_LINK_FAILED'
+        });
+      }
+      // Persist immediately when task execution already completed, rather than
+      // relying exclusively on a connected browser polling the response route.
+      await persistOwnerFinalAnswer(executionId);
+    },
+    async onFinalAnswer({ executionId, text }) {
+      if (typeof text !== 'string' || !text.trim()) return;
+      const safeExecutionId = String(executionId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+      try {
+        await ownerChatConversationStore.append({
+          id: 'assistant-' + safeExecutionId,
+          role: 'assistant',
+          content: text,
+          taskId: safeExecutionId
+        });
+      } catch (error) {
+        logger.error('Owner chat final answer persistence failed', {
+          code: error?.code || 'OWNER_CHAT_ANSWER_WRITE_FAILED'
+        });
+      }
+    }
+  });
 
 const server =
   createServer({
@@ -369,6 +423,19 @@ const server =
     accessAudit: accessAuditRepository,
     ownerAuth: ownerAuthService,
     ownerProfile: ownerWorkProfileStore,
+    ownerChatStore: ownerChatConversationStore,
+    ownerChatHistoryResolver: async messages => {
+      const answeredTaskIds = new Set(
+        messages.filter(message => message.role === 'assistant' && message.taskId)
+          .map(message => message.taskId)
+      );
+      const unresolved = messages.filter(message =>
+        message.role === 'user' && message.taskId && !answeredTaskIds.has(message.taskId)
+      ).slice(-25);
+      for (const message of unresolved) {
+        await persistOwnerFinalAnswer(message.taskId);
+      }
+    },
     websiteHandler: website.handler
   });
 

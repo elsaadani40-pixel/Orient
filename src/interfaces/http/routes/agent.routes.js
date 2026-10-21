@@ -1,7 +1,7 @@
 const AppError = require('../../../core/errors/AppError');
 const { createRuntimeResponseV1 } = require('../contracts/runtime-response.v1');
 
-function createAgentRoutes(agentService) {
+function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated = null } = {}) {
   return {
     async createTask(req, res, body) {
       let payload;
@@ -19,6 +19,15 @@ function createAgentRoutes(agentService) {
         goal: payload.goal,
         idempotencyKey
       });
+      if (typeof onTaskCreated === 'function' && typeof result.task?.id === 'string' &&
+          typeof req?.ownerChatMessageId === 'string') {
+        await onTaskCreated({
+          executionId: result.task.id,
+          messageId: req.ownerChatMessageId,
+          idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : null,
+          replayed: Boolean(result.replayed)
+        });
+      }
       const statusCode = result.replayed ? 200 : 201;
       res.writeHead(statusCode, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -113,6 +122,10 @@ function createAgentRoutes(agentService) {
       let finalAnswer = { text: null, status: result.status === 'completed' ? 'unavailable' : 'pending' };
       if (result.status === 'completed' && typeof agentService.getFinalAnswer === 'function') {
         finalAnswer = await agentService.getFinalAnswer(executionId);
+      }
+      if (result.status === 'completed' && typeof finalAnswer.text === 'string' &&
+          finalAnswer.text.trim() && typeof onFinalAnswer === 'function') {
+        await onFinalAnswer({ executionId, text: finalAnswer.text });
       }
       const response = createRuntimeResponseV1({
         assistantText: finalAnswer.text,

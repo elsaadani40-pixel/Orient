@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, websiteHandler = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -311,6 +311,25 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
+        if (req.method === 'GET' && requestUrl.pathname === '/owner/chat/history') {
+          if (!ownerChatStore || typeof ownerChatStore.list !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'OWNER_CHAT_HISTORY_UNAVAILABLE', message: 'سجل المحادثة غير متاح حاليًا.' });
+            return;
+          }
+          try {
+            let messages = await ownerChatStore.list();
+            if (typeof ownerChatHistoryResolver === 'function') {
+              await ownerChatHistoryResolver(messages);
+              messages = await ownerChatStore.list();
+            }
+            sendJson(res, 200, { ok: true, messages });
+          } catch (error) {
+            logger.error('Owner chat history read failed', { code: error.code || 'OWNER_CHAT_HISTORY_READ_FAILED' });
+            sendJson(res, 503, { ok: false, code: 'OWNER_CHAT_HISTORY_UNAVAILABLE', message: 'تعذر قراءة سجل المحادثة.' });
+          }
+          return;
+        }
+
         if (requestUrl.pathname === '/owner/profile' && ['GET', 'PUT'].includes(req.method)) {
           if (!ownerProfile || typeof ownerProfile.get !== 'function' || typeof ownerProfile.update !== 'function') {
             sendJson(res, 503, { ok: false, code: 'OWNER_PROFILE_UNAVAILABLE', message: 'ملف عمل المالك غير متاح حاليًا.' });
@@ -388,8 +407,15 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
+          const displayMessage = payload?.displayMessage === undefined
+            ? message
+            : (typeof payload.displayMessage === 'string' ? payload.displayMessage.trim() : '');
           if (!message || message.length > 4000 || /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(message)) {
-            sendJson(res, 400, { ok: false, code: 'INVALID_CHAT_MESSAGE', message: 'الرسالة مطلوبة وبحد أقصى 4000 حرف.' });
+            sendJson(res, 400, { ok: false, code: 'INVALID_CHAT_MESSAGE', message: 'الرسالة المطلوبة إلى Runtime غير صالحة أو تتجاوز 4000 حرف.' });
+            return;
+          }
+          if (!displayMessage || displayMessage.length > 4000 || /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(displayMessage)) {
+            sendJson(res, 400, { ok: false, code: 'INVALID_CHAT_DISPLAY_MESSAGE', message: 'النص الظاهر في سجل المحادثة غير صالح أو يتجاوز 4000 حرف.' });
             return;
           }
           if (!agentRoutes || typeof agentRoutes.createTask !== 'function') {
@@ -398,6 +424,24 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           }
           // Identity, tenant, workspace, role, capability and approval are
           // deliberately derived server-side; only the bounded message becomes a goal.
+          if (ownerChatStore && typeof ownerChatStore.append === 'function') {
+            const suppliedId = req.headers['idempotency-key'];
+            const messageId = typeof suppliedId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(suppliedId)
+              ? suppliedId
+              : randomUUID();
+            try {
+              await ownerChatStore.append({ id: messageId, role: 'user', content: displayMessage });
+              req.ownerChatMessageId = messageId;
+            } catch (error) {
+              if (error.code === 'OWNER_CHAT_IDEMPOTENCY_CONFLICT') {
+                sendJson(res, 409, { ok: false, code: error.code, message: 'معرّف الرسالة مستخدم لمحتوى مختلف.' });
+                return;
+              }
+              logger.error('Owner chat message persistence failed', { code: error.code || 'OWNER_CHAT_WRITE_FAILED' });
+              sendJson(res, 503, { ok: false, code: 'OWNER_CHAT_HISTORY_UNAVAILABLE', message: 'تعذر حفظ الرسالة؛ لم تُرسل المهمة إلى Runtime.' });
+              return;
+            }
+          }
           await agentRoutes.createTask(req, res, JSON.stringify({ goal: message }));
           return;
         }

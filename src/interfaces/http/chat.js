@@ -231,7 +231,7 @@
       const result = await request('/owner/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
-        body: JSON.stringify({ message: composed })
+        body: JSON.stringify({ message: composed, displayMessage: userText || ('اقرأ الملفات المرفقة: ' + originalFiles.map(file => file.name).join('، ')) })
       });
       const task = result.task;
       if (!task || typeof task.id !== 'string' || !task.id) throw new Error('استجابة الخادم لا تحتوي على معرّف مهمة صالح؛ افحص سجل المهام قبل إعادة الإرسال.');
@@ -323,6 +323,20 @@
       button.disabled = false;
     }
   }
+  async function loadConversationHistory() {
+    const result = await request('/owner/chat/history');
+    const messages = Array.isArray(result.messages) ? result.messages : [];
+    for (const message of messages) {
+      if (!message || !['user', 'assistant'].includes(message.role) ||
+          typeof message.content !== 'string' || !message.content.trim()) continue;
+      addBubble(
+        message.role === 'user' ? 'user' : 'runtime',
+        message.role === 'user' ? 'أنت' : 'ORIENT · إجابة محفوظة',
+        message.content
+      );
+    }
+  }
+
   async function initialize() {
     try {
       const session = await request('/owner/session');
@@ -332,7 +346,12 @@
         return;
       }
       state.csrfToken = session.csrfToken;
-      setConnection(true, 'جلسة المالك مؤكدة · لا تُحفظ الرسائل في تخزين المتصفح');
+      setConnection(true, 'جلسة المالك مؤكدة · سجل المحادثة محفوظ على الخادم');
+      try {
+        await loadConversationHistory();
+      } catch (historyError) {
+        setStatus('تم التحقق من جلسة المالك، لكن تعذر تحميل سجل المحادثة: ' + historyError.message, true);
+      }
       await loadOwnerProfile();
       setStatus('جاهز. الملفات النصية تُقرأ محليًا بحدود صارمة؛ الصور والصوت وPDF تحتاج معالجة متعددة الوسائط لم تُفعّل بعد.');
     } catch (error) {
