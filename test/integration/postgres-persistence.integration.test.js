@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
-const { PostgresPersistence, PostgresOwnerChatConversationRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
+const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
@@ -14,7 +14,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -845,5 +845,51 @@ test('PostgreSQL owner chat is durable, idempotent, bounded, and isolated by own
   } finally {
     await chat.clear();
     await otherOwner.clear();
+  }
+});
+
+
+test('PostgreSQL owner work profile persists validated partial updates and isolates owner scopes', async () => {
+  const ownerId = 'owner-profile-test-' + Date.now();
+  const otherOwnerId = ownerId + '-other';
+  const profile = new PostgresOwnerWorkProfileRepository(persistence.db, { ownerId });
+  const other = new PostgresOwnerWorkProfileRepository(persistence.db, { ownerId: otherOwnerId });
+
+  try {
+    assert.deepEqual(await profile.get(), {
+      version: 1,
+      mode: 'standard',
+      workingPreferences: '',
+      updatedAt: null
+    });
+
+    const saved = await profile.update({
+      mode: 'plan-only',
+      workingPreferences: 'Inspect evidence, define acceptance criteria, test before merging.'
+    });
+    assert.equal(saved.mode, 'plan-only');
+    assert.equal(saved.workingPreferences, 'Inspect evidence, define acceptance criteria, test before merging.');
+    assert.ok(Number.isFinite(Date.parse(saved.updatedAt)));
+
+    const partial = await profile.update({ workingPreferences: 'Updated preference' });
+    assert.equal(partial.mode, 'plan-only');
+    assert.equal(partial.workingPreferences, 'Updated preference');
+    assert.ok(Date.parse(partial.updatedAt) >= Date.parse(saved.updatedAt));
+
+    const restarted = new PostgresOwnerWorkProfileRepository(persistence.db, { ownerId });
+    assert.deepEqual(await restarted.get(), partial);
+    assert.equal((await other.get()).mode, 'standard');
+    assert.equal((await other.get()).workingPreferences, '');
+
+    await assert.rejects(
+      () => profile.update({ mode: 'owner-admin' }),
+      error => error.code === 'OWNER_PROFILE_MODE_INVALID'
+    );
+    await assert.rejects(
+      () => profile.update({ workingPreferences: 'x'.repeat(4001) }),
+      error => error.code === 'OWNER_PROFILE_PREFERENCES_INVALID'
+    );
+  } finally {
+    await pool.query('DELETE FROM owner_work_profiles WHERE owner_id = ANY($1::text[])', [[ownerId, otherOwnerId]]);
   }
 });
