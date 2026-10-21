@@ -424,6 +424,18 @@ const server =
     ownerAuth: ownerAuthService,
     ownerProfile: ownerWorkProfileStore,
     ownerChatStore: ownerChatConversationStore,
+    ownerChatHistoryResolver: async messages => {
+      const answeredTaskIds = new Set(
+        messages.filter(message => message.role === 'assistant' && message.taskId)
+          .map(message => message.taskId)
+      );
+      const unresolved = messages.filter(message =>
+        message.role === 'user' && message.taskId && !answeredTaskIds.has(message.taskId)
+      ).slice(-25);
+      for (const message of unresolved) {
+        await persistOwnerFinalAnswer(message.taskId);
+      }
+    },
     websiteHandler: website.handler
   });
 
