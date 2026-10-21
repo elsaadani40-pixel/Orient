@@ -275,6 +275,7 @@ class SqliteApprovalRepository {
       used: Boolean(r.used),
       usedAt: r.used_at || undefined,
       metadata,
+      decision: metadata?.decision || null,
       tenantId: metadata?.tenantId || null
     };
   }
@@ -320,6 +321,47 @@ class SqliteApprovalRepository {
     const result = this.db.run('UPDATE approvals SET used = 1, used_at = ? WHERE approval_id = ? AND used = 0', [usedAt, approvalId]);
     return Number(result.changes) === 1;
   }
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now()) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) {
+      throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    }
+    if (!decision || !['approved', 'rejected'].includes(decision.status) ||
+        typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
+        typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) {
+      throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
+    }
+    const nowMs = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
+    const nowIso = new Date(nowMs).toISOString();
+    const current = this.findById(approvalId, { tenantId });
+    if (!current) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+    if (current.decision) {
+      if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+      throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+    }
+    if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    const expiry = Date.parse(current.expiresAt);
+    if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+    let tenantClause = '';
+    const params = [JSON.stringify(decision), approvalId, nowIso];
+    if (tenantId) {
+      tenantClause = tenantId === 'local'
+        ? " AND (json_extract(metadata, '$.tenantId') = ? OR json_extract(metadata, '$.tenantId') IS NULL)"
+        : " AND json_extract(metadata, '$.tenantId') = ?";
+      params.push(tenantId);
+    }
+    const result = this.db.run(
+      "UPDATE approvals SET metadata = json_set(COALESCE(metadata, '{}'), '$.decision', json(?)) WHERE approval_id = ? AND used = 0 AND expires_at > ? AND json_type(metadata, '$.decision') IS NULL" + tenantClause,
+      params
+    );
+    if (Number(result.changes) === 1) return this.findById(approvalId, { tenantId });
+    const latest = this.findById(approvalId, { tenantId });
+    if (latest?.decision?.status === decision.status && latest?.decision?.actorId === decision.actorId) return latest;
+    if (latest?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+    if (latest?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+  }
+
   count() { return this.db.query('SELECT COUNT(*) AS count FROM approvals;')[0].count; }
 }
 
