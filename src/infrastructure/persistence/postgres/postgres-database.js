@@ -97,6 +97,21 @@ const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_execution_resume_leases_expiry
       ON execution_resume_leases(tenant_id, expires_at);
   `},
+  {version:7,sql:`
+    CREATE TABLE IF NOT EXISTS owner_chat_messages (
+      owner_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('user','assistant')),
+      content TEXT NOT NULL CHECK (length(content) BETWEEN 1 AND 20000),
+      created_at TIMESTAMPTZ NOT NULL,
+      task_id TEXT,
+      PRIMARY KEY (owner_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_owner_chat_messages_order
+      ON owner_chat_messages(owner_id, created_at, message_id);
+    CREATE INDEX IF NOT EXISTS idx_owner_chat_messages_task
+      ON owner_chat_messages(owner_id, task_id) WHERE task_id IS NOT NULL;
+  `},
 
 ];
 class PostgresDatabase {
@@ -116,7 +131,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6)',[1,2,3,4,5,6]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7)',[1,2,3,4,5,6,7]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
