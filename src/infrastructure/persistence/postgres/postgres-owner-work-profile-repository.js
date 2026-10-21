@@ -2,8 +2,7 @@
 
 const {
   normalizeProfile,
-  DEFAULT_PROFILE,
-  MAX_PREFERENCES_CHARS
+  DEFAULT_PROFILE
 } = require('../owner-work-profile-store');
 
 class PostgresOwnerWorkProfileRepository {
