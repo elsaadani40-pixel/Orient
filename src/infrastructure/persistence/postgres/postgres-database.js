@@ -113,6 +113,15 @@ const MIGRATIONS = [
       ON owner_chat_messages(owner_id, task_id) WHERE task_id IS NOT NULL;
   `},
 
+  {version:8,sql:`
+    CREATE TABLE IF NOT EXISTS owner_work_profiles (
+      owner_id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL CHECK (mode IN ('standard','read-only-audit','plan-only')),
+      working_preferences TEXT NOT NULL CHECK (length(working_preferences) <= 4000),
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+  `},
+
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -131,7 +140,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7)',[1,2,3,4,5,6,7]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8)',[1,2,3,4,5,6,7,8]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
