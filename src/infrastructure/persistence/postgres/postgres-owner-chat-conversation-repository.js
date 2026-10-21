@@ -87,6 +87,57 @@ class PostgresOwnerChatConversationRepository {
     });
   }
 
+  async appendAssistantForTask(input) {
+    if (!input || input.role !== 'assistant' ||
+        typeof input.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(input.taskId)) {
+      throw chatError('Assistant answer requires a valid task id');
+    }
+    const message = normalizeMessage(input);
+    return this.db.transaction(async client => {
+      // Use the same per-owner lock as append() and clear(), so clear/complete
+      // ordering is serialized across concurrent PostgreSQL requests.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['owner-chat:' + this.ownerId]);
+      const source = await client.query(
+        `SELECT message_id FROM owner_chat_messages
+         WHERE owner_id=$1 AND role='user' AND task_id=$2 LIMIT 1 FOR UPDATE`,
+        [this.ownerId, message.taskId]
+      );
+      if (!source.rows.length) return { message: null, replayed: false, skipped: true };
+
+      const existingResult = await client.query(
+        `SELECT message_id, role, content, created_at, task_id
+         FROM owner_chat_messages WHERE owner_id=$1 AND message_id=$2 FOR UPDATE`,
+        [this.ownerId, message.id]
+      );
+      if (existingResult.rows.length) {
+        const existing = this.mapRow(existingResult.rows[0]);
+        if (existing.role !== message.role || existing.content !== message.content ||
+            existing.taskId !== message.taskId) {
+          throw chatError('Message id was already used for different content', 'OWNER_CHAT_IDEMPOTENCY_CONFLICT');
+        }
+        return { message: existing, replayed: true, skipped: false };
+      }
+
+      const inserted = await client.query(
+        `INSERT INTO owner_chat_messages(owner_id,message_id,role,content,created_at,task_id)
+         VALUES($1,$2,$3,$4,$5,$6)
+         RETURNING message_id, role, content, created_at, task_id`,
+        [this.ownerId, message.id, message.role, message.content, message.createdAt, message.taskId]
+      );
+      await client.query(
+        `DELETE FROM owner_chat_messages
+         WHERE owner_id=$1 AND message_id IN (
+           SELECT message_id FROM owner_chat_messages
+           WHERE owner_id=$1
+           ORDER BY created_at DESC, message_id DESC
+           OFFSET $2
+         )`,
+        [this.ownerId, this.maxMessages]
+      );
+      return { message: this.mapRow(inserted.rows[0]), replayed: false, skipped: false };
+    });
+  }
+
   async attachTaskId(messageId, taskId) {
     if (typeof messageId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(messageId) ||
         typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(taskId)) {
