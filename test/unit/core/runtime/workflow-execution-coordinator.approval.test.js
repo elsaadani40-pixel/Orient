@@ -207,3 +207,31 @@ test('synchronous workflow coordinator durably pauses and indexes an approval ch
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('workflow cancellation distinguishes owner rejection from general cancellation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-cancel-reason-'));
+  try {
+    const { repository, coordinator } = createCoordinator(root);
+    await saveApprovalBlockedWorkflow(repository, {
+      workflowId: 'workflow-user-cancelled',
+      executionId: 'execution-user-cancelled',
+      approvalId: 'approval-user-cancelled'
+    });
+    await coordinator.cancelApprovalWorkflow('execution-user-cancelled', 'user_cancelled');
+    const userCancelled = (await repository.findAll({ tenantId: 'tenant-a' }))
+      .find(record => record.workflowId === 'workflow-user-cancelled');
+    assert.equal(userCancelled.metadata.approvalDecisionStatus, 'cancelled');
+
+    await saveApprovalBlockedWorkflow(repository, {
+      workflowId: 'workflow-owner-rejected',
+      executionId: 'execution-owner-rejected',
+      approvalId: 'approval-owner-rejected'
+    });
+    await coordinator.cancelApprovalWorkflow('execution-owner-rejected', 'owner_rejected');
+    const ownerRejected = (await repository.findAll({ tenantId: 'tenant-a' }))
+      .find(record => record.workflowId === 'workflow-owner-rejected');
+    assert.equal(ownerRejected.metadata.approvalDecisionStatus, 'rejected');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
