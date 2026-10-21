@@ -42,6 +42,27 @@ test('repeated message ids are idempotent and conflicting replays fail closed', 
   assert.equal((await store.list()).length, 1);
 });
 
+test('task links are durable, idempotent, and reject conflicting or missing links', async t => {
+  const { dir, store } = await fixture(t);
+  await store.append({ id: 'user-message-1', role: 'user', content: 'Run a task' });
+
+  const linked = await store.attachTaskId('user-message-1', 'exec-42');
+  assert.equal(linked.replayed, false);
+  assert.equal(linked.message.taskId, 'exec-42');
+
+  const replay = await store.attachTaskId('user-message-1', 'exec-42');
+  assert.equal(replay.replayed, true);
+  await assert.rejects(store.attachTaskId('user-message-1', 'exec-43'), {
+    code: 'OWNER_CHAT_TASK_LINK_CONFLICT'
+  });
+  await assert.rejects(store.attachTaskId('missing-message', 'exec-42'), {
+    code: 'OWNER_CHAT_MESSAGE_NOT_FOUND'
+  });
+
+  const reopened = new OwnerChatConversationStore({ filePath: path.join(dir, 'conversation.json') });
+  assert.equal((await reopened.list())[0].taskId, 'exec-42');
+});
+
 test('validates roles, ids, control characters, and message size', async t => {
   const { store } = await fixture(t);
   await assert.rejects(store.append({ id: 'bad role', role: 'system', content: 'secret' }), {
