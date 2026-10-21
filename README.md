@@ -19,6 +19,7 @@ ORIENT is being built as one coherent system for researching, planning, executin
 - **Current threat model and tested boundaries:** [`docs/security/THREAT-MODEL.md`](docs/security/THREAT-MODEL.md)
 - **Contribution rules:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Automated checks:** [GitHub Actions](https://github.com/elsaadani40-pixel/Orient/actions)
+- **First-user acceptance:** [`docs/operations/FIRST-USER-ACCEPTANCE.md`](docs/operations/FIRST-USER-ACCEPTANCE.md) — clean checkout, local owner setup, one read-only task, refresh/logout checks, and a device evidence matrix.
 
 ### Browser workbench and integration status
 
