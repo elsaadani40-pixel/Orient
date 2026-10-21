@@ -191,6 +191,43 @@ class ApprovalRepository {
     return JSON.parse(JSON.stringify(record));
   }
 
+
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now()) {
+    if (!approvalId) throw new TypeError('approvalId is required');
+    if (!decision || !['approved', 'rejected'].includes(decision.status) ||
+        typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
+        typeof decision.decidedAt !== 'string') {
+      throw Object.assign(new TypeError('Invalid approval decision record'), { code: 'APPROVAL_DECISION_INVALID' });
+    }
+
+    return this.withLock(() => {
+      const records = this.read();
+      const record = records[approvalId];
+      if (!record) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+      if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) {
+        throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
+      }
+      // An exact replay of the immutable decision remains idempotent even
+      // after the approved operation consumed the challenge or its TTL elapsed.
+      if (record.decision) {
+        if (record.decision.status === decision.status && record.decision.actorId === decision.actorId) {
+          return JSON.parse(JSON.stringify(record));
+        }
+        throw Object.assign(new Error('Approval already has a different decision'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (record.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      const expiresAt = typeof record.expiresAt === 'string' ? Date.parse(record.expiresAt) : NaN;
+      const decisionNow = typeof now === 'function' ? now() : now;
+      if (!Number.isFinite(expiresAt) || !Number.isFinite(decisionNow) || decisionNow >= expiresAt) {
+        throw Object.assign(new Error('Approval expired or has an invalid expiry timestamp'), { code: 'APPROVAL_EXPIRED' });
+      }
+      records[approvalId] = { ...record, decision: { ...decision } };
+      this.write(records);
+      return JSON.parse(JSON.stringify(records[approvalId]));
+    });
+  }
+
+
   async consume(approvalId, usedAt, tenantId = null) {
     if (!approvalId) return false;
 
