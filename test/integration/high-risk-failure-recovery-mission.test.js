@@ -116,6 +116,13 @@ async function approveChallenge(runtime, approvals, root) {
     operationId: challenge.operationId,
     scope: { planRevision: challenge.planRevision }
   });
+  await approvals.decide({
+    approvalId: approval.approvalId,
+    executionId: challenge.executionId,
+    decision: 'approved',
+    actorId: 'test-owner',
+    tenantId: challenge.tenantId
+  });
 
   return { challenge, approval };
 }
@@ -133,7 +140,7 @@ test('high-risk verification failure rolls back after a real approval and cannot
   const original = '{"name":"mission-8-rollback"}\n';
   fs.writeFileSync(manifestPath, original);
 
-  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8' });
+  const approvals = new ApprovalService({ tenantId: 'tenant-mission-8', decisionAuthorizer: async () => true });
   const runtime = createRuntime(root, { approvalService: approvals, projectPolicy: { allowCommands: true, allowedCommands: ['node'] } });
   const { challenge, approval } = await approveChallenge(runtime, approvals, root);
 
