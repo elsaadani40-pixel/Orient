@@ -1,5 +1,5 @@
 const AppError = require('../../../core/errors/AppError');
-const { createRuntimeResponseV1 } = require('../contracts/runtime-response.v1');
+const { createRuntimeResponseV1, MAX_ASSISTANT_TEXT_CHARS } = require('../contracts/runtime-response.v1');
 
 function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated = null } = {}) {
   return {
@@ -121,10 +121,18 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       // results, plans, inputs, observations, and tool payloads never leave this boundary.
       let finalAnswer = { text: null, status: result.status === 'completed' ? 'unavailable' : 'pending' };
       if (result.status === 'completed' && typeof agentService.getFinalAnswer === 'function') {
-        finalAnswer = await agentService.getFinalAnswer(executionId);
+        const candidate = await agentService.getFinalAnswer(executionId);
+        // Treat the persistence adapter as a trust boundary too: malformed,
+        // empty, or oversized answers must not turn a completed task into a 500
+        // or leak an unvalidated value into the public response contract.
+        if (candidate && typeof candidate === 'object' && !Array.isArray(candidate) &&
+            typeof candidate.text === 'string' && candidate.text.trim() &&
+            candidate.text.length <= MAX_ASSISTANT_TEXT_CHARS) {
+          finalAnswer = { text: candidate.text, status: 'available' };
+        }
       }
-      if (result.status === 'completed' && typeof finalAnswer.text === 'string' &&
-          finalAnswer.text.trim() && typeof onFinalAnswer === 'function') {
+      if (result.status === 'completed' && finalAnswer.status === 'available' &&
+          typeof onFinalAnswer === 'function') {
         await onFinalAnswer({ executionId, text: finalAnswer.text });
       }
       const response = createRuntimeResponseV1({

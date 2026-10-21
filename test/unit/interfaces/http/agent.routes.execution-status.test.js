@@ -176,3 +176,48 @@ test('task response does not persist an answer before Runtime completion', async
   assert.equal(res.status, 200);
   assert.deepEqual(saved, []);
 });
+
+
+test('completed task response fails closed when the final-answer adapter returns malformed data', async () => {
+  for (const malformed of [null, undefined, 'not-an-answer', { text: 42, status: 'available' }, { text: '   ', status: 'available' }]) {
+    const routes = createAgentRoutes({
+      getExecutionStatus: async executionId => ({ executionId, status: 'completed' }),
+      getExecutionEvents: async () => [],
+      getExecutionApprovals: async () => [],
+      getFinalAnswer: async () => malformed
+    });
+    const res = {
+      writeHead(status, headers) { this.status = status; this.headers = headers; },
+      end(body) { this.body = JSON.parse(body); }
+    };
+
+    await routes.taskResponse({}, res, 'exec-malformed');
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.assistant.text, null);
+    assert.equal(res.body.assistant.status, 'unavailable');
+  }
+});
+
+test('completed task response does not persist or expose an oversized final answer', async () => {
+  const saved = [];
+  const routes = createAgentRoutes({
+    getExecutionStatus: async executionId => ({ executionId, status: 'completed' }),
+    getExecutionEvents: async () => [],
+    getExecutionApprovals: async () => [],
+    getFinalAnswer: async () => ({ text: 'x'.repeat(20001), status: 'available' })
+  }, {
+    onFinalAnswer: async entry => { saved.push(entry); }
+  });
+  const res = {
+    writeHead(status, headers) { this.status = status; this.headers = headers; },
+    end(body) { this.body = JSON.parse(body); }
+  };
+
+  await routes.taskResponse({}, res, 'exec-oversized');
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.assistant.text, null);
+  assert.equal(res.body.assistant.status, 'unavailable');
+  assert.deepEqual(saved, []);
+});
