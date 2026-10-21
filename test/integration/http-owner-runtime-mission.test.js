@@ -51,7 +51,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     recoveryEngine: new RecoveryEngine()
   });
 
-  const approvalService = new ApprovalService({ tenantId: 'tenant-owner-runtime' });
+  const approvalService = new ApprovalService({ repository: persistence.approvals, tenantId: 'tenant-owner-runtime' });
   const authorizationService = new AuthorizationService({
     capabilityMapper: new CapabilityMapper({
       mappings: {
@@ -163,11 +163,13 @@ test('authenticated dashboard request completes a harmless mission through the r
   const decisionResult = await decisionResponse.json();
   assert.equal(decisionResult.ok, true);
   assert.equal(decisionResult.decision.status, 'approved');
-  assert.equal(
-    approvalService.approvals.get(httpApproval.approvalId).decision.actorId,
-    'owner:Admin',
-    'decision actor must be derived server-side rather than accepted from the request body'
-  );
+  const persistedApproved = await approvalService.getApprovedForExecution({
+    approvalId: httpApproval.approvalId,
+    executionId: 'http-approval-execution',
+    tenantId: 'tenant-owner-runtime'
+  });
+  assert.equal(persistedApproved?.decision?.actorId, 'owner:Admin',
+    'decision actor must be persisted server-side rather than accepted from the request body');
 
   const conflictingDecision = await fetch(decisionUrl, {
     method: 'POST',
