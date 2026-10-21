@@ -490,6 +490,32 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
+        const approvalDecisionMatch = requestUrl.pathname.match(/^\/owner\/approvals\/([A-Za-z0-9_-]{1,100})\/decision$/);
+        if (req.method === 'POST' && approvalDecisionMatch) {
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          if (!String(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
+            sendJson(res, 415, { ok: false, code: 'JSON_REQUIRED', message: 'يلزم إرسال القرار بصيغة JSON.' });
+            return;
+          }
+          let payload;
+          try { payload = JSON.parse(await readBody(req, 8192) || '{}'); }
+          catch (error) {
+            const tooLarge = error.code === 'REQUEST_TOO_LARGE';
+            sendJson(res, tooLarge ? 413 : 400, { ok: false, code: tooLarge ? 'REQUEST_TOO_LARGE' : 'INVALID_JSON', message: 'بيانات قرار الموافقة غير صالحة.' });
+            return;
+          }
+          if (!agentRoutes || typeof agentRoutes.decideApproval !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'APPROVAL_DECISION_UNAVAILABLE', message: 'اتخاذ قرار الموافقة غير متاح حاليًا.' });
+            return;
+          }
+          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, 'owner:Admin');
+          return;
+        }
+
         const ownerResumeMatch = requestUrl.pathname.match(/^\/owner\/executions\/([A-Za-z0-9_-]{1,200})\/resume$/);
         if (req.method === 'POST' && ownerResumeMatch) {
           if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
