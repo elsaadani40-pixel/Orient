@@ -102,7 +102,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
   const firstPersistence = new SqlitePersistence({ filePath });
   const firstApproval = new ApprovalService({
     repository: firstPersistence.approvals,
-    tenantId: 'tenant-a'
+    tenantId: 'tenant-a',
+    decisionAuthorizer: async () => true
   });
 
   const issued = await firstApproval.issue({
@@ -114,10 +115,13 @@ test('SQLite approval storage survives restart and remains single-use', async ()
     scope: { planRevision: 2 }
   });
 
+  await firstApproval.decide({ approvalId: issued.approvalId, executionId: 'exec-approval-1', decision: 'approved', actorId: 'test-owner', tenantId: 'tenant-a' });
+
   const secondPersistence = new SqlitePersistence({ filePath });
   const secondApproval = new ApprovalService({
     repository: secondPersistence.approvals,
-    tenantId: 'tenant-a'
+    tenantId: 'tenant-a',
+    decisionAuthorizer: async () => true
   });
 
   const validation = await secondApproval.validate({
@@ -135,8 +139,8 @@ test('SQLite approval storage survives restart and remains single-use', async ()
   assert.equal(durableExecutionApprovals.length, 1);
   assert.equal(durableExecutionApprovals[0].approvalId, issued.approvalId);
   const durablePending = await secondApproval.listPending({ tenantId: 'tenant-a' });
-  assert.equal(durablePending.length, 1);
-  assert.equal(durablePending[0].approvalId, issued.approvalId);
+  // A decided approval is no longer pending review, but remains durable for validation.
+  assert.equal(durablePending.length, 0);
   assert.equal(await secondApproval.consume(issued.approvalId), true);
   assert.equal(await secondApproval.consume(issued.approvalId), false);
 

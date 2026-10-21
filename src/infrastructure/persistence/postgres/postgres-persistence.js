@@ -781,7 +781,7 @@ class PostgresApprovalRepository {
       planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
       scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
       used: Boolean(row.used), usedAt: row.used_at || undefined,
-      metadata: row.metadata, tenantId: row.tenant_id
+      metadata: row.metadata, decision: row.metadata?.decision || null, tenantId: row.tenant_id
     };
   }
 
@@ -801,8 +801,8 @@ class PostgresApprovalRepository {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
     const nowIso = new Date(now).toISOString();
     const result = tenantId
-      ? await this.db.query('SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 ORDER BY issued_at ASC, approval_id ASC LIMIT $3', [tenantId, nowIso, boundedLimit])
-      : await this.db.query('SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 ORDER BY issued_at ASC, approval_id ASC LIMIT $2', [nowIso, boundedLimit]);
+      ? await this.db.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [tenantId, nowIso, boundedLimit])
+      : await this.db.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
     return result.rows.map(row => this.mapRow(row));
   }
 
@@ -836,6 +836,43 @@ class PostgresApprovalRepository {
     );
     return result.rowCount === 1;
   }
+
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now()) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) {
+      throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    }
+    if (!decision || !['approved', 'rejected'].includes(decision.status) ||
+        typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
+        typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) {
+      throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
+    }
+    const nowMs = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
+    const nowIso = new Date(nowMs).toISOString();
+    const current = await this.findById(approvalId, { tenantId });
+    if (!current) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+    if (current.decision) {
+      if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+      throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+    }
+    if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    const expiry = current.expiresAt instanceof Date ? current.expiresAt.getTime() : Date.parse(current.expiresAt);
+    if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+    const values = [JSON.stringify(decision), approvalId, nowIso];
+    let tenantClause = '';
+    if (tenantId) { values.push(tenantId); tenantClause = ' AND tenant_id=$4'; }
+    const updated = await this.db.query(
+      "UPDATE approvals SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')" + tenantClause + ' RETURNING *',
+      values
+    );
+    if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
+    const latest = await this.findById(approvalId, { tenantId });
+    if (latest?.decision?.status === decision.status && latest?.decision?.actorId === decision.actorId) return latest;
+    if (latest?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+    if (latest?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+    throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+  }
+
 
   async count({ tenantId = null } = {}) {
     const result = tenantId
