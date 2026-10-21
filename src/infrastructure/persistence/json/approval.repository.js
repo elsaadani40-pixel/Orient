@@ -2,6 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+function matchesTenant(record, tenantId) {
+  if (!tenantId) return true;
+  const primaryTenantId = record?.tenantId;
+  const metadataTenantId = record?.metadata?.tenantId;
+  // Conflicting tenant identities are invalid, even when one field matches
+  // the requested tenant. Never let fallback metadata override the owner field.
+  if (primaryTenantId && metadataTenantId && primaryTenantId !== metadataTenantId) return false;
+  return primaryTenantId === tenantId || metadataTenantId === tenantId;
+}
+
 class ApprovalRepository {
   constructor(filePath, { lockTimeoutMs = 30000 } = {}) {
     if (!filePath) throw new TypeError('filePath is required');
@@ -144,14 +154,14 @@ class ApprovalRepository {
 
   async save(approval, { tenantId = null } = {}) {
     if (!approval?.approvalId) throw new TypeError('approval.approvalId is required');
-    if (tenantId && approval.tenantId !== tenantId && approval.metadata?.tenantId !== tenantId) {
+    if (!matchesTenant(approval, tenantId)) {
       throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
     }
 
     return this.withLock(() => {
       const records = this.read();
       const existing = records[approval.approvalId];
-      if (existing && tenantId && existing.tenantId !== tenantId && existing.metadata?.tenantId !== tenantId) {
+      if (existing && !matchesTenant(existing, tenantId)) {
         throw Object.assign(new Error('Approval tenant collision'), { code: 'APPROVAL_TENANT_MISMATCH' });
       }
       // Match SQLite/PostgreSQL insert-only semantics: reusing an approval ID
@@ -169,7 +179,7 @@ class ApprovalRepository {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
     return Object.values(this.read())
       .filter(record => record && !record.used)
-      .filter(record => !tenantId || record.tenantId === tenantId || record.metadata?.tenantId === tenantId)
+      .filter(record => matchesTenant(record, tenantId))
       .filter(record => !record.expiresAt || now < Date.parse(record.expiresAt))
       .sort((a, b) => Date.parse(a.issuedAt || 0) - Date.parse(b.issuedAt || 0))
       .slice(0, boundedLimit)
@@ -180,7 +190,7 @@ class ApprovalRepository {
     if (!executionId) return [];
     return Object.values(this.read())
       .filter(record => record && record.executionId === String(executionId))
-      .filter(record => tenantId ? (record.tenantId === tenantId || record.metadata?.tenantId === tenantId) : true)
+      .filter(record => matchesTenant(record, tenantId))
       .filter(record => step === null || Number(record.step) === Number(step))
       .filter(record => tool === null || record.tool === tool)
       .filter(record => planRevision === null || Number(record.planRevision || 1) === Number(planRevision))
@@ -192,7 +202,7 @@ class ApprovalRepository {
     if (!approvalId) return null;
     const record = this.read()[approvalId] || null;
     if (!record) return null;
-    if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) return null;
+    if (!matchesTenant(record, tenantId)) return null;
     return JSON.parse(JSON.stringify(record));
   }
 
@@ -209,7 +219,7 @@ class ApprovalRepository {
       const records = this.read();
       const record = records[approvalId];
       if (!record) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
-      if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) {
+      if (!matchesTenant(record, tenantId)) {
         throw Object.assign(new Error('Approval tenant mismatch'), { code: 'APPROVAL_TENANT_MISMATCH' });
       }
       // An exact replay of the immutable decision remains idempotent even
@@ -240,7 +250,7 @@ class ApprovalRepository {
       const records = this.read();
       const record = records[approvalId];
       if (!record) return false;
-      if (tenantId && record.tenantId !== tenantId && record.metadata?.tenantId !== tenantId) return false;
+      if (!matchesTenant(record, tenantId)) return false;
       if (record.used) return false;
 
       records[approvalId] = {
