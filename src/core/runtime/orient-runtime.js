@@ -73,9 +73,28 @@ class OrientRuntime {
       (persistence?.approvals
         ? new ApprovalService({
             repository: persistence.approvals,
-            tenantId: tenantId || 'local'
+            tenantId: tenantId || 'local',
+            decisionAuthorizer: ({ actorId, tenantId: decisionTenantId, approval }) =>
+              actorId === 'owner:Admin' &&
+              decisionTenantId === (tenantId || 'local') &&
+              !(approval?.tenantId && approval?.metadata?.tenantId &&
+                approval.tenantId !== approval.metadata.tenantId) &&
+              (approval?.tenantId === (tenantId || 'local') || approval?.metadata?.tenantId === (tenantId || 'local'))
           })
         : null);
+
+    // Injected ApprovalService instances must receive the same fail-closed owner
+    // decision policy as Runtime-created instances. Preserve an explicitly
+    // configured authorizer supplied by a trusted composition root.
+    if (this.approvalService && this.approvalService.decisionAuthorizer == null) {
+      this.approvalService.decisionAuthorizer = ({ actorId, tenantId: decisionTenantId, approval }) =>
+        actorId === 'owner:Admin' &&
+        decisionTenantId === (tenantId || 'local') &&
+        !(approval?.tenantId && approval?.metadata?.tenantId &&
+          approval.tenantId !== approval.metadata.tenantId) &&
+        (approval?.tenantId === (tenantId || 'local') ||
+          approval?.metadata?.tenantId === (tenantId || 'local'));
+    }
 
     if (this.authorizationService && !this.authorizationService.approvalService) {
       this.authorizationService.approvalService = this.approvalService;
@@ -336,6 +355,15 @@ class OrientRuntime {
         cancellationRequested: Boolean(execution.cancellationRequested)
       }))
     };
+  }
+
+  async decideApproval({ approvalId, executionId, decision, actorId } = {}) {
+    if (!this.approvalService || typeof this.approvalService.decide !== 'function') {
+      throw Object.assign(new Error('Approval service is required for decisions'), { code: 'APPROVAL_SERVICE_REQUIRED' });
+    }
+    return this.approvalService.decide({
+      approvalId, executionId, decision, actorId, tenantId: this.tenantId
+    });
   }
 
   async listPendingApprovals({ limit = 100 } = {}) {
