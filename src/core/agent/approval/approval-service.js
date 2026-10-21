@@ -251,7 +251,12 @@ class ApprovalService {
       decidedAt: new Date(this.clock()).toISOString()
     };
     let updated;
-    if (this.repository?.recordDecision) {
+    if (this.repository) {
+      if (typeof this.repository.recordDecision !== 'function') {
+        throw Object.assign(new Error('Durable approval repository does not support atomic decision recording'), {
+          code: 'APPROVAL_DECISION_PERSISTENCE_UNSUPPORTED'
+        });
+      }
       updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId, this.clock);
     } else {
       const current = stored.decision || null;
