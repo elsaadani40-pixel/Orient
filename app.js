@@ -152,9 +152,7 @@ const accessAuditRepository =
 const websiteDataDir = process.env.ORIENT_DATA_DIR || path.join(__dirname, '.orient-data');
 const ownerBootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD;
 const ownerStateFile = path.join(websiteDataDir, 'owner.json');
-const ownerWorkProfileStore = new OwnerWorkProfileStore({
-  filePath: path.join(websiteDataDir, 'owner-work-profile.json')
-});
+let ownerWorkProfileStore;
 let ownerChatConversationStore;
 if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
   throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters). Set it in the local environment before starting ORIENT.');
@@ -332,6 +330,12 @@ const agentOrchestrator =
 
 const persistenceRuntime = createPersistence(config);
 const persistence = persistenceRuntime.adapter;
+
+// PostgreSQL mode stores the owner work profile in the same durable database;
+// JSON mode retains the restrictive local file-backed implementation.
+ownerWorkProfileStore = persistence.ownerProfile || new OwnerWorkProfileStore({
+  filePath: path.join(websiteDataDir, 'owner-work-profile.json')
+});
 
 // PostgreSQL deployments use the transactional repository backed by the same
 // persistence pool and lifecycle; JSON deployments retain the local file store.
