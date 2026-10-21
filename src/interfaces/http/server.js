@@ -330,6 +330,26 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
 
+        if (req.method === 'DELETE' && requestUrl.pathname === '/owner/chat/history') {
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          if (!ownerChatStore || typeof ownerChatStore.clear !== 'function') {
+            sendJson(res, 503, { ok: false, code: 'OWNER_CHAT_DELETE_UNAVAILABLE', message: 'حذف سجل المحادثة غير متاح حاليًا.' });
+            return;
+          }
+          try {
+            await ownerChatStore.clear();
+            sendJson(res, 200, { ok: true, cleared: true });
+          } catch (error) {
+            logger.error('Owner chat history deletion failed', { code: error.code || 'OWNER_CHAT_DELETE_FAILED' });
+            sendJson(res, 503, { ok: false, code: 'OWNER_CHAT_DELETE_FAILED', message: 'تعذر حذف سجل المحادثة.' });
+          }
+          return;
+        }
+
         if (requestUrl.pathname === '/owner/profile' && ['GET', 'PUT'].includes(req.method)) {
           if (!ownerProfile || typeof ownerProfile.get !== 'function' || typeof ownerProfile.update !== 'function') {
             sendJson(res, 503, { ok: false, code: 'OWNER_PROFILE_UNAVAILABLE', message: 'ملف عمل المالك غير متاح حاليًا.' });
