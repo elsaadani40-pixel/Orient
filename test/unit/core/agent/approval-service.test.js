@@ -153,3 +153,28 @@ test('pending approvals expose bounded review summaries without exposing arbitra
   const forExecution = await service.listForExecution({ executionId: 'exec-review', tenantId: 'tenant-review' });
   assert.equal(forExecution[0].summary.kind, 'file_change');
 });
+
+
+test('invalid approval expiry fails closed across validation, pending lists and consumption', async () => {
+  const service = new ApprovalService({ clock: () => 1000 });
+  const approval = await service.issue({
+    executionId: 'exec-invalid-expiry',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write'
+  });
+
+  service.approvals.get(approval.approvalId).expiresAt = 'not-a-valid-timestamp';
+
+  const checked = await service.validate({
+    approval,
+    executionId: 'exec-invalid-expiry',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write'
+  });
+  assert.equal(checked.allowed, false);
+  assert.equal(checked.reason, 'APPROVAL_EXPIRED');
+  assert.equal((await service.listPending()).length, 0);
+  assert.equal(await service.consume(approval.approvalId), false);
+});
