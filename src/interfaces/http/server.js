@@ -426,6 +426,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
               : randomUUID();
             try {
               await ownerChatStore.append({ id: messageId, role: 'user', content: displayMessage });
+              req.ownerChatMessageId = messageId;
             } catch (error) {
               if (error.code === 'OWNER_CHAT_IDEMPOTENCY_CONFLICT') {
                 sendJson(res, 409, { ok: false, code: error.code, message: 'معرّف الرسالة مستخدم لمحتوى مختلف.' });
