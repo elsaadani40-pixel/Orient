@@ -1,10 +1,12 @@
+const crypto = require('node:crypto');
+const path = require('node:path');
 const ToolInterface = require('../../core/tools/tool.interface');
 const ProjectBuilderAgent = require('../../core/agent/project-builder/project-builder-agent');
 const ProjectImprovementAnalyzer = require('../../core/agent/project-builder/change-proposal/project-improvement-analyzer');
 const CommandRunner = require('../../core/agent/project-builder/workspace/command-runner');
 const CommandVerification = require('../../core/agent/project-builder/verification/command-verification');
 
-function createProjectTools({ projectRoot, policy = {} } = {}) {
+function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = null } = {}) {
   if (!projectRoot || typeof projectRoot !== 'string') throw new TypeError('projectRoot is required');
   const readOnlyPolicy = { ...policy, allowRead: true, allowWrite: false, allowCommands: false, allowGit: false };
   const audit = new ToolInterface({
@@ -35,10 +37,21 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
     sandbox: { required: true, profile: { filesystem: { allowRead: [projectRoot], allowWrite: [projectRoot] }, network: { allowedDomains: [] }, unixSockets: { allowed: [] } } },
     effects: 'local_mutation',
     idempotency: 'unknown',
-    execute: async (input = {}) => {
+    execute: async (input = {}, context = {}) => {
       const proposalResult = input && input.proposals ? input : input;
       const proposals = Array.isArray(proposalResult.proposals) ? proposalResult.proposals : [];
       if (proposals.length === 0) throw new Error('No approved change proposals were supplied');
+      const operationId = typeof context.operationId === 'string' ? context.operationId : '';
+      const tenantId = typeof context.tenantId === 'string' ? context.tenantId : '';
+      if (operationReceiptStore && (!operationId || !tenantId)) {
+        const error = new Error('Durable operation identity is required before project mutation');
+        error.code = 'PROJECT_OPERATION_IDENTITY_REQUIRED';
+        throw error;
+      }
+      const workspaceId = crypto.createHash('sha256').update(path.resolve(projectRoot), 'utf8').digest('hex');
+      const changeSetHash = crypto.createHash('sha256').update(JSON.stringify(proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
+        action, path: proposalPath, content, ...(expectedContentSha256 ? { expectedContentSha256 } : {})
+      }))), 'utf8').digest('hex');
 
       const agent = new ProjectBuilderAgent({
         projectRoot,
@@ -69,16 +82,39 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
       const hasTests = canRunNodeTests && await agent.workspace.exists('test');
       if (hasTests) checks.push(commandVerification.createCheck({ id: 'node-test-suite', executable: 'node', args: ['--test'] }));
 
-      return agent.execute({
+      const result = await agent.execute({
         plan: { mission: 'PROJECT_CHANGE_EXECUTION' },
         changeSet: { changes: proposals },
         definitionOfDone: { allProposalsApplied: true, verificationPassed: true, rollbackOnFailure: true },
         checks
       });
+      const serialized = typeof result?.toJSON === 'function' ? result.toJSON() : result;
+      if (operationReceiptStore && serialized?.status === 'verified' &&
+          serialized?.verification?.status === 'passed' && serialized?.verification?.failed === 0) {
+        operationReceiptStore.write({ operationId, tenantId, workspaceId, changeSetHash, result: serialized });
+      }
+      return result;
     },
-    reconcile: async (input = {}) => {
+    reconcile: async (input = {}, context = {}) => {
       const proposals = Array.isArray(input.proposals) ? input.proposals : [];
       if (proposals.length === 0) return { status: 'conflict', reason: 'no_change_proposals' };
+      const operationId = typeof context.operationId === 'string' ? context.operationId : '';
+      const tenantId = typeof context.tenantId === 'string' ? context.tenantId : '';
+      const workspaceId = crypto.createHash('sha256').update(path.resolve(projectRoot), 'utf8').digest('hex');
+      const changeSetHash = crypto.createHash('sha256').update(JSON.stringify(proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
+        action, path: proposalPath, content, ...(expectedContentSha256 ? { expectedContentSha256 } : {})
+      }))), 'utf8').digest('hex');
+      let receipt = null;
+      if (operationReceiptStore && operationId && tenantId) {
+        try {
+          receipt = operationReceiptStore.read({ operationId, tenantId });
+        } catch (error) {
+          return { status: 'conflict', reason: error.code || 'operation_receipt_invalid' };
+        }
+        if (receipt && (receipt.workspaceId !== workspaceId || receipt.changeSetHash !== changeSetHash)) {
+          return { status: 'conflict', reason: 'operation_receipt_identity_conflict' };
+        }
+      }
 
       const workspaceAgent = new ProjectBuilderAgent({
         projectRoot,
@@ -99,10 +135,16 @@ function createProjectTools({ projectRoot, policy = {} } = {}) {
       // Observed matching files do not prove this operation applied them.
       // Without a durable operation receipt, fail closed rather than claim success.
       if (allApplied) {
+        if (!receipt) {
+          return {
+            status: 'conflict',
+            reason: 'operation_receipt_missing',
+            observations
+          };
+        }
         return {
-          status: 'conflict',
-          reason: 'operation_receipt_missing',
-          observations
+          status: 'completed',
+          result: receipt.result
         };
       }
 

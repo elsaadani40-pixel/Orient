@@ -42,6 +42,8 @@ const createWorkspaceTools =
   require('./src/application/tools/workspace.tools');
 const createProjectTools =
   require('./src/application/tools/project.tools');
+const ProjectOperationReceiptStore =
+  require('./src/infrastructure/execution/project-operation-receipt-store');
 
 const OrientRuntime =
   require('./src/core/runtime/orient-runtime');
@@ -202,6 +204,9 @@ const projectBuilderAgent = new ProjectBuilderAgent({
   }
 });
 const workspaceTools = createWorkspaceTools(projectBuilderAgent);
+const projectOperationReceiptStore = new ProjectOperationReceiptStore({
+  directory: path.join(config.agentDataDirectory, 'project-operation-receipts')
+});
 const projectTools = createProjectTools({
   projectRoot: __dirname,
   policy: {
@@ -210,7 +215,8 @@ const projectTools = createProjectTools({
     allowCommands: false,
     allowGit: false,
     maxOutput: 30000
-  }
+  },
+  operationReceiptStore: projectOperationReceiptStore
 });
 
 // Prefer the explicitly governed project tools over the legacy workspace
