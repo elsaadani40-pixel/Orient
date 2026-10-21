@@ -13,7 +13,9 @@ class ChannelAdapter {
     channelId,
     authenticate,
     runtimeForPrincipal,
-    maxMessageChars = 100000
+    sanitizeResult,
+    maxMessageChars = 100000,
+    maxResponseChars = 10000
   } = {}) {
     if (typeof channelId !== 'string' ||
         !/^[a-z][a-z0-9._-]{0,63}$/.test(channelId)) {
@@ -25,6 +27,12 @@ class ChannelAdapter {
     if (typeof runtimeForPrincipal !== 'function') {
       throw new TypeError('A principal-scoped Runtime resolver is required');
     }
+    if (typeof sanitizeResult !== 'function') {
+      throw new TypeError('A trusted outbound result sanitizer is required');
+    }
+    if (!Number.isSafeInteger(maxResponseChars) || maxResponseChars < 1 || maxResponseChars > 100000) {
+      throw new RangeError('maxResponseChars must be between 1 and 100000');
+    }
     if (!Number.isSafeInteger(maxMessageChars) ||
         maxMessageChars < 1 || maxMessageChars > 1000000) {
       throw new RangeError('maxMessageChars must be between 1 and 1000000');
@@ -33,7 +41,9 @@ class ChannelAdapter {
     this.channelId = channelId;
     this.authenticate = authenticate;
     this.runtimeForPrincipal = runtimeForPrincipal;
+    this.sanitizeResult = sanitizeResult;
     this.maxMessageChars = maxMessageChars;
+    this.maxResponseChars = maxResponseChars;
     Object.freeze(this);
   }
 
@@ -78,11 +88,19 @@ class ChannelAdapter {
       });
     }
 
-    const result = await runtime.execute(message);
-    return Object.freeze({
-      channelId: this.channelId,
-      result
-    });
+    const rawResult = await runtime.execute(message);
+    const result = await this.sanitizeResult(rawResult);
+    if (typeof result !== 'string' || !result.trim()) {
+      throw Object.assign(new TypeError('Sanitized channel response must be non-empty text'), {
+        code: 'CHANNEL_RESPONSE_INVALID'
+      });
+    }
+    if (result.length > this.maxResponseChars) {
+      throw Object.assign(new RangeError('Sanitized channel response exceeds the channel limit'), {
+        code: 'CHANNEL_RESPONSE_TOO_LARGE'
+      });
+    }
+    return Object.freeze({ channelId: this.channelId, result: result.trim() });
   }
 }
 
