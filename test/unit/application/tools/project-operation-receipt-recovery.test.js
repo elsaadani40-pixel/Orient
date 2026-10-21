@@ -64,14 +64,15 @@ test('matching workspace bytes without a receipt remain a fail-closed conflict',
 });
 
 test('receipt from another tenant cannot reconcile the same operation ID', async () => {
-  await withFixture(async ({ store, execute }) => {
+  await withFixture(async ({ root, store, execute }) => {
     const input = {
       proposals: [{ action: 'create', path: 'src/generated.txt', content: 'approved content\n' }]
     };
+    await fs.writeFile(path.join(root, 'src/generated.txt'), 'approved content\\n');
     const context = { operationId: 'shared-operation', tenantId: 'tenant-a' };
     store.write({
       ...context,
-      workspaceId: require('node:crypto').createHash('sha256').update(path.resolve('/tmp/orient-fixture'), 'utf8').digest('hex'),
+      workspaceId: require('node:crypto').createHash('sha256').update(path.resolve(root), 'utf8').digest('hex'),
       changeSetHash: require('node:crypto').createHash('sha256').update(JSON.stringify(input.proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
         action, path: proposalPath, content, ...(expectedContentSha256 ? { expectedContentSha256 } : {})
       }))), 'utf8').digest('hex'),
