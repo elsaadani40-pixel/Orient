@@ -23,5 +23,5 @@ test('chat client renders bounded evidence references without interpreting serve
 
 test('chat client refreshes response metadata during task monitoring', () => {
   assert.match(source, /renderResponseMetadata\(bubble, response\)/);
-  assert.match(source, /response\.apiVersion === 'v1'/);
+  assert.match(source, /response\?\.apiVersion === 'v1'/);
 });
