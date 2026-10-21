@@ -145,6 +145,42 @@ test('authenticated dashboard request completes a harmless mission through the r
   });
   assert.equal(csrfDeniedDecision.status, 403, 'approval decisions must reject invalid CSRF tokens');
 
+  const wrongOriginDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: 'https://attacker.invalid',
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken
+    },
+    body: JSON.stringify({ executionId: 'http-approval-execution', decision: 'approved' })
+  });
+  assert.equal(wrongOriginDecision.status, 403, 'approval decisions must reject cross-origin requests');
+
+  const malformedDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken
+    },
+    body: '{'
+  });
+  assert.equal(malformedDecision.status, 400, 'approval decisions must reject malformed JSON');
+
+  const wrongExecutionDecision = await fetch(decisionUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken
+    },
+    body: JSON.stringify({ executionId: 'different-execution', decision: 'approved' })
+  });
+  assert.equal(wrongExecutionDecision.status, 409, 'approval decisions must be bound to their original execution');
+
   const decisionResponse = await fetch(decisionUrl, {
     method: 'POST',
     headers: {
