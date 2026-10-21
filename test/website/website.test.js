@@ -21,14 +21,14 @@ test('ORIENT website includes Arabic RTL switching and responsive layouts', () =
 });
 
 test('ORIENT website mobile navigation exposes accessible state and keyboard behavior', () => {
-  assert.match(html, /<nav class=\"links\" id=\"navlinks\">/);
-  assert.match(html, /id=\"menu\"[^>]*aria-expanded=\"false\"[^>]*aria-controls=\"navlinks\"/);
-  assert.match(html, /function setMenuOpen\\(open\\)/);
-  assert.match(html, /menu\\.setAttribute\\('aria-expanded',String\\(open\\)\\)/);
-  assert.match(html, /nav\\.querySelectorAll\\('a'\\)\\.forEach\\(a=>a\\.addEventListener\\('click',\\(\\)=>setMenuOpen\\(false\\)\\)\\)/);
-  assert.match(html, /e\\.key==='Escape'/);
-  assert.match(html, /setMenuOpen\\(false\\);menu\\.focus\\(\\)/);
-  assert.match(html, /open\\?'إغلاق القائمة':'فتح القائمة'/);
+  assert.match(html, /<nav class="links" id="navlinks">/);
+  assert.match(html, /id="menu"[^>]*aria-expanded="false"[^>]*aria-controls="navlinks"/);
+  assert.match(html, /function setMenuOpen\(open\)/);
+  assert.match(html, /menu\.setAttribute\('aria-expanded',String\(open\)\)/);
+  assert.match(html, /nav\.querySelectorAll\('a'\)\.forEach\(a=>a\.addEventListener\('click',\(\)=>setMenuOpen\(false\)\)\)/);
+  assert.match(html, /e\.key==='Escape'/);
+  assert.match(html, /setMenuOpen\(false\);menu\.focus\(\)/);
+  assert.match(html, /open\?'إغلاق القائمة':'فتح القائمة'/);
 });
 
 test('ORIENT website respects reduced-motion preferences', () => {
