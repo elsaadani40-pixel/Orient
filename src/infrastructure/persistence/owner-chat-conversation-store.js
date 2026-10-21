@@ -100,6 +100,39 @@ class OwnerChatConversationStore {
     return operation;
   }
 
+  async appendAssistantForTask(input) {
+    if (!input || input.role !== 'assistant' ||
+        typeof input.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(input.taskId)) {
+      throw invalid('Assistant answer requires a valid task id');
+    }
+    const operation = this.writeQueue.then(async () => {
+      const message = normalizeMessage(input);
+      const record = await this.readRecord();
+      // Check source and append under the same serialized write operation as clear().
+      // If clear wins, the stale answer is discarded; if this wins, clear removes it.
+      const sourceExists = record.messages.some(item =>
+        item.role === 'user' && item.taskId === message.taskId
+      );
+      if (!sourceExists) return { message: null, replayed: false, skipped: true };
+      const existing = record.messages.find(item => item.id === message.id);
+      if (existing) {
+        if (existing.role !== message.role || existing.content !== message.content ||
+            existing.taskId !== message.taskId) {
+          throw invalid('Message id was already used for different content', 'OWNER_CHAT_IDEMPOTENCY_CONFLICT');
+        }
+        return { message: { ...existing }, replayed: true, skipped: false };
+      }
+      const next = {
+        version: 1,
+        messages: [...record.messages, message].slice(-this.maxMessages)
+      };
+      await this.writeRecord(next);
+      return { message: { ...message }, replayed: false, skipped: false };
+    });
+    this.writeQueue = operation.catch(() => {});
+    return operation;
+  }
+
   async attachTaskId(messageId, taskId) {
     if (typeof messageId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(messageId) ||
         typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(taskId)) {
