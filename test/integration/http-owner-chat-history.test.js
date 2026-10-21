@@ -7,7 +7,7 @@ const { once } = require('node:events');
 const createServer = require('../../src/interfaces/http/server');
 const OwnerAuthService = require('../../src/core/security/owner-auth-service');
 
-test('owner chat history and submission require owner session, CSRF, and persist idempotently', async t => {
+test('owner chat history and submission require owner session, CSRF, and persist only displayMessage', async t => {
   const password = 'owner-chat-integration-secret-2026';
   const messages = [];
   const store = {
@@ -27,7 +27,7 @@ test('owner chat history and submission require owner session, CSRF, and persist
   const agentRoutes = {
     async createTask(req, res, body) {
       assert.equal(req.headers['idempotency-key'], 'chat-message-key-0001');
-      assert.deepEqual(JSON.parse(body), { goal: 'مرحبا يا ORIENT' });
+      assert.deepEqual(JSON.parse(body), { goal: 'مرحبا يا ORIENT مع سياق داخلي سري' });
       res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ apiVersion: 'v1', task: { id: 'task-1' }, replayed: false }));
     }
@@ -62,7 +62,7 @@ test('owner chat history and submission require owner session, CSRF, and persist
   const deniedCsrf = await fetch(origin + '/owner/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json', Origin: origin, Cookie: cookie, 'Idempotency-Key': 'chat-message-key-0001' },
-    body: JSON.stringify({ message: 'مرحبا يا ORIENT' })
+    body: JSON.stringify({ message: 'مرحبا يا ORIENT مع سياق داخلي سري', displayMessage: 'مرحبا يا ORIENT' })
   });
   assert.equal(deniedCsrf.status, 403);
   assert.equal(messages.length, 0);
@@ -76,7 +76,7 @@ test('owner chat history and submission require owner session, CSRF, and persist
       'X-ORIENT-CSRF': session.csrfToken,
       'Idempotency-Key': 'chat-message-key-0001'
     },
-    body: JSON.stringify({ message: 'مرحبا يا ORIENT' })
+    body: JSON.stringify({ message: 'مرحبا يا ORIENT مع سياق داخلي سري', displayMessage: 'مرحبا يا ORIENT' })
   });
   assert.equal(submitted.status, 201);
   assert.equal((await submitted.json()).task.id, 'task-1');
@@ -86,8 +86,11 @@ test('owner chat history and submission require owner session, CSRF, and persist
     role: 'user',
     content: 'مرحبا يا ORIENT'
   });
+  assert.equal(messages.some(message => message.content.includes('سياق داخلي سري')), false);
 
   const history = await fetch(origin + '/owner/chat/history', { headers: { Cookie: cookie } });
   assert.equal(history.status, 200);
-  assert.equal((await history.json()).messages.length, 1);
+  const historyBody = await history.json();
+  assert.equal(historyBody.messages.length, 1);
+  assert.equal(historyBody.messages[0].content, 'مرحبا يا ORIENT');
 });
