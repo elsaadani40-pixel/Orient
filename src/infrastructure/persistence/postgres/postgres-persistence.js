@@ -3,6 +3,7 @@ const { PostgresDatabase } = require('./postgres-database');
 const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repository');
 const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-repository');
 const PostgresOwnerChatConversationRepository = require('./postgres-owner-chat-conversation-repository');
+const PostgresOwnerWorkProfileRepository = require('./postgres-owner-work-profile-repository');
 
 function tenantOrLocal(value) {
   return value || 'local';
@@ -858,6 +859,7 @@ class PostgresPersistence {
     this.approvals = new PostgresApprovalRepository(this.db);
     this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
     this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
+    this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
     this.workers = new PostgresWorkerRegistryRepository(this.db);
   }
 
@@ -879,6 +881,7 @@ class PostgresPersistence {
         approvals: true,
         tenantQuotas: true,
         ownerChat: true,
+        ownerProfile: true,
         workers: true
       }
     };
@@ -895,5 +898,6 @@ module.exports = {
   PostgresWorkflowLeaseRepository,
   PostgresApprovalRepository,
   PostgresWorkerRegistryRepository,
-  PostgresOwnerChatConversationRepository
+  PostgresOwnerChatConversationRepository,
+  PostgresOwnerWorkProfileRepository
 };
