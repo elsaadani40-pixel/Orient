@@ -395,3 +395,55 @@ test('malformed approval expiry timestamps fail closed across validation, decisi
     error => error.code === 'APPROVAL_EXPIRED'
   );
 });
+
+
+test('in-memory concurrent approve/reject decisions allow exactly one immutable winner', async () => {
+  let entered = 0;
+  let releaseAuthorizer;
+  const barrier = new Promise(resolve => { releaseAuthorizer = resolve; });
+  const service = new ApprovalService({
+    tenantId: 'tenant-a',
+    decisionAuthorizer: async () => {
+      entered += 1;
+      if (entered === 2) releaseAuthorizer();
+      await barrier;
+      return true;
+    }
+  });
+  const approval = await service.issue({
+    executionId: 'exec-race',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-a',
+    ttlMs: 60_000
+  });
+
+  const outcomes = await Promise.allSettled([
+    service.decide({
+      approvalId: approval.approvalId,
+      executionId: 'exec-race',
+      tenantId: 'tenant-a',
+      decision: 'approved',
+      actorId: 'owner-a'
+    }),
+    service.decide({
+      approvalId: approval.approvalId,
+      executionId: 'exec-race',
+      tenantId: 'tenant-a',
+      decision: 'rejected',
+      actorId: 'owner-b'
+    })
+  ]);
+
+  assert.equal(outcomes.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(outcomes.filter(result => result.status === 'rejected' &&
+    result.reason?.code === 'APPROVAL_DECISION_CONFLICT').length, 1);
+  const finalRecord = await service.getApprovedForExecution({
+    approvalId: approval.approvalId,
+    executionId: 'exec-race',
+    tenantId: 'tenant-a'
+  });
+  // Either decision may win; a rejection must never be represented as approved.
+  assert.ok(finalRecord === null || finalRecord.decision?.status === 'approved');
+});
