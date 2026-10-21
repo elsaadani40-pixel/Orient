@@ -197,7 +197,7 @@ test('owner HTTP decision resumes the same high-risk mission after runtime resta
       },
       body: JSON.stringify({ approval: { approvalId: challenge.approvalId } })
     });
-    assert.equal(resume.status, 200, await resume.text());
+    assert.equal(resume.status, 200);
     const resumed = await resume.json();
     assert.equal(resumed.resumed, true);
     assert.equal(resumed.execution.status, 'completed');
