@@ -22,6 +22,10 @@ test('owner chat history and submission require owner session, CSRF, and persist
       }
       messages.push({ ...message, createdAt: new Date().toISOString() });
       return messages[messages.length - 1];
+    },
+    async clear() {
+      messages.splice(0, messages.length);
+      return { cleared: true };
     }
   };
   const agentRoutes = {
@@ -109,4 +113,23 @@ test('owner chat history and submission require owner session, CSRF, and persist
   assert.equal(historyBody.messages[0].content, 'مرحبا يا ORIENT');
   assert.equal(historyBody.messages[1].content, 'Recovered final answer');
   assert.equal(historyBody.messages[1].role, 'assistant');
+
+  const deniedDelete = await fetch(origin + '/owner/chat/history', {
+    method: 'DELETE',
+    headers: { Origin: origin, Cookie: cookie }
+  });
+  assert.equal(deniedDelete.status, 403);
+  assert.equal(messages.length, 2);
+
+  const deleted = await fetch(origin + '/owner/chat/history', {
+    method: 'DELETE',
+    headers: { Origin: origin, Cookie: cookie, 'X-ORIENT-CSRF': session.csrfToken }
+  });
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(await deleted.json(), { ok: true, cleared: true });
+  assert.equal(messages.length, 0);
+
+  const emptyHistory = await fetch(origin + '/owner/chat/history', { headers: { Cookie: cookie } });
+  assert.equal(emptyHistory.status, 200);
+  assert.deepEqual((await emptyHistory.json()).messages, []);
 });
