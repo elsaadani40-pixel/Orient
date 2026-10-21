@@ -91,6 +91,48 @@
     container.append(section);
     section.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block:'end' });
   }
+  function renderResponseMetadata(container, response) {
+    if (!response || response.apiVersion !== 'v1') return;
+    let section = container.querySelector('.response-metadata');
+    if (!section) {
+      section = document.createElement('section');
+      section.className = 'response-metadata hint';
+      section.setAttribute('aria-label', 'معلومات الاستجابة');
+      container.append(section);
+    }
+    section.replaceChildren();
+
+    if (response.approvalRequired === true) {
+      const approval = document.createElement('p');
+      approval.className = 'approval-required';
+      approval.setAttribute('role', 'status');
+      approval.textContent = 'توجد موافقة مطلوبة أو معلّقة لهذه المهمة. افتح مركز المالك لمراجعة طلب الموافقة؛ لا تعتبر المهمة مأذونًا بها لمجرد ظهور هذه الرسالة.';
+      section.append(approval);
+    }
+
+    const references = Array.isArray(response.evidenceReferences)
+      ? response.evidenceReferences.slice(0, 100)
+      : [];
+    if (references.length) {
+      const heading = document.createElement('strong');
+      heading.textContent = 'مراجع أحداث Runtime المرتبطة بالاستجابة';
+      const list = document.createElement('ul');
+      list.className = 'evidence-references';
+      for (const reference of references) {
+        if (!reference || typeof reference.id !== 'string' || typeof reference.type !== 'string') continue;
+        const item = document.createElement('li');
+        const label = typeof reference.label === 'string' && reference.label.trim()
+          ? reference.label.trim()
+          : reference.type;
+        // IDs and labels are untrusted server data; render them as text only.
+        item.textContent = label + ' · ' + reference.type + ' · ' + reference.id;
+        list.append(item);
+      }
+      if (list.childElementCount) section.append(heading, list);
+    }
+    if (!section.childElementCount) section.remove();
+  }
+
   async function monitorTask(task, bubble) {
     const stateLine = document.createElement('div');
     stateLine.className = 'task-state';
@@ -116,6 +158,7 @@
         }
         const answer = response?.apiVersion === 'v1' ? response?.assistant?.text : null;
         const answerStatus = response?.apiVersion === 'v1' ? response?.assistant?.status : null;
+        renderResponseMetadata(bubble, response);
         if (typeof answer === 'string' && answer.trim()) renderFinalAnswer(bubble, answer);
         const actual = detail.task || {};
         const status = String(actual.status || task.status || 'unknown').toLowerCase();
