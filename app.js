@@ -365,6 +365,15 @@ const memoryRoutes =
 
 const agentRoutes =
   createAgentRoutes(agentService, {
+    async onTaskCreated({ executionId, idempotencyKey }) {
+      try {
+        await ownerChatConversationStore.attachTaskId(idempotencyKey, executionId);
+      } catch (error) {
+        logger.error('Owner chat task linkage failed', {
+          code: error?.code || 'OWNER_CHAT_TASK_LINK_FAILED'
+        });
+      }
+    },
     async onFinalAnswer({ executionId, text }) {
       if (typeof text !== 'string' || !text.trim()) return;
       const safeExecutionId = String(executionId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
