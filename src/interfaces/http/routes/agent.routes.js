@@ -20,8 +20,13 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         idempotencyKey
       });
       if (typeof onTaskCreated === 'function' && typeof result.task?.id === 'string' &&
-          typeof idempotencyKey === 'string' && idempotencyKey) {
-        await onTaskCreated({ executionId: result.task.id, idempotencyKey, replayed: Boolean(result.replayed) });
+          typeof req?.ownerChatMessageId === 'string') {
+        await onTaskCreated({
+          executionId: result.task.id,
+          messageId: req.ownerChatMessageId,
+          idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : null,
+          replayed: Boolean(result.replayed)
+        });
       }
       const statusCode = result.replayed ? 200 : 201;
       res.writeHead(statusCode, {
