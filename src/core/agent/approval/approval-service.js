@@ -1,7 +1,13 @@
 const crypto = require('crypto');
 
 function isApprovalExpired(expiresAt, now) {
-  const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : NaN;
+  const expiry = expiresAt instanceof Date
+    ? expiresAt.getTime()
+    : typeof expiresAt === 'string'
+      ? Date.parse(expiresAt)
+      : typeof expiresAt === 'number'
+        ? expiresAt
+        : NaN;
   return !Number.isFinite(expiry) || !Number.isFinite(now) || now >= expiry;
 }
 
