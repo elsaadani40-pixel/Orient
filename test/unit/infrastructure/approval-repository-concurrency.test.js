@@ -244,3 +244,62 @@ test('approval repository cannot overwrite an existing durable decision through 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('durable approval decision is immutable across independent processes', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-decision-race-'));
+  const file = path.join(dir, 'approvals.json');
+  const worker = path.join(dir, 'decision-worker.js');
+  const repo = new ApprovalRepository(file);
+  const now = Date.now();
+  try {
+    await repo.save({
+      approvalId: 'approval-decision-race',
+      executionId: 'execution-decision-race',
+      step: 1,
+      planRevision: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      scope: { target: 'x' },
+      issuedAt: new Date(now - 1000).toISOString(),
+      expiresAt: new Date(now + 60000).toISOString(),
+      used: false,
+      tenantId: 'tenant-a',
+      metadata: { tenantId: 'tenant-a' }
+    }, { tenantId: 'tenant-a' });
+
+    fs.writeFileSync(worker, `
+      const ApprovalRepository = require(${JSON.stringify(path.resolve(__dirname, '../../../src/infrastructure/persistence/json/approval.repository'))});
+      const repo = new ApprovalRepository(process.argv[2]);
+      const decision = {
+        status: process.argv[3],
+        actorId: process.argv[4],
+        decidedAt: new Date().toISOString()
+      };
+      repo.recordDecision('approval-decision-race', decision, 'tenant-a')
+        .then(() => process.exit(0))
+        .catch(error => process.exit(error.code === 'APPROVAL_DECISION_CONFLICT' ? 2 : 3));
+    `);
+
+    const contenders = [
+      ['approved', 'owner-a'], ['rejected', 'owner-b'],
+      ['approved', 'owner-c'], ['rejected', 'owner-d'],
+      ['approved', 'owner-e'], ['rejected', 'owner-f']
+    ];
+    const results = await Promise.all(contenders.map(([decision, actor]) => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [worker, file, decision, actor], { stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('exit', code => resolve(code));
+    })));
+
+    assert.equal(results.filter(code => code === 0).length, 1);
+    assert.equal(results.filter(code => code === 2).length, contenders.length - 1);
+    assert.equal(results.filter(code => code === 3).length, 0);
+
+    const stored = await repo.findById('approval-decision-race', { tenantId: 'tenant-a' });
+    assert.ok(['approved', 'rejected'].includes(stored.decision?.status));
+    assert.ok(contenders.some(([status, actor]) => status === stored.decision.status && actor === stored.decision.actorId));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
