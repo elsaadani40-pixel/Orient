@@ -365,9 +365,9 @@ const memoryRoutes =
 
 const agentRoutes =
   createAgentRoutes(agentService, {
-    async onTaskCreated({ executionId, idempotencyKey }) {
+    async onTaskCreated({ executionId, messageId }) {
       try {
-        await ownerChatConversationStore.attachTaskId(idempotencyKey, executionId);
+        await ownerChatConversationStore.attachTaskId(messageId, executionId);
       } catch (error) {
         logger.error('Owner chat task linkage failed', {
           code: error?.code || 'OWNER_CHAT_TASK_LINK_FAILED'
