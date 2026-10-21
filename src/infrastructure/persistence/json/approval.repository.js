@@ -211,7 +211,7 @@ class ApprovalRepository {
     if (!approvalId) throw new TypeError('approvalId is required');
     if (!decision || !['approved', 'rejected'].includes(decision.status) ||
         typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
-        typeof decision.decidedAt !== 'string') {
+        typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) {
       throw Object.assign(new TypeError('Invalid approval decision record'), { code: 'APPROVAL_DECISION_INVALID' });
     }
 
