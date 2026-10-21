@@ -379,11 +379,11 @@ async function persistOwnerFinalAnswer(executionId) {
     const answer = await agentService.getFinalAnswer(executionId);
     if (typeof answer?.text !== 'string' || !answer.text.trim()) return;
     const safeExecutionId = executionId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
-    await ownerChatConversationStore.append({
+    await ownerChatConversationStore.appendAssistantForTask({
       id: 'assistant-' + safeExecutionId,
       role: 'assistant',
       content: answer.text,
-      taskId: safeExecutionId
+      taskId: executionId
     });
   } catch (error) {
     logger.error('Owner chat final answer persistence failed', {
@@ -410,11 +410,11 @@ const agentRoutes =
       if (typeof text !== 'string' || !text.trim()) return;
       const safeExecutionId = String(executionId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
       try {
-        await ownerChatConversationStore.append({
+        await ownerChatConversationStore.appendAssistantForTask({
           id: 'assistant-' + safeExecutionId,
           role: 'assistant',
           content: text,
-          taskId: safeExecutionId
+          taskId: executionId
         });
       } catch (error) {
         logger.error('Owner chat final answer persistence failed', {
