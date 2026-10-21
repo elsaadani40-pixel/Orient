@@ -1,10 +1,14 @@
+function persistedDecisionForReplay(record) {
+  return { ...record.decision };
+}
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const ApprovalService = require('../../../../src/core/agent/approval/approval-service');
 
 test('approval is single use, scoped and expires', async () => {
   let now = 1000;
-  const service = new ApprovalService({ clock: () => now });
+  const service = new ApprovalService({ clock: () => now, decisionAuthorizer: async () => true });
   const approval = await service.issue({
     executionId: 'exec-1',
     step: 1,
@@ -13,6 +17,7 @@ test('approval is single use, scoped and expires', async () => {
     scope: { planRevision: 1 },
     ttlMs: 100
   });
+  await service.decide({ approvalId: approval.approvalId, executionId: 'exec-1', decision: 'approved', actorId: 'owner-test' });
 
   assert.equal((await service.validate({
     approval, executionId: 'exec-1', step: 1,
@@ -95,7 +100,7 @@ test('durable approval issue fails closed when persistence fails', async () => {
 
 test('expired approval cannot be consumed after validation', async () => {
   let now = 5000;
-  const service = new ApprovalService({ clock: () => now });
+  const service = new ApprovalService({ clock: () => now, decisionAuthorizer: async () => true });
   const approval = await service.issue({
     executionId: 'exec-expiry',
     step: 1,
@@ -103,6 +108,7 @@ test('expired approval cannot be consumed after validation', async () => {
     capability: 'external.write',
     ttlMs: 100
   });
+  await service.decide({ approvalId: approval.approvalId, executionId: 'exec-expiry', decision: 'approved', actorId: 'owner-test' });
 
   assert.equal((await service.validate({
     approval,
@@ -181,13 +187,14 @@ test('invalid approval expiry fails closed across validation, pending lists and 
 
 
 test('valid Date expiry values from database drivers remain supported', async () => {
-  const service = new ApprovalService({ clock: () => 1000 });
+  const service = new ApprovalService({ clock: () => 1000, decisionAuthorizer: async () => true });
   const approval = await service.issue({
     executionId: 'exec-date-expiry',
     step: 1,
     tool: 'danger.write',
     capability: 'external.write'
   });
+  await service.decide({ approvalId: approval.approvalId, executionId: 'exec-date-expiry', decision: 'approved', actorId: 'owner-test' });
 
   service.approvals.get(approval.approvalId).expiresAt = new Date(2000);
   const checked = await service.validate({
@@ -198,4 +205,300 @@ test('valid Date expiry values from database drivers remain supported', async ()
     capability: 'external.write'
   });
   assert.equal(checked.allowed, true);
+});
+
+
+test('approval decisions require authorization and persist one immutable tenant-scoped decision', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const ApprovalRepository = require('../../../../src/infrastructure/persistence/json/approval.repository');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-decision-'));
+  try {
+    const repository = new ApprovalRepository(path.join(dir, 'approvals.json'));
+    let authorized = true;
+    const service = new ApprovalService({
+      repository,
+      tenantId: 'tenant-a',
+      clock: () => 1000,
+      decisionAuthorizer: async ({ actorId, tenantId }) => authorized && actorId === 'owner-a' && tenantId === 'tenant-a'
+    });
+    const approval = await service.issue({
+      executionId: 'exec-decision',
+      step: 1,
+      tool: 'danger.write',
+      capability: 'external.write',
+      tenantId: 'tenant-a',
+      ttlMs: 10000
+    });
+
+    assert.equal(await service.getApprovedForExecution({
+      approvalId: approval.approvalId, executionId: 'exec-decision', tenantId: 'tenant-a'
+    }), null);
+    await assert.rejects(
+      () => service.decide({ approvalId: approval.approvalId, executionId: 'different-execution', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_EXECUTION_MISMATCH'
+    );
+
+    authorized = false;
+    await assert.rejects(
+      () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_DECISION_FORBIDDEN'
+    );
+    assert.equal((await repository.findById(approval.approvalId, { tenantId: 'tenant-a' })).decision, undefined);
+
+    authorized = true;
+    const decided = await service.decide({
+      approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+    });
+    assert.equal(decided.decision.status, 'approved');
+    assert.equal(decided.decision.actorId, 'owner-a');
+    assert.equal((await service.getApprovedForExecution({ approvalId: approval.approvalId, executionId: 'exec-decision', tenantId: 'tenant-a' })).decision.status, 'approved');
+    assert.equal(await service.getApprovedForExecution({ approvalId: approval.approvalId, executionId: 'wrong-execution', tenantId: 'tenant-a' }), null);
+
+    const replay = await service.decide({
+      approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+    });
+    assert.equal(replay.decision.status, 'approved');
+    assert.equal(replay.idempotent, true);
+
+    assert.equal(await service.consume(approval.approvalId, 'tenant-a'), true);
+    const replayAfterConsume = await service.decide({
+      approvalId: approval.approvalId, executionId: 'exec-decision',
+      decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a'
+    });
+    assert.equal(replayAfterConsume.idempotent, true);
+    assert.equal(replayAfterConsume.decision.status, 'approved');
+    const repositoryReplay = await repository.recordDecision(
+      approval.approvalId,
+      persistedDecisionForReplay(await repository.findById(approval.approvalId, { tenantId: 'tenant-a' })),
+      'tenant-a',
+      20000
+    );
+    assert.equal(repositoryReplay.decision.status, 'approved');
+
+    await assert.rejects(
+      () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'rejected', actorId: 'owner-a', tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_DECISION_CONFLICT'
+    );
+    await assert.rejects(
+      () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-decision', decision: 'approved', actorId: 'owner-b', tenantId: 'tenant-b' }),
+      error => error.code === 'APPROVAL_NOT_FOUND' || error.code === 'APPROVAL_TENANT_MISMATCH'
+    );
+
+    const persisted = await repository.findById(approval.approvalId, { tenantId: 'tenant-a' });
+    assert.equal(persisted.decision.status, 'approved');
+    assert.equal(persisted.decision.actorId, 'owner-a');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('approval decision fails closed when no decision authorizer is configured', async () => {
+  const service = new ApprovalService({ tenantId: 'tenant-a', clock: () => 1000 });
+  const approval = await service.issue({
+    executionId: 'exec-no-authorizer', step: 1, tool: 'danger.write',
+    capability: 'external.write', tenantId: 'tenant-a', ttlMs: 10000
+  });
+  await assert.rejects(
+    () => service.decide({ approvalId: approval.approvalId, executionId: 'exec-no-authorizer', decision: 'approved', actorId: 'owner-a', tenantId: 'tenant-a' }),
+    error => error.code === 'APPROVAL_DECISION_FORBIDDEN'
+  );
+});
+
+
+
+test('pending and rejected approvals cannot authorize tools or be recovered for resume', async () => {
+  const service = new ApprovalService({
+    tenantId: 'tenant-approval-gate',
+    clock: () => 1000,
+    decisionAuthorizer: async () => true
+  });
+  const pending = await service.issue({
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-approval-gate',
+    ttlMs: 10000
+  });
+
+  const validation = await service.validate({
+    approval: { approvalId: pending.approvalId },
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-approval-gate'
+  });
+  assert.equal(validation.allowed, false);
+  assert.equal(validation.reason, 'APPROVAL_NOT_APPROVED');
+  assert.equal(await service.findReusable({
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    tenantId: 'tenant-approval-gate'
+  }), null);
+
+  await service.decide({
+    approvalId: pending.approvalId,
+    executionId: 'exec-pending-gate',
+    decision: 'rejected',
+    actorId: 'owner-gate',
+    tenantId: 'tenant-approval-gate'
+  });
+  assert.equal((await service.validate({
+    approval: { approvalId: pending.approvalId },
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-approval-gate'
+  })).reason, 'APPROVAL_REJECTED');
+  assert.equal(await service.getApprovedForExecution({
+    approvalId: pending.approvalId,
+    executionId: 'exec-pending-gate',
+    tenantId: 'tenant-approval-gate'
+  }), null);
+  assert.equal(await service.findReusable({
+    executionId: 'exec-pending-gate',
+    step: 1,
+    tool: 'danger.write',
+    tenantId: 'tenant-approval-gate'
+  }), null);
+});
+
+
+test('malformed approval expiry timestamps fail closed across validation, decisions, recovery, and consumption', async () => {
+  const malformed = {
+    approvalId: 'approval-malformed-expiry',
+    executionId: 'exec-malformed-expiry',
+    step: 1,
+    planRevision: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: {},
+    issuedAt: new Date(1000).toISOString(),
+    expiresAt: 'not-a-timestamp',
+    used: false,
+    tenantId: 'tenant-malformed'
+  };
+  const repository = {
+    async findById(id) { return id === malformed.approvalId ? { ...malformed } : null; },
+    async findByExecution() { return [{ ...malformed }]; },
+    async findPending() { return [{ ...malformed }]; },
+    async consume() { throw new Error('malformed expiry must not reach consume'); }
+  };
+  const service = new ApprovalService({
+    repository,
+    tenantId: 'tenant-malformed',
+    clock: () => 2000,
+    decisionAuthorizer: async () => true
+  });
+
+  const checked = await service.validate({
+    approval: { approvalId: malformed.approvalId },
+    executionId: malformed.executionId,
+    step: malformed.step,
+    tool: malformed.tool,
+    capability: malformed.capability,
+    tenantId: 'tenant-malformed'
+  });
+  assert.equal(checked.allowed, false);
+  assert.equal(checked.reason, 'APPROVAL_EXPIRED');
+  assert.equal(await service.findReusable({
+    executionId: malformed.executionId,
+    step: malformed.step,
+    tool: malformed.tool,
+    tenantId: 'tenant-malformed'
+  }), null);
+  assert.deepEqual(await service.listPending({ tenantId: 'tenant-malformed' }), []);
+  assert.equal(await service.consume(malformed.approvalId, 'tenant-malformed'), false);
+  await assert.rejects(
+    () => service.decide({
+      approvalId: malformed.approvalId,
+      executionId: malformed.executionId,
+      decision: 'approved',
+      actorId: 'owner-malformed',
+      tenantId: 'tenant-malformed'
+    }),
+    error => error.code === 'APPROVAL_EXPIRED'
+  );
+  await assert.rejects(
+    () => service.getApprovedForExecution({
+      approvalId: malformed.approvalId,
+      executionId: malformed.executionId,
+      tenantId: 'tenant-malformed'
+    }),
+    error => error.code === 'APPROVAL_EXPIRED'
+  );
+});
+
+
+test('in-memory concurrent approve/reject decisions allow exactly one immutable winner', async () => {
+  const service = new ApprovalService({
+    tenantId: 'tenant-a',
+    decisionAuthorizer: async () => true
+  });
+  const approval = await service.issue({
+    executionId: 'exec-race',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-a',
+    ttlMs: 60_000
+  });
+
+  const outcomes = await Promise.allSettled([
+    service.decide({
+      approvalId: approval.approvalId,
+      executionId: 'exec-race',
+      tenantId: 'tenant-a',
+      decision: 'approved',
+      actorId: 'owner-a'
+    }),
+    service.decide({
+      approvalId: approval.approvalId,
+      executionId: 'exec-race',
+      tenantId: 'tenant-a',
+      decision: 'rejected',
+      actorId: 'owner-b'
+    })
+  ]);
+
+  assert.equal(outcomes.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(outcomes.filter(result => result.status === 'rejected' &&
+    result.reason?.code === 'APPROVAL_DECISION_CONFLICT').length, 1);
+
+  const stored = service.approvals.get(approval.approvalId);
+  assert.ok(['approved', 'rejected'].includes(stored?.decision?.status));
+  const winningDecision = stored.decision;
+
+  const replay = await service.decide({
+    approvalId: approval.approvalId,
+    executionId: 'exec-race',
+    tenantId: 'tenant-a',
+    decision: winningDecision.status,
+    actorId: winningDecision.actorId
+  });
+  assert.equal(replay.idempotent, true);
+  await assert.rejects(
+    () => service.decide({
+      approvalId: approval.approvalId,
+      executionId: 'exec-race',
+      tenantId: 'tenant-a',
+      decision: winningDecision.status === 'approved' ? 'rejected' : 'approved',
+      actorId: 'other-owner'
+    }),
+    error => error.code === 'APPROVAL_DECISION_CONFLICT'
+  );
+
+  const finalRecord = await service.getApprovedForExecution({
+    approvalId: approval.approvalId,
+    executionId: 'exec-race',
+    tenantId: 'tenant-a'
+  });
+  // Rejection must never be resumed as an approved operation.
+  if (winningDecision.status === 'rejected') assert.equal(finalRecord, null);
+  else assert.equal(finalRecord?.decision?.status, 'approved');
 });
