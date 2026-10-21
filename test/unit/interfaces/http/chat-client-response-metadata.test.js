@@ -9,19 +9,20 @@ const clientPath = path.join(__dirname, '..', '..', '..', '..', 'src', 'interfac
 const source = fs.readFileSync(clientPath, 'utf8');
 
 test('chat client renders approval-required state from the versioned Runtime response', () => {
-  assert.match(source, /response\.approvalRequired === true/);
-  assert.match(source, /role', 'status'/);
-  assert.match(source, /مركز المالك لمراجعة طلب الموافقة/);
+  assert.ok(source.includes('response.approvalRequired === true'));
+  assert.ok(source.includes("setAttribute('role', 'status')"));
+  assert.ok(source.includes('مركز المالك لمراجعة طلب الموافقة'));
 });
 
 test('chat client renders bounded evidence references without interpreting server data as HTML', () => {
-  assert.match(source, /response\.evidenceReferences\.slice\(0, 100\)/);
-  assert.match(source, /typeof reference\.id === 'string'/);
-  assert.match(source, /item\.textContent = label \+ ' · ' \+ reference\.type \+ ' · ' \+ reference\.id/);
-  assert.doesNotMatch(source, /item\.innerHTML\s*=/);
+  assert.ok(source.includes('response.evidenceReferences.slice(0, 100)'));
+  assert.ok(source.includes("typeof reference.id !== 'string'"));
+  assert.ok(source.includes("typeof reference.type !== 'string'"));
+  assert.ok(source.includes("item.textContent = label + ' · ' + reference.type + ' · ' + reference.id"));
+  assert.ok(!source.includes('item.innerHTML'));
 });
 
 test('chat client refreshes response metadata during task monitoring', () => {
-  assert.match(source, /renderResponseMetadata\(bubble, response\)/);
-  assert.match(source, /response\?\.apiVersion === 'v1'/);
+  assert.ok(source.includes('renderResponseMetadata(bubble, response)'));
+  assert.ok(source.includes("response?.apiVersion === 'v1'"));
 });
