@@ -90,3 +90,28 @@ test('receipt from another tenant cannot reconcile the same operation ID', async
     assert.equal(recovered.reason, 'operation_receipt_missing');
   });
 });
+
+
+test('receipt persistence failure after a verified mutation remains unreconciled and cannot be mistaken for success', async () => {
+  await withFixture(async ({ root, store, execute }) => {
+    const input = {
+      proposals: [{ action: 'create', path: 'src/receipt-write-failure.txt', content: 'verified but receipt unavailable\n' }]
+    };
+    const context = { operationId: 'operation-receipt-write-failure', tenantId: 'tenant-a' };
+    store.write = () => {
+      const error = new Error('simulated durable receipt storage failure');
+      error.code = 'RECEIPT_STORAGE_UNAVAILABLE';
+      throw error;
+    };
+
+    await assert.rejects(execute.execute(input, context), /simulated durable receipt storage failure/);
+    assert.equal(
+      await fs.readFile(path.join(root, 'src/receipt-write-failure.txt'), 'utf8'),
+      'verified but receipt unavailable\n'
+    );
+
+    const recovered = await execute.reconcile(input, context);
+    assert.equal(recovered.status, 'conflict');
+    assert.equal(recovered.reason, 'operation_receipt_missing');
+  });
+});
