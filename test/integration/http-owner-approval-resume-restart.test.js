@@ -203,11 +203,9 @@ test('owner HTTP decision resumes the same high-risk mission after runtime resta
     assert.equal(resumed.execution.status, 'completed');
     assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts.test, 'node --test');
 
-    const persisted = await runtime.approvalService.getApprovedForExecution({
-      approvalId: challenge.approvalId,
-      executionId: challenge.executionId,
-      tenantId: TENANT
-    });
+    const persisted = await persistence.approvals.findById(challenge.approvalId, { tenantId: TENANT });
+    assert.ok(persisted, 'approval record must remain durable after the resume consumes it');
+    assert.equal(persisted.decision.status, 'approved');
     assert.equal(persisted.decision.actorId, 'owner:Admin');
 
     const replay = await fetch(origin + '/owner/executions/' + encodeURIComponent(challenge.executionId) + '/resume', {
