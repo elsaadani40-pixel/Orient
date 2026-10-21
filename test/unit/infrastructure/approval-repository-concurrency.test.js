@@ -250,3 +250,55 @@ test('JSON approval save cannot overwrite an existing immutable decision or cons
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('JSON approval repository rejects records with conflicting tenant identities', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-tenant-conflict-'));
+  const file = path.join(dir, 'approvals.json');
+  const repo = new ApprovalRepository(file);
+  const now = Date.now();
+  const conflicting = {
+    approvalId: 'approval-tenant-conflict',
+    executionId: 'execution-tenant-conflict',
+    step: 1,
+    planRevision: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    scope: { target: 'x' },
+    issuedAt: new Date(now - 1000).toISOString(),
+    expiresAt: new Date(now + 60000).toISOString(),
+    used: false,
+    tenantId: 'tenant-a',
+    metadata: { tenantId: 'tenant-b' }
+  };
+
+  try {
+    await assert.rejects(
+      () => repo.save(conflicting, { tenantId: 'tenant-a' }),
+      error => error.code === 'APPROVAL_TENANT_MISMATCH'
+    );
+    await assert.rejects(
+      () => repo.save(conflicting, { tenantId: 'tenant-b' }),
+      error => error.code === 'APPROVAL_TENANT_MISMATCH'
+    );
+
+    // Simulate a legacy/corrupt persisted record to ensure every read/write
+    // authorization path fails closed, not only new inserts.
+    fs.writeFileSync(file, JSON.stringify({ [conflicting.approvalId]: conflicting }), 'utf8');
+    assert.equal(await repo.findById(conflicting.approvalId, { tenantId: 'tenant-a' }), null);
+    assert.equal(await repo.findById(conflicting.approvalId, { tenantId: 'tenant-b' }), null);
+    assert.deepEqual(await repo.findPending({ tenantId: 'tenant-a' }), []);
+    assert.deepEqual(await repo.findByExecution({
+      executionId: conflicting.executionId, tenantId: 'tenant-b'
+    }), []);
+    await assert.rejects(
+      () => repo.recordDecision(conflicting.approvalId, {
+        status: 'approved', actorId: 'owner-a', decidedAt: new Date(now).toISOString()
+      }, 'tenant-a', () => now),
+      error => error.code === 'APPROVAL_TENANT_MISMATCH'
+    );
+    assert.equal(await repo.consume(conflicting.approvalId, new Date(now).toISOString(), 'tenant-b'), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
