@@ -431,11 +431,36 @@ test('in-memory concurrent approve/reject decisions allow exactly one immutable 
   assert.equal(outcomes.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(outcomes.filter(result => result.status === 'rejected' &&
     result.reason?.code === 'APPROVAL_DECISION_CONFLICT').length, 1);
+
+  const stored = service.approvals.get(approval.approvalId);
+  assert.ok(['approved', 'rejected'].includes(stored?.decision?.status));
+  const winningDecision = stored.decision;
+
+  const replay = await service.decide({
+    approvalId: approval.approvalId,
+    executionId: 'exec-race',
+    tenantId: 'tenant-a',
+    decision: winningDecision.status,
+    actorId: winningDecision.actorId
+  });
+  assert.equal(replay.idempotent, true);
+  await assert.rejects(
+    () => service.decide({
+      approvalId: approval.approvalId,
+      executionId: 'exec-race',
+      tenantId: 'tenant-a',
+      decision: winningDecision.status === 'approved' ? 'rejected' : 'approved',
+      actorId: 'other-owner'
+    }),
+    error => error.code === 'APPROVAL_DECISION_CONFLICT'
+  );
+
   const finalRecord = await service.getApprovedForExecution({
     approvalId: approval.approvalId,
     executionId: 'exec-race',
     tenantId: 'tenant-a'
   });
-  // Either decision may win; a rejection must never be represented as approved.
-  assert.ok(finalRecord === null || finalRecord.decision?.status === 'approved');
+  // Rejection must never be resumed as an approved operation.
+  if (winningDecision.status === 'rejected') assert.equal(finalRecord, null);
+  else assert.equal(finalRecord?.decision?.status, 'approved');
 });
