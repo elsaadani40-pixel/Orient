@@ -98,8 +98,7 @@ test('channel adapter fails closed for unauthenticated senders and never resolve
   const adapter = createAdapter({
     authenticate: async () => null,
     sanitizeResult: value => value?.responseText || 'ok',
-    runtimeForPrincipal: async () => { resolveCalls += 1; return { async execute() {} }; },
-    sanitizeResult: value => value?.responseText || 'ok'
+    runtimeForPrincipal: async () => { resolveCalls += 1; return { async execute() {} }; }
   });
 
   await assert.rejects(
