@@ -402,8 +402,15 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           const message = typeof payload?.message === 'string' ? payload.message.trim() : '';
+          const displayMessage = payload?.displayMessage === undefined
+            ? message
+            : (typeof payload.displayMessage === 'string' ? payload.displayMessage.trim() : '');
           if (!message || message.length > 4000 || /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(message)) {
-            sendJson(res, 400, { ok: false, code: 'INVALID_CHAT_MESSAGE', message: 'الرسالة مطلوبة وبحد أقصى 4000 حرف.' });
+            sendJson(res, 400, { ok: false, code: 'INVALID_CHAT_MESSAGE', message: 'الرسالة المطلوبة إلى Runtime غير صالحة أو تتجاوز 4000 حرف.' });
+            return;
+          }
+          if (!displayMessage || displayMessage.length > 4000 || /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(displayMessage)) {
+            sendJson(res, 400, { ok: false, code: 'INVALID_CHAT_DISPLAY_MESSAGE', message: 'النص الظاهر في سجل المحادثة غير صالح أو يتجاوز 4000 حرف.' });
             return;
           }
           if (!agentRoutes || typeof agentRoutes.createTask !== 'function') {
@@ -418,7 +425,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
               ? suppliedId
               : randomUUID();
             try {
-              await ownerChatStore.append({ id: messageId, role: 'user', content: message });
+              await ownerChatStore.append({ id: messageId, role: 'user', content: displayMessage });
             } catch (error) {
               if (error.code === 'OWNER_CHAT_IDEMPOTENCY_CONFLICT') {
                 sendJson(res, 409, { ok: false, code: error.code, message: 'معرّف الرسالة مستخدم لمحتوى مختلف.' });
