@@ -73,7 +73,11 @@ class OrientRuntime {
       (persistence?.approvals
         ? new ApprovalService({
             repository: persistence.approvals,
-            tenantId: tenantId || 'local'
+            tenantId: tenantId || 'local',
+            decisionAuthorizer: ({ actorId, tenantId: decisionTenantId, approval }) =>
+              actorId === 'owner:Admin' &&
+              decisionTenantId === (tenantId || 'local') &&
+              (approval?.tenantId === (tenantId || 'local') || approval?.metadata?.tenantId === (tenantId || 'local'))
           })
         : null);
 
@@ -336,6 +340,15 @@ class OrientRuntime {
         cancellationRequested: Boolean(execution.cancellationRequested)
       }))
     };
+  }
+
+  async decideApproval({ approvalId, executionId, decision, actorId } = {}) {
+    if (!this.approvalService || typeof this.approvalService.decide !== 'function') {
+      throw Object.assign(new Error('Approval service is required for decisions'), { code: 'APPROVAL_SERVICE_REQUIRED' });
+    }
+    return this.approvalService.decide({
+      approvalId, executionId, decision, actorId, tenantId: this.tenantId
+    });
   }
 
   async listPendingApprovals({ limit = 100 } = {}) {
