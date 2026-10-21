@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
-const { PostgresPersistence } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
+const { PostgresPersistence, PostgresOwnerChatConversationRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
@@ -14,7 +14,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7]);
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -781,4 +781,69 @@ test('PostgreSQL cancellation wins terminal completion race', async () => {
   await persistence.executions.deleteById(executionId, {
     tenantId: 'tenant-outcome'
   });
+});
+
+
+test('PostgreSQL owner chat is durable, idempotent, bounded, and isolated by owner', async () => {
+  const ownerId = 'owner-chat-test-' + Date.now();
+  const otherOwner = new PostgresOwnerChatConversationRepository(persistence.db, {
+    ownerId: ownerId + '-other'
+  });
+  const chat = new PostgresOwnerChatConversationRepository(persistence.db, {
+    ownerId,
+    maxMessages: 3
+  });
+
+  try {
+    const baseTime = Date.now();
+    const first = {
+      id: 'message-01',
+      role: 'user',
+      content: 'First owner message',
+      createdAt: new Date(baseTime).toISOString()
+    };
+    const inserted = await chat.append(first);
+    assert.equal(inserted.replayed, false);
+    assert.equal(inserted.message.content, first.content);
+
+    const replay = await chat.append(first);
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.message.id, first.id);
+    await assert.rejects(
+      () => chat.append({ ...first, content: 'Different content under same id' }),
+      error => error.code === 'OWNER_CHAT_IDEMPOTENCY_CONFLICT'
+    );
+
+    const linked = await chat.attachTaskId(first.id, 'task-01');
+    assert.equal(linked.message.taskId, 'task-01');
+    assert.equal((await chat.attachTaskId(first.id, 'task-01')).replayed, true);
+    await assert.rejects(
+      () => chat.attachTaskId(first.id, 'task-02'),
+      error => error.code === 'OWNER_CHAT_TASK_LINK_CONFLICT'
+    );
+
+    for (let index = 2; index <= 4; index += 1) {
+      await chat.append({
+        id: 'message-0' + index,
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: 'Owner chat message ' + index,
+        createdAt: new Date(baseTime + index * 1000).toISOString()
+      });
+    }
+
+    const history = await chat.list();
+    assert.equal(history.length, 3);
+    assert.deepEqual(history.map(message => message.id), ['message-02', 'message-03', 'message-04']);
+    assert.deepEqual(await otherOwner.list(), []);
+
+    // A fresh repository instance sees the same persisted history after restart.
+    const restarted = new PostgresOwnerChatConversationRepository(persistence.db, {
+      ownerId,
+      maxMessages: 3
+    });
+    assert.deepEqual(await restarted.list(), history);
+  } finally {
+    await chat.clear();
+    await otherOwner.clear();
+  }
 });
