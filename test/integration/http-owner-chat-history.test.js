@@ -36,7 +36,18 @@ test('owner chat history and submission require owner session, CSRF, and persist
     memoryRoutes: { home() {}, add() {}, delete() {} },
     agentRoutes,
     ownerAuth: new OwnerAuthService({ password }),
-    ownerChatStore: store
+    ownerChatStore: store,
+    ownerChatHistoryResolver: async historyMessages => {
+      const userMessage = historyMessages.find(message => message.role === 'user' && message.taskId);
+      if (userMessage && !historyMessages.some(message => message.role === 'assistant' && message.taskId === userMessage.taskId)) {
+        await store.append({
+          id: 'assistant-' + userMessage.taskId,
+          role: 'assistant',
+          content: 'Recovered final answer',
+          taskId: userMessage.taskId
+        });
+      }
+    }
   });
 
   t.after(async () => {
@@ -88,9 +99,14 @@ test('owner chat history and submission require owner session, CSRF, and persist
   });
   assert.equal(messages.some(message => message.content.includes('سياق داخلي سري')), false);
 
+  // Simulate a task link surviving a closed browser. History loading must
+  // reconcile a completed Runtime answer even when no polling request occurred.
+  messages[0].taskId = 'task-1';
   const history = await fetch(origin + '/owner/chat/history', { headers: { Cookie: cookie } });
   assert.equal(history.status, 200);
   const historyBody = await history.json();
-  assert.equal(historyBody.messages.length, 1);
+  assert.equal(historyBody.messages.length, 2);
   assert.equal(historyBody.messages[0].content, 'مرحبا يا ORIENT');
+  assert.equal(historyBody.messages[1].content, 'Recovered final answer');
+  assert.equal(historyBody.messages[1].role, 'assistant');
 });
