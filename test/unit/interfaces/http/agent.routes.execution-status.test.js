@@ -103,6 +103,35 @@ test('agent approvals route returns only service-provided durable approval state
 });
 
 
+test('task creation links the idempotent owner message to the Runtime execution', async () => {
+  const linked = [];
+  const routes = createAgentRoutes({
+    createTask: async input => {
+      assert.equal(input.goal, 'Perform a bounded task');
+      assert.equal(input.idempotencyKey, 'owner-message-1');
+      return { task: { id: 'exec-77' }, replayed: false };
+    }
+  }, {
+    onTaskCreated: async entry => { linked.push(entry); }
+  });
+  const res = {
+    writeHead(status, headers) { this.status = status; this.headers = headers; },
+    end(body) { this.body = JSON.parse(body); }
+  };
+
+  await routes.createTask({ headers: { 'idempotency-key': 'owner-message-1' } }, res, {
+    goal: 'Perform a bounded task'
+  });
+
+  assert.equal(res.status, 201);
+  assert.equal(res.body.task.id, 'exec-77');
+  assert.deepEqual(linked, [{
+    executionId: 'exec-77',
+    idempotencyKey: 'owner-message-1',
+    replayed: false
+  }]);
+});
+
 test('completed task response persists only the validated final assistant answer', async () => {
   const saved = [];
   const routes = createAgentRoutes({
