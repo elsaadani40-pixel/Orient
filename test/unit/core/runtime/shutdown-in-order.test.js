@@ -19,7 +19,7 @@ test('shutdown closes HTTP ingress before observations, workers, runtime, and pe
 test('shutdown continues to later stages when an earlier stage fails', async () => {
   const order = [];
   const errors = [];
-  await shutdownInOrder({
+  const failures = await shutdownInOrder({
     closeIngress: async () => { order.push('http-ingress'); throw new Error('close failed'); },
     stopObservations: async () => { order.push('observations'); },
     stopWorkers: async () => { order.push('workers'); },
@@ -29,4 +29,7 @@ test('shutdown continues to later stages when an earlier stage fails', async () 
   });
   assert.deepEqual(order, ['http-ingress', 'observations', 'workers', 'runtime', 'persistence']);
   assert.deepEqual(errors, [{ stage: 'http-ingress', message: 'close failed' }]);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].stage, 'http-ingress');
+  assert.match(failures[0].error.message, /close failed/);
 });
