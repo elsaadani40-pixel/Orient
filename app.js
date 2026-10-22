@@ -541,7 +541,7 @@ function shutdown(signal) {
   void shutdownInOrder({
     // server.close stops accepting new requests and resolves after active
     // connections have drained; only then may Runtime and persistence stop.
-    closeIngress: () => new Promise((resolve) => server.close(resolve)),
+    closeIngress: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
     stopObservations: () => eventStoreSubscriber.stop(),
     // Production async workers remain disabled until safety gate #189 passes.
     stopWorkers: async () => {},
