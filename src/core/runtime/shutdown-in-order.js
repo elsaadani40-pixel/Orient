@@ -31,6 +31,10 @@ async function shutdownInOrder({
       } catch (_) {
         // Logging failures must not prevent later shutdown stages.
       }
+      // If HTTP ingress cannot be confirmed closed, do not tear down Runtime
+      // or persistence underneath potentially active requests. The caller's
+      // forced non-zero process exit is the final containment boundary.
+      if (stage === 'http-ingress') return failures;
     }
   }
   return failures;
