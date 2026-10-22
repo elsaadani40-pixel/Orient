@@ -565,9 +565,16 @@ function shutdown(signal) {
         message: error?.message || String(error)
       });
     }
-  }).finally(() => {
+  }).then((failures) => {
     clearTimeout(forceExit);
-    process.exit(0);
+    process.exit(failures.length > 0 ? 1 : 0);
+  }).catch((error) => {
+    clearTimeout(forceExit);
+    logger.error('Shutdown orchestration failed', {
+      code: error?.code || 'SHUTDOWN_ORCHESTRATION_FAILED',
+      message: error?.message || String(error)
+    });
+    process.exit(1);
   });
 }
 
