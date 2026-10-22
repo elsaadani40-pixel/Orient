@@ -20,10 +20,12 @@ async function shutdownInOrder({
     ['persistence', closePersistence]
   ];
 
+  const failures = [];
   for (const [stage, operation] of steps) {
     try {
       await operation();
     } catch (error) {
+      failures.push({ stage, error });
       try {
         onError(stage, error);
       } catch (_) {
@@ -31,6 +33,7 @@ async function shutdownInOrder({
       }
     }
   }
+  return failures;
 }
 
 module.exports = shutdownInOrder;
