@@ -25,7 +25,9 @@ test('Runtime adapter exposes only the shared owner identity authority', async t
   assert.ok(session);
   assert.equal(adapter.verifyCsrf(session, login.csrfToken), true);
   assert.equal(adapter.verifyCsrf(session, 'invalid'), false);
+  assert.equal(adapter.isActiveSession(session.sessionId), true);
   assert.equal(adapter.logout(login.token), true);
+  assert.equal(adapter.isActiveSession(session.sessionId), false);
   assert.equal(adapter.authenticate(login.token), null);
 });
 
