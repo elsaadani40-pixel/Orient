@@ -512,7 +512,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'APPROVAL_DECISION_UNAVAILABLE', message: 'اتخاذ قرار الموافقة غير متاح حاليًا.' });
             return;
           }
-          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, 'owner:Admin');
+          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, ownerSession.sessionId);
           return;
         }
 
