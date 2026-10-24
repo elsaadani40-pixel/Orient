@@ -62,6 +62,34 @@ test('public-user tokens cannot authenticate as owner and owner mutations requir
   assert.equal(identity.authenticate(login.token), null);
 });
 
+test('owner identity session IDs are non-secret, independently revocable, and expire at the boundary', async t => {
+  const { stateFile } = fixture(t);
+  let now = 1000;
+  const identity = new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x',
+    sessionTtlMs: 1000,
+    now: () => now
+  });
+  const first = await identity.login({ username: 'Admin', password: 'temporary-owner-password-9F!x' });
+  const second = await identity.login({ username: 'Admin', password: 'temporary-owner-password-9F!x' });
+  const firstSession = identity.authenticate(first.token);
+  const secondSession = identity.authenticate(second.token);
+  assert.match(firstSession.sessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.notEqual(firstSession.sessionId, secondSession.sessionId);
+  assert.equal(identity.isActiveSession(firstSession.sessionId), true);
+  assert.equal(identity.isActiveSession(secondSession.sessionId), true);
+  assert.equal(identity.isActiveSession('unknown-session-id'), false);
+  assert.equal(identity.logout(first.token), true);
+  assert.equal(identity.isActiveSession(firstSession.sessionId), false);
+  assert.equal(identity.isActiveSession(secondSession.sessionId), true);
+  now += 1000;
+  assert.equal(identity.isActiveSession(secondSession.sessionId), false);
+  assert.equal(identity.sessions.size, 0);
+  const restarted = new OwnerIdentityService({ stateFile, now: () => now });
+  assert.equal(restarted.isActiveSession(secondSession.sessionId), false);
+});
+
 test('invalid owner state fails closed instead of silently resetting credentials', t => {
   const { stateFile } = fixture(t);
   fs.writeFileSync(stateFile, '{"version":1,"passwordHash":"invalid"}');
