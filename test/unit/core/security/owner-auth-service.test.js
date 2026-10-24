@@ -223,3 +223,25 @@ test('owner auth rejects persisted sessions beyond configured capacity', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('owner auth verifies session identity only while that session is active', async () => {
+  let now = 1000;
+  const password = 'a-strong-owner-password-2026';
+  const auth = new OwnerAuthService({ password, sessionTtlMs: 1000, now: () => now });
+
+  const first = await auth.login({ password, sourceIp: '192.0.2.101' });
+  const second = await auth.login({ password, sourceIp: '192.0.2.102' });
+  assert.equal(auth.isActiveSession(first.sessionId), true);
+  assert.equal(auth.isActiveSession(second.sessionId), true);
+  assert.equal(auth.isActiveSession(''), false);
+  assert.equal(auth.isActiveSession('unknown-session-id'), false);
+
+  assert.equal(auth.logout(first.token), true);
+  assert.equal(auth.isActiveSession(first.sessionId), false, 'logged-out session identity is no longer active');
+  assert.equal(auth.isActiveSession(second.sessionId), true, 'revoking one session does not revoke another');
+
+  now += 1000;
+  assert.equal(auth.isActiveSession(second.sessionId), false, 'session expires at its expiry boundary');
+  assert.equal(auth.sessions.size, 0, 'expired sessions are pruned');
+});
