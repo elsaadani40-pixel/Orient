@@ -67,6 +67,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     approvalService
   });
 
+  const ownerAuth = new OwnerAuthService({ password: 'owner-runtime-test-secret-2026' });
   const runtime = new OrientRuntime({
     toolRegistry,
     agentOrchestrator,
@@ -74,9 +75,9 @@ test('authenticated dashboard request completes a harmless mission through the r
     approvalService,
     persistence,
     tenantId: 'tenant-owner-runtime',
-    agentRegistry
+    agentRegistry,
+    approvalDecisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId)
   });
-  const ownerAuth = new OwnerAuthService({ password: 'owner-runtime-test-secret-2026' });
   const server = createServer({
     memoryRoutes: { home() {}, add() {}, delete() {} },
     agentRoutes: createAgentRoutes(new AgentService(runtime)),
@@ -204,7 +205,8 @@ test('authenticated dashboard request completes a harmless mission through the r
     executionId: 'http-approval-execution',
     tenantId: 'tenant-owner-runtime'
   });
-  assert.equal(persistedApproved?.decision?.actorId, 'owner:Admin',
+  const authenticatedSessionId = ownerAuth.authenticate(cookie.split('=')[1]).sessionId;
+  assert.equal(persistedApproved?.decision?.actorId, authenticatedSessionId,
     'decision actor must be persisted server-side rather than accepted from the request body');
 
   // Re-open the durable JSON repository and reconstruct ApprovalService to
@@ -220,7 +222,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     tenantId: 'tenant-owner-runtime'
   });
   assert.equal(recoveredApproval?.decision?.status, 'approved');
-  assert.equal(recoveredApproval?.decision?.actorId, 'owner:Admin');
+  assert.equal(recoveredApproval?.decision?.actorId, authenticatedSessionId);
 
   const conflictingDecision = await fetch(decisionUrl, {
     method: 'POST',
