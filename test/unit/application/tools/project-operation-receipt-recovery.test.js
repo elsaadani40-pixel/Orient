@@ -123,3 +123,39 @@ test('receipt persistence failure after a verified mutation remains unreconciled
     assert.equal(recovered.reason, 'operation_receipt_missing');
   });
 });
+
+
+test('a receipt bound to different proposal content is a conflict, even when workspace files match the new proposal', async () => {
+  await withFixture(async ({ root, store, execute }) => {
+    const original = {
+      proposals: [{ action: 'create', path: 'src/generated.txt', content: 'original verified content\\n' }]
+    };
+    const context = { operationId: 'operation-proposal-mismatch', tenantId: 'tenant-a' };
+    const result = await execute.execute(original, context);
+    assert.equal(result.status, 'verified');
+
+    const changed = {
+      proposals: [{ action: 'create', path: 'src/generated.txt', content: 'different content\\n' }]
+    };
+    await fs.writeFile(path.join(root, 'src/generated.txt'), 'different content\\n');
+    const recovered = await execute.reconcile(changed, context);
+    assert.equal(recovered.status, 'conflict');
+    assert.equal(recovered.reason, 'operation_receipt_identity_conflict');
+  });
+});
+
+test('a corrupt durable receipt fails closed instead of returning a recovered result', async () => {
+  await withFixture(async ({ store, execute }) => {
+    const input = {
+      proposals: [{ action: 'create', path: 'src/generated.txt', content: 'verified content\\n' }]
+    };
+    const context = { operationId: 'operation-corrupt-receipt', tenantId: 'tenant-a' };
+    const result = await execute.execute(input, context);
+    assert.equal(result.status, 'verified');
+
+    await fs.writeFile(store.receiptPath(context.operationId, context.tenantId), '{not valid json', 'utf8');
+    const recovered = await execute.reconcile(input, context);
+    assert.equal(recovered.status, 'conflict');
+    assert.equal(recovered.reason, 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+  });
+});
