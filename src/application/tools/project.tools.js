@@ -36,7 +36,7 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
     risk: 'high',
     sandbox: { required: true, profile: { filesystem: { allowRead: [projectRoot], allowWrite: [projectRoot] }, network: { allowedDomains: [] }, unixSockets: { allowed: [] } } },
     effects: 'local_mutation',
-    idempotency: 'unknown',
+    idempotency: 'reconcilable',
     execute: async (input = {}, context = {}) => {
       const proposalResult = input && input.proposals ? input : input;
       const proposals = Array.isArray(proposalResult.proposals) ? proposalResult.proposals : [];
