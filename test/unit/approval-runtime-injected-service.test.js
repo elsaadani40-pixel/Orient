@@ -65,11 +65,11 @@ test('runtime decision policy rejects approvals belonging to another tenant', as
   );
 });
 
-test('runtime decision policy rejects conflicting primary and metadata tenant identities', () => {
+test('runtime decision policy rejects conflicting primary and metadata tenant identities', async () => {
   const approvals = new ApprovalService({ tenantId: 'tenant-a' });
   const runtime = createRuntime(approvals, 'tenant-a');
 
-  assert.equal(runtime.approvalService.decisionAuthorizer({
+  assert.equal(await runtime.approvalService.decisionAuthorizer({
     actorId: 'owner:Admin',
     tenantId: 'tenant-a',
     approval: {
