@@ -33,14 +33,14 @@ test('approval decision route forwards server-derived owner identity and exact s
     res,
     'approval_123',
     { executionId: 'execution_456', decision: 'approved' },
-    'owner:Admin'
+    '00000000-0000-4000-8000-000000000001'
   );
 
   assert.deepEqual(received, {
     approvalId: 'approval_123',
     executionId: 'execution_456',
     decision: 'approved',
-    actorId: 'owner:Admin'
+    actorId: '00000000-0000-4000-8000-000000000001'
   });
   assert.equal(res.statusCode, 200);
   assert.equal(JSON.parse(res.body).ok, true);
@@ -67,7 +67,7 @@ test('approval decision route rejects non-owner actor identities', async () => {
 test('approval decision route rejects malformed decision scope', async () => {
   const routes = createAgentRoutes({ decideApproval: async () => { throw new Error('must not be called'); } });
   await assert.rejects(
-    routes.decideApproval({}, responseStub(), 'approval_123', { executionId: '', decision: 'approve' }, 'owner:Admin'),
+    routes.decideApproval({}, responseStub(), 'approval_123', { executionId: '', decision: 'approve' }, '00000000-0000-4000-8000-000000000001'),
     error => error.code === 'INVALID_APPROVAL_DECISION' && error.statusCode === 400
   );
 });
