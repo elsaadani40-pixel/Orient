@@ -51,7 +51,7 @@ class OwnerIdentityService {
       for (const session of this.state.sessions) {
         if (!session || !/^[a-f0-9]{64}$/.test(session.digest) || !TOKEN.test(session.csrfToken) ||
             !Number.isSafeInteger(session.expiresAt) || session.expiresAt <= this.now()) continue;
-        this.sessions.set(session.digest, { csrfToken: session.csrfToken, expiresAt: session.expiresAt });
+        this.sessions.set(session.digest, { csrfToken: session.csrfToken, expiresAt: session.expiresAt, sessionId: typeof session.sessionId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(session.sessionId) ? session.sessionId : crypto.randomUUID() });
       }
       this.save();
     }
@@ -142,7 +142,8 @@ class OwnerIdentityService {
     const csrfToken = crypto.randomBytes(32).toString('base64url');
     const expiresAt = this.now() + this.sessionTtlMs;
     const digest = tokenDigest(token);
-    this.sessions.set(digest, { csrfToken, expiresAt });
+    const sessionId = crypto.randomUUID();
+    this.sessions.set(digest, { csrfToken, expiresAt, sessionId });
     try {
       this.save();
     } catch (error) {
@@ -173,7 +174,24 @@ class OwnerIdentityService {
       if (session) { this.sessions.delete(key); this.save(); }
       return null;
     }
-    return Object.freeze({ csrfToken: session.csrfToken, expiresAt: session.expiresAt });
+    return Object.freeze({ csrfToken: session.csrfToken, expiresAt: session.expiresAt, sessionId: session.sessionId });
+  }
+
+  isActiveSession(sessionId) {
+    if (typeof sessionId !== 'string' || !sessionId) return false;
+    const now = this.now();
+    let changed = false;
+    let active = false;
+    for (const [digest, session] of this.sessions) {
+      if (session.expiresAt <= now) {
+        this.sessions.delete(digest);
+        changed = true;
+      } else if (session.sessionId === sessionId) {
+        active = true;
+      }
+    }
+    if (changed) this.save();
+    return active;
   }
 
   verifyCsrf(session, token) {

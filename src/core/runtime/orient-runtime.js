@@ -41,7 +41,8 @@ class OrientRuntime {
     quotaService = null,
     agentRegistry = null,
     agentInvocationService = null,
-    capabilityGovernance = null
+    capabilityGovernance = null,
+    approvalDecisionAuthorizer = null
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -68,32 +69,32 @@ class OrientRuntime {
       this.toolRegistry.requireAuthorization();
     }
 
+    const authorizeApprovalDecision = async ({ actorId, tenantId: decisionTenantId, approval }) => {
+      const actorAuthorized = typeof approvalDecisionAuthorizer === 'function'
+        ? await approvalDecisionAuthorizer({ actorId, tenantId: decisionTenantId, approval }) === true
+        : actorId === 'owner:Admin';
+      return actorAuthorized &&
+        decisionTenantId === (tenantId || 'local') &&
+        !(approval?.tenantId && approval?.metadata?.tenantId &&
+          approval.tenantId !== approval.metadata.tenantId) &&
+        (approval?.tenantId === (tenantId || 'local') ||
+          approval?.metadata?.tenantId === (tenantId || 'local'));
+    };
+
     this.approvalService =
       approvalService ||
       (persistence?.approvals
         ? new ApprovalService({
             repository: persistence.approvals,
             tenantId: tenantId || 'local',
-            decisionAuthorizer: ({ actorId, tenantId: decisionTenantId, approval }) =>
-              actorId === 'owner:Admin' &&
-              decisionTenantId === (tenantId || 'local') &&
-              !(approval?.tenantId && approval?.metadata?.tenantId &&
-                approval.tenantId !== approval.metadata.tenantId) &&
-              (approval?.tenantId === (tenantId || 'local') || approval?.metadata?.tenantId === (tenantId || 'local'))
+            decisionAuthorizer: authorizeApprovalDecision
           })
         : null);
 
-    // Injected ApprovalService instances must receive the same fail-closed owner
-    // decision policy as Runtime-created instances. Preserve an explicitly
-    // configured authorizer supplied by a trusted composition root.
+    // Injected services receive the same fail-closed policy unless the trusted
+    // composition root explicitly supplied its own decision authorizer.
     if (this.approvalService && this.approvalService.decisionAuthorizer == null) {
-      this.approvalService.decisionAuthorizer = ({ actorId, tenantId: decisionTenantId, approval }) =>
-        actorId === 'owner:Admin' &&
-        decisionTenantId === (tenantId || 'local') &&
-        !(approval?.tenantId && approval?.metadata?.tenantId &&
-          approval.tenantId !== approval.metadata.tenantId) &&
-        (approval?.tenantId === (tenantId || 'local') ||
-          approval?.metadata?.tenantId === (tenantId || 'local'));
+      this.approvalService.decisionAuthorizer = authorizeApprovalDecision;
     }
 
     if (this.authorizationService && !this.authorizationService.approvalService) {
