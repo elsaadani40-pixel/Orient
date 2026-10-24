@@ -59,6 +59,10 @@ class OwnerIdentityRuntimeAdapter {
     return this.identity.authenticate(token);
   }
 
+  isActiveSession(sessionId) {
+    return this.identity.isActiveSession(sessionId);
+  }
+
   verifyCsrf(session, token) {
     return this.identity.verifyCsrf(session, token);
   }
