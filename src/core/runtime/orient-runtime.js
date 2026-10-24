@@ -72,7 +72,7 @@ class OrientRuntime {
     const authorizeApprovalDecision = async ({ actorId, tenantId: decisionTenantId, approval }) => {
       const actorAuthorized = typeof approvalDecisionAuthorizer === 'function'
         ? await approvalDecisionAuthorizer({ actorId, tenantId: decisionTenantId, approval }) === true
-        : actorId === 'owner:Admin';
+        : false;
       return actorAuthorized &&
         decisionTenantId === (tenantId || 'local') &&
         !(approval?.tenantId && approval?.metadata?.tenantId &&
