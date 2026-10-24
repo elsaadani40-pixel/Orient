@@ -247,7 +247,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       if (!executionId || executionId.length > 200 || !['approved', 'rejected'].includes(decision)) {
         throw new AppError('Approval decision requires executionId and an approved/rejected decision', 400, 'INVALID_APPROVAL_DECISION');
       }
-      if (typeof actorId !== 'string' || actorId !== 'owner:Admin') {
+      if (typeof actorId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(actorId)) {
         throw new AppError('Owner authorization is required', 403, 'APPROVAL_DECISION_FORBIDDEN');
       }
       let result;
