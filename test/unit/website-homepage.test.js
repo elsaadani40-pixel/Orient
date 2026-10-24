@@ -23,11 +23,18 @@ function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLang
     href: '',
     dataset: {},
     attributes: {},
-    classList: { toggle() {}, add() {}, remove() {} },
+    classList: {
+      toggle() {},
+      add() {},
+      remove() {},
+      contains(name) { return this._classes?.has(name) || false; },
+      _classes: new Set()
+    },
     addEventListener(name, callback) { listeners.set(this.id + ':' + name, callback); },
     setAttribute(name, value) { this.attributes[name] = value; },
     querySelectorAll() { return []; },
-    getBoundingClientRect() { return { left: 0, top: 0, width: 100, height: 100 }; }
+    getBoundingClientRect() { return { left: 0, top: 0, width: 100, height: 100 }; },
+    focus() { this.focused = true; }
   });
   const ids = ['lang', 'menu', 'navlinks', 'authAction'];
   const elements = Object.fromEntries(ids.map(id => [id, { ...element(), id }]));
