@@ -27,6 +27,14 @@ async function withFixture(run) {
   }
 }
 
+test('project mutation declares receipt-backed reconciliation in tool metadata', async () => {
+  await withFixture(async ({ execute }) => {
+    assert.equal(execute.effects, 'local_mutation');
+    assert.equal(execute.idempotency, 'reconcilable');
+    assert.equal(typeof execute.reconcile, 'function');
+  });
+});
+
 test('verified project mutation writes a tenant-scoped receipt and reconciles only from that receipt', async () => {
   await withFixture(async ({ root, store, execute }) => {
     const input = {
