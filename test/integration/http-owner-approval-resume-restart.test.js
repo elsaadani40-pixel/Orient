@@ -43,7 +43,7 @@ async function sandboxAvailable(root) {
   return !(result.code !== 0 && /Failed RTM_NEWADDR|Operation not permitted/.test(result.stderr || ''));
 }
 
-function createRuntime(root, persistence) {
+function createRuntime(root, persistence, ownerAuth) {
   const registry = new AgentRegistry();
   registerDefaultAgents(registry);
   const tools = new ToolRegistry();
@@ -85,7 +85,8 @@ function createRuntime(root, persistence) {
     approvalService: approvals,
     persistence,
     tenantId: TENANT,
-    agentRegistry: registry
+    agentRegistry: registry,
+    approvalDecisionAuthorizer: ({ actorId }) => ownerAuth?.isActiveSession(actorId) === true
   });
 }
 
@@ -126,8 +127,8 @@ test('owner HTTP decision resumes the same high-risk mission after runtime resta
 
     const persistenceRoot = path.join(root, '.orient-state');
     let persistence = new JsonPersistence({ rootDir: persistenceRoot });
-    runtime = createRuntime(root, persistence);
     const ownerAuth = new OwnerAuthService({ password: 'owner-approval-restart-test-secret-2026' });
+    runtime = createRuntime(root, persistence, ownerAuth);
     ({ server } = await startServer(runtime, ownerAuth));
     let origin = 'http://127.0.0.1:' + server.address().port;
 
@@ -189,7 +190,7 @@ test('owner HTTP decision resumes the same high-risk mission after runtime resta
       executionId: challenge.executionId,
       tenantId: TENANT
     });
-    assert.equal(storedDecision.decision.actorId, 'owner:Admin');
+    assert.equal(storedDecision.decision.actorId, ownerAuth.authenticate(cookie.split('=')[1]).sessionId);
 
     // Simulate a process boundary: close the first listener/runtime and reopen
     // all JSON repositories from disk. The owner session remains in the auth
@@ -199,7 +200,7 @@ test('owner HTTP decision resumes the same high-risk mission after runtime resta
     await runtime.shutdown({ cancelQueued: false });
     runtime = null;
     persistence = new JsonPersistence({ rootDir: persistenceRoot });
-    runtime = createRuntime(root, persistence);
+    runtime = createRuntime(root, persistence, ownerAuth);
     ({ server, origin } = await startServer(runtime, ownerAuth));
 
     const resume = await fetch(origin + '/owner/executions/' + encodeURIComponent(challenge.executionId) + '/resume', {
@@ -221,7 +222,7 @@ test('owner HTTP decision resumes the same high-risk mission after runtime resta
     const persisted = await persistence.approvals.findById(challenge.approvalId, { tenantId: TENANT });
     assert.ok(persisted, 'approval record must remain durable after the resume consumes it');
     assert.equal(persisted.decision.status, 'approved');
-    assert.equal(persisted.decision.actorId, 'owner:Admin');
+    assert.equal(persisted.decision.actorId, ownerAuth.authenticate(cookie.split('=')[1]).sessionId);
 
     const replay = await fetch(origin + '/owner/executions/' + encodeURIComponent(challenge.executionId) + '/resume', {
       method: 'POST',
