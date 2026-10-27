@@ -49,6 +49,7 @@ test('verified project mutation writes a tenant-scoped receipt and reconciles on
     assert.equal(receipt.operationId, context.operationId);
     assert.equal(receipt.tenantId, context.tenantId);
     assert.equal(receipt.result.status, 'verified');
+    assert.equal(store.readIntent(context), null, 'verified receipt is durable before its pending intent is removed');
 
     const recovered = await execute.reconcile(input, context);
     assert.equal(recovered.status, 'completed');
@@ -120,7 +121,17 @@ test('receipt persistence failure after a verified mutation remains unreconciled
 
     const recovered = await execute.reconcile(input, context);
     assert.equal(recovered.status, 'conflict');
-    assert.equal(recovered.reason, 'operation_receipt_missing');
+    assert.equal(recovered.reason, 'operation_outcome_unknown');
+    assert.ok(recovered.intent, 'pending intent preserves uncertainty after receipt persistence fails');
+    await assert.rejects(
+      execute.execute(input, context),
+      error => error?.code === 'PROJECT_OPERATION_OUTCOME_UNKNOWN'
+    );
+    assert.equal(
+      await fs.readFile(path.join(root, 'src/receipt-write-failure.txt'), 'utf8'),
+      'verified but receipt unavailable\\n',
+      'retry must not replay a mutation whose receipt could not be committed'
+    );
   });
 });
 
@@ -157,6 +168,38 @@ test('a corrupt durable receipt fails closed instead of returning a recovered re
     const recovered = await execute.reconcile(input, context);
     assert.equal(recovered.status, 'conflict');
     assert.equal(recovered.reason, 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+  });
+});
+
+test('a durable pending intent blocks replay when a crash leaves matching workspace bytes without a receipt', async () => {
+  await withFixture(async ({ root, store, execute }) => {
+    const input = {
+      proposals: [{ action: 'create', path: 'src/uncertain-operation.txt', content: 'possibly applied\\n' }]
+    };
+    const context = { operationId: 'operation-crash-window', tenantId: 'tenant-a' };
+    const workspaceId = require('node:crypto').createHash('sha256')
+      .update(path.resolve(root), 'utf8').digest('hex');
+    const changeSetHash = require('node:crypto').createHash('sha256')
+      .update(JSON.stringify(input.proposals.map(({ action, path: proposalPath, content, expectedContentSha256 }) => ({
+        action, path: proposalPath, content, ...(expectedContentSha256 ? { expectedContentSha256 } : {})
+      }))), 'utf8').digest('hex');
+
+    store.beginIntent({ ...context, workspaceId, changeSetHash });
+    await fs.writeFile(path.join(root, 'src/uncertain-operation.txt'), 'possibly applied\\n');
+
+    const recovered = await execute.reconcile(input, context);
+    assert.equal(recovered.status, 'conflict');
+    assert.equal(recovered.reason, 'operation_outcome_unknown');
+
+    await assert.rejects(
+      execute.execute(input, context),
+      error => error?.code === 'PROJECT_OPERATION_OUTCOME_UNKNOWN'
+    );
+    assert.equal(
+      await fs.readFile(path.join(root, 'src/uncertain-operation.txt'), 'utf8'),
+      'possibly applied\\n',
+      'matching bytes alone must not authorize replay or claim completion'
+    );
   });
 });
 
