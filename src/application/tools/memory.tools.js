@@ -4,8 +4,6 @@ function createMemoryTools(memoryService) {
   const searchMemory = new ToolInterface({
     name: 'memory.search',
     description: 'البحث داخل ذاكرة ORIENT ONE',
-    effects: 'read_only',
-    idempotency: 'idempotent',
     execute: async (input, context) => {
       const query = String(input || '').trim();
 
@@ -19,8 +17,6 @@ function createMemoryTools(memoryService) {
   const listMemory = new ToolInterface({
     name: 'memory.list',
     description: 'عرض الذكريات المحفوظة',
-    effects: 'read_only',
-    idempotency: 'idempotent',
     execute: async (input, context) => {
       return {
         memories: memoryService.list('', context),
@@ -31,8 +27,6 @@ function createMemoryTools(memoryService) {
   const addMemory = new ToolInterface({
     name: 'memory.add',
     description: 'إضافة معلومة جديدة إلى ذاكرة ORIENT ONE',
-    effects: 'local_mutation',
-    idempotency: 'unknown',
     execute: async (input, context) => {
       const text =
         typeof input === 'string'
@@ -43,13 +37,17 @@ function createMemoryTools(memoryService) {
         ? input
         : {}, context);
     },
+    reconcile: async (input, recoveryContext = {}) =>
+      memoryService.reconcileToolOperation('memory.add', input, {
+        ...recoveryContext,
+        tenantId: recoveryContext.tenantId || recoveryContext.record?.tenantId,
+        memoryScope: input?.scope || recoveryContext.memoryScope || 'personal'
+      }),
   });
 
   const memoryHistory = new ToolInterface({
     name: 'memory.history',
     description: 'عرض سجل التدقيق والقرارات المرتبطة بذاكرة ORIENT ONE',
-    effects: 'read_only',
-    idempotency: 'idempotent',
     execute: async (input, context) => {
       const id =
         typeof input === 'string'
@@ -66,8 +64,6 @@ function createMemoryTools(memoryService) {
   const deleteMemory = new ToolInterface({
     name: 'memory.delete',
     description: 'حذف معلومة من ذاكرة ORIENT ONE',
-    effects: 'local_mutation',
-    idempotency: 'unknown',
     execute: async (input, context) => {
       const id =
         typeof input === 'string'
@@ -76,6 +72,12 @@ function createMemoryTools(memoryService) {
 
       return memoryService.delete(id, context);
     },
+    reconcile: async (input, recoveryContext = {}) =>
+      memoryService.reconcileToolOperation('memory.delete', input, {
+        ...recoveryContext,
+        tenantId: recoveryContext.tenantId || recoveryContext.record?.tenantId,
+        memoryScope: recoveryContext.memoryScope || input?.scope || 'personal'
+      }),
   });
 
   return [

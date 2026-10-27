@@ -10,6 +10,8 @@ const MemoryService =
   require('./src/application/memory/memory.service');
 const MemoryAuditRepository =
   require('./src/infrastructure/memory/memory-audit.repository');
+const MemoryTransactionCoordinator =
+  require('./src/infrastructure/memory/memory-transaction-coordinator');
 const JsonAccessAuditRepository =
   require('./src/infrastructure/security/json-access-audit.repository');
 const OwnerIdentityService =
@@ -123,6 +125,17 @@ const createAgentRoutes =
 const createServer =
   require('./src/interfaces/http/server');
 
+const memoryAuditFile = path.join(config.agentDataDirectory, 'memory-audit.json');
+const memoryTransactionCoordinator = new MemoryTransactionCoordinator({
+  memoryFile: config.dataFile,
+  auditFile: memoryAuditFile,
+  journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
+});
+
+// Recover an interrupted memory/audit transaction before either repository reads
+// its files or the HTTP server can accept requests.
+memoryTransactionCoordinator.recover();
+
 const repository =
   new JsonMemoryRepository(config.dataFile);
 
@@ -142,9 +155,7 @@ const agentInvocationService =
   });
 
 const memoryAuditRepository =
-  new MemoryAuditRepository(
-    require('path').join(config.agentDataDirectory, 'memory-audit.json')
-  );
+  new MemoryAuditRepository(memoryAuditFile);
 
 const accessAuditRepository =
   new JsonAccessAuditRepository(
@@ -181,7 +192,8 @@ const memoryService =
   new MemoryService(repository, {
     memoryAccessPolicy,
     defaultScope: 'personal',
-    auditRepository: memoryAuditRepository
+    auditRepository: memoryAuditRepository,
+    transactionCoordinator: memoryTransactionCoordinator
   });
 
 const toolRegistry =
