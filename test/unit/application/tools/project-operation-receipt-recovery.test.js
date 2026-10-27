@@ -59,6 +59,40 @@ test('pending operation intents are tenant-scoped and cannot be rebound to diffe
   });
 });
 
+test('intent reads reject symbolic links without following them', async () => {
+  await withFixture(async ({ store }) => {
+    if (typeof require('node:fs').constants.O_NOFOLLOW !== 'number') {
+      assert.throws(
+        () => store.readIntent({ operationId: 'symlink-intent', tenantId: 'tenant-a' }),
+        error => error?.code === 'PROJECT_OPERATION_INTENT_UNSAFE_FILESYSTEM'
+      );
+      return;
+    }
+
+    const identity = {
+      operationId: 'symlink-intent',
+      tenantId: 'tenant-a',
+      workspaceId: 'a'.repeat(64),
+      changeSetHash: 'b'.repeat(64)
+    };
+    const target = path.join(path.dirname(store.intentPath(identity.operationId, identity.tenantId)), 'external-intent-target.json');
+    await fs.writeFile(target, JSON.stringify({
+      version: 1,
+      status: 'pending',
+      operationId: identity.operationId,
+      tenantId: identity.tenantId,
+      workspaceId: identity.workspaceId,
+      changeSetHash: identity.changeSetHash,
+      recordedAt: new Date().toISOString()
+    }));
+    await fs.symlink(target, store.intentPath(identity.operationId, identity.tenantId));
+    assert.throws(
+      () => store.readIntent(identity),
+      error => error?.code === 'PROJECT_OPERATION_INTENT_CORRUPT'
+    );
+  });
+});
+
 test('verified project mutation writes a tenant-scoped receipt and reconciles only from that receipt', async () => {
   await withFixture(async ({ root, store, execute }) => {
     const input = {
