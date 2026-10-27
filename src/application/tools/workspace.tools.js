@@ -332,6 +332,10 @@ function createWorkspaceTools(projectBuilder) {
     description: 'تطبيق ChangeSet صريح بعد اجتياز تفويض المخاطر والموافقة البشرية والتحقق',
     capabilities: ['workspace.write'],
     risk: 'high',
+    // This adapter mutates local files but has no durable operation receipt or
+    // reconciliation contract. Keep retries fail-closed until those guarantees exist.
+    effects: 'local_mutation',
+    idempotency: 'unknown',
     execute: async (input) => {
       const payload = inputObject(input);
       const rawChanges = Array.isArray(payload.changeSet?.changes)
