@@ -73,6 +73,20 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
         }
       }
 
+      // Persist a pending intent before any workspace mutation. If the process
+      // crashes before a verified receipt is durable, retries must fail closed.
+      if (operationReceiptStore) {
+        const reservation = operationReceiptStore.beginIntent({
+          operationId, tenantId, workspaceId, changeSetHash
+        });
+        if (!reservation.created) {
+          const error = new Error('A prior project operation has no verified receipt; outcome is unknown');
+          error.code = 'PROJECT_OPERATION_OUTCOME_UNKNOWN';
+          error.intent = reservation.intent;
+          throw error;
+        }
+      }
+
       const agent = new ProjectBuilderAgent({
         projectRoot,
         policy: {
@@ -112,6 +126,7 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       if (operationReceiptStore && serialized?.status === 'verified' &&
           serialized?.verification?.status === 'passed' && serialized?.verification?.failed === 0) {
         operationReceiptStore.write({ operationId, tenantId, workspaceId, changeSetHash, result: serialized });
+        operationReceiptStore.clearIntent({ operationId, tenantId, workspaceId, changeSetHash });
       }
       return result;
     },
@@ -128,6 +143,15 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       if (operationReceiptStore && operationId && tenantId) {
         try {
           receipt = operationReceiptStore.read({ operationId, tenantId });
+          if (!receipt) {
+            const pendingIntent = operationReceiptStore.readIntent({ operationId, tenantId });
+            if (pendingIntent) {
+              if (pendingIntent.workspaceId !== workspaceId || pendingIntent.changeSetHash !== changeSetHash) {
+                return { status: 'conflict', reason: 'operation_intent_identity_conflict' };
+              }
+              return { status: 'conflict', reason: 'operation_outcome_unknown', intent: pendingIntent };
+            }
+          }
         } catch (error) {
           return { status: 'conflict', reason: error.code || 'operation_receipt_invalid' };
         }
