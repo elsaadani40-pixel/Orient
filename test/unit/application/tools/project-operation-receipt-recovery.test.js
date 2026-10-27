@@ -73,7 +73,7 @@ test('verified project mutation writes a tenant-scoped receipt and reconciles on
     assert.equal(receipt.operationId, context.operationId);
     assert.equal(receipt.tenantId, context.tenantId);
     assert.equal(receipt.result.status, 'verified');
-    assert.equal(store.readIntent(context), null, 'verified receipt is durable before its pending intent is removed');
+    assert.equal(store.readIntent(context).status, 'pending', 'the durable intent is retained as an audit marker; the verified receipt is authoritative');
 
     const recovered = await execute.reconcile(input, context);
     assert.equal(recovered.status, 'completed');
