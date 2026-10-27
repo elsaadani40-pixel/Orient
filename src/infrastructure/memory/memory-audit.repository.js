@@ -150,10 +150,17 @@ class MemoryAuditRepository {
         'memory.consolidated': 'memory.consolidated',
         'memory.archived': 'memory.archived'
       };
-      this.eventSink({
-        ...record,
-        type: record.type || eventTypeByAction[record.action] || 'memory.updated'
-      });
+      try {
+        this.eventSink({
+          ...record,
+          type: record.type || eventTypeByAction[record.action] || 'memory.updated'
+        });
+        this.lastEventSinkError = null;
+      } catch (error) {
+        // The audit append is already durable; downstream event delivery failure
+        // must remain observable without misreporting the committed memory write.
+        this.lastEventSinkError = error;
+      }
     }
 
     return record;
