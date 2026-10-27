@@ -121,7 +121,7 @@ class ProjectOperationReceiptStore {
     let fd;
     try {
       fd = fs.openSync(filePath, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify(intent) + '\\n', 'utf8');
+      fs.writeFileSync(fd, JSON.stringify(intent) + '\n', 'utf8');
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = undefined;
