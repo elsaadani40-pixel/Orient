@@ -63,6 +63,101 @@ class ProjectOperationReceiptStore {
     }
   }
 
+  intentPath(operationId, tenantId) {
+    return this.receiptPath(operationId, tenantId) + '.intent.json';
+  }
+
+  readIntent({ operationId, tenantId }) {
+    const filePath = this.intentPath(operationId, tenantId);
+    let stats;
+    try {
+      stats = fs.lstatSync(filePath);
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      fail('Project operation intent is not a regular file', 'PROJECT_OPERATION_INTENT_CORRUPT');
+    }
+
+    let intent;
+    try {
+      intent = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (error) {
+      const invalid = new Error('Project operation intent is not valid JSON');
+      invalid.code = 'PROJECT_OPERATION_INTENT_CORRUPT';
+      invalid.cause = error;
+      throw invalid;
+    }
+
+    if (!intent || intent.version !== 1 || intent.status !== 'pending' ||
+        intent.operationId !== operationId || intent.tenantId !== tenantId ||
+        typeof intent.workspaceId !== 'string' || !/^[a-f0-9]{64}$/.test(intent.workspaceId) ||
+        typeof intent.changeSetHash !== 'string' || !/^[a-f0-9]{64}$/.test(intent.changeSetHash) ||
+        typeof intent.recordedAt !== 'string') {
+      fail('Project operation intent schema or identity is invalid', 'PROJECT_OPERATION_INTENT_CORRUPT');
+    }
+    return intent;
+  }
+
+  beginIntent({ operationId, tenantId, workspaceId, changeSetHash }) {
+    if (!validIdentity({ operationId, tenantId }) ||
+        typeof workspaceId !== 'string' || !/^[a-f0-9]{64}$/.test(workspaceId) ||
+        typeof changeSetHash !== 'string' || !/^[a-f0-9]{64}$/.test(changeSetHash)) {
+      fail('Project operation intent identity is invalid', 'PROJECT_OPERATION_INTENT_INVALID');
+    }
+
+    this.ensureDirectory();
+    const filePath = this.intentPath(operationId, tenantId);
+    const intent = {
+      version: 1,
+      status: 'pending',
+      operationId,
+      tenantId,
+      workspaceId,
+      changeSetHash,
+      recordedAt: new Date().toISOString()
+    };
+    let fd;
+    try {
+      fd = fs.openSync(filePath, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify(intent) + '\\n', 'utf8');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      syncDirectory(this.directory);
+      return { created: true, intent };
+    } catch (error) {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      if (error.code !== 'EEXIST') {
+        try { fs.unlinkSync(filePath); } catch {}
+        throw error;
+      }
+    }
+
+    const existing = this.readIntent({ operationId, tenantId });
+    if (!existing) {
+      fail('Project operation intent disappeared during reservation', 'PROJECT_OPERATION_INTENT_CONFLICT');
+    }
+    if (existing.workspaceId !== workspaceId || existing.changeSetHash !== changeSetHash) {
+      fail('Operation ID is already bound to a different pending project change', 'PROJECT_OPERATION_INTENT_IDENTITY_CONFLICT');
+    }
+    return { created: false, intent: existing };
+  }
+
+  clearIntent({ operationId, tenantId, workspaceId, changeSetHash }) {
+    const existing = this.readIntent({ operationId, tenantId });
+    if (!existing) return false;
+    if (existing.workspaceId !== workspaceId || existing.changeSetHash !== changeSetHash) {
+      fail('Project operation intent identity changed before cleanup', 'PROJECT_OPERATION_INTENT_IDENTITY_CONFLICT');
+    }
+    fs.unlinkSync(this.intentPath(operationId, tenantId));
+    syncDirectory(this.directory);
+    return true;
+  }
+
   read({ operationId, tenantId }) {
     const filePath = this.receiptPath(operationId, tenantId);
     let fileStats;
