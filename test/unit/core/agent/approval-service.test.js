@@ -502,3 +502,87 @@ test('in-memory concurrent approve/reject decisions allow exactly one immutable 
   if (winningDecision.status === 'rejected') assert.equal(finalRecord, null);
   else assert.equal(finalRecord?.decision?.status, 'approved');
 });
+
+
+test('conflicting primary and metadata tenant identities fail closed across approval operations', async () => {
+  const service = new ApprovalService({
+    tenantId: 'tenant-a',
+    clock: () => 1000,
+    decisionAuthorizer: async () => true
+  });
+  const approved = await service.issue({
+    executionId: 'exec-conflicting-approved',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-a',
+    ttlMs: 10000
+  });
+  await service.decide({
+    approvalId: approved.approvalId,
+    executionId: approved.executionId,
+    decision: 'approved',
+    actorId: 'owner-a',
+    tenantId: 'tenant-a'
+  });
+
+  const pending = await service.issue({
+    executionId: 'exec-conflicting-pending',
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-a',
+    ttlMs: 10000
+  });
+
+  // Simulate corrupt or legacy storage where metadata contradicts the
+  // authoritative tenant field. Neither identity may be chosen opportunistically.
+  service.approvals.get(approved.approvalId).metadata.tenantId = 'tenant-b';
+  service.approvals.get(pending.approvalId).metadata.tenantId = 'tenant-b';
+
+  assert.deepEqual(await service.validate({
+    approval: { approvalId: approved.approvalId },
+    executionId: approved.executionId,
+    step: 1,
+    tool: 'danger.write',
+    capability: 'external.write',
+    tenantId: 'tenant-a'
+  }), { allowed: false, reason: 'APPROVAL_TENANT_MISMATCH' });
+
+  assert.equal(await service.findReusable({
+    executionId: approved.executionId,
+    step: 1,
+    tool: 'danger.write',
+    tenantId: 'tenant-a'
+  }), null);
+  assert.deepEqual(await service.listForExecution({
+    executionId: approved.executionId,
+    tenantId: 'tenant-a'
+  }), []);
+  assert.deepEqual(await service.listPending({ tenantId: 'tenant-a' }), []);
+
+  await assert.rejects(
+    () => service.decide({
+      approvalId: approved.approvalId,
+      executionId: approved.executionId,
+      decision: 'approved',
+      actorId: 'owner-a',
+      tenantId: 'tenant-a'
+    }),
+    error => error.code === 'APPROVAL_TENANT_MISMATCH'
+  );
+  assert.equal(await service.getApprovedForExecution({
+    approvalId: approved.approvalId,
+    executionId: approved.executionId,
+    tenantId: 'tenant-a'
+  }), null);
+  assert.equal(await service.consume(approved.approvalId, 'tenant-a'), false);
+
+  // Conflicting identities remain invalid even if a caller omits the tenant filter.
+  assert.deepEqual(await service.listPending({ tenantId: null }), []);
+  assert.equal(await service.getApprovedForExecution({
+    approvalId: approved.approvalId,
+    executionId: approved.executionId,
+    tenantId: null
+  }), null);
+});
