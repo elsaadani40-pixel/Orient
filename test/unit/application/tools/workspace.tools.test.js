@@ -80,6 +80,10 @@ test('change execution is explicitly high-risk and refuses empty or unbound chan
   await withWorkspace(async ({ tools }) => {
     const execute = tools.find(tool => tool.name === 'project.execute_change');
     assert.equal(execute.risk, 'high');
+    assert.equal(execute.effects, 'local_mutation');
+    assert.equal(execute.idempotency, 'unknown');
+    assert.equal(execute.retryable, false);
+    assert.equal(execute.reconcile, null, 'unreconciled local mutations must not advertise retry safety');
     assert.ok(execute.capabilities.includes('workspace.write'));
     await assert.rejects(
       () => execute.execute({ proposals: [] }, {}),
