@@ -134,10 +134,8 @@ class ProjectOperationReceiptStore {
       recordedAt: new Date().toISOString()
     };
     let fd;
-    let createdFile = false;
     try {
       fd = fs.openSync(filePath, 'wx', 0o600);
-      createdFile = true;
       fs.writeFileSync(fd, JSON.stringify(intent) + '\n', 'utf8');
       fs.fsyncSync(fd);
       fs.closeSync(fd);
@@ -149,9 +147,9 @@ class ProjectOperationReceiptStore {
         try { fs.closeSync(fd); } catch {}
       }
       if (error.code !== 'EEXIST') {
-        if (createdFile) {
-          try { fs.unlinkSync(filePath); } catch {}
-        }
+        // Do not unlink by pathname after a failed write: another actor could
+        // replace the path between creation and cleanup. A partial intent is
+        // deliberately left in place and causes fail-closed recovery.
         throw error;
       }
     }
