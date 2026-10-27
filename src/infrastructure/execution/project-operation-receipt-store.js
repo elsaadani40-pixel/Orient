@@ -166,17 +166,9 @@ class ProjectOperationReceiptStore {
     return { created: false, intent: existing };
   }
 
-  clearIntent({ operationId, tenantId, workspaceId, changeSetHash }) {
-    const existing = this.readIntent({ operationId, tenantId });
-    if (!existing) return false;
-    if (existing.workspaceId !== workspaceId || existing.changeSetHash !== changeSetHash) {
-      fail('Project operation intent identity changed before cleanup', 'PROJECT_OPERATION_INTENT_IDENTITY_CONFLICT');
-    }
-    fs.unlinkSync(this.intentPath(operationId, tenantId));
-    syncDirectory(this.directory);
-    return true;
-  }
-
+  // Pending intent files are intentionally retained after a receipt is committed.
+  // The verified receipt is authoritative; deleting by pathname after a separate
+  // identity check would introduce a time-of-check/time-of-use race.
   read({ operationId, tenantId }) {
     const filePath = this.receiptPath(operationId, tenantId);
     let fileStats;
