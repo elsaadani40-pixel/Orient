@@ -47,3 +47,34 @@ test('shutdown continues cleanup after a non-ingress stage fails', async () => {
   assert.equal(failures.length, 1);
   assert.equal(failures[0].stage, 'observations');
 });
+
+
+test('shutdown rejects invalid mandatory callbacks before invoking ingress', async () => {
+  let invoked = false;
+  await assert.rejects(
+    shutdownInOrder({ closeIngress: async () => { invoked = true; } }),
+    /shutdownRuntime is required/
+  );
+  assert.equal(invoked, false);
+});
+
+test('shutdown continues later cleanup after an observation failure and records the stage', async () => {
+  const order = [];
+  const logged = [];
+  const failures = await shutdownInOrder({
+    closeIngress: async () => { order.push('http-ingress'); },
+    stopObservations: async () => {
+      order.push('observations');
+      throw new Error('observation close failed');
+    },
+    stopWorkers: async () => { order.push('workers'); },
+    shutdownRuntime: async () => { order.push('runtime'); },
+    closePersistence: async () => { order.push('persistence'); },
+    onError: (stage, error) => logged.push([stage, error.message])
+  });
+
+  assert.deepEqual(order, ['http-ingress', 'observations', 'workers', 'runtime', 'persistence']);
+  assert.deepEqual(logged, [['observations', 'observation close failed']]);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].stage, 'observations');
+});
