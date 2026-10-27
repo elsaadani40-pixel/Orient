@@ -53,6 +53,26 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
         action, path: proposalPath, content, ...(expectedContentSha256 ? { expectedContentSha256 } : {})
       }))), 'utf8').digest('hex');
 
+      // A previously receipted operation must never be executed again. First
+      // validate its tenant-scoped identity, then verify the current workspace
+      // still matches the recorded post-state. Any uncertainty is a hard stop.
+      if (operationReceiptStore) {
+        const priorReceipt = operationReceiptStore.read({ operationId, tenantId });
+        if (priorReceipt) {
+          if (priorReceipt.workspaceId !== workspaceId || priorReceipt.changeSetHash !== changeSetHash) {
+            const error = new Error('Operation ID is already bound to a different project change');
+            error.code = 'PROJECT_OPERATION_RECEIPT_IDENTITY_CONFLICT';
+            throw error;
+          }
+          const recovered = await executeChange.reconcile(input, context);
+          if (recovered.status === 'completed') return recovered.result;
+          const error = new Error('Previously receipted operation no longer matches the verified workspace state');
+          error.code = 'PROJECT_OPERATION_REPLAY_CONFLICT';
+          error.reconciliation = recovered;
+          throw error;
+        }
+      }
+
       const agent = new ProjectBuilderAgent({
         projectRoot,
         policy: {

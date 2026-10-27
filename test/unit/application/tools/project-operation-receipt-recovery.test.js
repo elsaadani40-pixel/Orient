@@ -159,3 +159,27 @@ test('a corrupt durable receipt fails closed instead of returning a recovered re
     assert.equal(recovered.reason, 'PROJECT_OPERATION_RECEIPT_CORRUPT');
   });
 });
+
+test('a receipted operation ID is not replayed when the workspace has drifted', async () => {
+  await withFixture(async ({ root, execute }) => {
+    const input = {
+      proposals: [{ action: 'create', path: 'src/replay-guard.txt', content: 'verified original\\n' }]
+    };
+    const context = { operationId: 'operation-replay-guard', tenantId: 'tenant-a' };
+    const first = await execute.execute(input, context);
+    assert.equal(first.status, 'verified');
+
+    // Simulate an intervening change after the original operation completed.
+    await fs.writeFile(path.join(root, 'src/replay-guard.txt'), 'external change\\n');
+
+    await assert.rejects(
+      execute.execute(input, context),
+      error => error?.code === 'PROJECT_OPERATION_REPLAY_CONFLICT'
+    );
+    assert.equal(
+      await fs.readFile(path.join(root, 'src/replay-guard.txt'), 'utf8'),
+      'external change\\n',
+      'a repeated operation must not overwrite workspace drift'
+    );
+  });
+});
