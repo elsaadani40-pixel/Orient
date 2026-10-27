@@ -119,8 +119,10 @@ class ProjectOperationReceiptStore {
       recordedAt: new Date().toISOString()
     };
     let fd;
+    let createdFile = false;
     try {
       fd = fs.openSync(filePath, 'wx', 0o600);
+      createdFile = true;
       fs.writeFileSync(fd, JSON.stringify(intent) + '\n', 'utf8');
       fs.fsyncSync(fd);
       fs.closeSync(fd);
@@ -132,7 +134,9 @@ class ProjectOperationReceiptStore {
         try { fs.closeSync(fd); } catch {}
       }
       if (error.code !== 'EEXIST') {
-        try { fs.unlinkSync(filePath); } catch {}
+        if (createdFile) {
+          try { fs.unlinkSync(filePath); } catch {}
+        }
         throw error;
       }
     }
