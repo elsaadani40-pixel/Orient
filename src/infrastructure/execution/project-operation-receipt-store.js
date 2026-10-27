@@ -81,13 +81,28 @@ class ProjectOperationReceiptStore {
     }
 
     let intent;
+    let fd;
     try {
-      intent = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      // Read through one file descriptor and compare the opened inode with the
+      // inspected path. O_NOFOLLOW prevents a symlink swap where supported.
+      const noFollow = typeof fs.constants.O_NOFOLLOW === 'number'
+        ? fs.constants.O_NOFOLLOW
+        : 0;
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+      const openedStats = fs.fstatSync(fd);
+      if (!openedStats.isFile() || openedStats.dev !== stats.dev || openedStats.ino !== stats.ino) {
+        fail('Project operation intent changed while being opened', 'PROJECT_OPERATION_INTENT_CORRUPT');
+      }
+      intent = JSON.parse(fs.readFileSync(fd, 'utf8'));
     } catch (error) {
-      const invalid = new Error('Project operation intent is not valid JSON');
+      const invalid = new Error('Project operation intent is not valid or changed while being read');
       invalid.code = 'PROJECT_OPERATION_INTENT_CORRUPT';
       invalid.cause = error;
       throw invalid;
+    } finally {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
     }
 
     if (!intent || intent.version !== 1 || intent.status !== 'pending' ||
