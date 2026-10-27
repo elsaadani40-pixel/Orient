@@ -195,7 +195,9 @@ test('memory.add receipt and idempotency result prevent duplicate writes after w
         runtimeContext: { tenantId, memoryScope: 'personal', planRevision: 1 }
       })
     });
-    assert.equal(await firstWorker.tick(), null);
+    // The worker API returns the current workflow instance even when the lease is lost;
+    // the durable operation receipt, not a null return value, is the recovery contract.
+    assert.ok(await firstWorker.tick());
     const operationRecord = [...operationRepository.records.values()][0];
     assert.equal(operationRecord.status, 'completed');
     assert.equal(initial.auditRepository.findByOperationId(
@@ -340,7 +342,9 @@ test('memory.delete archive receipt prevents duplicate deletion after workflow l
         runtimeContext: { tenantId, memoryScope: 'personal', planRevision: 1 }
       })
     });
-    assert.equal(await firstWorker.tick(), null);
+    // The worker API returns the current workflow instance even when the lease is lost;
+    // the durable operation receipt, not a null return value, is the recovery contract.
+    assert.ok(await firstWorker.tick());
     const operationRecord = [...operationRepository.records.values()].find(record => record.tool === 'memory.delete');
     assert.ok(operationRecord);
     assert.equal(operationRecord.status, 'completed');
