@@ -63,6 +63,106 @@ class ProjectOperationReceiptStore {
     }
   }
 
+  intentPath(operationId, tenantId) {
+    return this.receiptPath(operationId, tenantId) + '.intent.json';
+  }
+
+  readIntent({ operationId, tenantId }) {
+    const filePath = this.intentPath(operationId, tenantId);
+    let intent;
+    let fd;
+    try {
+      // Never inspect then reopen by pathname: that creates a TOCTOU window.
+      // Require O_NOFOLLOW so unsupported platforms fail closed instead of
+      // following a substituted symlink.
+      if (typeof fs.constants.O_NOFOLLOW !== 'number') {
+        fail('Safe intent-file reads are unsupported on this platform', 'PROJECT_OPERATION_INTENT_UNSAFE_FILESYSTEM');
+      }
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const openedStats = fs.fstatSync(fd);
+      if (!openedStats.isFile()) {
+        fail('Project operation intent is not a regular file', 'PROJECT_OPERATION_INTENT_CORRUPT');
+      }
+      intent = JSON.parse(fs.readFileSync(fd, 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      if (error.code === 'ELOOP') {
+        fail('Project operation intent must not be a symbolic link', 'PROJECT_OPERATION_INTENT_CORRUPT');
+      }
+      if (error.code === 'PROJECT_OPERATION_INTENT_UNSAFE_FILESYSTEM' ||
+          error.code === 'PROJECT_OPERATION_INTENT_CORRUPT') throw error;
+      const invalid = new Error('Project operation intent is not valid or could not be read safely');
+      invalid.code = 'PROJECT_OPERATION_INTENT_CORRUPT';
+      invalid.cause = error;
+      throw invalid;
+    } finally {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
+    }
+
+    if (!intent || intent.version !== 1 || intent.status !== 'pending' ||
+        intent.operationId !== operationId || intent.tenantId !== tenantId ||
+        typeof intent.workspaceId !== 'string' || !/^[a-f0-9]{64}$/.test(intent.workspaceId) ||
+        typeof intent.changeSetHash !== 'string' || !/^[a-f0-9]{64}$/.test(intent.changeSetHash) ||
+        typeof intent.recordedAt !== 'string') {
+      fail('Project operation intent schema or identity is invalid', 'PROJECT_OPERATION_INTENT_CORRUPT');
+    }
+    return intent;
+  }
+
+  beginIntent({ operationId, tenantId, workspaceId, changeSetHash }) {
+    if (!validIdentity({ operationId, tenantId }) ||
+        typeof workspaceId !== 'string' || !/^[a-f0-9]{64}$/.test(workspaceId) ||
+        typeof changeSetHash !== 'string' || !/^[a-f0-9]{64}$/.test(changeSetHash)) {
+      fail('Project operation intent identity is invalid', 'PROJECT_OPERATION_INTENT_INVALID');
+    }
+
+    this.ensureDirectory();
+    const filePath = this.intentPath(operationId, tenantId);
+    const intent = {
+      version: 1,
+      status: 'pending',
+      operationId,
+      tenantId,
+      workspaceId,
+      changeSetHash,
+      recordedAt: new Date().toISOString()
+    };
+    let fd;
+    try {
+      fd = fs.openSync(filePath, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify(intent) + '\n', 'utf8');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      syncDirectory(this.directory);
+      return { created: true, intent };
+    } catch (error) {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      if (error.code !== 'EEXIST') {
+        // Do not unlink by pathname after a failed write: another actor could
+        // replace the path between creation and cleanup. A partial intent is
+        // deliberately left in place and causes fail-closed recovery.
+        throw error;
+      }
+    }
+
+    const existing = this.readIntent({ operationId, tenantId });
+    if (!existing) {
+      fail('Project operation intent disappeared during reservation', 'PROJECT_OPERATION_INTENT_CONFLICT');
+    }
+    if (existing.workspaceId !== workspaceId || existing.changeSetHash !== changeSetHash) {
+      fail('Operation ID is already bound to a different pending project change', 'PROJECT_OPERATION_INTENT_IDENTITY_CONFLICT');
+    }
+    return { created: false, intent: existing };
+  }
+
+  // Pending intent files are intentionally retained after a receipt is committed.
+  // The verified receipt is authoritative; deleting by pathname after a separate
+  // identity check would introduce a time-of-check/time-of-use race.
   read({ operationId, tenantId }) {
     const filePath = this.receiptPath(operationId, tenantId);
     let fileStats;

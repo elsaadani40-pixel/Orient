@@ -102,6 +102,20 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       const hasTests = canRunNodeTests && await agent.workspace.exists('test');
       if (hasTests) checks.push(commandVerification.createCheck({ id: 'node-test-suite', executable: 'node', args: ['--test'] }));
 
+      // Persist a pending intent immediately before the mutation boundary. If the
+      // process crashes before a verified receipt is durable, retries fail closed.
+      if (operationReceiptStore) {
+        const reservation = operationReceiptStore.beginIntent({
+          operationId, tenantId, workspaceId, changeSetHash
+        });
+        if (!reservation.created) {
+          const error = new Error('A prior project operation has no verified receipt; outcome is unknown');
+          error.code = 'PROJECT_OPERATION_OUTCOME_UNKNOWN';
+          error.intent = reservation.intent;
+          throw error;
+        }
+      }
+
       const result = await agent.execute({
         plan: { mission: 'PROJECT_CHANGE_EXECUTION' },
         changeSet: { changes: proposals },
@@ -112,6 +126,9 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       if (operationReceiptStore && serialized?.status === 'verified' &&
           serialized?.verification?.status === 'passed' && serialized?.verification?.failed === 0) {
         operationReceiptStore.write({ operationId, tenantId, workspaceId, changeSetHash, result: serialized });
+        // Keep the durable intent as an audit marker. A verified receipt takes
+        // precedence during reconciliation; pathname deletion is avoided because
+        // checking identity and unlinking are not atomic.
       }
       return result;
     },
@@ -128,6 +145,15 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       if (operationReceiptStore && operationId && tenantId) {
         try {
           receipt = operationReceiptStore.read({ operationId, tenantId });
+          if (!receipt) {
+            const pendingIntent = operationReceiptStore.readIntent({ operationId, tenantId });
+            if (pendingIntent) {
+              if (pendingIntent.workspaceId !== workspaceId || pendingIntent.changeSetHash !== changeSetHash) {
+                return { status: 'conflict', reason: 'operation_intent_identity_conflict' };
+              }
+              return { status: 'conflict', reason: 'operation_outcome_unknown', intent: pendingIntent };
+            }
+          }
         } catch (error) {
           return { status: 'conflict', reason: error.code || 'operation_receipt_invalid' };
         }
