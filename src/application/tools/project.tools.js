@@ -126,7 +126,9 @@ function createProjectTools({ projectRoot, policy = {}, operationReceiptStore = 
       if (operationReceiptStore && serialized?.status === 'verified' &&
           serialized?.verification?.status === 'passed' && serialized?.verification?.failed === 0) {
         operationReceiptStore.write({ operationId, tenantId, workspaceId, changeSetHash, result: serialized });
-        operationReceiptStore.clearIntent({ operationId, tenantId, workspaceId, changeSetHash });
+        // Keep the durable intent as an audit marker. A verified receipt takes
+        // precedence during reconciliation; pathname deletion is avoided because
+        // checking identity and unlinking are not atomic.
       }
       return result;
     },
