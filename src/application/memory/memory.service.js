@@ -358,7 +358,10 @@ class MemoryService {
       );
     }
 
+    // Ranking signals such as recency and importance may order real matches,
+    // but must never make an unrelated memory eligible for a non-empty query.
     return memories
+      .filter(memory => lexicalScore(cleanQuery, memory.text) > 0)
       .map(memory => ({
         ...memory,
         relevance: relevanceScore(memory, cleanQuery, options)
