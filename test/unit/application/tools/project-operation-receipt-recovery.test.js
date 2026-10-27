@@ -35,6 +35,30 @@ test('project mutation declares receipt-backed reconciliation in tool metadata',
   });
 });
 
+test('pending operation intents are tenant-scoped and cannot be rebound to different changes', async () => {
+  await withFixture(async ({ store }) => {
+    const identity = {
+      operationId: 'pending-intent-identity',
+      tenantId: 'tenant-a',
+      workspaceId: 'a'.repeat(64),
+      changeSetHash: 'b'.repeat(64)
+    };
+    const first = store.beginIntent(identity);
+    assert.equal(first.created, true);
+    assert.equal(store.readIntent(identity).status, 'pending');
+
+    const duplicate = store.beginIntent(identity);
+    assert.equal(duplicate.created, false);
+    assert.equal(duplicate.intent.changeSetHash, identity.changeSetHash);
+
+    assert.equal(store.readIntent({ ...identity, tenantId: 'tenant-b' }), null);
+    assert.throws(
+      () => store.beginIntent({ ...identity, changeSetHash: 'c'.repeat(64) }),
+      error => error?.code === 'PROJECT_OPERATION_INTENT_IDENTITY_CONFLICT'
+    );
+  });
+});
+
 test('verified project mutation writes a tenant-scoped receipt and reconciles only from that receipt', async () => {
   await withFixture(async ({ root, store, execute }) => {
     const input = {
