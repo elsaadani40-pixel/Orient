@@ -129,7 +129,7 @@ test('receipt persistence failure after a verified mutation remains unreconciled
     );
     assert.equal(
       await fs.readFile(path.join(root, 'src/receipt-write-failure.txt'), 'utf8'),
-      'verified but receipt unavailable\\n',
+      'verified but receipt unavailable\n',
       'retry must not replay a mutation whose receipt could not be committed'
     );
   });
