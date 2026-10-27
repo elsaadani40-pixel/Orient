@@ -75,7 +75,7 @@ class MemoryAuditRepository {
       throw error;
     }
     if (!Array.isArray(parsed)) {
-      throw Object.assign(new Error('Memory audit storage root must be an array'), {
+      throw Object.assign(new Error('Memory audit store must contain a JSON array'), {
         code: 'MEMORY_AUDIT_CORRUPT'
       });
     }

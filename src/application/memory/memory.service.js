@@ -60,7 +60,15 @@ function sourceReliability(source = {}) {
 
 function evidenceStrength(memory) {
   if (!Array.isArray(memory.evidence) || !memory.evidence.length) return 0;
-  const weighted = memory.evidence.map(item =>
+  // Evidence with the same stable ID is one observation, not independent support.
+  // Preserve separate unidentified items because no safe identity can be inferred.
+  const uniqueEvidence = [...new Map(
+    memory.evidence.map((item, index) => [
+      item.id ? `id:${item.id}` : `unidentified:${index}`,
+      item
+    ])
+  ).values()];
+  const weighted = uniqueEvidence.map(item =>
     clamp(item.confidence, 0.5) * sourceReliability(item.source)
   );
   const mean = weighted.reduce((sum, value) => sum + value, 0) / weighted.length;
