@@ -177,6 +177,12 @@ class MemoryService {
         const original = this[method].bind(this);
         this[method] = (...args) => transactionCoordinator.run(() => original(...args));
       }
+      // Cross-process readers share the transaction lock so they cannot observe
+      // a memory file update before its corresponding audit receipt is durable.
+      for (const method of ['list', 'history', 'count']) {
+        const original = this[method].bind(this);
+        this[method] = (...args) => transactionCoordinator.read(() => original(...args));
+      }
     }
   }
 
