@@ -140,3 +140,37 @@ test('startup recovery refuses to race a live transaction owner', () => {
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
+
+test('read waits for another process transaction lock before reading shared files', () => {
+  const f = fixture();
+  try {
+    const signalPath = path.join(f.directory, 'lock-held');
+    const script = [
+      `const Coordinator = require(${JSON.stringify(require.resolve('../../../../src/infrastructure/memory/memory-transaction-coordinator'))});`,
+      `const fs = require('node:fs');`,
+      `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
+      `const owner = c.acquireLock();`,
+      `fs.writeFileSync(process.env.SIGNAL_FILE, 'ready');`,
+      `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);`,
+      `c.releaseLock(owner);`
+    ].join('\\n');
+    const child = spawnSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        MEMORY_FILE: f.memoryFile,
+        AUDIT_FILE: f.auditFile,
+        JOURNAL_FILE: f.journalFile,
+        SIGNAL_FILE: signalPath
+      }
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.ok(fs.existsSync(signalPath));
+    const startedAt = Date.now();
+    const result = f.coordinator.read(() => fs.readFileSync(f.memoryFile, 'utf8'));
+    assert.ok(Date.now() - startedAt >= 100, 'read should wait until the competing transaction lock is released');
+    assert.equal(result, '[{"id":"before"}]\\n');
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
