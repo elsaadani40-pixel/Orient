@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawnSync, spawn } = require('node:child_process');
 
 const MemoryTransactionCoordinator = require('../../../../src/infrastructure/memory/memory-transaction-coordinator');
 
@@ -141,8 +141,9 @@ test('startup recovery refuses to race a live transaction owner', () => {
   }
 });
 
-test('read waits for another process transaction lock before reading shared files', () => {
+test('read waits for another process transaction lock before reading shared files', async () => {
   const f = fixture();
+  let child;
   try {
     const signalPath = path.join(f.directory, 'lock-held');
     const script = [
@@ -151,11 +152,11 @@ test('read waits for another process transaction lock before reading shared file
       `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
       `const owner = c.acquireLock();`,
       `fs.writeFileSync(process.env.SIGNAL_FILE, 'ready');`,
-      `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);`,
+      `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);`,
       `c.releaseLock(owner);`
     ].join('\\n');
-    const child = spawnSync(process.execPath, ['-e', script], {
-      encoding: 'utf8',
+    child = spawn(process.execPath, ['-e', script], {
+      stdio: ['ignore', 'ignore', 'pipe'],
       env: {
         ...process.env,
         MEMORY_FILE: f.memoryFile,
@@ -164,13 +165,27 @@ test('read waits for another process transaction lock before reading shared file
         SIGNAL_FILE: signalPath
       }
     });
-    assert.equal(child.status, 0, child.stderr);
-    assert.ok(fs.existsSync(signalPath));
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    const exited = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => resolve({ code, signal }));
+    });
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(signalPath)) {
+      if (child.exitCode !== null) throw new Error('lock holder exited early: ' + stderr);
+      if (Date.now() >= deadline) throw new Error('timed out waiting for lock holder: ' + stderr);
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
     const startedAt = Date.now();
     const result = f.coordinator.read(() => fs.readFileSync(f.memoryFile, 'utf8'));
-    assert.ok(Date.now() - startedAt >= 100, 'read should wait until the competing transaction lock is released');
+    const elapsed = Date.now() - startedAt;
+    assert.ok(elapsed >= 150, `read should wait for lock release; waited ${elapsed}ms`);
     assert.equal(result, '[{"id":"before"}]\\n');
+    assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
   } finally {
+    if (child && child.exitCode === null) child.kill('SIGKILL');
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
