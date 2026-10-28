@@ -23,7 +23,7 @@ function durableIdempotencyRepository() {
   const scopedKey = (key, tenantId) => JSON.stringify([tenantId || 'local', key]);
   return {
     records,
-    async begin(args) {
+    begin(args) {
       const key = args.operationId;
       const storageKey = scopedKey(key, args.tenantId);
       const existing = records.get(storageKey);
@@ -45,11 +45,11 @@ function durableIdempotencyRepository() {
       records.set(storageKey, record);
       return { created: true, key, record: { ...record } };
     },
-    async findByKey(key, { tenantId } = {}) {
+    findByKey(key, { tenantId } = {}) {
       const record = records.get(scopedKey(key, tenantId));
       return record ? { ...record } : null;
     },
-    async complete(key, result, { tenantId } = {}) {
+    complete(key, result, { tenantId } = {}) {
       const storageKey = scopedKey(key, tenantId);
       const record = records.get(storageKey);
       if (!record) throw new Error('Idempotency record not found');
@@ -59,7 +59,7 @@ function durableIdempotencyRepository() {
       records.set(storageKey, record);
       return { ...record };
     },
-    async fail(key, error, { tenantId } = {}) {
+    fail(key, error, { tenantId } = {}) {
       const storageKey = scopedKey(key, tenantId);
       const record = records.get(storageKey);
       if (!record) return null;
@@ -69,7 +69,7 @@ function durableIdempotencyRepository() {
       record.completedAt = new Date().toISOString();
       return { ...record };
     },
-    async delete(key, { tenantId } = {}) {
+    delete(key, { tenantId } = {}) {
       return records.delete(scopedKey(key, tenantId));
     }
   };
