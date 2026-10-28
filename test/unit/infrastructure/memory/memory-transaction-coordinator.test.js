@@ -154,7 +154,7 @@ test('read waits for another process transaction lock before reading shared file
       `fs.writeFileSync(process.env.SIGNAL_FILE, 'ready');`,
       `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);`,
       `c.releaseLock(owner);`
-    ].join('\\n');
+    ].join('\n');
     child = spawn(process.execPath, ['-e', script], {
       stdio: ['ignore', 'ignore', 'pipe'],
       env: {
@@ -182,7 +182,7 @@ test('read waits for another process transaction lock before reading shared file
     const result = f.coordinator.read(() => fs.readFileSync(f.memoryFile, 'utf8'));
     const elapsed = Date.now() - startedAt;
     assert.ok(elapsed >= 150, `read should wait for lock release; waited ${elapsed}ms`);
-    assert.equal(result, '[{"id":"before"}]\\n');
+    assert.equal(result, '[{"id":"before"}]\n');
     assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
   } finally {
     if (child && child.exitCode === null) child.kill('SIGKILL');
