@@ -169,6 +169,28 @@ class MemoryTransactionCoordinator {
     atomicWrite(this.journalFile, JSON.stringify(journal, null, 2) + '\n');
   }
 
+  read(operation) {
+    if (typeof operation !== 'function') throw new TypeError('operation must be a function');
+    const deadline = Date.now() + this.lockTimeoutMs;
+    let owner;
+    while (!owner) {
+      try {
+        owner = this.acquireLock();
+      } catch (error) {
+        if (error.code !== 'MEMORY_TRANSACTION_LOCKED' || Date.now() >= deadline) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    try {
+      // Readers must not observe the memory/audit pair between its writes.
+      // Recover any abandoned prepared journal while holding the same lock.
+      this._recoverUnlocked();
+      return operation();
+    } finally {
+      this.releaseLock(owner);
+    }
+  }
+
   run(operation) {
     if (typeof operation !== 'function') throw new TypeError('operation must be a function');
     const owner = this.acquireLock();
