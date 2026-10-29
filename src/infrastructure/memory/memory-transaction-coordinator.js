@@ -113,15 +113,33 @@ class MemoryTransactionCoordinator {
       token: crypto.randomUUID(), pid: process.pid, hostname: os.hostname(),
       acquiredAt: new Date().toISOString()
     };
+    let createdLockIdentity = null;
     try {
       const fd = fs.openSync(this.lockFile, 'wx', 0o600);
       try {
+        const stat = fs.fstatSync(fd);
+        createdLockIdentity = { dev: stat.dev, ino: stat.ino };
         fs.writeFileSync(fd, JSON.stringify(owner) + '\n', 'utf8');
         fs.fsyncSync(fd);
       } finally { fs.closeSync(fd); }
       syncDirectory(path.dirname(this.lockFile));
       return owner;
     } catch (error) {
+      // Clean up only the inode created here if initialization or directory
+      // sync fails; never leave an unusable lock or unlink a replacement.
+      if (createdLockIdentity) {
+        try {
+          const current = fs.lstatSync(this.lockFile);
+          if (current.dev === createdLockIdentity.dev && current.ino === createdLockIdentity.ino) {
+            fs.unlinkSync(this.lockFile);
+            syncDirectory(path.dirname(this.lockFile));
+          }
+        } catch (cleanupError) {
+          if (!['ENOENT', 'EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR'].includes(cleanupError.code)) {
+            error.cleanupError = cleanupError;
+          }
+        }
+      }
       if (error.code !== 'EEXIST') throw error;
       let current;
       try { current = JSON.parse(fs.readFileSync(this.lockFile, 'utf8')); } catch {}
