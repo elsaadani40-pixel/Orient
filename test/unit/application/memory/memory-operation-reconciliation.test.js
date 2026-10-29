@@ -135,6 +135,16 @@ test('memory.delete reconciliation reports completion only when its durable arch
     fixture.service.reconcileToolOperation('memory.delete', { id: created.id }, deleteContext),
     { status: 'completed', result: true }
   );
+  assert.deepEqual(
+    fixture.service.reconcileToolOperation('memory.delete', { id: 'different-memory-id' }, deleteContext),
+    { status: 'unknown', reason: 'delete_receipt_not_found_for_target' },
+    'a receipt for another memory must not prove this target was deleted'
+  );
+  assert.deepEqual(
+    fixture.service.reconcileToolOperation('memory.delete', {}, deleteContext),
+    { status: 'unknown', reason: 'delete_target_id_missing' },
+    'reconciliation without a target ID must fail closed'
+  );
   assert.equal(
     fixture.auditRepository.findByOperationId('operation-delete-a', 'tenant-a', 'personal')[0].action,
     'memory.archived'
