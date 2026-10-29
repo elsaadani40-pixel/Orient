@@ -142,7 +142,33 @@ class MemoryTransactionCoordinator {
       }
       if (error.code !== 'EEXIST') throw error;
       let current;
-      try { current = JSON.parse(fs.readFileSync(this.lockFile, 'utf8')); } catch {}
+      let lockStat;
+      try {
+        current = JSON.parse(fs.readFileSync(this.lockFile, 'utf8'));
+      } catch {
+        // A process can die after exclusive creation but before its owner record
+        // reaches disk. Only quarantine an unreadable lock after the configured
+        // timeout, and only if the same inode is still present at rename time.
+        try { lockStat = fs.lstatSync(this.lockFile); } catch (statError) {
+          if (statError.code === 'ENOENT') return this.acquireLock();
+          throw statError;
+        }
+        if (Date.now() - lockStat.mtimeMs > this.lockTimeoutMs) {
+          const quarantine = `${this.lockFile}.stale.${crypto.randomUUID()}`;
+          try {
+            const latest = fs.lstatSync(this.lockFile);
+            if (latest.dev === lockStat.dev && latest.ino === lockStat.ino &&
+                Date.now() - latest.mtimeMs > this.lockTimeoutMs) {
+              fs.renameSync(this.lockFile, quarantine);
+              try { fs.unlinkSync(quarantine); } catch {}
+              return this.acquireLock();
+            }
+          } catch (staleError) {
+            if (staleError.code === 'ENOENT') return this.acquireLock();
+            throw staleError;
+          }
+        }
+      }
       if (current && current.hostname === os.hostname() &&
           Number.isInteger(current.pid) && current.pid > 0) {
         let alive = true;
