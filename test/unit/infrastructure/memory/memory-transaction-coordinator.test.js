@@ -215,6 +215,24 @@ test('failed transaction lock initialization removes only its own unusable lock 
 });
 
 
+test('stale lock recovery refuses to race another recovery owner', () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(f.coordinator.lockFile, '', { mode: 0o600 });
+    const stale = new Date(Date.now() - f.coordinator.lockTimeoutMs - 5000);
+    fs.utimesSync(f.coordinator.lockFile, stale, stale);
+    fs.mkdirSync(`${f.coordinator.lockFile}.recovery`, { mode: 0o700 });
+
+    assert.throws(
+      () => f.coordinator.acquireLock(),
+      error => error.code === 'MEMORY_TRANSACTION_LOCKED'
+    );
+    assert.equal(fs.existsSync(f.coordinator.lockFile), true);
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
 test('stale malformed transaction lock left by a crashed initializer can be recovered', () => {
   const f = fixture();
   try {
