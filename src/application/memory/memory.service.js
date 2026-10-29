@@ -286,50 +286,53 @@ class MemoryService {
 
     const operation = toolName === 'memory.delete' ? 'delete' : 'write';
     const authorization = this.authorize(context, operation);
-    const events = this.auditRepository.findByOperationId(
-      operationId,
-      authorization.tenantId,
-      authorization.scope
-    );
 
-    // The coordinator's startup recovery runs before tools become available:
-    // a prepared transaction is rolled back from both files, while a committed
-    // transaction retains its audit receipt. Missing evidence is not treated as
-    // success; the executor must fail closed rather than replay an uncertain step.
-    if (!events.length) {
-      return {
-        status: 'unknown',
-        reason: 'no_committed_receipt_for_operation'
-      };
-    }
-
-    if (toolName === 'memory.delete') {
-      const archived = events.find(event => event.action === 'memory.archived');
-      return archived
-        ? { status: 'completed', result: true }
-        : { status: 'unknown', reason: 'delete_receipt_not_found' };
-    }
-
-    if (toolName === 'memory.add') {
-      const mutation = [...events].reverse().find(event =>
-        ['memory.created', 'memory.reinforced'].includes(event.action) &&
-        typeof event.memoryId === 'string' &&
-        event.memoryId
-      );
-      if (!mutation) {
-        return { status: 'unknown', reason: 'add_result_receipt_not_found' };
-      }
-      const memory = this.repository.findById(
-        mutation.memoryId,
+    // Reconciliation reads the audit receipt and memory record as one consistent
+    // snapshot. Without the shared lock, a concurrent mutation could expose an
+    // intermediate memory/audit pair and cause an unsafe replay decision.
+    return this.transactionCoordinator.read(() => {
+      const events = this.auditRepository.findByOperationId(
+        operationId,
         authorization.tenantId,
         authorization.scope
       );
-      return memory
-        ? { status: 'completed', result: normalizeMemory(memory) }
-        : { status: 'unknown', reason: 'committed_memory_record_missing' };
-    }
 
-    return { status: 'unknown', reason: 'unsupported_memory_operation' };
+      // Missing evidence is not treated as success; the executor must fail closed.
+      if (!events.length) {
+        return {
+          status: 'unknown',
+          reason: 'no_committed_receipt_for_operation'
+        };
+      }
+
+      if (toolName === 'memory.delete') {
+        const archived = events.find(event => event.action === 'memory.archived');
+        return archived
+          ? { status: 'completed', result: true }
+          : { status: 'unknown', reason: 'delete_receipt_not_found' };
+      }
+
+      if (toolName === 'memory.add') {
+        const mutation = [...events].reverse().find(event =>
+          ['memory.created', 'memory.reinforced'].includes(event.action) &&
+          typeof event.memoryId === 'string' &&
+          event.memoryId
+        );
+        if (!mutation) {
+          return { status: 'unknown', reason: 'add_result_receipt_not_found' };
+        }
+        const memory = this.repository.findById(
+          mutation.memoryId,
+          authorization.tenantId,
+          authorization.scope
+        );
+        return memory
+          ? { status: 'completed', result: normalizeMemory(memory) }
+          : { status: 'unknown', reason: 'committed_memory_record_missing' };
+      }
+
+      return { status: 'unknown', reason: 'unsupported_memory_operation' };
+    });
   }
 
   findExact({ tenantId, scope, type, text }) {
