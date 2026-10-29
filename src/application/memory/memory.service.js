@@ -306,10 +306,17 @@ class MemoryService {
       }
 
       if (toolName === 'memory.delete') {
-        const archived = events.find(event => event.action === 'memory.archived');
+        const requestedMemoryId = typeof input === 'string' ? input : input?.id;
+        if (typeof requestedMemoryId !== 'string' || !requestedMemoryId) {
+          return { status: 'unknown', reason: 'delete_target_id_missing' };
+        }
+        const archived = events.find(event =>
+          event.action === 'memory.archived' &&
+          event.memoryId === requestedMemoryId
+        );
         return archived
           ? { status: 'completed', result: true }
-          : { status: 'unknown', reason: 'delete_receipt_not_found' };
+          : { status: 'unknown', reason: 'delete_receipt_not_found_for_target' };
       }
 
       if (toolName === 'memory.add') {
