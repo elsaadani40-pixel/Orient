@@ -108,6 +108,39 @@ class MemoryTransactionCoordinator {
     }
   }
 
+  quarantineStaleLock(expectedStat, isStale) {
+    // Only one process may inspect and quarantine a stale lock at a time.
+    // The recovery directory is itself acquired atomically with mkdir.
+    const recoveryLock = `${this.lockFile}.recovery`;
+    try {
+      fs.mkdirSync(recoveryLock, { mode: 0o700 });
+    } catch (error) {
+      if (error.code === 'EEXIST') return false;
+      throw error;
+    }
+
+    try {
+      let currentStat;
+      try { currentStat = fs.lstatSync(this.lockFile); } catch (error) {
+        if (error.code === 'ENOENT') return true;
+        throw error;
+      }
+      if (currentStat.dev !== expectedStat.dev || currentStat.ino !== expectedStat.ino ||
+          !isStale(currentStat)) return false;
+
+      const quarantine = `${this.lockFile}.stale.${crypto.randomUUID()}`;
+      // Stale-lock removals are serialized by recoveryLock, so another
+      // recovery contender cannot replace the path between validation and rename.
+      fs.renameSync(this.lockFile, quarantine);
+      try { fs.unlinkSync(quarantine); } catch {}
+      return true;
+    } finally {
+      try { fs.rmdirSync(recoveryLock); } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+  }
+
   acquireLock() {
     const owner = {
       token: crypto.randomUUID(), pid: process.pid, hostname: os.hostname(),
@@ -119,7 +152,7 @@ class MemoryTransactionCoordinator {
       try {
         const stat = fs.fstatSync(fd);
         createdLockIdentity = { dev: stat.dev, ino: stat.ino };
-        fs.writeFileSync(fd, JSON.stringify(owner) + '\n', 'utf8');
+        fs.writeFileSync(fd, JSON.stringify(owner) + '\\n', 'utf8');
         fs.fsyncSync(fd);
       } finally { fs.closeSync(fd); }
       syncDirectory(path.dirname(this.lockFile));
@@ -147,25 +180,17 @@ class MemoryTransactionCoordinator {
         current = JSON.parse(fs.readFileSync(this.lockFile, 'utf8'));
       } catch {
         // A process can die after exclusive creation but before its owner record
-        // reaches disk. Only quarantine an unreadable lock after the configured
-        // timeout, and only if the same inode is still present at rename time.
+        // reaches disk. Serialize stale reclamation to prevent competing
+        // recoverers from renaming one another's replacement lock.
         try { lockStat = fs.lstatSync(this.lockFile); } catch (statError) {
           if (statError.code === 'ENOENT') return this.acquireLock();
           throw statError;
         }
-        if (Date.now() - lockStat.mtimeMs > this.lockTimeoutMs) {
-          const quarantine = `${this.lockFile}.stale.${crypto.randomUUID()}`;
-          try {
-            const latest = fs.lstatSync(this.lockFile);
-            if (latest.dev === lockStat.dev && latest.ino === lockStat.ino &&
-                Date.now() - latest.mtimeMs > this.lockTimeoutMs) {
-              fs.renameSync(this.lockFile, quarantine);
-              try { fs.unlinkSync(quarantine); } catch {}
-              return this.acquireLock();
-            }
-          } catch (staleError) {
-            if (staleError.code === 'ENOENT') return this.acquireLock();
-            throw staleError;
+        const malformedLockIsStale = stat =>
+          Date.now() - stat.mtimeMs > this.lockTimeoutMs;
+        if (malformedLockIsStale(lockStat)) {
+          if (this.quarantineStaleLock(lockStat, malformedLockIsStale)) {
+            return this.acquireLock();
           }
         }
       }
@@ -177,14 +202,21 @@ class MemoryTransactionCoordinator {
           else if (probeError.code !== 'EPERM') throw probeError;
         }
         if (!alive) {
-          const quarantine = `${this.lockFile}.stale.${crypto.randomUUID()}`;
-          try {
-            fs.renameSync(this.lockFile, quarantine);
-            try { fs.unlinkSync(quarantine); } catch {}
+          try { lockStat = fs.lstatSync(this.lockFile); } catch (statError) {
+            if (statError.code === 'ENOENT') return this.acquireLock();
+            throw statError;
+          }
+          const deadOwnerIsStale = () => {
+            let latest;
+            try { latest = JSON.parse(fs.readFileSync(this.lockFile, 'utf8')); } catch { return false; }
+            if (latest.token !== current.token || latest.pid !== current.pid ||
+                latest.hostname !== current.hostname) return false;
+            try { process.kill(latest.pid, 0); return false; } catch (probeError) {
+              return probeError.code === 'ESRCH';
+            }
+          };
+          if (this.quarantineStaleLock(lockStat, deadOwnerIsStale)) {
             return this.acquireLock();
-          } catch (renameError) {
-            if (renameError.code === 'ENOENT') return this.acquireLock();
-            throw renameError;
           }
         }
       }
