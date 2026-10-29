@@ -115,8 +115,27 @@ class MemoryTransactionCoordinator {
     try {
       fs.mkdirSync(recoveryLock, { mode: 0o700 });
     } catch (error) {
-      if (error.code === 'EEXIST') return false;
-      throw error;
+      if (error.code !== 'EEXIST') throw error;
+
+      // Never delete or rename an abandoned recovery directory automatically:
+      // another process could have created a replacement after any lstat check.
+      // Surface a distinct fail-closed error once the marker is old enough to
+      // warrant operator inspection; this is diagnostic, not proof of ownership.
+      let recoveryStat;
+      try {
+        recoveryStat = fs.lstatSync(recoveryLock);
+      } catch (statError) {
+        if (statError.code === 'ENOENT') return false;
+        throw statError;
+      }
+      if (Date.now() - recoveryStat.mtimeMs > this.lockTimeoutMs) {
+        const abandoned = new Error(
+          'Memory transaction recovery marker is old; refusing unsafe automatic cleanup. Verify no recovery process is active before removing it.'
+        );
+        abandoned.code = 'MEMORY_TRANSACTION_RECOVERY_LOCK_ABANDONED';
+        throw abandoned;
+      }
+      return false;
     }
 
     try {
