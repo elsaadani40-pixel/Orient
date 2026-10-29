@@ -54,6 +54,14 @@ test('memory.add reconciliation returns the committed memory from its tenant-sco
     'an operation receipt must not suppress a different requested memory payload'
   );
   assert.deepEqual(
+    fixture.service.reconcileToolOperation('memory.add', {
+      text: 'reconciliation receipt test',
+      type: 'fact'
+    }, context),
+    { status: 'unknown', reason: 'add_receipt_target_mismatch' },
+    'an operation receipt must not suppress a request for the same text with a different memory type'
+  );
+  assert.deepEqual(
     fixture.service.reconcileToolOperation('memory.add', {}, context),
     { status: 'unknown', reason: 'add_target_text_missing' },
     'reconciliation without a target payload must fail closed'
