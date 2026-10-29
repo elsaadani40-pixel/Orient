@@ -191,6 +191,26 @@ class MemoryTransactionCoordinator {
     }
   }
 
+  // Reconciliation must not wait behind a live mutation: while the writer
+  // holds the lock, its memory/audit pair is intentionally incomplete. Return
+  // an explicit unavailable snapshot so callers can fail closed as unknown.
+  tryRead(operation) {
+    if (typeof operation !== 'function') throw new TypeError('operation must be a function');
+    let owner;
+    try {
+      owner = this.acquireLock();
+    } catch (error) {
+      if (error.code === 'MEMORY_TRANSACTION_LOCKED') return { acquired: false };
+      throw error;
+    }
+    try {
+      this._recoverUnlocked();
+      return { acquired: true, value: operation() };
+    } finally {
+      this.releaseLock(owner);
+    }
+  }
+
   run(operation) {
     if (typeof operation !== 'function') throw new TypeError('operation must be a function');
     const owner = this.acquireLock();
