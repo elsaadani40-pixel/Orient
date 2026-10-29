@@ -233,6 +233,28 @@ test('stale lock recovery refuses to race another recovery owner', () => {
   }
 });
 
+test('abandoned recovery marker fails closed with an actionable diagnostic', () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(f.coordinator.lockFile, '', { mode: 0o600 });
+    const stale = new Date(Date.now() - f.coordinator.lockTimeoutMs - 5000);
+    fs.utimesSync(f.coordinator.lockFile, stale, stale);
+    const recoveryPath = `${f.coordinator.lockFile}.recovery`;
+    fs.mkdirSync(recoveryPath, { mode: 0o700 });
+    fs.utimesSync(recoveryPath, stale, stale);
+
+    assert.throws(
+      () => f.coordinator.acquireLock(),
+      error => error.code === 'MEMORY_TRANSACTION_RECOVERY_LOCK_ABANDONED' &&
+        /refusing unsafe automatic cleanup/.test(error.message)
+    );
+    assert.equal(fs.existsSync(recoveryPath), true, 'the marker must not be removed automatically');
+    assert.equal(fs.existsSync(f.coordinator.lockFile), true, 'the original lock must remain untouched');
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
 test('stale malformed transaction lock left by a crashed initializer can be recovered', () => {
   const f = fixture();
   try {
