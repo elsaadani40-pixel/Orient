@@ -290,7 +290,7 @@ class MemoryService {
     // Reconciliation reads the audit receipt and memory record as one consistent
     // snapshot. Without the shared lock, a concurrent mutation could expose an
     // intermediate memory/audit pair and cause an unsafe replay decision.
-    return this.transactionCoordinator.read(() => {
+    const snapshot = this.transactionCoordinator.tryRead(() => {
       const events = this.auditRepository.findByOperationId(
         operationId,
         authorization.tenantId,
@@ -333,6 +333,9 @@ class MemoryService {
 
       return { status: 'unknown', reason: 'unsupported_memory_operation' };
     });
+    return snapshot.acquired
+      ? snapshot.value
+      : { status: 'unknown', reason: 'memory_transaction_in_progress' };
   }
 
   findExact({ tenantId, scope, type, text }) {
