@@ -189,3 +189,27 @@ test('read waits for another process transaction lock before reading shared file
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
+
+
+test('failed transaction lock initialization removes only its own unusable lock file', () => {
+  const f = fixture();
+  const originalFsync = fs.fsyncSync;
+  let failed = false;
+  try {
+    fs.fsyncSync = function (...args) {
+      if (!failed) {
+        failed = true;
+        throw new Error('simulated lock metadata fsync failure');
+      }
+      return originalFsync.apply(this, args);
+    };
+    assert.throws(
+      () => f.coordinator.acquireLock(),
+      /simulated lock metadata fsync failure/
+    );
+    assert.equal(fs.existsSync(f.coordinator.lockFile), false);
+  } finally {
+    fs.fsyncSync = originalFsync;
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
