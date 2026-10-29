@@ -213,3 +213,20 @@ test('failed transaction lock initialization removes only its own unusable lock 
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
+
+
+test('stale malformed transaction lock left by a crashed initializer can be recovered', () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(f.coordinator.lockFile, '', { mode: 0o600 });
+    const stale = new Date(Date.now() - f.coordinator.lockTimeoutMs - 5000);
+    fs.utimesSync(f.coordinator.lockFile, stale, stale);
+    const owner = f.coordinator.acquireLock();
+    assert.ok(owner.token);
+    assert.equal(JSON.parse(fs.readFileSync(f.coordinator.lockFile, 'utf8')).token, owner.token);
+    f.coordinator.releaseLock(owner);
+    assert.equal(fs.existsSync(f.coordinator.lockFile), false);
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
