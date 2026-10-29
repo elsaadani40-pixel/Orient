@@ -320,6 +320,14 @@ class MemoryService {
       }
 
       if (toolName === 'memory.add') {
+        const requestedText = typeof input === 'string'
+          ? input.trim()
+          : typeof input?.text === 'string'
+            ? input.text.trim()
+            : '';
+        if (!requestedText) {
+          return { status: 'unknown', reason: 'add_target_text_missing' };
+        }
         const mutation = [...events].reverse().find(event =>
           ['memory.created', 'memory.reinforced'].includes(event.action) &&
           typeof event.memoryId === 'string' &&
@@ -333,9 +341,16 @@ class MemoryService {
           authorization.tenantId,
           authorization.scope
         );
-        return memory
-          ? { status: 'completed', result: normalizeMemory(memory) }
-          : { status: 'unknown', reason: 'committed_memory_record_missing' };
+        if (!memory) {
+          return { status: 'unknown', reason: 'committed_memory_record_missing' };
+        }
+        // Operation IDs are correlation keys, not proof that a receipt matches
+        // the requested payload. Fail closed if a reused/colliding ID points to
+        // a different memory instead of suppressing the requested add.
+        if (memory.text !== requestedText) {
+          return { status: 'unknown', reason: 'add_receipt_target_mismatch' };
+        }
+        return { status: 'completed', result: normalizeMemory(memory) };
       }
 
       return { status: 'unknown', reason: 'unsupported_memory_operation' };
