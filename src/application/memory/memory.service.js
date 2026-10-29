@@ -347,7 +347,10 @@ class MemoryService {
         // Operation IDs are correlation keys, not proof that a receipt matches
         // the requested payload. Fail closed if a reused/colliding ID points to
         // a different memory instead of suppressing the requested add.
-        if (memory.text !== requestedText) {
+        const requestedType = input && typeof input === 'object' && typeof input.type === 'string'
+          ? input.type
+          : 'note';
+        if (memory.text !== requestedText || memory.type !== requestedType) {
           return { status: 'unknown', reason: 'add_receipt_target_mismatch' };
         }
         return { status: 'completed', result: normalizeMemory(memory) };
