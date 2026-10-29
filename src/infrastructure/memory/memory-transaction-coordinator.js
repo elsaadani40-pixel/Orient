@@ -152,7 +152,7 @@ class MemoryTransactionCoordinator {
       try {
         const stat = fs.fstatSync(fd);
         createdLockIdentity = { dev: stat.dev, ino: stat.ino };
-        fs.writeFileSync(fd, JSON.stringify(owner) + '\\n', 'utf8');
+        fs.writeFileSync(fd, JSON.stringify(owner) + '\n', 'utf8');
         fs.fsyncSync(fd);
       } finally { fs.closeSync(fd); }
       syncDirectory(path.dirname(this.lockFile));
