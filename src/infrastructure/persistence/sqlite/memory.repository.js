@@ -117,13 +117,20 @@ class SqliteMemoryAuditRepository {
         record.occurredAt, JSON.stringify(record)]
     );
     if (this.eventSink) {
-      try {
-        this.eventSink(record);
-        this.lastEventSinkError = null;
-      } catch (error) {
-        // The durable database audit record is authoritative; the in-memory
-        // observation stream is best-effort and must not undo the transaction.
-        this.lastEventSinkError = error;
+      const publish = () => {
+        try {
+          this.eventSink(record);
+          this.lastEventSinkError = null;
+        } catch (error) {
+          // The durable database audit record is authoritative; the in-memory
+          // observation stream is best-effort and must not undo the transaction.
+          this.lastEventSinkError = error;
+        }
+      };
+      if (typeof this.db.afterCommit === 'function') {
+        this.db.afterCommit(publish);
+      } else {
+        publish();
       }
     }
     return record;
