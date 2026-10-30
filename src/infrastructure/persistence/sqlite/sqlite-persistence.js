@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const SqliteDatabase = require('./sqlite-database');
 const { SqliteWorkflowRepository, SqliteWorkflowLeaseRepository } = require('./workflow.repository');
+const { SqliteMemoryRepository, SqliteMemoryAuditRepository } = require('./memory.repository');
 
 class SqliteExecutionRepository {
   constructor(db) { this.db = db; }
@@ -375,6 +376,8 @@ class SqlitePersistence {
     this.approvals = new SqliteApprovalRepository(this.db);
     this.workflows = new SqliteWorkflowRepository(this.db);
     this.workflowLeases = new SqliteWorkflowLeaseRepository(this.db);
+    this.memory = new SqliteMemoryRepository(this.db);
+    this.memoryAudit = new SqliteMemoryAuditRepository(this.db);
   }
 
   close() {

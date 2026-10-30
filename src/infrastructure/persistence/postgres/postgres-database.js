@@ -114,6 +114,37 @@ const MIGRATIONS = [
       ON owner_chat_messages(owner_id, task_id) WHERE task_id IS NOT NULL;
   `},
 
+  {version:9,sql:`
+    CREATE TABLE IF NOT EXISTS memories (
+      memory_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      payload JSONB NOT NULL,
+      PRIMARY KEY (tenant_id, memory_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_memories_tenant_scope_created
+      ON memories(tenant_id, scope, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memories_active_semantic
+      ON memories(tenant_id, scope, (payload->>'semanticKey'), updated_at DESC)
+      WHERE payload->>'state'='active' AND payload->>'semanticKey' IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS memory_audit (
+      event_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      memory_id TEXT,
+      operation_id TEXT,
+      occurred_at TIMESTAMPTZ NOT NULL,
+      payload JSONB NOT NULL,
+      PRIMARY KEY (tenant_id, event_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_audit_tenant_memory
+      ON memory_audit(tenant_id, scope, memory_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_memory_audit_tenant_operation
+      ON memory_audit(tenant_id, scope, operation_id, occurred_at)
+      WHERE operation_id IS NOT NULL;
+  `},
   {version:8,sql:`
     CREATE TABLE IF NOT EXISTS owner_work_profiles (
       owner_id TEXT PRIMARY KEY,
@@ -141,7 +172,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8)',[1,2,3,4,5,6,7,8]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9)',[1,2,3,4,5,6,7,8,9]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);

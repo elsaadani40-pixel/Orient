@@ -115,6 +115,31 @@ class SqliteDatabase {
         payload TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_workflow_leases_expiry ON workflow_leases(expires_at);
+      CREATE TABLE IF NOT EXISTS memories (
+        memory_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, memory_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memories_tenant_scope_created
+        ON memories(tenant_id, scope, created_at DESC);
+      CREATE TABLE IF NOT EXISTS memory_audit (
+        event_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        memory_id TEXT,
+        operation_id TEXT,
+        occurred_at TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, event_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_tenant_memory
+        ON memory_audit(tenant_id, scope, memory_id, occurred_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_tenant_operation
+        ON memory_audit(tenant_id, scope, operation_id, occurred_at);
       CREATE TABLE IF NOT EXISTS approvals (
         approval_id TEXT PRIMARY KEY,
         execution_id TEXT NOT NULL,
