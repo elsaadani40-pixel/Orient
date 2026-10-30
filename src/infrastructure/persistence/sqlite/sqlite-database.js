@@ -36,12 +36,23 @@ class SqliteDatabase {
     return this.connection.exec(sql);
   }
 
+  afterCommit(callback) {
+    if (typeof callback !== 'function') throw new TypeError('afterCommit requires a callback');
+    if (this.afterCommitCallbacks) {
+      this.afterCommitCallbacks.push(callback);
+      return;
+    }
+    callback();
+  }
+
   transaction(workOrStatements) {
     const callback = typeof workOrStatements === 'function' ? workOrStatements : null;
     const statements = callback ? null : workOrStatements;
     if (!callback && (!Array.isArray(statements) || !statements.length)) return;
 
     this.connection.exec('BEGIN IMMEDIATE;');
+    const callbacks = [];
+    this.afterCommitCallbacks = callbacks;
     try {
       if (callback) {
         const result = callback(this);
@@ -52,6 +63,12 @@ class SqliteDatabase {
           );
         }
         this.connection.exec('COMMIT;');
+        this.afterCommitCallbacks = null;
+        for (const callback of callbacks) {
+          try { callback(); } catch (error) {
+            this.lastAfterCommitError = error;
+          }
+        }
         return result;
       }
 
