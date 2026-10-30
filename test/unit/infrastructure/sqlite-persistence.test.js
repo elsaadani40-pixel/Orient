@@ -276,3 +276,40 @@ test('SQLite memory mutation and audit receipt commit or roll back together', ()
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('SQLite audit event sink runs only after commit and never publishes rolled-back events', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-audit-outbox-'));
+  const filePath = path.join(directory, 'orient.db');
+  const persistence = new SqlitePersistence({ filePath });
+  const published = [];
+  persistence.memoryAudit.setEventSink(event => published.push(event.id));
+
+  try {
+    assert.throws(() => persistence.db.transaction(() => {
+      persistence.memoryAudit.append({
+        id: 'audit-not-published',
+        tenantId: 'tenant-outbox',
+        scope: 'personal',
+        memoryId: 'memory-outbox',
+        action: 'memory.created'
+      });
+      throw new Error('rollback after audit append');
+    }), /rollback after audit append/);
+    assert.deepEqual(published, []);
+
+    persistence.db.transaction(() => {
+      persistence.memoryAudit.append({
+        id: 'audit-published-after-commit',
+        tenantId: 'tenant-outbox',
+        scope: 'personal',
+        memoryId: 'memory-outbox',
+        action: 'memory.created'
+      });
+    });
+    assert.deepEqual(published, ['audit-published-after-commit']);
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
