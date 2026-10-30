@@ -205,12 +205,15 @@ class MemoryTransactionCoordinator {
           if (statError.code === 'ENOENT') return this.acquireLock();
           throw statError;
         }
-        const malformedLockIsStale = stat =>
-          Date.now() - stat.mtimeMs > this.lockTimeoutMs;
-        if (malformedLockIsStale(lockStat)) {
-          if (this.quarantineStaleLock(lockStat, malformedLockIsStale)) {
-            return this.acquireLock();
-          }
+        if (Date.now() - lockStat.mtimeMs > this.lockTimeoutMs) {
+          // A malformed lock may belong to an initializer that was paused after
+          // O_EXCL creation but before writing its owner record. Age alone cannot
+          // prove that process is dead, so never reclaim this lock automatically.
+          const abandoned = new Error(
+            'Memory transaction lock is old and has no valid owner record; refusing unsafe automatic reclamation.'
+          );
+          abandoned.code = 'MEMORY_TRANSACTION_MALFORMED_LOCK_ABANDONED';
+          throw abandoned;
         }
       }
       if (current && current.hostname === os.hostname() &&
