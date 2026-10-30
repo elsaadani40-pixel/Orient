@@ -255,17 +255,19 @@ test('abandoned recovery marker fails closed with an actionable diagnostic', () 
   }
 });
 
-test('stale malformed transaction lock left by a crashed initializer can be recovered', () => {
+test('stale malformed transaction lock fails closed instead of reclaiming a possibly live initializer', () => {
   const f = fixture();
   try {
     fs.writeFileSync(f.coordinator.lockFile, '', { mode: 0o600 });
     const stale = new Date(Date.now() - f.coordinator.lockTimeoutMs - 5000);
     fs.utimesSync(f.coordinator.lockFile, stale, stale);
-    const owner = f.coordinator.acquireLock();
-    assert.ok(owner.token);
-    assert.equal(JSON.parse(fs.readFileSync(f.coordinator.lockFile, 'utf8')).token, owner.token);
-    f.coordinator.releaseLock(owner);
-    assert.equal(fs.existsSync(f.coordinator.lockFile), false);
+
+    assert.throws(
+      () => f.coordinator.acquireLock(),
+      error => error.code === 'MEMORY_TRANSACTION_MALFORMED_LOCK_ABANDONED'
+    );
+    assert.equal(fs.readFileSync(f.coordinator.lockFile, 'utf8'), '');
+    assert.equal(fs.existsSync(`${f.coordinator.lockFile}.recovery`), false);
   } finally {
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
