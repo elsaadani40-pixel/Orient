@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -159,6 +160,9 @@ class PostgresDatabase {
   constructor({pool,schema=null}={}) {
     if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
     this.pool=pool; this.schema=schema;
+    // Route every repository query in an async transaction to its pinned client.
+    // AsyncLocalStorage keeps concurrent requests isolated without mutable global client state.
+    this.transactionContext = new AsyncLocalStorage();
   }
   async initialize() {
     const client=await this.pool.connect();
@@ -182,8 +186,35 @@ class PostgresDatabase {
       await client.query('COMMIT');
     } catch(error){try{await client.query('ROLLBACK');}catch{}throw error;} finally{client.release();}
   }
-  async query(text,values=[]){return this.pool.query(text,values);}
-  async transaction(work){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await work(client);await client.query('COMMIT');return result;}catch(error){try{await client.query('ROLLBACK');}catch{}throw error;}finally{client.release();}}
+  async query(text, values = []) {
+    const client = this.transactionContext.getStore();
+    return client
+      ? client.query(text, values)
+      : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    if (typeof work !== 'function') {
+      throw new TypeError('transaction(work) requires a callback');
+    }
+
+    // Nested repository/service calls participate in the existing transaction.
+    const activeClient = this.transactionContext.getStore();
+    if (activeClient) return work(activeClient);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await this.transactionContext.run(client, () => work(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   static json(value){return value===undefined?null:value;}
   static uuid(){return crypto.randomUUID();}
 }

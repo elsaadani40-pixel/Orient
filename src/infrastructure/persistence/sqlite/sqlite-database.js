@@ -36,10 +36,25 @@ class SqliteDatabase {
     return this.connection.exec(sql);
   }
 
-  transaction(statements) {
-    if (!Array.isArray(statements) || !statements.length) return;
+  transaction(workOrStatements) {
+    const callback = typeof workOrStatements === 'function' ? workOrStatements : null;
+    const statements = callback ? null : workOrStatements;
+    if (!callback && (!Array.isArray(statements) || !statements.length)) return;
+
     this.connection.exec('BEGIN IMMEDIATE;');
     try {
+      if (callback) {
+        const result = callback(this);
+        if (result && typeof result.then === 'function') {
+          throw Object.assign(
+            new TypeError('SQLite transaction callbacks must be synchronous; async callbacks are not supported'),
+            { code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED' }
+          );
+        }
+        this.connection.exec('COMMIT;');
+        return result;
+      }
+
       for (const statement of statements) {
         if (typeof statement === 'string') {
           // String batches are reserved for static schema/test SQL. Dynamic
