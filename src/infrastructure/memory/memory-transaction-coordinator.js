@@ -248,19 +248,72 @@ class MemoryTransactionCoordinator {
     }
   }
 
+  acquireRecoveryGate({ wait = false } = {}) {
+    const recoveryLock = `${this.lockFile}.recovery`;
+    const deadline = Date.now() + this.lockTimeoutMs;
+    while (true) {
+      try {
+        fs.mkdirSync(recoveryLock, { mode: 0o700 });
+        return true;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+
+      let recoveryStat;
+      try {
+        recoveryStat = fs.lstatSync(recoveryLock);
+      } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+      if (Date.now() - recoveryStat.mtimeMs > this.lockTimeoutMs) {
+        const abandoned = new Error(
+          'Memory transaction recovery marker is old; refusing unsafe automatic cleanup. Verify no recovery process is active before removing it.'
+        );
+        abandoned.code = 'MEMORY_TRANSACTION_RECOVERY_LOCK_ABANDONED';
+        throw abandoned;
+      }
+      if (!wait) return false;
+      if (Date.now() >= deadline) {
+        const busy = new Error('Memory transaction recovery is in progress; refusing concurrent lock release');
+        busy.code = 'MEMORY_TRANSACTION_LOCKED';
+        throw busy;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+
+  releaseRecoveryGate() {
+    try {
+      fs.rmdirSync(`${this.lockFile}.recovery`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+
   releaseLock(owner) {
-    let current;
-    try { current = JSON.parse(fs.readFileSync(this.lockFile, 'utf8')); } catch (error) {
-      if (error.code === 'ENOENT') return;
-      throw error;
+    // Reclamation and release must serialize on the same gate. Otherwise a
+    // reclaimer can validate a stale inode, a releaser can unlink it, and a
+    // new owner can create a replacement at the path before the reclaimer's
+    // rename; rename would then move the replacement rather than the inode
+    // that was validated.
+    this.acquireRecoveryGate({ wait: true });
+    try {
+      let current;
+      try { current = JSON.parse(fs.readFileSync(this.lockFile, 'utf8')); } catch (error) {
+        if (error.code === 'ENOENT') return;
+        throw error;
+      }
+      if (!current || current.token !== owner.token) {
+        const error = new Error('Memory transaction lock ownership changed');
+        error.code = 'MEMORY_TRANSACTION_LOCK_OWNERSHIP_LOST';
+        throw error;
+      }
+      fs.unlinkSync(this.lockFile);
+      syncDirectory(path.dirname(this.lockFile));
+    } finally {
+      this.releaseRecoveryGate();
     }
-    if (!current || current.token !== owner.token) {
-      const error = new Error('Memory transaction lock ownership changed');
-      error.code = 'MEMORY_TRANSACTION_LOCK_OWNERSHIP_LOST';
-      throw error;
-    }
-    fs.unlinkSync(this.lockFile);
-    syncDirectory(path.dirname(this.lockFile));
   }
 
   writeJournal(journal) {
