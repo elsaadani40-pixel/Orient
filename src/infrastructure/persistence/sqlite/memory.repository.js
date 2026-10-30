@@ -96,6 +96,12 @@ class SqliteMemoryAuditRepository {
       throw new TypeError('SQLite database adapter is required');
     }
     this.db = db;
+    this.eventSink = null;
+    this.lastEventSinkError = null;
+  }
+
+  setEventSink(sink) {
+    this.eventSink = typeof sink === 'function' ? sink : null;
   }
 
   append(event) {
@@ -110,6 +116,16 @@ class SqliteMemoryAuditRepository {
         record.memoryId || null, record.operationId || null,
         record.occurredAt, JSON.stringify(record)]
     );
+    if (this.eventSink) {
+      try {
+        this.eventSink(record);
+        this.lastEventSinkError = null;
+      } catch (error) {
+        // The durable database audit record is authoritative; the in-memory
+        // observation stream is best-effort and must not undo the transaction.
+        this.lastEventSinkError = error;
+      }
+    }
     return record;
   }
 
