@@ -218,8 +218,13 @@ test('failed transaction lock initialization removes only its own unusable lock 
 test('stale lock recovery refuses to race another recovery owner', () => {
   const f = fixture();
   try {
-    fs.writeFileSync(f.coordinator.lockFile, '', { mode: 0o600 });
     const stale = new Date(Date.now() - f.coordinator.lockTimeoutMs - 5000);
+    fs.writeFileSync(f.coordinator.lockFile, JSON.stringify({
+      token: 'dead-owner',
+      pid: 2147483647,
+      hostname: os.hostname(),
+      acquiredAt: stale.toISOString()
+    }), { mode: 0o600 });
     fs.utimesSync(f.coordinator.lockFile, stale, stale);
     fs.mkdirSync(`${f.coordinator.lockFile}.recovery`, { mode: 0o700 });
 
@@ -228,6 +233,7 @@ test('stale lock recovery refuses to race another recovery owner', () => {
       error => error.code === 'MEMORY_TRANSACTION_LOCKED'
     );
     assert.equal(fs.existsSync(f.coordinator.lockFile), true);
+    assert.equal(fs.existsSync(`${f.coordinator.lockFile}.recovery`), true);
   } finally {
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
@@ -236,8 +242,13 @@ test('stale lock recovery refuses to race another recovery owner', () => {
 test('abandoned recovery marker fails closed with an actionable diagnostic', () => {
   const f = fixture();
   try {
-    fs.writeFileSync(f.coordinator.lockFile, '', { mode: 0o600 });
     const stale = new Date(Date.now() - f.coordinator.lockTimeoutMs - 5000);
+    fs.writeFileSync(f.coordinator.lockFile, JSON.stringify({
+      token: 'dead-owner',
+      pid: 2147483647,
+      hostname: os.hostname(),
+      acquiredAt: stale.toISOString()
+    }), { mode: 0o600 });
     fs.utimesSync(f.coordinator.lockFile, stale, stale);
     const recoveryPath = `${f.coordinator.lockFile}.recovery`;
     fs.mkdirSync(recoveryPath, { mode: 0o700 });
@@ -251,6 +262,94 @@ test('abandoned recovery marker fails closed with an actionable diagnostic', () 
     assert.equal(fs.existsSync(recoveryPath), true, 'the marker must not be removed automatically');
     assert.equal(fs.existsSync(f.coordinator.lockFile), true, 'the original lock must remain untouched');
   } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
+test('a competing process cannot replace a stale lock while its quarantine is in progress', async () => {
+  const f = fixture();
+  let child;
+  try {
+    const stale = new Date(Date.now() - f.coordinator.lockTimeoutMs - 5000);
+    fs.writeFileSync(f.coordinator.lockFile, JSON.stringify({
+      token: 'dead-owner',
+      pid: 2147483647,
+      hostname: os.hostname(),
+      acquiredAt: stale.toISOString()
+    }), { mode: 0o600 });
+    fs.utimesSync(f.coordinator.lockFile, stale, stale);
+
+    const pausedPath = path.join(f.directory, 'reclaimer-paused');
+    const continuePath = path.join(f.directory, 'continue-reclaimer');
+    const resultPath = path.join(f.directory, 'reclaimer-result');
+    const coordinatorPath = require.resolve('../../../../src/infrastructure/memory/memory-transaction-coordinator');
+    const script = [
+      `const fs = require('node:fs');`,
+      `const Coordinator = require(${JSON.stringify(coordinatorPath)});`,
+      `const originalRename = fs.renameSync.bind(fs);`,
+      `const lockPath = process.env.LOCK_FILE;`,
+      `fs.renameSync = (source, destination) => {`,
+      `  if (source === lockPath && destination.startsWith(lockPath + '.stale.')) {`,
+      `    fs.writeFileSync(process.env.PAUSED_FILE, 'ready');`,
+      `    const deadline = Date.now() + 5000;`,
+      `    while (!fs.existsSync(process.env.CONTINUE_FILE)) {`,
+      `      if (Date.now() >= deadline) throw new Error('timed out waiting for reclaimer release signal');`,
+      `      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);`,
+      `    }`,
+      `  }`,
+      `  return originalRename(source, destination);`,
+      `};`,
+      `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
+      `const owner = c.acquireLock();`,
+      `fs.writeFileSync(process.env.RESULT_FILE, owner.token);`,
+      `c.releaseLock(owner);`
+    ].join('\\n');
+    child = spawn(process.execPath, ['-e', script], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: {
+        ...process.env,
+        MEMORY_FILE: f.memoryFile,
+        AUDIT_FILE: f.auditFile,
+        JOURNAL_FILE: f.journalFile,
+        LOCK_FILE: f.coordinator.lockFile,
+        PAUSED_FILE: pausedPath,
+        CONTINUE_FILE: continuePath,
+        RESULT_FILE: resultPath
+      }
+    });
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    const exited = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => resolve({ code, signal }));
+    });
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(pausedPath)) {
+      if (child.exitCode !== null) throw new Error('reclaimer exited before quarantine: ' + stderr);
+      if (Date.now() >= deadline) throw new Error('timed out waiting for reclaimer pause: ' + stderr);
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    assert.throws(
+      () => f.coordinator.acquireLock(),
+      error => error.code === 'MEMORY_TRANSACTION_LOCKED',
+      'a contender must not acquire the lock while quarantine owns the recovery gate'
+    );
+    assert.equal(fs.existsSync(f.coordinator.lockFile), true, 'the stale lock remains until quarantine resumes');
+
+    fs.writeFileSync(continuePath, 'continue');
+    assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
+    assert.ok(fs.readFileSync(resultPath, 'utf8'), 'the reclaimer must acquire and release its replacement lock');
+
+    const replacementOwner = f.coordinator.acquireLock();
+    assert.equal(
+      JSON.parse(fs.readFileSync(f.coordinator.lockFile, 'utf8')).token,
+      replacementOwner.token,
+      'the replacement owner lock must remain intact after the previous quarantine completes'
+    );
+    f.coordinator.releaseLock(replacementOwner);
+  } finally {
+    if (child && child.exitCode === null) child.kill('SIGKILL');
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
