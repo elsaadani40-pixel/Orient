@@ -150,10 +150,17 @@ class MemoryAuditRepository {
         'memory.consolidated': 'memory.consolidated',
         'memory.archived': 'memory.archived'
       };
-      this.eventSink({
-        ...record,
-        type: record.type || eventTypeByAction[record.action] || 'memory.updated'
-      });
+      try {
+        this.eventSink({
+          ...record,
+          type: record.type || eventTypeByAction[record.action] || 'memory.updated'
+        });
+        this.lastEventSinkError = null;
+      } catch (error) {
+        // The audit append is already durable; downstream event delivery failure
+        // must remain observable without misreporting the committed memory write.
+        this.lastEventSinkError = error;
+      }
     }
 
     return record;
@@ -166,6 +173,20 @@ class MemoryAuditRepository {
       (!scope || event.scope === scope || (!event.scope && scope === 'personal'))
     );
   }
+
+  // Operation receipts are scoped by tenant and memory scope; an operation ID
+  // is correlation metadata, never an authorization boundary.
+  findByOperationId(operationId, tenantId = 'local', scope = null) {
+    if (typeof operationId !== 'string' || !operationId.trim()) {
+      throw new TypeError('operationId is required');
+    }
+    return this.read().filter(event =>
+      event.operationId === operationId &&
+      event.tenantId === tenantId &&
+      (!scope || event.scope === scope || (!event.scope && scope === 'personal'))
+    );
+  }
+
 }
 
 module.exports = MemoryAuditRepository;

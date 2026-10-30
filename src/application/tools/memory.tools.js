@@ -43,6 +43,12 @@ function createMemoryTools(memoryService) {
         ? input
         : {}, context);
     },
+    reconcile: async (input, recoveryContext = {}) =>
+      memoryService.reconcileToolOperation('memory.add', input, {
+        ...recoveryContext,
+        tenantId: recoveryContext.tenantId || recoveryContext.record?.tenantId,
+        memoryScope: input?.scope || recoveryContext.memoryScope || 'personal'
+      }),
   });
 
   const memoryHistory = new ToolInterface({
@@ -76,6 +82,12 @@ function createMemoryTools(memoryService) {
 
       return memoryService.delete(id, context);
     },
+    reconcile: async (input, recoveryContext = {}) =>
+      memoryService.reconcileToolOperation('memory.delete', input, {
+        ...recoveryContext,
+        tenantId: recoveryContext.tenantId || recoveryContext.record?.tenantId,
+        memoryScope: recoveryContext.memoryScope || input?.scope || 'personal'
+      }),
   });
 
   return [
