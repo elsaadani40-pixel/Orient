@@ -14,7 +14,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -906,4 +906,53 @@ test('PostgreSQL owner work profile persists validated partial updates and isola
   } finally {
     await pool.query('DELETE FROM owner_work_profiles WHERE owner_id = ANY($1::text[])', [[ownerId, otherOwnerId]]);
   }
+});
+
+
+test('PostgreSQL memory and audit repositories commit atomically and remain tenant-scoped', async () => {
+  const memory = {
+    id: 'memory-pg-atomic',
+    tenantId: 'tenant-memory-a',
+    scope: 'personal',
+    type: 'fact',
+    text: 'PostgreSQL memory transaction',
+    state: 'active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  await assert.rejects(() => persistence.db.transaction(async () => {
+    await persistence.memory.insert(memory);
+    await persistence.memoryAudit.append({
+      id: 'audit-pg-rollback',
+      tenantId: memory.tenantId,
+      scope: memory.scope,
+      memoryId: memory.id,
+      operationId: 'operation-pg-rollback',
+      action: 'memory.created'
+    });
+    throw new Error('injected PostgreSQL memory transaction failure');
+  }), /injected PostgreSQL memory transaction failure/);
+
+  assert.equal(await persistence.memory.findById(memory.id, memory.tenantId, memory.scope), null);
+  assert.deepEqual(
+    await persistence.memoryAudit.findByOperationId('operation-pg-rollback', memory.tenantId, memory.scope),
+    []
+  );
+
+  await persistence.db.transaction(async () => {
+    await persistence.memory.insert(memory);
+    await persistence.memoryAudit.append({
+      id: 'audit-pg-commit',
+      tenantId: memory.tenantId,
+      scope: memory.scope,
+      memoryId: memory.id,
+      operationId: 'operation-pg-commit',
+      action: 'memory.created'
+    });
+  });
+
+  assert.equal((await persistence.memory.findById(memory.id, memory.tenantId, memory.scope)).text, memory.text);
+  assert.equal((await persistence.memoryAudit.findByOperationId('operation-pg-commit', memory.tenantId, memory.scope)).length, 1);
+  assert.equal(await persistence.memory.findById(memory.id, 'tenant-memory-b', memory.scope), null);
 });
