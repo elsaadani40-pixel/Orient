@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
 const { PostgresPersistence } = require('./postgres/postgres-persistence');
 const JsonPersistence = require('./json-persistence');
+const SqlitePersistence = require('./sqlite/sqlite-persistence');
 
 function createPersistence(config) {
   const mode = config.persistenceMode || 'json';
@@ -14,9 +15,15 @@ function createPersistence(config) {
     };
   }
 
+  if (mode === 'sqlite') {
+    const filePath = config.databaseFile || require('node:path').join(config.agentDataDirectory, 'orient.sqlite');
+    const adapter = new SqlitePersistence({ filePath });
+    return { adapter, close: () => adapter.close() };
+  }
+
   if (mode !== 'postgres') {
     throw Object.assign(
-      new Error(`Unsupported persistence mode "${mode}". Supported modes: json, postgres`),
+      new Error(`Unsupported persistence mode "${mode}". Supported modes: json, sqlite, postgres`),
       { code: 'PERSISTENCE_MODE_UNSUPPORTED' }
     );
   }
