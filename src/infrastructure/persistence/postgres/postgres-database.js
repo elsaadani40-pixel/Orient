@@ -169,12 +169,12 @@ class PostgresDatabase {
       const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
       const version=Number(current.rows[0].version);
       if(version===0){
-        for(const migration of MIGRATIONS.filter(m=>m.version>1)){
+        for(const migration of MIGRATIONS.filter(m=>m.version>1).sort((a,b)=>a.version-b.version)){
           await client.query(migration.sql);
         }
         await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9)',[1,2,3,4,5,6,7,8,9]);
       } else {
-        for(const migration of MIGRATIONS.filter(m=>m.version>version)){
+        for(const migration of MIGRATIONS.filter(m=>m.version>version).sort((a,b)=>a.version-b.version)){
           await client.query(migration.sql);
           await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
         }

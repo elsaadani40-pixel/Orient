@@ -18,13 +18,13 @@ class PostgresMemoryRepository {
   async findById(id, tenantId = 'local', scope = null) {
     if (!id) return null;
     const result = scope
-      ? await this.db.query('SELECT payload FROM memories WHERE tenant_id=$1 AND memory_id=$2 AND scope=$3 LIMIT 1', [tenantId, id, scope])
-      : await this.db.query('SELECT payload FROM memories WHERE tenant_id=$1 AND memory_id=$2 LIMIT 1', [tenantId, id]);
+      ? await this.db.query('SELECT payload FROM memories WHERE tenant_id=$1 AND memory_id=$2 AND scope=$3 LIMIT 1', [tenantId || 'local', id, scope])
+      : await this.db.query('SELECT payload FROM memories WHERE tenant_id=$1 AND memory_id=$2 LIMIT 1', [tenantId || 'local', id]);
     return result.rows[0]?.payload || null;
   }
 
   async findByFingerprint({ tenantId = 'local', scope = null, type, text }) {
-    const params = [tenantId, type, String(text || '').trim()];
+    const params = [tenantId || 'local', type, String(text || '').trim()];
     const scopeClause = scope ? ' AND scope=$4' : '';
     if (scope) params.push(scope);
     const result = await this.db.query(
@@ -38,7 +38,7 @@ class PostgresMemoryRepository {
 
   async findActiveBySemanticKey(key, tenantId = 'local', scope = null) {
     if (!key) return null;
-    const params = [tenantId, key];
+    const params = [tenantId || 'local', key];
     const scopeClause = scope ? ' AND scope=$3' : '';
     if (scope) params.push(scope);
     const result = await this.db.query(
@@ -66,7 +66,7 @@ class PostgresMemoryRepository {
     });
     const result = await this.db.query(
       'UPDATE memories SET updated_at=$1,payload=$2 WHERE tenant_id=$3 AND memory_id=$4 AND scope=$5 RETURNING payload',
-      [updated.updatedAt, updated, tenantId, id, current.scope]
+      [updated.updatedAt, updated, current.tenantId || tenantId || 'local', id, current.scope]
     );
     return result.rows[0]?.payload || null;
   }

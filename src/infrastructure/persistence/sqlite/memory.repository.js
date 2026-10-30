@@ -30,7 +30,7 @@ class SqliteMemoryRepository {
   }
 
   findByFingerprint({ tenantId = 'local', scope = null, type, text }) {
-    const params = [tenantId, type, String(text || '').trim()];
+    const params = [tenantId || 'local', type, String(text || '').trim()];
     let scopeClause = '';
     if (scope) { scopeClause = ' AND scope = ?'; params.push(scope); }
     const rows = this.db.query(
@@ -45,7 +45,7 @@ class SqliteMemoryRepository {
 
   findActiveBySemanticKey(key, tenantId = 'local', scope = null) {
     if (!key) return null;
-    const params = [tenantId, key];
+    const params = [tenantId || 'local', key];
     let scopeClause = '';
     if (scope) { scopeClause = ' AND scope = ?'; params.push(scope); }
     const rows = this.db.query(
@@ -74,15 +74,16 @@ class SqliteMemoryRepository {
       ...current, ...patch, id: current.id,
       tenantId: current.tenantId, scope: current.scope
     });
+    const effectiveTenantId = current.tenantId || tenantId || 'local';
     const result = this.db.run(
       'UPDATE memories SET updated_at = ?, payload = ? WHERE tenant_id = ? AND memory_id = ? AND scope = ?',
-      [updated.updatedAt, JSON.stringify(updated), tenantId, id, current.scope]
+      [updated.updatedAt, JSON.stringify(updated), effectiveTenantId, id, current.scope]
     );
     return result.changes === 1 ? updated : null;
   }
 
   deleteById(id, tenantId = 'local', scope = null) {
-    const params = [tenantId, id];
+    const params = [tenantId || 'local', id];
     let where = 'tenant_id = ? AND memory_id = ?';
     if (scope) { where += ' AND scope = ?'; params.push(scope); }
     return this.db.run(`DELETE FROM memories WHERE ${where}`, params).changes === 1;

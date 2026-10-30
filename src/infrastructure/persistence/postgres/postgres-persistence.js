@@ -939,7 +939,9 @@ class PostgresPersistence {
         tenantQuotas: true,
         ownerChat: true,
         ownerProfile: true,
-        workers: true
+        workers: true,
+        memory: true,
+        memoryAudit: true
       }
     };
   }
