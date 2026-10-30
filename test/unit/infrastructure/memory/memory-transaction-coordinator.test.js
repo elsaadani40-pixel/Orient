@@ -303,7 +303,7 @@ test('a competing process cannot replace a stale lock while its quarantine is in
       `const owner = c.acquireLock();`,
       `fs.writeFileSync(process.env.RESULT_FILE, owner.token);`,
       `c.releaseLock(owner);`
-    ].join('\\n');
+    ].join('\n');
     child = spawn(process.execPath, ['-e', script], {
       stdio: ['ignore', 'ignore', 'pipe'],
       env: {
