@@ -235,3 +235,80 @@ test('Postgres approval repository supports durable tenant-scoped execution and 
   assert.match(db.calls[1].text, /tenant_id=\$1 AND used=FALSE AND expires_at>\$2.*LIMIT \$3/);
   assert.deepEqual(db.calls[1].values, ['tenant-a', '2026-10-10T10:00:00.000Z', 10]);
 });
+
+
+test('Postgres database routes concurrent transaction queries to isolated pinned clients', async () => {
+  const { PostgresDatabase } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
+  const calls = [];
+  let nextClient = 0;
+  const pool = {
+    async connect() {
+      const clientId = ++nextClient;
+      return {
+        async query(text) {
+          calls.push({ clientId, text });
+          return { rows: [], rowCount: 0 };
+        },
+        release() { calls.push({ clientId, text: 'RELEASE' }); }
+      };
+    },
+    async query(text) {
+      calls.push({ clientId: 'pool', text });
+      return { rows: [], rowCount: 0 };
+    }
+  };
+  const db = new PostgresDatabase({ pool });
+  let releaseFirst;
+  const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+  let firstEntered;
+  const enteredFirst = new Promise(resolve => { firstEntered = resolve; });
+
+  const first = db.transaction(async () => {
+    await db.query('FIRST_BEFORE_WAIT');
+    firstEntered();
+    await firstGate;
+    await db.query('FIRST_AFTER_WAIT');
+  });
+  await enteredFirst;
+  const second = db.transaction(async () => {
+    await db.query('SECOND_QUERY');
+    await db.transaction(() => db.query('SECOND_NESTED_QUERY'));
+  });
+  await second;
+  releaseFirst();
+  await first;
+
+  const firstBefore = calls.find(call => call.text === 'FIRST_BEFORE_WAIT');
+  const firstAfter = calls.find(call => call.text === 'FIRST_AFTER_WAIT');
+  const secondQuery = calls.find(call => call.text === 'SECOND_QUERY');
+  const nestedQuery = calls.find(call => call.text === 'SECOND_NESTED_QUERY');
+  assert.equal(firstBefore.clientId, firstAfter.clientId);
+  assert.equal(secondQuery.clientId, nestedQuery.clientId);
+  assert.notEqual(firstBefore.clientId, secondQuery.clientId);
+  assert.equal(calls.some(call => call.clientId === 'pool'), false);
+  assert.equal(calls.filter(call => call.text === 'BEGIN').length, 2);
+  assert.equal(calls.filter(call => call.text === 'COMMIT').length, 2);
+});
+
+test('Postgres database rolls back and releases its pinned client when work fails', async () => {
+  const { PostgresDatabase } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
+  const calls = [];
+  const pool = {
+    async connect() {
+      return {
+        async query(text) { calls.push(text); return { rows: [], rowCount: 0 }; },
+        release() { calls.push('RELEASE'); }
+      };
+    },
+    async query() { throw new Error('unexpected pool query'); }
+  };
+  const db = new PostgresDatabase({ pool });
+  await assert.rejects(
+    () => db.transaction(async () => {
+      await db.query('WRITE_THEN_FAIL');
+      throw new Error('injected failure');
+    }),
+    /injected failure/
+  );
+  assert.deepEqual(calls, ['BEGIN', 'WRITE_THEN_FAIL', 'ROLLBACK', 'RELEASE']);
+});

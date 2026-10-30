@@ -186,3 +186,36 @@ test('sqlite transactions roll back all statements after an injected failure', (
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
   db.close();
 });
+
+
+test('SQLite callback transactions commit synchronously and roll back on failure', () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+  db.transaction(tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'callback-commit', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+  });
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['callback-commit'])[0].count), 1);
+
+  assert.throws(() => db.transaction(tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'callback-rollback', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+    throw new Error('injected failure');
+  }), /injected failure/);
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['callback-rollback'])[0].count), 0);
+  db.close();
+});
+
+test('SQLite callback transactions reject asynchronous work and roll it back', () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+  assert.throws(() => db.transaction(async tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'async-callback-rejected', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+  }), error => error.code === 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED');
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['async-callback-rejected'])[0].count), 0);
+  db.close();
+});
