@@ -49,6 +49,12 @@ class SqliteDatabase {
     const callback = typeof workOrStatements === 'function' ? workOrStatements : null;
     const statements = callback ? null : workOrStatements;
     if (!callback && (!Array.isArray(statements) || !statements.length)) return;
+    if (callback && callback.constructor?.name === 'AsyncFunction') {
+      throw Object.assign(
+        new TypeError('SQLite transaction callbacks must be synchronous; async functions are rejected before execution'),
+        { code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED' }
+      );
+    }
 
     this.connection.exec('BEGIN IMMEDIATE;');
     const callbacks = [];
@@ -85,7 +91,14 @@ class SqliteDatabase {
         this.connection.prepare(statement.sql).run(...(statement.params || []));
       }
       this.connection.exec('COMMIT;');
+      this.afterCommitCallbacks = null;
+      for (const callback of callbacks) {
+        try { callback(); } catch (error) {
+          this.lastAfterCommitError = error;
+        }
+      }
     } catch (error) {
+      this.afterCommitCallbacks = null;
       try { this.connection.exec('ROLLBACK;'); } catch {}
       throw error;
     }
