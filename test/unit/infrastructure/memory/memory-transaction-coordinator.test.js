@@ -266,90 +266,151 @@ test('abandoned recovery marker fails closed with an actionable diagnostic', () 
   }
 });
 
-test('a competing process cannot replace a stale lock while its quarantine is in progress', async () => {
+test('release waits for stale recovery and cannot remove a replacement owner lock', async () => {
   const f = fixture();
-  let child;
+  let holder;
+  let reclaimer;
   try {
-    const stale = new Date(Date.now() - f.coordinator.lockTimeoutMs - 5000);
-    fs.writeFileSync(f.coordinator.lockFile, JSON.stringify({
-      token: 'dead-owner',
-      pid: 2147483647,
-      hostname: os.hostname(),
-      acquiredAt: stale.toISOString()
-    }), { mode: 0o600 });
-    fs.utimesSync(f.coordinator.lockFile, stale, stale);
-
-    const pausedPath = path.join(f.directory, 'reclaimer-paused');
-    const continuePath = path.join(f.directory, 'continue-reclaimer');
-    const resultPath = path.join(f.directory, 'reclaimer-result');
+    const holderReady = path.join(f.directory, 'holder-ready');
+    const releaseHolder = path.join(f.directory, 'release-holder');
+    const holderWaiting = path.join(f.directory, 'holder-waiting');
+    const reclaimerPaused = path.join(f.directory, 'reclaimer-paused');
+    const continueRename = path.join(f.directory, 'continue-rename');
+    const quarantined = path.join(f.directory, 'quarantined');
+    const continueGateRelease = path.join(f.directory, 'continue-gate-release');
+    const holderResult = path.join(f.directory, 'holder-result');
+    const reclaimerResult = path.join(f.directory, 'reclaimer-result');
     const coordinatorPath = require.resolve('../../../../src/infrastructure/memory/memory-transaction-coordinator');
-    const script = [
+
+    const holderScript = [
+      `const fs = require('node:fs');`,
+      `const os = require('node:os');`,
+      `const Coordinator = require(${JSON.stringify(coordinatorPath)});`,
+      `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
+      `const owner = c.acquireLock();`,
+      `const staleOwner = {...owner, pid: 2147483647, hostname: os.hostname()};`,
+      `fs.writeFileSync(process.env.LOCK_FILE, JSON.stringify(staleOwner) + '\\n');`,
+      `const stale = new Date(Date.now() - c.lockTimeoutMs - 5000);`,
+      `fs.utimesSync(process.env.LOCK_FILE, stale, stale);`,
+      `fs.writeFileSync(process.env.HOLDER_READY, 'ready');`,
+      `const originalMkdir = fs.mkdirSync.bind(fs);`,
+      `fs.mkdirSync = (target, ...args) => {`,
+      `  try { return originalMkdir(target, ...args); } catch (error) {`,
+      `    if (target === process.env.RECOVERY_LOCK && error.code === 'EEXIST') fs.writeFileSync(process.env.HOLDER_WAITING, 'waiting');`,
+      `    throw error;`,
+      `  }`,
+      `};`,
+      `const deadline = Date.now() + 10000;`,
+      `while (!fs.existsSync(process.env.RELEASE_HOLDER)) {`,
+      `  if (Date.now() >= deadline) throw new Error('timed out waiting for holder release signal');`,
+      `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);`,
+      `}`,
+      `try { c.releaseLock(owner); fs.writeFileSync(process.env.HOLDER_RESULT, 'released'); }`,
+      `catch (error) {`,
+      `  if (error.code !== 'MEMORY_TRANSACTION_LOCK_OWNERSHIP_LOST') throw error;`,
+      `  fs.writeFileSync(process.env.HOLDER_RESULT, 'ownership-lost');`,
+      `}`
+    ].join('\n');
+
+    const reclaimerScript = [
       `const fs = require('node:fs');`,
       `const Coordinator = require(${JSON.stringify(coordinatorPath)});`,
       `const originalRename = fs.renameSync.bind(fs);`,
-      `const lockPath = process.env.LOCK_FILE;`,
+      `const originalRmdir = fs.rmdirSync.bind(fs);`,
       `fs.renameSync = (source, destination) => {`,
-      `  if (source === lockPath && destination.startsWith(lockPath + '.stale.')) {`,
-      `    fs.writeFileSync(process.env.PAUSED_FILE, 'ready');`,
-      `    const deadline = Date.now() + 5000;`,
-      `    while (!fs.existsSync(process.env.CONTINUE_FILE)) {`,
-      `      if (Date.now() >= deadline) throw new Error('timed out waiting for reclaimer release signal');`,
+      `  if (source === process.env.LOCK_FILE && destination.startsWith(process.env.LOCK_FILE + '.stale.')) {`,
+      `    fs.writeFileSync(process.env.RECLAIMER_PAUSED, 'paused');`,
+      `    const deadline = Date.now() + 10000;`,
+      `    while (!fs.existsSync(process.env.CONTINUE_RENAME)) {`,
+      `      if (Date.now() >= deadline) throw new Error('timed out waiting to continue quarantine');`,
       `      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);`,
       `    }`,
       `  }`,
       `  return originalRename(source, destination);`,
       `};`,
+      `fs.rmdirSync = (target, ...args) => {`,
+      `  if (target === process.env.RECOVERY_LOCK) {`,
+      `    fs.writeFileSync(process.env.QUARANTINED, 'ready');`,
+      `    const deadline = Date.now() + 10000;`,
+      `    while (!fs.existsSync(process.env.CONTINUE_GATE_RELEASE)) {`,
+      `      if (Date.now() >= deadline) throw new Error('timed out waiting to release recovery gate');`,
+      `      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);`,
+      `    }`,
+      `  }`,
+      `  return originalRmdir(target, ...args);`,
+      `};`,
       `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
-      `const owner = c.acquireLock();`,
-      `fs.writeFileSync(process.env.RESULT_FILE, owner.token);`,
-      `c.releaseLock(owner);`
+      `try { c.acquireLock(); throw new Error('expected the replacement owner to contend'); }`,
+      `catch (error) { if (error.code !== 'MEMORY_TRANSACTION_LOCKED') throw error; }`,
+      `fs.writeFileSync(process.env.RECLAIMER_RESULT, 'contended-safely');`
     ].join('\n');
-    child = spawn(process.execPath, ['-e', script], {
+
+    const env = {
+      ...process.env,
+      MEMORY_FILE: f.memoryFile,
+      AUDIT_FILE: f.auditFile,
+      JOURNAL_FILE: f.journalFile,
+      LOCK_FILE: f.coordinator.lockFile,
+      RECOVERY_LOCK: `${f.coordinator.lockFile}.recovery`,
+      HOLDER_READY: holderReady,
+      RELEASE_HOLDER: releaseHolder,
+      HOLDER_WAITING: holderWaiting,
+      RECLAIMER_PAUSED: reclaimerPaused,
+      CONTINUE_RENAME: continueRename,
+      QUARANTINED: quarantined,
+      CONTINUE_GATE_RELEASE: continueGateRelease,
+      HOLDER_RESULT: holderResult,
+      RECLAIMER_RESULT: reclaimerResult
+    };
+    const launch = script => spawn(process.execPath, ['-e', script], {
       stdio: ['ignore', 'ignore', 'pipe'],
-      env: {
-        ...process.env,
-        MEMORY_FILE: f.memoryFile,
-        AUDIT_FILE: f.auditFile,
-        JOURNAL_FILE: f.journalFile,
-        LOCK_FILE: f.coordinator.lockFile,
-        PAUSED_FILE: pausedPath,
-        CONTINUE_FILE: continuePath,
-        RESULT_FILE: resultPath
-      }
+      env
     });
-    let stderr = '';
-    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
-    const exited = new Promise((resolve, reject) => {
+    const waitFor = async (signal, child, description) => {
+      const deadline = Date.now() + 10000;
+      while (!fs.existsSync(signal)) {
+        if (child.exitCode !== null) throw new Error(`${description}: child exited early`);
+        if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}`);
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+    };
+    const waitExit = child => new Promise((resolve, reject) => {
       child.once('error', reject);
       child.once('exit', (code, signal) => resolve({ code, signal }));
     });
-    const deadline = Date.now() + 5000;
-    while (!fs.existsSync(pausedPath)) {
-      if (child.exitCode !== null) throw new Error('reclaimer exited before quarantine: ' + stderr);
-      if (Date.now() >= deadline) throw new Error('timed out waiting for reclaimer pause: ' + stderr);
-      await new Promise(resolve => setTimeout(resolve, 5));
-    }
 
-    assert.throws(
-      () => f.coordinator.acquireLock(),
-      error => error.code === 'MEMORY_TRANSACTION_LOCKED',
-      'a contender must not acquire the lock while quarantine owns the recovery gate'
-    );
-    assert.equal(fs.existsSync(f.coordinator.lockFile), true, 'the stale lock remains until quarantine resumes');
+    holder = launch(holderScript);
+    let holderStderr = '';
+    holder.stderr.on('data', chunk => { holderStderr += chunk.toString(); });
+    await waitFor(holderReady, holder, 'initial lock holder');
+    reclaimer = launch(reclaimerScript);
+    let reclaimerStderr = '';
+    reclaimer.stderr.on('data', chunk => { reclaimerStderr += chunk.toString(); });
+    await waitFor(reclaimerPaused, reclaimer, 'reclaimer pause before rename');
 
-    fs.writeFileSync(continuePath, 'continue');
-    assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
-    assert.ok(fs.readFileSync(resultPath, 'utf8'), 'the reclaimer must acquire and release its replacement lock');
+    fs.writeFileSync(releaseHolder, 'release');
+    await waitFor(holderWaiting, holder, 'holder waiting on recovery gate');
+    fs.writeFileSync(continueRename, 'continue');
+    await waitFor(quarantined, reclaimer, 'old lock quarantined while recovery gate remains held');
 
     const replacementOwner = f.coordinator.acquireLock();
+    const replacementOnDisk = JSON.parse(fs.readFileSync(f.coordinator.lockFile, 'utf8'));
+    assert.equal(replacementOnDisk.token, replacementOwner.token, 'a new owner can acquire the now-vacant path');
+
+    fs.writeFileSync(continueGateRelease, 'continue');
+    assert.deepEqual(await waitExit(reclaimer), { code: 0, signal: null }, reclaimerStderr);
+    assert.deepEqual(await waitExit(holder), { code: 0, signal: null }, holderStderr);
+    assert.ok(['released', 'ownership-lost'].includes(fs.readFileSync(holderResult, 'utf8')));
     assert.equal(
       JSON.parse(fs.readFileSync(f.coordinator.lockFile, 'utf8')).token,
       replacementOwner.token,
-      'the replacement owner lock must remain intact after the previous quarantine completes'
+      'the releaser/reclaimer must not unlink or rename the replacement owner lock'
     );
     f.coordinator.releaseLock(replacementOwner);
   } finally {
-    if (child && child.exitCode === null) child.kill('SIGKILL');
+    for (const child of [holder, reclaimer]) {
+      if (child && child.exitCode === null) child.kill('SIGKILL');
+    }
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
