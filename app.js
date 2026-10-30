@@ -126,18 +126,31 @@ const createServer =
   require('./src/interfaces/http/server');
 
 const memoryAuditFile = path.join(config.agentDataDirectory, 'memory-audit.json');
-const memoryTransactionCoordinator = new MemoryTransactionCoordinator({
-  memoryFile: config.dataFile,
-  auditFile: memoryAuditFile,
-  journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
-});
+let repository;
+let memoryAuditRepository;
+let memoryTransactionCoordinator = null;
 
-// Recover an interrupted memory/audit transaction before either repository reads
-// its files or the HTTP server can accept requests.
-memoryTransactionCoordinator.recover();
-
-const repository =
-  new JsonMemoryRepository(config.dataFile);
+if (persistence.memory && persistence.memoryAudit) {
+  // SQLite memory and audit records share one database transaction.
+  repository = persistence.memory;
+  memoryAuditRepository = persistence.memoryAudit;
+  const database = persistence.db;
+  memoryTransactionCoordinator = {
+    run: operation => database.transaction(operation),
+    read: operation => operation(),
+    tryRead: operation => operation()
+  };
+} else {
+  memoryTransactionCoordinator = new MemoryTransactionCoordinator({
+    memoryFile: config.dataFile,
+    auditFile: memoryAuditFile,
+    journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
+  });
+  // Recover interrupted JSON transactions before repository reads or HTTP startup.
+  memoryTransactionCoordinator.recover();
+  repository = new JsonMemoryRepository(config.dataFile);
+  memoryAuditRepository = new MemoryAuditRepository(memoryAuditFile);
+}
 
 const agentRegistry =
   new AgentRegistry();
@@ -153,9 +166,6 @@ const agentInvocationService =
   new AgentInvocationService({
     agentRegistry
   });
-
-const memoryAuditRepository =
-  new MemoryAuditRepository(memoryAuditFile);
 
 const accessAuditRepository =
   new JsonAccessAuditRepository(
