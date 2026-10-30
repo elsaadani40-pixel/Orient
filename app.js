@@ -88,6 +88,9 @@ const CapabilityGovernance =
 const createPersistence =
   require('./src/infrastructure/persistence/persistence-factory');
 
+const persistenceRuntime = createPersistence(config);
+const persistence = persistenceRuntime.adapter;
+
 const { OwnerWorkProfileStore } =
   require('./src/infrastructure/persistence/owner-work-profile-store');
 
@@ -130,7 +133,7 @@ let repository;
 let memoryAuditRepository;
 let memoryTransactionCoordinator = null;
 
-if (persistence.memory && persistence.memoryAudit) {
+if (config.persistenceMode === 'sqlite' && persistence.memory && persistence.memoryAudit) {
   // SQLite memory and audit records share one database transaction.
   repository = persistence.memory;
   memoryAuditRepository = persistence.memoryAudit;
@@ -356,10 +359,7 @@ const agentOrchestrator =
     modelRouter
   });
 
-const persistenceRuntime = createPersistence(config);
-const persistence = persistenceRuntime.adapter;
-
-// PostgreSQL mode stores the owner work profile in the same durable database;
+ // PostgreSQL mode stores the owner work profile in the same durable database;
 // JSON mode retains the restrictive local file-backed implementation.
 ownerWorkProfileStore = persistence.ownerProfile || new OwnerWorkProfileStore({
   filePath: path.join(websiteDataDir, 'owner-work-profile.json')
