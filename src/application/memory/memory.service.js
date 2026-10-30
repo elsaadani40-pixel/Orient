@@ -245,6 +245,7 @@ class MemoryService {
     if (!this.auditRepository) return null;
     return this.auditRepository.append({
       ...event,
+      tenantId: event.tenantId || this.resolveTenant(context),
       agentId: context.agentId || 'ORIENT_RUNTIME',
       scope: event.scope || context.memoryScope || this.defaultScope,
       executionId: event.executionId || context.executionId || null,
