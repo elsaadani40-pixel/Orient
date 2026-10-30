@@ -380,6 +380,25 @@ class SqlitePersistence {
     this.memoryAudit = new SqliteMemoryAuditRepository(this.db);
   }
 
+  health() {
+    return {
+      adapter: 'sqlite',
+      ready: true,
+      filePath: this.db.filePath,
+      repositories: {
+        executions: true,
+        events: true,
+        idempotency: true,
+        checkpoints: true,
+        approvals: true,
+        workflows: true,
+        workflowLeases: true,
+        memory: true,
+        memoryAudit: true
+      }
+    };
+  }
+
   close() {
     this.db.close();
   }
