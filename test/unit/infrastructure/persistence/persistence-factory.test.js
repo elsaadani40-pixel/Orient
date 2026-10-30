@@ -28,7 +28,7 @@ test('persistence factory defaults to JSON when mode is omitted', () => {
 });
 
 test('persistence factory rejects unknown modes instead of silently falling back to JSON', () => {
-  for (const persistenceMode of ['sqlite', 'postgress', 'unexpected', 'JSON', 'POSTGRES']) {
+  for (const persistenceMode of ['postgress', 'unexpected', 'JSON', 'POSTGRES']) {
     assert.throws(
       () => createPersistence({ ...baseConfig, persistenceMode }),
       error => error.code === 'PERSISTENCE_MODE_UNSUPPORTED',
@@ -42,4 +42,27 @@ test('persistence factory requires a database URL for PostgreSQL mode', () => {
     () => createPersistence({ ...baseConfig, persistenceMode: 'postgres', databaseUrl: '' }),
     error => error.code === 'PERSISTENCE_DATABASE_URL_REQUIRED'
   );
+});
+
+
+test('persistence factory selects SQLite and exposes memory repositories', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-factory-sqlite-'));
+  const filePath = path.join(directory, 'memory.db');
+  const result = createPersistence({
+    ...baseConfig,
+    persistenceMode: 'sqlite',
+    databaseFile: filePath
+  });
+  try {
+    assert.equal(result.adapter.health().adapter, 'sqlite');
+    assert.equal(result.adapter.health().repositories.memory, true);
+    assert.equal(typeof result.adapter.memory.findAll, 'function');
+    assert.equal(typeof result.adapter.memoryAudit.append, 'function');
+  } finally {
+    await result.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
