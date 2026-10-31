@@ -11,7 +11,7 @@ function createMemoryTools(memoryService) {
 
       return {
         query,
-        memories: memoryService.list(query, context),
+        memories: await memoryService.list(query, context),
       };
     },
   });
@@ -23,7 +23,7 @@ function createMemoryTools(memoryService) {
     idempotency: 'idempotent',
     execute: async (input, context) => {
       return {
-        memories: memoryService.list('', context),
+        memories: await memoryService.list('', context),
       };
     },
   });
@@ -44,7 +44,7 @@ function createMemoryTools(memoryService) {
         : {}, context);
     },
     reconcile: async (input, recoveryContext = {}) =>
-      memoryService.reconcileToolOperation('memory.add', input, {
+      await memoryService.reconcileToolOperation('memory.add', input, {
         ...recoveryContext,
         tenantId: recoveryContext.tenantId || recoveryContext.record?.tenantId,
         memoryScope: input?.scope || recoveryContext.memoryScope || 'personal'
@@ -64,7 +64,7 @@ function createMemoryTools(memoryService) {
 
       return {
         memoryId: id,
-        history: memoryService.history(id, context),
+        history: await memoryService.history(id, context),
       };
     },
   });
@@ -83,7 +83,7 @@ function createMemoryTools(memoryService) {
       return memoryService.delete(id, context);
     },
     reconcile: async (input, recoveryContext = {}) =>
-      memoryService.reconcileToolOperation('memory.delete', input, {
+      await memoryService.reconcileToolOperation('memory.delete', input, {
         ...recoveryContext,
         tenantId: recoveryContext.tenantId || recoveryContext.record?.tenantId,
         memoryScope: recoveryContext.memoryScope || input?.scope || 'personal'
