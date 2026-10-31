@@ -4,6 +4,7 @@ const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repositor
 const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-repository');
 const PostgresOwnerChatConversationRepository = require('./postgres-owner-chat-conversation-repository');
 const PostgresOwnerWorkProfileRepository = require('./postgres-owner-work-profile-repository');
+const { PostgresMemoryRepository, PostgresMemoryAuditRepository } = require('./memory.repository');
 
 function tenantOrLocal(value) {
   return value || 'local';
@@ -915,6 +916,8 @@ class PostgresPersistence {
     this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
     this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
     this.workers = new PostgresWorkerRegistryRepository(this.db);
+    this.memory = new PostgresMemoryRepository(this.db);
+    this.memoryAudit = new PostgresMemoryAuditRepository(this.db);
   }
 
   initialize() {
@@ -936,7 +939,9 @@ class PostgresPersistence {
         tenantQuotas: true,
         ownerChat: true,
         ownerProfile: true,
-        workers: true
+        workers: true,
+        memory: true,
+        memoryAudit: true
       }
     };
   }

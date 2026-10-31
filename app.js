@@ -88,6 +88,9 @@ const CapabilityGovernance =
 const createPersistence =
   require('./src/infrastructure/persistence/persistence-factory');
 
+const persistenceRuntime = createPersistence(config);
+const persistence = persistenceRuntime.adapter;
+
 const { OwnerWorkProfileStore } =
   require('./src/infrastructure/persistence/owner-work-profile-store');
 
@@ -126,18 +129,31 @@ const createServer =
   require('./src/interfaces/http/server');
 
 const memoryAuditFile = path.join(config.agentDataDirectory, 'memory-audit.json');
-const memoryTransactionCoordinator = new MemoryTransactionCoordinator({
-  memoryFile: config.dataFile,
-  auditFile: memoryAuditFile,
-  journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
-});
+let repository;
+let memoryAuditRepository;
+let memoryTransactionCoordinator = null;
 
-// Recover an interrupted memory/audit transaction before either repository reads
-// its files or the HTTP server can accept requests.
-memoryTransactionCoordinator.recover();
-
-const repository =
-  new JsonMemoryRepository(config.dataFile);
+if (config.persistenceMode === 'sqlite' && persistence.memory && persistence.memoryAudit) {
+  // SQLite memory and audit records share one database transaction.
+  repository = persistence.memory;
+  memoryAuditRepository = persistence.memoryAudit;
+  const database = persistence.db;
+  memoryTransactionCoordinator = {
+    run: operation => database.transaction(operation),
+    read: operation => operation(),
+    tryRead: operation => operation()
+  };
+} else {
+  memoryTransactionCoordinator = new MemoryTransactionCoordinator({
+    memoryFile: config.dataFile,
+    auditFile: memoryAuditFile,
+    journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
+  });
+  // Recover interrupted JSON transactions before repository reads or HTTP startup.
+  memoryTransactionCoordinator.recover();
+  repository = new JsonMemoryRepository(config.dataFile);
+  memoryAuditRepository = new MemoryAuditRepository(memoryAuditFile);
+}
 
 const agentRegistry =
   new AgentRegistry();
@@ -153,9 +169,6 @@ const agentInvocationService =
   new AgentInvocationService({
     agentRegistry
   });
-
-const memoryAuditRepository =
-  new MemoryAuditRepository(memoryAuditFile);
 
 const accessAuditRepository =
   new JsonAccessAuditRepository(
@@ -346,10 +359,7 @@ const agentOrchestrator =
     modelRouter
   });
 
-const persistenceRuntime = createPersistence(config);
-const persistence = persistenceRuntime.adapter;
-
-// PostgreSQL mode stores the owner work profile in the same durable database;
+ // PostgreSQL mode stores the owner work profile in the same durable database;
 // JSON mode retains the restrictive local file-backed implementation.
 ownerWorkProfileStore = persistence.ownerProfile || new OwnerWorkProfileStore({
   filePath: path.join(websiteDataDir, 'owner-work-profile.json')

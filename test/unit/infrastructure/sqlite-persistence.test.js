@@ -186,3 +186,130 @@ test('sqlite transactions roll back all statements after an injected failure', (
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
   db.close();
 });
+
+
+test('SQLite callback transactions commit synchronously and roll back on failure', () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+  db.transaction(tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'callback-commit', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+  });
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['callback-commit'])[0].count), 1);
+
+  assert.throws(() => db.transaction(tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'callback-rollback', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+    throw new Error('injected failure');
+  }), /injected failure/);
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['callback-rollback'])[0].count), 0);
+  db.close();
+});
+
+test('SQLite callback transactions reject asynchronous work and roll it back', () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+  assert.throws(() => db.transaction(async tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'async-callback-rejected', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+  }), error => error.code === 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED');
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['async-callback-rejected'])[0].count), 0);
+  db.close();
+});
+
+
+test('SQLite memory mutation and audit receipt commit or roll back together', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-atomic-'));
+  const filePath = path.join(directory, 'orient.db');
+  const persistence = new SqlitePersistence({ filePath });
+  const memory = {
+    id: 'memory-atomic-1',
+    tenantId: 'tenant-a',
+    scope: 'personal',
+    type: 'fact',
+    text: 'Atomic memory transaction',
+    state: 'active',
+    createdAt: '2026-10-27T00:00:00.000Z',
+    updatedAt: '2026-10-27T00:00:00.000Z'
+  };
+
+  try {
+    assert.throws(() => persistence.db.transaction(() => {
+      persistence.memory.insert(memory);
+      persistence.memoryAudit.append({
+        id: 'audit-atomic-rollback',
+        tenantId: 'tenant-a',
+        scope: 'personal',
+        memoryId: memory.id,
+        operationId: 'operation-atomic-rollback',
+        action: 'memory.created'
+      });
+      throw new Error('injected transaction failure');
+    }), /injected transaction failure/);
+
+    assert.equal(persistence.memory.findById(memory.id, 'tenant-a', 'personal'), null);
+    assert.deepEqual(
+      persistence.memoryAudit.findByOperationId('operation-atomic-rollback', 'tenant-a', 'personal'),
+      []
+    );
+
+    persistence.db.transaction(() => {
+      persistence.memory.insert(memory);
+      persistence.memoryAudit.append({
+        id: 'audit-atomic-commit',
+        tenantId: 'tenant-a',
+        scope: 'personal',
+        memoryId: memory.id,
+        operationId: 'operation-atomic-commit',
+        action: 'memory.created'
+      });
+    });
+
+    assert.equal(persistence.memory.findById(memory.id, 'tenant-a', 'personal').text, memory.text);
+    assert.equal(persistence.memoryAudit.findByOperationId('operation-atomic-commit', 'tenant-a', 'personal').length, 1);
+    assert.equal(persistence.memory.findById(memory.id, 'tenant-b', 'personal'), null);
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite audit event sink runs only after commit and never publishes rolled-back events', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-audit-outbox-'));
+  const filePath = path.join(directory, 'orient.db');
+  const persistence = new SqlitePersistence({ filePath });
+  const published = [];
+  persistence.memoryAudit.setEventSink(event => published.push(event.id));
+
+  try {
+    assert.throws(() => persistence.db.transaction(() => {
+      persistence.memoryAudit.append({
+        id: 'audit-not-published',
+        tenantId: 'tenant-outbox',
+        scope: 'personal',
+        memoryId: 'memory-outbox',
+        action: 'memory.created'
+      });
+      throw new Error('rollback after audit append');
+    }), /rollback after audit append/);
+    assert.deepEqual(published, []);
+
+    persistence.db.transaction(() => {
+      persistence.memoryAudit.append({
+        id: 'audit-published-after-commit',
+        tenantId: 'tenant-outbox',
+        scope: 'personal',
+        memoryId: 'memory-outbox',
+        action: 'memory.created'
+      });
+    });
+    assert.deepEqual(published, ['audit-published-after-commit']);
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

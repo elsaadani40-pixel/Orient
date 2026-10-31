@@ -36,10 +36,48 @@ class SqliteDatabase {
     return this.connection.exec(sql);
   }
 
-  transaction(statements) {
-    if (!Array.isArray(statements) || !statements.length) return;
+  afterCommit(callback) {
+    if (typeof callback !== 'function') throw new TypeError('afterCommit requires a callback');
+    if (this.afterCommitCallbacks) {
+      this.afterCommitCallbacks.push(callback);
+      return;
+    }
+    callback();
+  }
+
+  transaction(workOrStatements) {
+    const callback = typeof workOrStatements === 'function' ? workOrStatements : null;
+    const statements = callback ? null : workOrStatements;
+    if (!callback && (!Array.isArray(statements) || !statements.length)) return;
+    if (callback && callback.constructor?.name === 'AsyncFunction') {
+      throw Object.assign(
+        new TypeError('SQLite transaction callbacks must be synchronous; async functions are rejected before execution'),
+        { code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED' }
+      );
+    }
+
     this.connection.exec('BEGIN IMMEDIATE;');
+    const callbacks = [];
+    this.afterCommitCallbacks = callbacks;
     try {
+      if (callback) {
+        const result = callback(this);
+        if (result && typeof result.then === 'function') {
+          throw Object.assign(
+            new TypeError('SQLite transaction callbacks must be synchronous; async callbacks are not supported'),
+            { code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED' }
+          );
+        }
+        this.connection.exec('COMMIT;');
+        this.afterCommitCallbacks = null;
+        for (const callback of callbacks) {
+          try { callback(); } catch (error) {
+            this.lastAfterCommitError = error;
+          }
+        }
+        return result;
+      }
+
       for (const statement of statements) {
         if (typeof statement === 'string') {
           // String batches are reserved for static schema/test SQL. Dynamic
@@ -53,7 +91,14 @@ class SqliteDatabase {
         this.connection.prepare(statement.sql).run(...(statement.params || []));
       }
       this.connection.exec('COMMIT;');
+      this.afterCommitCallbacks = null;
+      for (const callback of callbacks) {
+        try { callback(); } catch (error) {
+          this.lastAfterCommitError = error;
+        }
+      }
     } catch (error) {
+      this.afterCommitCallbacks = null;
       try { this.connection.exec('ROLLBACK;'); } catch {}
       throw error;
     }
@@ -115,6 +160,31 @@ class SqliteDatabase {
         payload TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_workflow_leases_expiry ON workflow_leases(expires_at);
+      CREATE TABLE IF NOT EXISTS memories (
+        memory_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, memory_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memories_tenant_scope_created
+        ON memories(tenant_id, scope, created_at DESC);
+      CREATE TABLE IF NOT EXISTS memory_audit (
+        event_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        memory_id TEXT,
+        operation_id TEXT,
+        occurred_at TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, event_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_tenant_memory
+        ON memory_audit(tenant_id, scope, memory_id, occurred_at);
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_tenant_operation
+        ON memory_audit(tenant_id, scope, operation_id, occurred_at);
       CREATE TABLE IF NOT EXISTS approvals (
         approval_id TEXT PRIMARY KEY,
         execution_id TEXT NOT NULL,

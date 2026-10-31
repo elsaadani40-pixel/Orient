@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -114,6 +115,37 @@ const MIGRATIONS = [
       ON owner_chat_messages(owner_id, task_id) WHERE task_id IS NOT NULL;
   `},
 
+  {version:9,sql:`
+    CREATE TABLE IF NOT EXISTS memories (
+      memory_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      payload JSONB NOT NULL,
+      PRIMARY KEY (tenant_id, memory_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_memories_tenant_scope_created
+      ON memories(tenant_id, scope, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memories_active_semantic
+      ON memories(tenant_id, scope, (payload->>'semanticKey'), updated_at DESC)
+      WHERE payload->>'state'='active' AND payload->>'semanticKey' IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS memory_audit (
+      event_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      memory_id TEXT,
+      operation_id TEXT,
+      occurred_at TIMESTAMPTZ NOT NULL,
+      payload JSONB NOT NULL,
+      PRIMARY KEY (tenant_id, event_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_audit_tenant_memory
+      ON memory_audit(tenant_id, scope, memory_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_memory_audit_tenant_operation
+      ON memory_audit(tenant_id, scope, operation_id, occurred_at)
+      WHERE operation_id IS NOT NULL;
+  `},
   {version:8,sql:`
     CREATE TABLE IF NOT EXISTS owner_work_profiles (
       owner_id TEXT PRIMARY KEY,
@@ -128,6 +160,9 @@ class PostgresDatabase {
   constructor({pool,schema=null}={}) {
     if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
     this.pool=pool; this.schema=schema;
+    // Route every repository query in an async transaction to its pinned client.
+    // AsyncLocalStorage keeps concurrent requests isolated without mutable global client state.
+    this.transactionContext = new AsyncLocalStorage();
   }
   async initialize() {
     const client=await this.pool.connect();
@@ -138,12 +173,12 @@ class PostgresDatabase {
       const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
       const version=Number(current.rows[0].version);
       if(version===0){
-        for(const migration of MIGRATIONS.filter(m=>m.version>1)){
+        for(const migration of MIGRATIONS.filter(m=>m.version>1).sort((a,b)=>a.version-b.version)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8)',[1,2,3,4,5,6,7,8]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9)',[1,2,3,4,5,6,7,8,9]);
       } else {
-        for(const migration of MIGRATIONS.filter(m=>m.version>version)){
+        for(const migration of MIGRATIONS.filter(m=>m.version>version).sort((a,b)=>a.version-b.version)){
           await client.query(migration.sql);
           await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
         }
@@ -151,8 +186,35 @@ class PostgresDatabase {
       await client.query('COMMIT');
     } catch(error){try{await client.query('ROLLBACK');}catch{}throw error;} finally{client.release();}
   }
-  async query(text,values=[]){return this.pool.query(text,values);}
-  async transaction(work){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await work(client);await client.query('COMMIT');return result;}catch(error){try{await client.query('ROLLBACK');}catch{}throw error;}finally{client.release();}}
+  async query(text, values = []) {
+    const client = this.transactionContext.getStore();
+    return client
+      ? client.query(text, values)
+      : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    if (typeof work !== 'function') {
+      throw new TypeError('transaction(work) requires a callback');
+    }
+
+    // Nested repository/service calls participate in the existing transaction.
+    const activeClient = this.transactionContext.getStore();
+    if (activeClient) return work(activeClient);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await this.transactionContext.run(client, () => work(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   static json(value){return value===undefined?null:value;}
   static uuid(){return crypto.randomUUID();}
 }

@@ -676,7 +676,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         req.method === 'GET' &&
         (requestUrl.pathname === '/memory' || (requestUrl.pathname === '/' && !websiteHandler))
       ) {
-        memoryRoutes.home(req, res, requestUrl);
+        await memoryRoutes.home(req, res, requestUrl);
         return;
       }
 
@@ -685,7 +685,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         requestUrl.pathname === '/memory/add'
       ) {
         const body = await readBody(req);
-        memoryRoutes.add(req, res, body);
+        await memoryRoutes.add(req, res, body);
         return;
       }
 
@@ -694,7 +694,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         requestUrl.pathname === '/memory/delete'
       ) {
         const body = await readBody(req);
-        memoryRoutes.delete(req, res, body);
+        await memoryRoutes.delete(req, res, body);
         return;
       }
 

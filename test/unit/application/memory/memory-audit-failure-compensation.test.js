@@ -135,3 +135,16 @@ test('a downstream event sink failure does not contradict an already committed a
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('memory audit records inherit the authorized tenant when the event omits tenantId', () => {
+  const fixture = createFixture();
+  try {
+    const memory = fixture.service.add('tenant-bound audit event', { type: 'note' }, fixture.context);
+    const events = fixture.audit.findByMemoryId(memory.id, 'tenant-a', 'personal');
+    assert.ok(events.length > 0);
+    assert.equal(events.every(event => event.tenantId === 'tenant-a'), true);
+  } finally {
+    fixture.cleanup();
+  }
+});
