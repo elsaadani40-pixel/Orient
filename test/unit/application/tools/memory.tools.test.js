@@ -28,3 +28,50 @@ test('memory tools declare read effects and conservative mutation idempotency', 
     'memory.history': { effects: 'read_only', idempotency: 'idempotent' }
   });
 });
+
+
+test('memory tools await asynchronous repository-backed service operations', async () => {
+  const expected = {
+    list: [{ id: 'memory-1' }],
+    add: { id: 'memory-2' },
+    delete: true,
+    history: [{ action: 'memory.created' }],
+    reconcile: { status: 'committed' }
+  };
+  const memoryService = {
+    list: async () => expected.list,
+    add: async () => expected.add,
+    delete: async () => expected.delete,
+    history: async () => expected.history,
+    reconcileToolOperation: async () => expected.reconcile
+  };
+  const tools = Object.fromEntries(
+    createMemoryTools(memoryService).map(tool => [tool.name, tool])
+  );
+
+  assert.deepEqual(
+    (await tools['memory.search'].execute('query', {})).memories,
+    expected.list
+  );
+  assert.deepEqual(
+    (await tools['memory.list'].execute('', {})).memories,
+    expected.list
+  );
+  assert.deepEqual(
+    await tools['memory.add'].execute({ text: 'new memory' }, {}),
+    expected.add
+  );
+  assert.equal(await tools['memory.delete'].execute('memory-2', {}), true);
+  assert.deepEqual(
+    (await tools['memory.history'].execute('memory-2', {})).history,
+    expected.history
+  );
+  assert.deepEqual(
+    await tools['memory.add'].reconcile({ text: 'new memory' }, {}),
+    expected.reconcile
+  );
+  assert.deepEqual(
+    await tools['memory.delete'].reconcile('memory-2', {}),
+    expected.reconcile
+  );
+});
