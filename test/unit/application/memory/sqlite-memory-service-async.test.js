@@ -126,6 +126,12 @@ test('SQLite async transactions reject unrelated synchronous writes instead of a
   });
 
   await started;
+  // WAL readers may inspect the last committed snapshot, but must not see
+  // the uncommitted memory row owned by the isolated transaction.
+  assert.equal(
+    persistence.db.query('SELECT COUNT(*) AS count FROM memories WHERE memory_id = ?', ['isolated-memory'])[0].count,
+    0
+  );
   assert.throws(
     () => persistence.db.run(
       'INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)',

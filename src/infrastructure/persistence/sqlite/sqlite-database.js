@@ -31,12 +31,14 @@ class SqliteDatabase {
 
   query(sql, params = []) {
     if (typeof sql !== 'string' || !sql.trim()) throw new TypeError('SQL statement is required');
+    this.assertExternalAccess(sql, 'read');
     if (!Array.isArray(params)) throw new TypeError('SQL parameters must be an array');
     return this.connection.prepare(sql).all(...params);
   }
 
   exec(sql) {
     if (typeof sql !== 'string' || !sql.trim()) throw new TypeError('SQL batch is required');
+    this.assertExternalAccess(sql, 'write');
     return this.connection.exec(sql);
   }
 
@@ -95,6 +97,7 @@ class SqliteDatabase {
       return;
     }
 
+    this.assertExternalAccess('BEGIN IMMEDIATE', 'write');
     const connection = this.connection;
     const context = { connection, afterCommitCallbacks: [] };
     connection.exec('BEGIN IMMEDIATE;');
