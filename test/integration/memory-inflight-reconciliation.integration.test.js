@@ -100,8 +100,10 @@ async function runInFlightMutation(mode) {
       '};',
       'const service = new Service(new Repository(memoryFile), { auditRepository, transactionCoordinator: coordinator });',
       'const context = { tenantId, memoryScope: "personal", operationId };',
-      'if (mode === "add") service.add(text, { scope: "personal" }, context);',
-      'else service.delete(memoryId, context);'
+      '(async () => {',
+      '  if (mode === "add") await service.add(text, { scope: "personal" }, context);',
+      '  else await service.delete(memoryId, context);',
+      '})();'
     ].join(String.fromCharCode(10));
 
     child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
