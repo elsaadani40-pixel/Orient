@@ -39,9 +39,14 @@ function createMemoryTools(memoryService) {
           ? input
           : input && input.text;
 
+      const operationContext = input && typeof input === 'object' &&
+        typeof input.scope === 'string'
+        ? { ...context, memoryScope: input.scope }
+        : context;
+
       return memoryService.add(text, input && typeof input === 'object'
         ? input
-        : {}, context);
+        : {}, operationContext);
     },
     reconcile: async (input, recoveryContext = {}) =>
       memoryService.reconcileToolOperation('memory.add', input, {
@@ -80,7 +85,12 @@ function createMemoryTools(memoryService) {
           ? input
           : input && input.id;
 
-      return memoryService.delete(id, context);
+      const operationContext = input && typeof input === 'object' &&
+        typeof input.scope === 'string'
+        ? { ...context, memoryScope: input.scope }
+        : context;
+
+      return memoryService.delete(id, operationContext);
     },
     reconcile: async (input, recoveryContext = {}) =>
       memoryService.reconcileToolOperation('memory.delete', input, {
