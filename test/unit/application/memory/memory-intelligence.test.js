@@ -69,7 +69,7 @@ test('semantic conflicts supersede the previous active fact', async () => {
     async () => service.get(oldMemory.id, context),
     error => error.code === 'MEMORY_NOT_FOUND'
   );
-  assert.equal(await service.search('Cairo', context)[0].id, newMemory.id);
+  assert.equal((await service.search('Cairo', context))[0].id, newMemory.id);
 });
 
 test('tenant and scope isolation prevent cross-boundary reads and updates', async () => {
@@ -80,7 +80,7 @@ test('tenant and scope isolation prevent cross-boundary reads and updates', asyn
   const tenantA = await service.add('Tenant A fact', { type: 'fact' }, a);
   const tenantB = await service.add('Tenant B fact', { type: 'fact' }, b);
 
-  assert.equal(await service.get(tenantA.id, a).text, 'Tenant A fact');
+  assert.equal((await service.get(tenantA.id, a)).text, 'Tenant A fact');
   await assert.rejects(
     async () => service.get(tenantA.id, b),
     error => error.code === 'MEMORY_NOT_FOUND'
@@ -213,15 +213,15 @@ test('memory history cannot cross tenant or scope boundaries', async () => {
   const { service, context } = createService();
   const memory = await service.add('Private trace', { type: 'note' }, context);
 
-  assert.equal(await service.history(memory.id, {
+  assert.equal((await service.history(memory.id, {
     ...context,
     tenantId: 'other-tenant'
-  }).length, 0);
+  })).length, 0);
 
   assert.equal(await service.history(memory.id, {
     ...context,
     memoryScope: 'private'
-  }).length, 0);
+  })).length, 0);
 });
 
 test('delete is retention-safe: archive plus audit, not physical removal', async () => {
