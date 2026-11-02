@@ -52,7 +52,7 @@ class SqliteDatabase {
     if (this.transactionContext.getStore() || this.asyncTransactionPending === 0) return;
     const readOnly = access === 'read' &&
       this.filePath !== ':memory:' &&
-      /^\\s*(SELECT|PRAGMA)\\b/i.test(sql);
+      /^\s*(SELECT|PRAGMA)\b/i.test(sql);
     if (readOnly) return;
     const error = new Error('SQLite connection is reserved by an asynchronous transaction');
     error.code = 'SQLITE_TRANSACTION_BUSY';
