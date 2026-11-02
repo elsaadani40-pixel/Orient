@@ -388,10 +388,10 @@ class MemoryService {
 
   async list(query = '', context = {}, options = {}) {
     const authorization = this.authorize(context, 'read', options.scope);
-    const memories = this.repository
-      .findAll(authorization.tenantId, authorization.scope)
-      .map(normalizeMemory)
-      .filter(memory =>
+    const memories = (await this.repository.findAll(
+      authorization.tenantId,
+      authorization.scope
+    )).map(normalizeMemory).filter(memory =>
         memory.state === 'active' &&
         (options.includeExpired ||
           isTemporallyValid(memory, options.nowDate || new Date()))
