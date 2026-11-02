@@ -413,3 +413,48 @@ test('SQLite migrates legacy memory and audit tables to tenant-scoped schema wit
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('SQLite synchronous transactions poison thenable callbacks and block deferred writes', async () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+  const insert = id => db.run(
+    'INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)',
+    [id, 'test', '2026-01-01T00:00:00.000Z', '{}']
+  );
+
+  assert.throws(
+    () => db.transaction(tx => {
+      tx.run(
+        'INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)',
+        ['thenable-before-await', 'test', '2026-01-01T00:00:00.000Z', '{}']
+      );
+      return Promise.resolve().then(() => insert('thenable-after-await'));
+    }),
+    error => error.code === 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(Number(db.query(
+    "SELECT COUNT(*) AS count FROM events WHERE event_id IN ('thenable-before-await','thenable-after-await')"
+  )[0].count), 0);
+
+  assert.throws(
+    () => db.transaction(tx => {
+      try {
+        db.transaction(() => Promise.resolve().then(() => insert('nested-thenable-after-await')));
+      } catch (error) {
+        assert.equal(error.code, 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED');
+      }
+      tx.run(
+        'INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)',
+        ['outer-after-nested-thenable', 'test', '2026-01-01T00:00:00.000Z', '{}']
+      );
+    }),
+    error => error.code === 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(Number(db.query(
+    "SELECT COUNT(*) AS count FROM events WHERE event_id IN ('nested-thenable-after-await','outer-after-nested-thenable')"
+  )[0].count), 0);
+  db.close();
+});
