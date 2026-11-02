@@ -62,3 +62,30 @@ test('recovered workflow releases the dispatch claim owned by the recovery worke
     tenantId: 'tenant-compensation'
   });
 });
+
+
+test('recovery releases a dispatch claim when the worker lacks required capabilities', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'recovery-capability-skip-wf',
+    tenantId: 'tenant-compensation'
+  });
+  instance.metadata.requiredCapabilities = ['gpu'];
+  let released = false;
+  const workflowRepository = {
+    workerRegistry: { async register(worker) { return worker; } },
+    async claimQueued() { return [instance.toJSON()]; },
+    async releaseDispatchClaim() { released = true; return true; }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    clock: () => 1000,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+
+  assert.equal(await scheduler.recoverPersisted(), 0);
+  assert.equal(released, true);
+  assert.equal(scheduler.depth(), 0);
+});
