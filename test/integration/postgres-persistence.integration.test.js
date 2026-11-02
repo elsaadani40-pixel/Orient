@@ -987,6 +987,19 @@ test('PostgreSQL-backed MemoryService awaits the full service lifecycle and isol
   }, context);
   assert.ok(created.id);
 
+  const concurrentOperationBase = 'operation-memory-concurrent-' + Date.now();
+  const [concurrentA, concurrentB] = await Promise.all([
+    service.add('concurrent PostgreSQL memory fact', { type: 'fact' }, {
+      ...context,
+      operationId: concurrentOperationBase + '-a'
+    }),
+    service.add('concurrent PostgreSQL memory fact', { type: 'fact' }, {
+      ...context,
+      operationId: concurrentOperationBase + '-b'
+    })
+  ]);
+  assert.equal(concurrentA.id, concurrentB.id, 'same-scope concurrent inserts must reinforce one record');
+
   const listed = await service.list('PostgreSQL lifecycle', context);
   assert.equal(listed.length, 1);
   assert.equal(listed[0].id, created.id);
@@ -1008,6 +1021,10 @@ test('PostgreSQL-backed MemoryService awaits the full service lifecycle and isol
   assert.equal(reconciliation.result.id, created.id);
 
   assert.equal(await service.delete(created.id, context), true);
+  assert.equal(await service.delete(concurrentA.id, {
+    ...context,
+    operationId: 'operation-memory-concurrent-delete-' + Date.now()
+  }), true);
   const deleteRecovery = await service.reconcileToolOperation('memory.delete', created.id, {
     ...context,
     operationId: context.operationId
