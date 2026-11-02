@@ -289,7 +289,7 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
       `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
       `const owner = c.acquireLock();`,
       `const staleOwner = {...owner, pid: 2147483647, hostname: os.hostname()};`,
-      `fs.writeFileSync(process.env.LOCK_FILE, JSON.stringify(staleOwner) + '\n');`,
+      `fs.writeFileSync(process.env.LOCK_FILE, JSON.stringify(staleOwner) + String.fromCharCode(10));`,
       `const stale = new Date(Date.now() - c.lockTimeoutMs - 5000);`,
       `fs.utimesSync(process.env.LOCK_FILE, stale, stale);`,
       `fs.writeFileSync(process.env.HOLDER_READY, 'ready');`,
