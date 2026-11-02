@@ -1000,7 +1000,7 @@ test('PostgreSQL-backed MemoryService awaits the full service lifecycle and isol
   ]);
   assert.equal(concurrentA.id, concurrentB.id, 'same-scope concurrent inserts must reinforce one record');
 
-  const listed = await service.list('PostgreSQL lifecycle', context);
+  const listed = await service.list('lifecycle proof', context);
   assert.equal(listed.length, 1);
   assert.equal(listed[0].id, created.id);
 
