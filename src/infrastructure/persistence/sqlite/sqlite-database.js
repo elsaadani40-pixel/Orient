@@ -65,6 +65,29 @@ class SqliteDatabase {
         version INTEGER PRIMARY KEY,
         applied_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS memories (
+        memory_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        state TEXT NOT NULL,
+        type TEXT NOT NULL,
+        semantic_key TEXT,
+        text TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_memories_tenant_scope ON memories(tenant_id, scope);
+      CREATE INDEX IF NOT EXISTS idx_memories_semantic_key ON memories(tenant_id, scope, semantic_key);
+      CREATE TABLE IF NOT EXISTS memory_audit (
+        event_id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        scope TEXT,
+        memory_id TEXT,
+        operation_id TEXT,
+        occurred_at TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_operation ON memory_audit(tenant_id, scope, operation_id);
+      CREATE INDEX IF NOT EXISTS idx_memory_audit_memory ON memory_audit(tenant_id, scope, memory_id);
       CREATE TABLE IF NOT EXISTS executions (
         execution_id TEXT PRIMARY KEY,
         payload TEXT NOT NULL,

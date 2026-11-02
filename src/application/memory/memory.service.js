@@ -159,13 +159,31 @@ class MemoryService {
   constructor(repository, {
     memoryAccessPolicy = null,
     defaultScope = 'personal',
-    auditRepository = null
+    auditRepository = null,
+    transactionCoordinator = null
   } = {}) {
     if (!repository) throw new TypeError('repository is required');
     this.repository = repository;
     this.memoryAccessPolicy = memoryAccessPolicy;
     this.defaultScope = defaultScope;
     this.auditRepository = auditRepository;
+    this.transactionCoordinator = transactionCoordinator;
+
+    // Every public operation that mutates memory or its audit trail shares one
+    // durable before-image journal. Nested calls (forget -> delete) enter only
+    // the wrapped leaf operation, avoiding nested journal transactions.
+    if (transactionCoordinator) {
+      for (const method of ['add', 'get', 'consolidate', 'delete']) {
+        const original = this[method].bind(this);
+        this[method] = (...args) => transactionCoordinator.run(() => original(...args));
+      }
+      // Cross-process readers share the transaction lock so they cannot observe
+      // a memory file update before its corresponding audit receipt is durable.
+      for (const method of ['list', 'history', 'count']) {
+        const original = this[method].bind(this);
+        this[method] = (...args) => transactionCoordinator.read(() => original(...args));
+      }
+    }
   }
 
   resolveTenant(context = {}) {
@@ -233,7 +251,11 @@ class MemoryService {
       goalId: event.goalId || context.goalId || null,
       decisionId: event.decisionId || context.decisionId || null,
       correlationId: event.correlationId || context.correlationId || null,
-      traceId: event.traceId || context.traceId || null
+      traceId: event.traceId || context.traceId || null,
+      // Stable logical operation identity lets async recovery prove whether
+      // this exact memory mutation committed with the memory/audit transaction.
+      operationId: event.operationId || context.operationId || null,
+      idempotencyKey: event.idempotencyKey || context.idempotencyKey || null
     });
   }
 
@@ -247,6 +269,98 @@ class MemoryService {
       authorization.tenantId,
       authorization.scope
     );
+  }
+
+  reconcileToolOperation(toolName, input, context = {}) {
+    const operationId = context.operationId;
+    if (!this.transactionCoordinator ||
+        !this.auditRepository ||
+        typeof this.auditRepository.findByOperationId !== 'function' ||
+        typeof operationId !== 'string' ||
+        !operationId) {
+      return {
+        status: 'unknown',
+        reason: 'durable_operation_receipts_unavailable'
+      };
+    }
+
+    const operation = toolName === 'memory.delete' ? 'delete' : 'write';
+    const authorization = this.authorize(context, operation);
+
+    // Reconciliation reads the audit receipt and memory record as one consistent
+    // snapshot. Without the shared lock, a concurrent mutation could expose an
+    // intermediate memory/audit pair and cause an unsafe replay decision.
+    const snapshot = this.transactionCoordinator.tryRead(() => {
+      const events = this.auditRepository.findByOperationId(
+        operationId,
+        authorization.tenantId,
+        authorization.scope
+      );
+
+      // Missing evidence is not treated as success; the executor must fail closed.
+      if (!events.length) {
+        return {
+          status: 'unknown',
+          reason: 'no_committed_receipt_for_operation'
+        };
+      }
+
+      if (toolName === 'memory.delete') {
+        const requestedMemoryId = typeof input === 'string' ? input : input?.id;
+        if (typeof requestedMemoryId !== 'string' || !requestedMemoryId) {
+          return { status: 'unknown', reason: 'delete_target_id_missing' };
+        }
+        const archived = events.find(event =>
+          event.action === 'memory.archived' &&
+          event.memoryId === requestedMemoryId
+        );
+        return archived
+          ? { status: 'completed', result: true }
+          : { status: 'unknown', reason: 'delete_receipt_not_found_for_target' };
+      }
+
+      if (toolName === 'memory.add') {
+        const requestedText = typeof input === 'string'
+          ? input.trim()
+          : typeof input?.text === 'string'
+            ? input.text.trim()
+            : '';
+        if (!requestedText) {
+          return { status: 'unknown', reason: 'add_target_text_missing' };
+        }
+        const mutation = [...events].reverse().find(event =>
+          ['memory.created', 'memory.reinforced'].includes(event.action) &&
+          typeof event.memoryId === 'string' &&
+          event.memoryId
+        );
+        if (!mutation) {
+          return { status: 'unknown', reason: 'add_result_receipt_not_found' };
+        }
+        const memory = this.repository.findById(
+          mutation.memoryId,
+          authorization.tenantId,
+          authorization.scope
+        );
+        if (!memory) {
+          return { status: 'unknown', reason: 'committed_memory_record_missing' };
+        }
+        // Operation IDs are correlation keys, not proof that a receipt matches
+        // the requested payload. Fail closed if a reused/colliding ID points to
+        // a different memory instead of suppressing the requested add.
+        const requestedType = input && typeof input === 'object' && typeof input.type === 'string'
+          ? input.type
+          : 'note';
+        if (memory.text !== requestedText || memory.type !== requestedType) {
+          return { status: 'unknown', reason: 'add_receipt_target_mismatch' };
+        }
+        return { status: 'completed', result: normalizeMemory(memory) };
+      }
+
+      return { status: 'unknown', reason: 'unsupported_memory_operation' };
+    });
+    return snapshot.acquired
+      ? snapshot.value
+      : { status: 'unknown', reason: 'memory_transaction_in_progress' };
   }
 
   findExact({ tenantId, scope, type, text }) {
@@ -349,12 +463,19 @@ class MemoryService {
           scope
         );
 
-        this.audit({
-          action: 'memory.reinforced',
-          tenantId,
-          memoryId: exact.id,
-          evidence: candidate.evidence
-        }, context);
+        try {
+          this.audit({
+            action: 'memory.reinforced',
+            tenantId,
+            memoryId: exact.id,
+            evidence: candidate.evidence
+          }, context);
+        } catch (auditError) {
+          // Restore the pre-operation snapshot when the audit append fails on
+          // the handled exception path. This does not make two files crash-atomic.
+          this.repository.update(exact.id, exact, tenantId, scope);
+          throw auditError;
+        }
 
         return updated;
       }
@@ -366,52 +487,116 @@ class MemoryService {
       );
 
       let memory = candidate;
+      let conflictSnapshot = null;
+      let conflictWasUpdated = false;
+      let inserted = null;
 
-      if (conflict && conflict.text !== candidate.text) {
-        const resolution = compareConflictCandidates(candidate, conflict);
-        const candidateScore = conflictResolutionScore(candidate);
-        const conflictScore = conflictResolutionScore(conflict);
-        const candidateWins = resolution.id === candidate.id;
+      const compensateConflictOperation = originalError => {
+        const rollbackErrors = [];
+        if (inserted) {
+          if (typeof this.repository.deleteById !== 'function') {
+            rollbackErrors.push({
+              operation: 'delete-inserted-memory',
+              message: 'Repository does not support deleteById compensation'
+            });
+          } else {
+            try {
+              const deleted = this.repository.deleteById(inserted.id, tenantId, scope);
+              if (!deleted) {
+                throw new Error(`Inserted memory ${inserted.id} could not be removed during rollback`);
+              }
+            } catch (rollbackError) {
+              rollbackErrors.push({ operation: 'delete-inserted-memory', message: rollbackError.message });
+            }
+          }
+        }
+        if (conflictWasUpdated && conflictSnapshot) {
+          try {
+            const restored = this.repository.update(
+              conflictSnapshot.id,
+              conflictSnapshot,
+              tenantId,
+              scope
+            );
+            if (!restored) {
+              throw new Error(`Memory ${conflictSnapshot.id} disappeared during conflict rollback`);
+            }
+          } catch (rollbackError) {
+            rollbackErrors.push({ operation: 'restore-conflicting-memory', message: rollbackError.message });
+          }
+        }
+        if (rollbackErrors.length) {
+          const rollbackError = new AppError(
+            'Memory conflict resolution failed and rollback was incomplete',
+            500,
+            'MEMORY_CONFLICT_ROLLBACK_FAILED'
+          );
+          rollbackError.cause = originalError;
+          rollbackError.details = { rollbackErrors };
+          throw rollbackError;
+        }
+        throw originalError;
+      };
 
-        if (candidateWins) {
-          this.repository.update(conflict.id, {
-            state: 'superseded',
-            supersededById: candidate.id,
-            updatedAt: new Date().toISOString()
-          }, tenantId, scope);
-          memory = { ...candidate, supersedesId: conflict.id };
+      try {
+        if (conflict && conflict.text !== candidate.text) {
+          const resolution = compareConflictCandidates(candidate, conflict);
+          const candidateScore = conflictResolutionScore(candidate);
+          const conflictScore = conflictResolutionScore(conflict);
+          const candidateWins = resolution.id === candidate.id;
+
+          if (candidateWins) {
+            conflictSnapshot = conflict;
+            const updatedConflict = this.repository.update(conflict.id, {
+              state: 'superseded',
+              supersededById: candidate.id,
+              updatedAt: new Date().toISOString()
+            }, tenantId, scope);
+            if (!updatedConflict) {
+              throw new Error(`Memory ${conflict.id} disappeared during conflict resolution`);
+            }
+            conflictWasUpdated = true;
+            memory = { ...candidate, supersedesId: conflict.id };
+          } else {
+            memory = { ...candidate, state: 'contradicted', supersededById: null, supersedesId: null };
+          }
+
+          // The durable audit store and memory store are not transactional.
+          // This protects handled repository/audit exceptions, not process crashes
+          // or a crash between a successful audit append and a later failure.
+          inserted = this.repository.insert(memory, tenantId, scope);
+
+          this.audit({
+            action: 'memory.conflict.resolved',
+            tenantId,
+            memoryId: inserted.id,
+            relatedMemoryId: conflict.id,
+            resolution: candidateWins
+              ? 'candidate_wins_evidence_policy'
+              : 'existing_memory_wins_evidence_policy',
+            rationale: {
+              policy: 'confidence_source_evidence_verification_recency_importance',
+              candidate: candidateScore,
+              existing: conflictScore,
+              winnerId: resolution.id
+            }
+          }, context);
         } else {
-          memory = { ...candidate, state: 'contradicted', supersededById: null, supersedesId: null };
+          inserted = this.repository.insert(memory, tenantId, scope);
         }
 
         this.audit({
-          action: 'memory.conflict.resolved',
+          action: 'memory.created',
           tenantId,
-          memoryId: candidate.id,
-          relatedMemoryId: conflict.id,
-          resolution: candidateWins
-            ? 'candidate_wins_evidence_policy'
-            : 'existing_memory_wins_evidence_policy',
-          rationale: {
-            policy: 'confidence_source_evidence_verification_recency_importance',
-            candidate: candidateScore,
-            existing: conflictScore,
-            winnerId: resolution.id
-          }
+          memoryId: inserted.id,
+          source: inserted.source,
+          confidence: inserted.confidence
         }, context);
+
+        return inserted;
+      } catch (error) {
+        return compensateConflictOperation(error);
       }
-
-      const inserted = this.repository.insert(memory, tenantId, scope);
-
-      this.audit({
-        action: 'memory.created',
-        tenantId,
-        memoryId: inserted.id,
-        source: inserted.source,
-        confidence: inserted.confidence
-      }, context);
-
-      return inserted;
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError(error.message, 400, 'INVALID_MEMORY');
@@ -464,51 +649,103 @@ class MemoryService {
 
     const seen = new Map();
     const changes = [];
+    const beforeById = new Map();
 
-    for (const memory of memories) {
-      if (memory.state !== 'active') continue;
-      const key = `${memory.type}::${memory.text.toLowerCase().trim()}`;
-      const previous = seen.get(key);
+    // This is best-effort compensation for handled exceptions only. The JSON
+    // repository and audit log are separate durable stores, so a process crash
+    // between writes still requires a shared operation journal/transaction.
+    const rememberBefore = memory => {
+      if (!beforeById.has(memory.id)) {
+        beforeById.set(memory.id, memory);
+      }
+    };
+    const restoreChanges = originalError => {
+      const snapshots = [...beforeById.values()].reverse();
+      const rollbackErrors = [];
+      for (const snapshot of snapshots) {
+        try {
+          const restored = this.repository.update(
+            snapshot.id,
+            snapshot,
+            tenantId,
+            scope
+          );
+          if (!restored) {
+            throw new Error(`Memory ${snapshot.id} disappeared during consolidation rollback`);
+          }
+        } catch (rollbackError) {
+          rollbackErrors.push({ memoryId: snapshot.id, message: rollbackError.message });
+        }
+      }
+      if (rollbackErrors.length) {
+        const error = new AppError(
+          'Memory consolidation failed and rollback was incomplete',
+          500,
+          'MEMORY_CONSOLIDATION_ROLLBACK_FAILED'
+        );
+        error.cause = originalError;
+        error.details = { rollbackErrors };
+        throw error;
+      }
+      throw originalError;
+    };
 
-      if (!previous) {
-        seen.set(key, memory);
-        continue;
+    try {
+      for (const memory of memories) {
+        if (memory.state !== 'active') continue;
+        const key = `${memory.type}::${memory.text.toLowerCase().trim()}`;
+        const previous = seen.get(key);
+
+        if (!previous) {
+          seen.set(key, memory);
+          continue;
+        }
+
+        const winner =
+          previous.confidence >= memory.confidence ? previous : memory;
+        const loser = winner.id === previous.id ? memory : previous;
+
+        rememberBefore(winner);
+        rememberBefore(loser);
+
+        const updatedWinner = this.repository.update(
+          winner.id,
+          {
+            confidence: Math.max(winner.confidence, loser.confidence),
+            importance: Math.max(winner.importance, loser.importance),
+            evidence: [...winner.evidence, ...loser.evidence].slice(-50),
+            updatedAt: new Date().toISOString()
+          },
+          tenantId,
+          scope
+        );
+        if (!updatedWinner) {
+          throw new Error(`Memory ${winner.id} disappeared during consolidation`);
+        }
+
+        const updatedLoser = this.repository.update(
+          loser.id,
+          {
+            state: 'superseded',
+            supersededById: winner.id,
+            updatedAt: new Date().toISOString()
+          },
+          tenantId,
+          scope
+        );
+        if (!updatedLoser) {
+          throw new Error(`Memory ${loser.id} disappeared during consolidation`);
+        }
+
+        seen.set(key, updatedWinner);
+        changes.push({ winnerId: winner.id, supersededId: loser.id });
       }
 
-      const winner =
-        previous.confidence >= memory.confidence ? previous : memory;
-      const loser = winner.id === previous.id ? memory : previous;
-
-      this.repository.update(
-        winner.id,
-        {
-          confidence: Math.max(winner.confidence, loser.confidence),
-          importance: Math.max(winner.importance, loser.importance),
-          evidence: [...winner.evidence, ...loser.evidence].slice(-50),
-          updatedAt: new Date().toISOString()
-        },
-        tenantId,
-        scope
-      );
-
-      this.repository.update(
-        loser.id,
-        {
-          state: 'superseded',
-          supersededById: winner.id,
-          updatedAt: new Date().toISOString()
-        },
-        tenantId,
-        scope
-      );
-
-      seen.set(key, winner);
-      changes.push({ winnerId: winner.id, supersededId: loser.id });
+      this.audit({ action: 'memory.consolidated', tenantId, changes }, context);
+      return { tenantId, scope, consolidated: changes.length, changes };
+    } catch (error) {
+      return restoreChanges(error);
     }
-
-    this.audit({ action: 'memory.consolidated', tenantId, changes }, context);
-
-    return { tenantId, scope, consolidated: changes.length, changes };
   }
 
   delete(id, context = {}) {
@@ -523,6 +760,10 @@ class MemoryService {
       throw new AppError('الذاكرة غير موجودة', 404, 'MEMORY_NOT_FOUND');
     }
 
+    const previousState = {
+      state: memory.state,
+      updatedAt: memory.updatedAt
+    };
     this.repository.update(
       id,
       {
@@ -533,12 +774,25 @@ class MemoryService {
       authorization.scope
     );
 
-    this.audit({
-      action: 'memory.archived',
-      tenantId: authorization.tenantId,
-      memoryId: id,
-      reason: context.reason || 'manual'
-    }, context);
+    try {
+      this.audit({
+        action: 'memory.archived',
+        tenantId: authorization.tenantId,
+        memoryId: id,
+        reason: context.reason || 'manual'
+      }, context);
+    } catch (auditError) {
+      // Compensate a reported audit failure. This closes the ordinary
+      // exception path, not a process-crash window; async activation remains
+      // blocked until the mutation and audit result share a durable protocol.
+      this.repository.update(
+        id,
+        previousState,
+        authorization.tenantId,
+        authorization.scope
+      );
+      throw auditError;
+    }
 
     return true;
   }

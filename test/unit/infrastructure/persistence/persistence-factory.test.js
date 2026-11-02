@@ -57,6 +57,7 @@ test('persistence factory selects SQLite with durable memory repositories', asyn
     assert.equal(result.adapter.health().repositories.memory, true);
     assert.equal(typeof result.adapter.memory.findAll, 'function');
     assert.equal(typeof result.adapter.memoryAudit.append, 'function');
+    assert.equal(typeof result.adapter.memoryTransactionCoordinator.run, 'function');
   } finally {
     await result.close();
     fs.rmSync(directory, { recursive: true, force: true });
