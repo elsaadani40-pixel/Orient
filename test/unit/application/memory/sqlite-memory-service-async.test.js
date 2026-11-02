@@ -77,3 +77,29 @@ test('SQLite async transaction rolls back awaited failures and releases the conn
   });
   assert.ok(persistence.memory.findById('after-rollback', 'tenant-a', 'personal'));
 });
+
+
+test('SQLite reconciliation reads fail fast while an async transaction owns the connection', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-try-read-'));
+  const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.sqlite') });
+  t.after(() => {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  let release;
+  const blocker = persistence.db.transactionAsync(async () => {
+    await new Promise(resolve => { release = resolve; });
+  });
+  await Promise.resolve();
+
+  const snapshot = await persistence.db.tryReadAsync(async () => 'must not run');
+  assert.deepEqual(snapshot, { acquired: false });
+
+  release();
+  await blocker;
+  assert.deepEqual(
+    await persistence.db.tryReadAsync(async () => 'available'),
+    { acquired: true, value: 'available' }
+  );
+});
