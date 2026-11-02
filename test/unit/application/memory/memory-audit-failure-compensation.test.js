@@ -94,7 +94,7 @@ test('memory.add restores the original record when duplicate reinforcement audit
       return originalAppend(event);
     };
 
-    assert.throws(
+    await assert.rejects(
       () => fixture.service.add('same fact', {
         type: 'note',
         confidence: 0.99
@@ -140,7 +140,7 @@ test('a downstream event sink failure does not contradict an already committed a
 test('memory audit records inherit the authorized tenant when the event omits tenantId', async () => {
   const fixture = createFixture();
   try {
-    const memory = fixture.service.add('tenant-bound audit event', { type: 'note' }, fixture.context);
+    const memory = await fixture.service.add('tenant-bound audit event', { type: 'note' }, fixture.context);
     const events = fixture.audit.findByMemoryId(memory.id, 'tenant-a', 'personal');
     assert.ok(events.length > 0);
     assert.equal(events.every(event => event.tenantId === 'tenant-a'), true);
