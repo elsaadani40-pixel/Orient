@@ -299,6 +299,7 @@ test('memory.add tool forwards explicit scope to execution and reconciliation', 
   const input = { text: 'project-scoped memory receipt', scope: 'project' };
   const context = {
     tenantId: 'tenant-scoped-add',
+    memoryScope: 'personal',
     operationId: 'operation-project-add'
   };
 
@@ -343,6 +344,7 @@ test('memory.delete tool forwards explicit scope to execution and reconciliation
   const input = { id: created.id, scope: 'project' };
   const context = {
     tenantId: 'tenant-scoped-delete',
+    memoryScope: 'personal',
     operationId: 'operation-project-delete'
   };
 
