@@ -9,6 +9,7 @@ const JsonMemoryRepository = require('../../../../src/infrastructure/memory/json
 const MemoryAuditRepository = require('../../../../src/infrastructure/memory/memory-audit.repository');
 const MemoryTransactionCoordinator = require('../../../../src/infrastructure/memory/memory-transaction-coordinator');
 const MemoryService = require('../../../../src/application/memory/memory.service');
+const createMemoryTools = require('../../../../src/application/tools/memory.tools');
 
 function createFixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-operation-reconcile-'));
@@ -288,4 +289,78 @@ test('memory.delete reconciliation survives process exit after archive commit an
   );
   assert.equal(receipts.length, 1);
   assert.equal(receipts[0].action, 'memory.archived');
+});
+
+
+test('memory.add tool forwards explicit scope to async execution and reconciliation', async t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
+  const tool = createMemoryTools(fixture.service).find(item => item.name === 'memory.add');
+  const input = { text: 'project-scoped memory receipt', scope: 'project' };
+  const context = {
+    tenantId: 'tenant-scoped-add',
+    memoryScope: 'personal',
+    operationId: 'operation-project-add'
+  };
+
+  const created = await tool.execute(input, context);
+  const reconciled = await tool.reconcile(input, {
+    ...context,
+    record: { tenantId: context.tenantId }
+  });
+
+  assert.equal(reconciled.status, 'completed');
+  assert.equal(reconciled.result.id, created.id);
+  assert.equal(
+    fixture.auditRepository.findByOperationId(
+      context.operationId,
+      context.tenantId,
+      'project'
+    ).length,
+    1
+  );
+  assert.equal(
+    fixture.auditRepository.findByOperationId(
+      context.operationId,
+      context.tenantId,
+      'personal'
+    ).length,
+    0
+  );
+});
+
+test('memory.delete tool forwards explicit scope to async execution and reconciliation', async t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
+  const created = await fixture.service.add('project-scoped memory to delete', {
+    scope: 'project'
+  }, {
+    tenantId: 'tenant-scoped-delete',
+    memoryScope: 'project',
+    operationId: 'operation-project-create'
+  });
+  const tool = createMemoryTools(fixture.service).find(item => item.name === 'memory.delete');
+  const input = { id: created.id, scope: 'project' };
+  const context = {
+    tenantId: 'tenant-scoped-delete',
+    memoryScope: 'personal',
+    operationId: 'operation-project-delete'
+  };
+
+  const deleted = await tool.execute(input, context);
+  const reconciled = await tool.reconcile(input, {
+    ...context,
+    record: { tenantId: context.tenantId }
+  });
+
+  assert.equal(deleted, true);
+  assert.deepEqual(reconciled, { status: 'completed', result: true });
+  assert.equal(
+    fixture.auditRepository.findByOperationId(
+      context.operationId,
+      context.tenantId,
+      'project'
+    )[0]?.action,
+    'memory.archived'
+  );
 });
