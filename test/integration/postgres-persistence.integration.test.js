@@ -1,6 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const net = require('node:net');
+const { spawn } = require('node:child_process');
+const { once } = require('node:events');
+const { setTimeout: delay } = require('node:timers/promises');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const MemoryService = require('../../src/application/memory/memory.service');
@@ -1081,4 +1088,136 @@ test('PostgreSQL memory audit observations are emitted only after transaction co
     persistence.memoryAudit.setEventSink(null);
     await pool.query('DELETE FROM memory_audit WHERE tenant_id=$1', [tenantId]);
   }
+});
+
+
+test('PostgreSQL app composition serves authenticated memory HTTP routes from PostgreSQL', async t => {
+  const tenantId = 'tenant-postgres-app-' + Date.now();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-postgres-app-'));
+  const probe = net.createServer();
+  probe.listen(0, '127.0.0.1');
+  await once(probe, 'listening');
+  const port = probe.address().port;
+  await new Promise((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
+
+  const appPath = path.resolve(__dirname, '../../app.js');
+  const child = spawn(process.execPath, [appPath], {
+    cwd: path.resolve(__dirname, '../..'),
+    env: {
+      ...process.env,
+      ORIENT_PERSISTENCE: 'postgres',
+      ORIENT_DATABASE_URL: process.env.DATABASE_URL,
+      ORIENT_TENANT_ID: tenantId,
+      ORIENT_OWNER_BOOTSTRAP_PASSWORD: 'orient-postgres-app-test-password-2026',
+      ORIENT_DATA_DIR: directory,
+      HOST: '127.0.0.1',
+      PORT: String(port),
+      NODE_ENV: 'test',
+      ORIENT_MODEL_PROVIDER: 'none',
+      ORIENT_SHUTDOWN_GRACE_MS: '5000'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk.toString(); });
+  child.stderr.on('data', chunk => { output += chunk.toString(); });
+
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGTERM');
+      await Promise.race([exited, delay(7000)]);
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
+    await pool.query('DELETE FROM memory_audit WHERE tenant_id=$1', [tenantId]);
+    await pool.query('DELETE FROM memories WHERE tenant_id=$1', [tenantId]);
+  });
+
+  const origin = `http://127.0.0.1:${port}`;
+  let ready = false;
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`PostgreSQL app exited before listening. Output: ${output}`);
+    }
+    try {
+      const response = await fetch(origin + '/memory');
+      if (response.status === 401) {
+        ready = true;
+        break;
+      }
+    } catch {}
+    await delay(100);
+  }
+  assert.equal(ready, true, `PostgreSQL app did not become ready. Output: ${output}`);
+
+  const password = 'orient-postgres-app-test-password-2026';
+  const login = await fetch(origin + '/owner/login', {
+    method: 'POST',
+    headers: {
+      Origin: origin,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ password })
+  });
+  assert.equal(login.status, 200, await login.text());
+  const cookieHeader = login.headers.get('set-cookie') || '';
+  const cookie = cookieHeader.match(/orient_owner_session=[^;]+/)?.[0];
+  assert.ok(cookie, 'owner login must issue the authenticated session cookie');
+
+  const memoryText = 'PostgreSQL app composition memory proof ' + Date.now();
+  const add = await fetch(origin + '/memory/add', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      Origin: origin,
+      Cookie: cookie,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ text: memoryText }).toString()
+  });
+  assert.equal(add.status, 303);
+
+  const stored = await pool.query(
+    "SELECT memory_id,payload FROM memories WHERE tenant_id=$1 AND payload->>'text'=$2",
+    [tenantId, memoryText]
+  );
+  assert.equal(stored.rowCount, 1, 'the app must persist memory through the configured PostgreSQL repository');
+  const memoryId = stored.rows[0].memory_id;
+
+  const audit = await pool.query(
+    "SELECT payload FROM memory_audit WHERE tenant_id=$1 AND memory_id=$2 AND payload->>'action'='memory.created'",
+    [tenantId, memoryId]
+  );
+  assert.equal(audit.rowCount, 1, 'the memory and its audit receipt must both be durable in PostgreSQL');
+
+  const page = await fetch(origin + '/memory?q=' + encodeURIComponent(memoryText), {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), new RegExp(memoryText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+  const remove = await fetch(origin + '/memory/delete', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      Origin: origin,
+      Cookie: cookie,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ id: memoryId }).toString()
+  });
+  assert.equal(remove.status, 303);
+
+  const archived = await pool.query(
+    'SELECT payload FROM memories WHERE tenant_id=$1 AND memory_id=$2',
+    [tenantId, memoryId]
+  );
+  assert.equal(archived.rows[0]?.payload?.state, 'archived');
+  const archiveAudit = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM memory_audit WHERE tenant_id=$1 AND memory_id=$2 AND payload->>'action'='memory.archived'",
+    [tenantId, memoryId]
+  );
+  assert.equal(Number(archiveAudit.rows[0].count), 1);
 });
