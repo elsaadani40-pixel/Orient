@@ -140,14 +140,28 @@ let memoryAuditRepository;
 let memoryTransactionCoordinator = null;
 
 if (config.persistenceMode === 'sqlite' && persistence.memory && persistence.memoryAudit) {
-  // SQLite memory and audit records share one database transaction.
+  // SQLite operations are asynchronous at the service boundary but serialized
+  // on its single DatabaseSync connection and committed atomically.
   repository = persistence.memory;
   memoryAuditRepository = persistence.memoryAudit;
   const database = persistence.db;
   memoryTransactionCoordinator = {
-    run: operation => database.transaction(operation),
-    read: operation => operation(),
-    tryRead: operation => operation()
+    runAsync: operation => database.transactionAsync(operation),
+    readAsync: operation => database.readAsync(operation),
+    tryReadAsync: operation => database.tryReadAsync(operation)
+  };
+} else if (config.persistenceMode === 'postgres' && persistence.memory && persistence.memoryAudit) {
+  // PostgreSQL memory and audit mutations share one database transaction.
+  repository = persistence.memory;
+  memoryAuditRepository = persistence.memoryAudit;
+  const database = persistence.db;
+  memoryTransactionCoordinator = {
+    runAsync: operation => database.transaction(operation),
+    readAsync: operation => database.transaction(operation),
+    tryReadAsync: async operation => ({
+      acquired: true,
+      value: await database.transaction(operation)
+    })
   };
 } else {
   memoryTransactionCoordinator = new MemoryTransactionCoordinator({
