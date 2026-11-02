@@ -45,6 +45,11 @@ class SqliteDatabase {
 
   get connection() {
     const context = this.transactionContext.getStore();
+    if (context && context.active === false) {
+      const error = new Error('SQLite transaction context is no longer active');
+      error.code = 'SQLITE_TRANSACTION_CONTEXT_CLOSED';
+      throw error;
+    }
     return context?.connection || this.baseConnection;
   }
 
@@ -62,6 +67,11 @@ class SqliteDatabase {
   afterCommit(callback) {
     if (typeof callback !== 'function') throw new TypeError('afterCommit requires a callback');
     const context = this.transactionContext.getStore();
+    if (context && context.active === false) {
+      const error = new Error('Cannot register an after-commit callback on a closed SQLite transaction');
+      error.code = 'SQLITE_TRANSACTION_CONTEXT_CLOSED';
+      throw error;
+    }
     if (context && Array.isArray(context.afterCommitCallbacks)) {
       context.afterCommitCallbacks.push(callback);
       return;
@@ -77,6 +87,11 @@ class SqliteDatabase {
 
     // Nested repository transactions participate in the outer transaction.
     if (active) {
+      if (active.active === false) {
+        const error = new Error('SQLite transaction context is no longer active');
+        error.code = 'SQLITE_TRANSACTION_CONTEXT_CLOSED';
+        throw error;
+      }
       if (callback) {
         if (callback.constructor?.name === 'AsyncFunction') {
           throw Object.assign(new TypeError('SQLite transaction callbacks must be synchronous'), {
@@ -85,6 +100,8 @@ class SqliteDatabase {
         }
         const result = callback(this);
         if (result && typeof result.then === 'function') {
+          active.poisoned = true;
+          Promise.resolve(result).catch(() => {});
           throw Object.assign(new TypeError('SQLite transaction callbacks must be synchronous'), {
             code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
           });
@@ -105,7 +122,7 @@ class SqliteDatabase {
 
     this.assertExternalAccess('BEGIN IMMEDIATE', 'write');
     const connection = this.connection;
-    const context = { connection, afterCommitCallbacks: [] };
+    const context = { connection, afterCommitCallbacks: [], active: true, mode: 'sync', poisoned: false };
     connection.exec('BEGIN IMMEDIATE;');
     try {
       const result = this.transactionContext.run(context, () => {
@@ -117,6 +134,8 @@ class SqliteDatabase {
           }
           const value = callback(this);
           if (value && typeof value.then === 'function') {
+            context.poisoned = true;
+            Promise.resolve(value).catch(() => {});
             throw Object.assign(new TypeError('SQLite transaction callbacks must be synchronous; async callbacks are not supported'), {
               code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
             });
@@ -136,6 +155,11 @@ class SqliteDatabase {
         }
         return undefined;
       });
+      if (context.poisoned) {
+        throw Object.assign(new Error('SQLite transaction was poisoned by an asynchronous nested callback'), {
+          code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+        });
+      }
       connection.exec('COMMIT;');
       for (const afterCommit of context.afterCommitCallbacks) {
         try { this.transactionContext.run(context, afterCommit); } catch (error) {
@@ -146,13 +170,28 @@ class SqliteDatabase {
     } catch (error) {
       try { connection.exec('ROLLBACK;'); } catch {}
       throw error;
+    } finally {
+      context.active = false;
     }
   }
 
   transactionAsync(work) {
     if (typeof work !== 'function') throw new TypeError('transactionAsync(work) requires a callback');
     const active = this.transactionContext.getStore();
-    if (active) return Promise.resolve(work(this));
+    if (active) {
+      if (active.active === false) {
+        const error = new Error('SQLite transaction context is no longer active');
+        error.code = 'SQLITE_TRANSACTION_CONTEXT_CLOSED';
+        return Promise.reject(error);
+      }
+      if (active.mode === 'sync') {
+        active.poisoned = true;
+        const error = new TypeError('Cannot start an asynchronous SQLite transaction inside a synchronous transaction');
+        error.code = 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED';
+        return Promise.reject(error);
+      }
+      return Promise.resolve(work(this));
+    }
 
     const execute = async () => {
       const ownsConnection = this.filePath !== ':memory:';
@@ -160,10 +199,15 @@ class SqliteDatabase {
         ? new DatabaseSync(this.filePath)
         : this.baseConnection;
       connection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
-      const context = { connection, afterCommitCallbacks: [] };
+      const context = { connection, afterCommitCallbacks: [], active: true, mode: 'async', poisoned: false };
       connection.exec('BEGIN IMMEDIATE;');
       try {
         const result = await this.transactionContext.run(context, () => work(this));
+        if (context.poisoned) {
+          throw Object.assign(new Error('SQLite transaction was poisoned by an unsupported nested transaction'), {
+            code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+          });
+        }
         connection.exec('COMMIT;');
         for (const afterCommit of context.afterCommitCallbacks) {
           try {
@@ -177,6 +221,7 @@ class SqliteDatabase {
         try { connection.exec('ROLLBACK;'); } catch {}
         throw error;
       } finally {
+        context.active = false;
         if (ownsConnection) connection.close();
       }
     };
