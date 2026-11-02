@@ -266,7 +266,7 @@ test('memory.delete reconciliation survives process exit after archive commit an
     operationId: 'operation-delete-crash'
   };
 
-  const reconciled = restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext);
+  const reconciled = await restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext);
   assert.deepEqual(reconciled, { status: 'completed', result: true });
   assert.deepEqual(
     await restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext),
