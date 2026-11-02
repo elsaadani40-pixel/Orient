@@ -440,3 +440,63 @@ test('stale malformed transaction lock fails closed instead of reclaiming a poss
     fs.rmSync(f.directory, { recursive: true, force: true });
   }
 });
+
+
+test('async transactions hold the inter-process lock until awaited work commits', async () => {
+  const f = fixture();
+  try {
+    let releaseFirst;
+    const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+    let firstStarted = false;
+    let secondStarted = false;
+    const first = f.coordinator.runAsync(async () => {
+      firstStarted = true;
+      fs.writeFileSync(f.memoryFile, '[{"id":"async-first"}]\\n');
+      await firstGate;
+      fs.writeFileSync(f.auditFile, '[{"action":"async-first"}]\\n');
+      return 'first';
+    });
+    while (!firstStarted) await new Promise(resolve => setTimeout(resolve, 1));
+
+    const second = f.coordinator.runAsync(async () => {
+      secondStarted = true;
+      fs.writeFileSync(f.memoryFile, '[{"id":"async-second"}]\\n');
+      fs.writeFileSync(f.auditFile, '[{"action":"async-second"}]\\n');
+      return 'second';
+    });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(secondStarted, false, 'a second transaction must not enter while the first awaits');
+    assert.equal(fs.existsSync(f.journalFile), true, 'prepared journal remains durable while async work is pending');
+
+    releaseFirst();
+    assert.equal(await first, 'first');
+    assert.equal(await second, 'second');
+    assert.equal(JSON.parse(fs.readFileSync(f.memoryFile, 'utf8'))[0].id, 'async-second');
+    assert.equal(JSON.parse(fs.readFileSync(f.auditFile, 'utf8'))[0].action, 'async-second');
+    assert.equal(fs.existsSync(f.journalFile), false);
+    assert.equal(fs.existsSync(f.coordinator.lockFile), false);
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
+test('failed async transaction restores both before-images after awaited failure', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(
+      f.coordinator.runAsync(async () => {
+        fs.writeFileSync(f.memoryFile, '[{"id":"async-partial"}]\\n');
+        await Promise.resolve();
+        fs.writeFileSync(f.auditFile, '[{"action":"async-partial"}]\\n');
+        throw new Error('simulated async transaction failure');
+      }),
+      /simulated async transaction failure/
+    );
+    assert.equal(fs.readFileSync(f.memoryFile, 'utf8'), '[{"id":"before"}]\\n');
+    assert.equal(fs.readFileSync(f.auditFile, 'utf8'), '[{"action":"before"}]\\n');
+    assert.equal(fs.existsSync(f.journalFile), false);
+    assert.equal(fs.existsSync(f.coordinator.lockFile), false);
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
