@@ -17,3 +17,48 @@ test('async scheduler compensates lease and durable quota when persistence fails
   assert.equal(quotaCalls.length,1,'quota reservation leaked');
   assert.equal(quotaCalls[0].workflowId,instance.workflowId);
 });
+
+
+test('recovered workflow releases the dispatch claim owned by the recovery worker, not the runtime worker', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'recovered-dispatch-claim-wf',
+    tenantId: 'tenant-compensation'
+  });
+  let claimOwner = null;
+  let releasedClaim = null;
+  const workflowRepository = {
+    workerRegistry: {
+      async register(worker) { claimOwner = worker.workerId; return worker; }
+    },
+    async claimQueued({ workerId }) {
+      assert.equal(workerId, claimOwner);
+      return [instance.toJSON()];
+    },
+    async save() { return true; },
+    async releaseDispatchClaim(workflowId, workerId, tenantId) {
+      releasedClaim = { workflowId, workerId, tenantId };
+      return true;
+    }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    clock: () => 1000,
+    leaseDurationMs: 30000,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+
+  assert.equal(await scheduler.recoverPersisted(), 1);
+  assert.ok(claimOwner.startsWith('orient-recovery-'));
+  assert.equal(scheduler.queue[0].dispatchClaimWorkerId, claimOwner);
+
+  const lease = await scheduler.leaseAsync('runtime-worker-1');
+  assert.equal(lease.workerId, 'runtime-worker-1');
+  assert.deepEqual(releasedClaim, {
+    workflowId: instance.workflowId,
+    workerId: claimOwner,
+    tenantId: 'tenant-compensation'
+  });
+});
