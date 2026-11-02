@@ -187,10 +187,21 @@ class PostgresDatabase {
     } catch(error){try{await client.query('ROLLBACK');}catch{}throw error;} finally{client.release();}
   }
   async query(text, values = []) {
-    const client = this.transactionContext.getStore();
+    const context = this.transactionContext.getStore();
+    const client = context?.client || context;
     return client
       ? client.query(text, values)
       : this.pool.query(text, values);
+  }
+
+  afterCommit(callback) {
+    if (typeof callback !== 'function') throw new TypeError('afterCommit requires a callback');
+    const context = this.transactionContext.getStore();
+    if (context && Array.isArray(context.afterCommitCallbacks)) {
+      context.afterCommitCallbacks.push(callback);
+      return;
+    }
+    callback();
   }
 
   async transaction(work) {
@@ -199,14 +210,20 @@ class PostgresDatabase {
     }
 
     // Nested repository/service calls participate in the existing transaction.
-    const activeClient = this.transactionContext.getStore();
-    if (activeClient) return work(activeClient);
+    const activeContext = this.transactionContext.getStore();
+    if (activeContext) return work(activeContext.client || activeContext);
 
     const client = await this.pool.connect();
+    const context = { client, afterCommitCallbacks: [] };
     try {
       await client.query('BEGIN');
-      const result = await this.transactionContext.run(client, () => work(client));
+      const result = await this.transactionContext.run(context, () => work(client));
       await client.query('COMMIT');
+      for (const callback of context.afterCommitCallbacks) {
+        try { await callback(); } catch (error) {
+          this.lastAfterCommitError = error;
+        }
+      }
       return result;
     } catch (error) {
       try { await client.query('ROLLBACK'); } catch {}
