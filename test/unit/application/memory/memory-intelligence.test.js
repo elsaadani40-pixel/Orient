@@ -21,9 +21,9 @@ function createService() {
   return { directory, service, repository, audit, context };
 }
 
-test('memory preserves provenance, temporal semantics, confidence and scope', () => {
+test('memory preserves provenance, temporal semantics, confidence and scope', async () => {
   const { service, context } = createService();
-  const memory = service.add('I prefer Carrier air conditioners', {
+  const memory = await service.add('I prefer Carrier air conditioners', {
     type: 'preference',
     confidence: 0.91,
     importance: 0.8,
@@ -41,12 +41,12 @@ test('memory preserves provenance, temporal semantics, confidence and scope', ()
   assert.equal(memory.validFrom, '2026-01-01T00:00:00.000Z');
 });
 
-test('exact duplicate reinforces confidence without creating a duplicate', () => {
+test('exact duplicate reinforces confidence without creating a duplicate', async () => {
   const { service, repository, context } = createService();
-  const first = service.add('The user prefers concise answers', {
+  const first = await service.add('The user prefers concise answers', {
     type: 'preference', confidence: 0.6, source: { type: 'user' }
   }, context);
-  const second = service.add('The user prefers concise answers', {
+  const second = await service.add('The user prefers concise answers', {
     type: 'preference', confidence: 0.95, source: { type: 'user' }
   }, context);
 
@@ -55,34 +55,34 @@ test('exact duplicate reinforces confidence without creating a duplicate', () =>
   assert.equal(second.confidence, 0.95);
 });
 
-test('semantic conflicts supersede the previous active fact', () => {
+test('semantic conflicts supersede the previous active fact', async () => {
   const { service, context } = createService();
-  const oldMemory = service.add('Preferred city is Alexandria', {
+  const oldMemory = await service.add('Preferred city is Alexandria', {
     type: 'fact', semanticKey: 'user.home.city', source: { type: 'user' }
   }, context);
-  const newMemory = service.add('Preferred city is Cairo', {
+  const newMemory = await service.add('Preferred city is Cairo', {
     type: 'fact', semanticKey: 'user.home.city', source: { type: 'user' }
   }, context);
 
   assert.equal(newMemory.supersedesId, oldMemory.id);
-  assert.throws(
-    () => service.get(oldMemory.id, context),
+  await assert.rejects(
+    async () => service.get(oldMemory.id, context),
     error => error.code === 'MEMORY_NOT_FOUND'
   );
-  assert.equal(service.search('Cairo', context)[0].id, newMemory.id);
+  assert.equal(await service.search('Cairo', context)[0].id, newMemory.id);
 });
 
-test('tenant and scope isolation prevent cross-boundary reads and updates', () => {
+test('tenant and scope isolation prevent cross-boundary reads and updates', async () => {
   const { service, repository } = createService();
   const a = { agentId: 'ORIENT_RUNTIME', tenantId: 'tenant-a' };
   const b = { agentId: 'ORIENT_RUNTIME', tenantId: 'tenant-b' };
 
-  const tenantA = service.add('Tenant A fact', { type: 'fact' }, a);
-  const tenantB = service.add('Tenant B fact', { type: 'fact' }, b);
+  const tenantA = await service.add('Tenant A fact', { type: 'fact' }, a);
+  const tenantB = await service.add('Tenant B fact', { type: 'fact' }, b);
 
-  assert.equal(service.get(tenantA.id, a).text, 'Tenant A fact');
-  assert.throws(
-    () => service.get(tenantA.id, b),
+  assert.equal(await service.get(tenantA.id, a).text, 'Tenant A fact');
+  await assert.rejects(
+    async () => service.get(tenantA.id, b),
     error => error.code === 'MEMORY_NOT_FOUND'
   );
 
@@ -90,44 +90,44 @@ test('tenant and scope isolation prevent cross-boundary reads and updates', () =
   assert.equal(repository.findById(tenantB.id, 'tenant-b', 'personal').text, 'Tenant B fact');
 });
 
-test('missing tenant context is denied fail-closed', () => {
+test('missing tenant context is denied fail-closed', async () => {
   const { service } = createService();
-  assert.throws(
-    () => service.list('anything'),
+  await assert.rejects(
+    async () => service.list('anything'),
     error => error.code === 'MEMORY_TENANT_REQUIRED'
   );
 });
 
-test('relevance ranking combines lexical match, confidence and importance', () => {
+test('relevance ranking combines lexical match, confidence and importance', async () => {
   const { service, context } = createService();
-  const weak = service.add('Python is useful', {
+  const weak = await service.add('Python is useful', {
     type: 'fact', confidence: 0.2, importance: 0.2
   }, context);
-  const strong = service.add('Python is useful for ORIENT ONE tooling', {
+  const strong = await service.add('Python is useful for ORIENT ONE tooling', {
     type: 'fact', confidence: 0.95, importance: 0.95
   }, context);
 
-  const results = service.search('Python ORIENT ONE', context);
+  const results = await service.search('Python ORIENT ONE', context);
   assert.equal(results[0].id, strong.id);
   assert.ok(results[0].relevance > 0);
   assert.notEqual(results[0].id, weak.id);
 });
 
-test('temporal validity excludes expired memories from active recall', () => {
+test('temporal validity excludes expired memories from active recall', async () => {
   const { service, context } = createService();
-  const expired = service.add('Old project deadline', {
+  const expired = await service.add('Old project deadline', {
     type: 'task', validUntil: '2020-01-01T00:00:00.000Z'
   }, context);
-  service.add('Current project deadline', { type: 'task' }, context);
+  await service.add('Current project deadline', { type: 'task' }, context);
 
-  const results = service.search('project deadline', context);
+  const results = await service.search('project deadline', context);
   assert.equal(results.some(memory => memory.id === expired.id), false);
   assert.equal(results.length, 1);
 });
 
-test('consolidation is loss-minimizing and auditable', () => {
+test('consolidation is loss-minimizing and auditable', async () => {
   const { service, repository, audit, context } = createService();
-  const first = service.add('User likes quiet environments', {
+  const first = await service.add('User likes quiet environments', {
     type: 'preference', confidence: 0.7
   }, context);
   const second = repository.insert({
@@ -142,10 +142,10 @@ test('consolidation is loss-minimizing and auditable', () => {
     }]
   }, 'default', 'personal');
 
-  const result = service.consolidate(context);
+  const result = await service.consolidate(context);
   assert.equal(result.consolidated, 1);
-  assert.throws(
-    () => service.get(first.id, context),
+  await assert.rejects(
+    async () => service.get(first.id, context),
     error => error.code === 'MEMORY_NOT_FOUND'
   );
   assert.equal(repository.findById(second.id, 'default', 'personal').state, 'active');
@@ -154,7 +154,7 @@ test('consolidation is loss-minimizing and auditable', () => {
 
 
 
-test('memory lifecycle audit can feed the agent event store with trace provenance', () => {
+test('memory lifecycle audit can feed the agent event store with trace provenance', async () => {
   const { service, audit, context } = createService();
   const events = [];
   audit.setEventSink(event => events.push(event));
@@ -167,7 +167,7 @@ test('memory lifecycle audit can feed the agent event store with trace provenanc
     traceId: 'trace-memory-1'
   };
 
-  const memory = service.add('Event-store linked memory', {
+  const memory = await service.add('Event-store linked memory', {
     type: 'note'
   }, traceContext);
 
@@ -180,7 +180,7 @@ test('memory lifecycle audit can feed the agent event store with trace provenanc
   assert.equal(created.traceId, 'trace-memory-1');
 });
 
-test('memory audit carries execution and decision trace context', () => {
+test('memory audit carries execution and decision trace context', async () => {
   const { service, context } = createService();
   const traceContext = {
     ...context,
@@ -191,12 +191,12 @@ test('memory audit carries execution and decision trace context', () => {
     traceId: 'trace-1'
   };
 
-  const memory = service.add('Traceable memory', {
+  const memory = await service.add('Traceable memory', {
     type: 'note',
     source: { type: 'agent', ref: 'decision:decision-9' }
   }, traceContext);
 
-  const history = service.history(memory.id, traceContext);
+  const history = await service.history(memory.id, traceContext);
   const created = history.find(event => event.action === 'memory.created');
 
   assert.ok(created);
@@ -209,33 +209,33 @@ test('memory audit carries execution and decision trace context', () => {
   assert.equal(created.scope, 'personal');
 });
 
-test('memory history cannot cross tenant or scope boundaries', () => {
+test('memory history cannot cross tenant or scope boundaries', async () => {
   const { service, context } = createService();
-  const memory = service.add('Private trace', { type: 'note' }, context);
+  const memory = await service.add('Private trace', { type: 'note' }, context);
 
-  assert.equal(service.history(memory.id, {
+  assert.equal(await service.history(memory.id, {
     ...context,
     tenantId: 'other-tenant'
   }).length, 0);
 
-  assert.equal(service.history(memory.id, {
+  assert.equal(await service.history(memory.id, {
     ...context,
     memoryScope: 'private'
   }).length, 0);
 });
 
-test('delete is retention-safe: archive plus audit, not physical removal', () => {
+test('delete is retention-safe: archive plus audit, not physical removal', async () => {
   const { service, repository, audit, context } = createService();
-  const memory = service.add('Temporary note', { type: 'note' }, context);
+  const memory = await service.add('Temporary note', { type: 'note' }, context);
 
-  service.delete(memory.id, { ...context, reason: 'retention-policy' });
+  await service.delete(memory.id, { ...context, reason: 'retention-policy' });
 
   assert.equal(
     repository.findById(memory.id, 'default', 'personal').state,
     'archived'
   );
-  assert.throws(
-    () => service.get(memory.id, context),
+  await assert.rejects(
+    async () => service.get(memory.id, context),
     error => error.code === 'MEMORY_NOT_FOUND'
   );
   assert.ok(audit.read().some(event =>
@@ -245,9 +245,9 @@ test('delete is retention-safe: archive plus audit, not physical removal', () =>
   ));
 });
 
-test('evidence policy keeps a stronger verified existing memory over a newer weak candidate', () => {
+test('evidence policy keeps a stronger verified existing memory over a newer weak candidate', async () => {
   const { service, repository, audit, context } = createService();
-  const existing = service.add('Preferred city is Alexandria', {
+  const existing = await service.add('Preferred city is Alexandria', {
     type: 'fact',
     semanticKey: 'user.home.city',
     confidence: 0.95,
@@ -266,7 +266,7 @@ test('evidence policy keeps a stronger verified existing memory over a newer wea
     updatedAt: '2026-01-02T00:00:00.000Z'
   }, 'default', 'personal');
 
-  const candidate = service.add('Preferred city is Cairo', {
+  const candidate = await service.add('Preferred city is Cairo', {
     type: 'fact',
     semanticKey: 'user.home.city',
     confidence: 0.2,
@@ -286,9 +286,9 @@ test('evidence policy keeps a stronger verified existing memory over a newer wea
   assert.ok(event.rationale.candidate.score < event.rationale.existing.score);
 });
 
-test('evidence policy lets a strongly verified candidate replace a weak existing memory', () => {
+test('evidence policy lets a strongly verified candidate replace a weak existing memory', async () => {
   const { service, repository, context } = createService();
-  const existing = service.add('Preferred city is Alexandria', {
+  const existing = await service.add('Preferred city is Alexandria', {
     type: 'fact',
     semanticKey: 'user.home.city',
     confidence: 0.2,
@@ -296,7 +296,7 @@ test('evidence policy lets a strongly verified candidate replace a weak existing
     source: { type: 'unknown' }
   }, context);
 
-  const candidate = service.add('Preferred city is Cairo', {
+  const candidate = await service.add('Preferred city is Cairo', {
     type: 'fact',
     semanticKey: 'user.home.city',
     confidence: 0.95,
@@ -316,16 +316,16 @@ test('evidence policy lets a strongly verified candidate replace a weak existing
   assert.equal(repository.findById(candidate.id, 'default', 'personal').state, 'active');
 });
 
-test('expired conflict candidate cannot win evidence resolution', () => {
+test('expired conflict candidate cannot win evidence resolution', async () => {
   const { service, repository, context } = createService();
-  const existing = service.add('Preferred city is Alexandria', {
+  const existing = await service.add('Preferred city is Alexandria', {
     type: 'fact',
     semanticKey: 'user.home.city',
     confidence: 0.5,
     source: { type: 'system' }
   }, context);
 
-  const candidate = service.add('Preferred city is Cairo', {
+  const candidate = await service.add('Preferred city is Cairo', {
     type: 'fact',
     semanticKey: 'user.home.city',
     confidence: 1,
