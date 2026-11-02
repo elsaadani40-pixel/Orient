@@ -74,11 +74,11 @@ test('MemoryService keeps tenant memory isolated', async () => {
   });
 
   assert.equal(
-    await service.list('', {
+    (await service.list('', {
       agentId: 'research',
       memoryScope: 'research',
       tenantId: 'tenant-a'
-    }).length,
+    })).length,
     1
   );
 
@@ -96,7 +96,7 @@ test('MemoryService keeps tenant memory isolated', async () => {
       agentId: 'research',
       memoryScope: 'research',
       tenantId: 'tenant-a'
-    })[0].text,
+    }))[0].text,
     'tenant A memory'
   );
 });
