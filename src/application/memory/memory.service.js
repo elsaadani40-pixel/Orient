@@ -426,6 +426,9 @@ class MemoryService {
       const authorization = this.authorize(context, 'write', options.scope);
       const tenantId = authorization.tenantId;
       const scope = authorization.scope;
+      if (typeof this.repository.lockScope === 'function') {
+        await this.repository.lockScope(tenantId, scope);
+      }
 
       const candidate = createMemory({
         text: clean,
@@ -606,6 +609,9 @@ class MemoryService {
 
   async get(id, context = {}) {
     const authorization = this.authorize(context, 'read');
+    if (typeof this.repository.lockScope === 'function') {
+      await this.repository.lockScope(authorization.tenantId, authorization.scope);
+    }
     const memory = await this.repository.findById(
       id,
       authorization.tenantId,
@@ -644,6 +650,9 @@ class MemoryService {
     const authorization = this.authorize(context, 'write');
     const tenantId = authorization.tenantId;
     const scope = authorization.scope;
+    if (typeof this.repository.lockScope === 'function') {
+      await this.repository.lockScope(tenantId, scope);
+    }
     const memories = (await this.repository.findAll(tenantId, scope)).map(normalizeMemory);
 
     const seen = new Map();
@@ -749,6 +758,9 @@ class MemoryService {
 
   async delete(id, context = {}) {
     const authorization = this.authorize(context, 'delete');
+    if (typeof this.repository.lockScope === 'function') {
+      await this.repository.lockScope(authorization.tenantId, authorization.scope);
+    }
     const memory = await this.repository.findById(
       id,
       authorization.tenantId,
