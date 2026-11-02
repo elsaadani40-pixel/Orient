@@ -8,6 +8,9 @@ const JsonMemoryRepository =
 
 const MemoryService =
   require('./src/application/memory/memory.service');
+
+const assertMemoryPersistenceMode =
+  require('./src/application/memory/assert-memory-persistence-mode');
 const MemoryAuditRepository =
   require('./src/infrastructure/memory/memory-audit.repository');
 const MemoryTransactionCoordinator =
@@ -90,6 +93,10 @@ const createPersistence =
 
 const persistenceRuntime = createPersistence(config);
 const persistence = persistenceRuntime.adapter;
+// Never let PostgreSQL silently select the JSON memory/audit stores below.
+// PostgreSQL memory activation remains blocked until MemoryService and its
+// transaction/recovery protocol are fully asynchronous and integrated.
+assertMemoryPersistenceMode(config.persistenceMode || 'json');
 
 const { OwnerWorkProfileStore } =
   require('./src/infrastructure/persistence/owner-work-profile-store');
