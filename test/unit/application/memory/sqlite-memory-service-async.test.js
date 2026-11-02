@@ -151,6 +151,7 @@ test('SQLite memory operation receipts reconcile after closing and reopening the
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-restart-'));
   const filePath = path.join(directory, 'orient.sqlite');
   let firstPersistence = new SqlitePersistence({ filePath });
+  let secondPersistence = null;
   t.after(() => {
     try { firstPersistence?.close(); } catch {}
     try { secondPersistence?.close(); } catch {}
@@ -175,7 +176,7 @@ test('SQLite memory operation receipts reconcile after closing and reopening the
   firstPersistence.close();
   firstPersistence = null;
 
-  let secondPersistence = new SqlitePersistence({ filePath });
+  secondPersistence = new SqlitePersistence({ filePath });
   const secondService = new MemoryService(secondPersistence.memory, {
     auditRepository: secondPersistence.memoryAudit,
     transactionCoordinator: coordinatorFor(secondPersistence)
