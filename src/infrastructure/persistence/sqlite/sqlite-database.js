@@ -22,6 +22,7 @@ class SqliteDatabase {
 
   run(sql, params = []) {
     if (typeof sql !== 'string' || !sql.trim()) throw new TypeError('SQL statement is required');
+    this.assertExternalAccess(sql, 'write');
     if (!Array.isArray(params)) throw new TypeError('SQL parameters must be an array');
     if (params.length === 0 && sql.trim().includes(';') && sql.trim().split(';').filter(part => part.trim()).length > 1) {
       throw new TypeError('run() accepts one prepared statement; use exec() only for static SQL batches');
@@ -44,13 +45,18 @@ class SqliteDatabase {
 
   get connection() {
     const context = this.transactionContext.getStore();
-    if (context?.connection) return context.connection;
-    if (this.asyncTransactionPending > 0) {
-      const error = new Error('SQLite connection is reserved by an asynchronous transaction');
-      error.code = 'SQLITE_TRANSACTION_BUSY';
-      throw error;
-    }
-    return this.baseConnection;
+    return context?.connection || this.baseConnection;
+  }
+
+  assertExternalAccess(sql, access) {
+    if (this.transactionContext.getStore() || this.asyncTransactionPending === 0) return;
+    const readOnly = access === 'read' &&
+      this.filePath !== ':memory:' &&
+      /^\\s*(SELECT|PRAGMA)\\b/i.test(sql);
+    if (readOnly) return;
+    const error = new Error('SQLite connection is reserved by an asynchronous transaction');
+    error.code = 'SQLITE_TRANSACTION_BUSY';
+    throw error;
   }
 
   afterCommit(callback) {
