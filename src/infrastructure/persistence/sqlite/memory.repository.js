@@ -85,7 +85,17 @@ class SqliteMemoryRepository {
 }
 
 class SqliteMemoryAuditRepository {
-  constructor(db) { this.db = db; }
+  constructor(db, transactionCoordinator = null) {
+    this.db = db;
+    this.transactionCoordinator = transactionCoordinator;
+    this.eventSink = null;
+  }
+
+  setEventSink(eventSink) {
+    this.eventSink = typeof eventSink === 'function' ? eventSink : null;
+    return this;
+  }
+
   append(event) {
     const record = {
       ...event,
@@ -97,6 +107,33 @@ class SqliteMemoryAuditRepository {
       [record.id, String(record.tenantId || 'local'), record.scope || null,
         record.memoryId || null, record.operationId || null, record.occurredAt, JSON.stringify(record)]
     );
+    if (this.eventSink) {
+      const eventTypeByAction = {
+        'memory.created': 'memory.created',
+        'memory.reinforced': 'memory.reinforced',
+        'memory.conflict.resolved': 'memory.conflict.resolved',
+        'memory.accessed': 'memory.accessed',
+        'memory.consolidated': 'memory.consolidated',
+        'memory.archived': 'memory.archived'
+      };
+      const publish = () => {
+        try {
+          this.eventSink({
+            ...record,
+            type: record.type || eventTypeByAction[record.action] || 'memory.updated'
+          });
+          this.lastEventSinkError = null;
+        } catch (error) {
+          this.lastEventSinkError = error;
+        }
+      };
+      if (this.transactionCoordinator &&
+          typeof this.transactionCoordinator.afterCommit === 'function') {
+        this.transactionCoordinator.afterCommit(publish);
+      } else {
+        publish();
+      }
+    }
     return record;
   }
   findByMemoryId(memoryId, tenantId = 'local', scope = null) {
