@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 class SqliteDatabase {
   constructor(filePath) {
@@ -11,10 +12,11 @@ class SqliteDatabase {
     if (this.filePath !== ':memory:') {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     }
-    this.connection = new DatabaseSync(this.filePath);
+    this.baseConnection = new DatabaseSync(this.filePath);
+    this.transactionContext = new AsyncLocalStorage();
     this.asyncTransactionTail = Promise.resolve();
     this.asyncTransactionPending = 0;
-    this.connection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;');
+    this.baseConnection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;');
     this.initialize();
   }
 
@@ -38,100 +40,140 @@ class SqliteDatabase {
     return this.connection.exec(sql);
   }
 
+  get connection() {
+    const context = this.transactionContext.getStore();
+    if (context?.connection) return context.connection;
+    if (this.asyncTransactionPending > 0) {
+      const error = new Error('SQLite connection is reserved by an asynchronous transaction');
+      error.code = 'SQLITE_TRANSACTION_BUSY';
+      throw error;
+    }
+    return this.baseConnection;
+  }
+
   afterCommit(callback) {
     if (typeof callback !== 'function') throw new TypeError('afterCommit requires a callback');
-    if (this.afterCommitCallbacks) {
-      this.afterCommitCallbacks.push(callback);
+    const context = this.transactionContext.getStore();
+    if (context && Array.isArray(context.afterCommitCallbacks)) {
+      context.afterCommitCallbacks.push(callback);
       return;
     }
     callback();
   }
 
   transaction(workOrStatements) {
+    const active = this.transactionContext.getStore();
     const callback = typeof workOrStatements === 'function' ? workOrStatements : null;
     const statements = callback ? null : workOrStatements;
     if (!callback && (!Array.isArray(statements) || !statements.length)) return;
-    if (callback && callback.constructor?.name === 'AsyncFunction') {
-      throw Object.assign(
-        new TypeError('SQLite transaction callbacks must be synchronous; async functions are rejected before execution'),
-        { code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED' }
-      );
-    }
 
-    this.connection.exec('BEGIN IMMEDIATE;');
-    const callbacks = [];
-    this.afterCommitCallbacks = callbacks;
-    try {
+    // Nested repository transactions participate in the outer transaction.
+    if (active) {
       if (callback) {
+        if (callback.constructor?.name === 'AsyncFunction') {
+          throw Object.assign(new TypeError('SQLite transaction callbacks must be synchronous'), {
+            code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+          });
+        }
         const result = callback(this);
         if (result && typeof result.then === 'function') {
-          throw Object.assign(
-            new TypeError('SQLite transaction callbacks must be synchronous; async callbacks are not supported'),
-            { code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED' }
-          );
-        }
-        this.connection.exec('COMMIT;');
-        this.afterCommitCallbacks = null;
-        for (const callback of callbacks) {
-          try { callback(); } catch (error) {
-            this.lastAfterCommitError = error;
-          }
+          throw Object.assign(new TypeError('SQLite transaction callbacks must be synchronous'), {
+            code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+          });
         }
         return result;
       }
-
       for (const statement of statements) {
-        if (typeof statement === 'string') {
-          // String batches are reserved for static schema/test SQL. Dynamic
-          // values must be passed through { sql, params } prepared statements.
-          this.connection.exec(statement);
-          continue;
+        if (typeof statement === 'string') active.connection.exec(statement);
+        else {
+          if (!statement || typeof statement.sql !== 'string' || !Array.isArray(statement.params || [])) {
+            throw new TypeError('Transaction statements must be SQL strings or { sql, params } objects');
+          }
+          active.connection.prepare(statement.sql).run(...(statement.params || []));
         }
-        if (!statement || typeof statement.sql !== 'string' || !Array.isArray(statement.params || [])) {
-          throw new TypeError('Transaction statements must be SQL strings or { sql, params } objects');
-        }
-        this.connection.prepare(statement.sql).run(...(statement.params || []));
       }
-      this.connection.exec('COMMIT;');
-      this.afterCommitCallbacks = null;
-      for (const callback of callbacks) {
-        try { callback(); } catch (error) {
+      return;
+    }
+
+    const connection = this.connection;
+    const context = { connection, afterCommitCallbacks: [] };
+    connection.exec('BEGIN IMMEDIATE;');
+    try {
+      const result = this.transactionContext.run(context, () => {
+        if (callback) {
+          if (callback.constructor?.name === 'AsyncFunction') {
+            throw Object.assign(new TypeError('SQLite transaction callbacks must be synchronous; async functions are rejected before execution'), {
+              code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+            });
+          }
+          const value = callback(this);
+          if (value && typeof value.then === 'function') {
+            throw Object.assign(new TypeError('SQLite transaction callbacks must be synchronous; async callbacks are not supported'), {
+              code: 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+            });
+          }
+          return value;
+        }
+        for (const statement of statements) {
+          if (typeof statement === 'string') {
+            // String batches are reserved for static schema/test SQL.
+            context.connection.exec(statement);
+          } else {
+            if (!statement || typeof statement.sql !== 'string' || !Array.isArray(statement.params || [])) {
+              throw new TypeError('Transaction statements must be SQL strings or { sql, params } objects');
+            }
+            context.connection.prepare(statement.sql).run(...(statement.params || []));
+          }
+        }
+        return undefined;
+      });
+      connection.exec('COMMIT;');
+      for (const afterCommit of context.afterCommitCallbacks) {
+        try { this.transactionContext.run(context, afterCommit); } catch (error) {
           this.lastAfterCommitError = error;
         }
       }
+      return result;
     } catch (error) {
-      this.afterCommitCallbacks = null;
-      try { this.connection.exec('ROLLBACK;'); } catch {}
+      try { connection.exec('ROLLBACK;'); } catch {}
       throw error;
     }
   }
 
   transactionAsync(work) {
     if (typeof work !== 'function') throw new TypeError('transactionAsync(work) requires a callback');
+    const active = this.transactionContext.getStore();
+    if (active) return Promise.resolve(work(this));
 
     const execute = async () => {
-      this.connection.exec('BEGIN IMMEDIATE;');
-      const callbacks = [];
-      this.afterCommitCallbacks = callbacks;
+      const ownsConnection = this.filePath !== ':memory:';
+      const connection = ownsConnection
+        ? new DatabaseSync(this.filePath)
+        : this.baseConnection;
+      connection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+      const context = { connection, afterCommitCallbacks: [] };
+      connection.exec('BEGIN IMMEDIATE;');
       try {
-        const result = await work(this);
-        this.connection.exec('COMMIT;');
-        this.afterCommitCallbacks = null;
-        for (const callback of callbacks) {
-          try { await callback(); } catch (error) {
+        const result = await this.transactionContext.run(context, () => work(this));
+        connection.exec('COMMIT;');
+        for (const afterCommit of context.afterCommitCallbacks) {
+          try {
+            await this.transactionContext.run(context, afterCommit);
+          } catch (error) {
             this.lastAfterCommitError = error;
           }
         }
         return result;
       } catch (error) {
-        this.afterCommitCallbacks = null;
-        try { this.connection.exec('ROLLBACK;'); } catch {}
+        try { connection.exec('ROLLBACK;'); } catch {}
         throw error;
+      } finally {
+        if (ownsConnection) connection.close();
       }
     };
 
-    // DatabaseSync is one connection. Serialize every async transaction so
-    // another request cannot execute statements inside a suspended transaction.
+    // Transactions are serialized. Calls outside the active transaction context
+    // fail closed while it is pending instead of accidentally joining its writes.
     this.asyncTransactionPending += 1;
     const result = this.asyncTransactionTail.then(execute, execute).finally(() => {
       this.asyncTransactionPending -= 1;
@@ -251,7 +293,12 @@ class SqliteDatabase {
   }
 
   close() {
-    this.connection.close();
+    if (this.asyncTransactionPending > 0) {
+      const error = new Error('Cannot close SQLite while asynchronous transactions are pending');
+      error.code = 'SQLITE_TRANSACTION_BUSY';
+      throw error;
+    }
+    this.baseConnection.close();
   }
 }
 

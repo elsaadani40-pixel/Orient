@@ -103,3 +103,39 @@ test('SQLite reconciliation reads fail fast while an async transaction owns the 
     { acquired: true, value: 'available' }
   );
 });
+
+test('SQLite async transactions reject unrelated synchronous writes instead of absorbing them', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-async-isolation-'));
+  const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.sqlite') });
+  t.after(() => {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  let release;
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const transaction = persistence.db.transactionAsync(async db => {
+    db.run(
+      'INSERT INTO memories(memory_id,tenant_id,scope,created_at,updated_at,payload) VALUES(?,?,?,?,?,?)',
+      ['isolated-memory', 'tenant-a', 'personal', new Date().toISOString(), new Date().toISOString(), JSON.stringify({ id: 'isolated-memory' })]
+    );
+    entered();
+    await new Promise(resolve => { release = resolve; });
+    throw new Error('rollback isolated transaction');
+  });
+
+  await started;
+  assert.throws(
+    () => persistence.db.run(
+      'INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)',
+      ['unrelated-event', 'test', new Date().toISOString(), '{}']
+    ),
+    error => error.code === 'SQLITE_TRANSACTION_BUSY'
+  );
+
+  release();
+  await assert.rejects(transaction, /rollback isolated transaction/);
+  assert.equal(persistence.db.query('SELECT COUNT(*) AS count FROM memories WHERE memory_id = ?', ['isolated-memory'])[0].count, 0);
+  assert.equal(persistence.db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['unrelated-event'])[0].count, 0);
+});
