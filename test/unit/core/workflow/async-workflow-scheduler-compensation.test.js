@@ -194,3 +194,80 @@ test('expired recovered workflow releases its dispatch claim', async () => {
     workerId: owner
   });
 });
+
+
+test('recovery releases its dispatch claim when quota recovery fails', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'recovery-quota-restore-failure-wf',
+    tenantId: 'tenant-compensation'
+  });
+  let releasedBy = null;
+  const workflowRepository = {
+    workerRegistry: { async register(worker) { return worker; } },
+    async claimQueued() { return [instance.toJSON()]; },
+    async releaseDispatchClaim(workflowId, workerId) {
+      releasedBy = { workflowId, workerId };
+      return true;
+    }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    quotaRepository: {
+      async recoverWorkflow() { throw new Error('quota recovery unavailable'); },
+      async reserveWorkflow() { return {}; }
+    },
+    clock: () => 1000,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+
+  await assert.rejects(
+    () => scheduler.recoverPersisted(),
+    /quota recovery unavailable/
+  );
+  assert.deepEqual(releasedBy, {
+    workflowId: instance.workflowId,
+    workerId: scheduler.recoveryWorkerId
+  });
+  assert.equal(scheduler.depth(), 0);
+});
+
+
+test('recovery releases its dispatch claim when persisting a quota failure throws', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'recovery-quota-save-failure-wf',
+    tenantId: 'tenant-compensation'
+  });
+  instance.input = { oversized: 'input' };
+  let releasedBy = null;
+  const workflowRepository = {
+    workerRegistry: { async register(worker) { return worker; } },
+    async claimQueued() { return [instance.toJSON()]; },
+    async save() { throw new Error('quota failure persistence unavailable'); },
+    async releaseDispatchClaim(workflowId, workerId) {
+      releasedBy = { workflowId, workerId };
+      return true;
+    }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    quotaPolicy: { maxInputChars: 1 },
+    clock: () => 1000,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+
+  await assert.rejects(
+    () => scheduler.recoverPersisted(),
+    /quota failure persistence unavailable/
+  );
+  assert.deepEqual(releasedBy, {
+    workflowId: instance.workflowId,
+    workerId: scheduler.recoveryWorkerId
+  });
+  assert.equal(scheduler.depth(), 0);
+});
