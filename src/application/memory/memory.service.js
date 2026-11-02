@@ -243,7 +243,7 @@ class MemoryService {
 
   async audit(event, context = {}) {
     if (!this.auditRepository) return null;
-    return this.auditRepository.append({
+    return await this.auditRepository.append({
       ...event,
       tenantId: event.tenantId || this.resolveTenant(context),
       agentId: context.agentId || 'ORIENT_RUNTIME',
@@ -265,7 +265,7 @@ class MemoryService {
     if (!this.auditRepository || typeof this.auditRepository.findByMemoryId !== 'function') {
       return [];
     }
-    return await await this.auditRepository.findByMemoryId(
+    return await this.auditRepository.findByMemoryId(
       id,
       authorization.tenantId,
       authorization.scope
@@ -292,7 +292,7 @@ class MemoryService {
     // snapshot. Without the shared lock, a concurrent mutation could expose an
     // intermediate memory/audit pair and cause an unsafe replay decision.
     const snapshot = await this.transactionCoordinator.tryReadAsync(async () => {
-      const events = await await this.auditRepository.findByOperationId(
+      const events = await this.auditRepository.findByOperationId(
         operationId,
         authorization.tenantId,
         authorization.scope
@@ -337,7 +337,7 @@ class MemoryService {
         if (!mutation) {
           return { status: 'unknown', reason: 'add_result_receipt_not_found' };
         }
-        const memory = await await this.repository.findById(
+        const memory = await this.repository.findById(
           mutation.memoryId,
           authorization.tenantId,
           authorization.scope
@@ -366,9 +366,9 @@ class MemoryService {
 
   async findExact({ tenantId, scope, type, text }) {
     if (typeof this.repository.findByFingerprint === 'function') {
-      return await await this.repository.findByFingerprint({ tenantId, scope, type, text });
+      return await this.repository.findByFingerprint({ tenantId, scope, type, text });
     }
-    return (await await this.repository.findAll(tenantId, scope)).find(memory =>
+    return (await this.repository.findAll(tenantId, scope)).find(memory =>
       memory.state !== 'archived' &&
       memory.type === type &&
       String(memory.text || '').trim().toLowerCase() === String(text || '').trim().toLowerCase()
@@ -378,7 +378,7 @@ class MemoryService {
   async findConflict(semanticKey, tenantId, scope) {
     if (!semanticKey) return null;
     if (typeof this.repository.findActiveBySemanticKey === 'function') {
-      return await await this.repository.findActiveBySemanticKey(semanticKey, tenantId, scope);
+      return await this.repository.findActiveBySemanticKey(semanticKey, tenantId, scope);
     }
     return (await this.repository.findAll(tenantId, scope)).find(memory =>
       memory.state === 'active' &&
@@ -465,7 +465,7 @@ class MemoryService {
         );
 
         try {
-          await await this.audit({
+          await this.audit({
             action: 'memory.reinforced',
             tenantId,
             memoryId: exact.id,
@@ -513,7 +513,7 @@ class MemoryService {
         }
         if (conflictWasUpdated && conflictSnapshot) {
           try {
-            const restored = await await this.repository.update(
+            const restored = await this.repository.update(
               conflictSnapshot.id,
               conflictSnapshot,
               tenantId,
@@ -565,9 +565,9 @@ class MemoryService {
           // The durable audit store and memory store are not transactional.
           // This protects handled repository/audit exceptions, not process crashes
           // or a crash between a successful audit append and a later failure.
-          inserted = await await this.repository.insert(memory, tenantId, scope);
+          inserted = await this.repository.insert(memory, tenantId, scope);
 
-          this.audit({
+          await this.audit({
             action: 'memory.conflict.resolved',
             tenantId,
             memoryId: inserted.id,
@@ -583,10 +583,10 @@ class MemoryService {
             }
           }, context);
         } else {
-          inserted = this.repository.insert(memory, tenantId, scope);
+          inserted = await this.repository.insert(memory, tenantId, scope);
         }
 
-        this.audit({
+        await this.audit({
           action: 'memory.created',
           tenantId,
           memoryId: inserted.id,
@@ -606,7 +606,7 @@ class MemoryService {
 
   async get(id, context = {}) {
     const authorization = this.authorize(context, 'read');
-    const memory = await await await this.repository.findById(
+    const memory = await this.repository.findById(
       id,
       authorization.tenantId,
       authorization.scope
@@ -740,7 +740,7 @@ class MemoryService {
         changes.push({ winnerId: winner.id, supersededId: loser.id });
       }
 
-      this.audit({ action: 'memory.consolidated', tenantId, changes }, context);
+      await this.audit({ action: 'memory.consolidated', tenantId, changes }, context);
       return { tenantId, scope, consolidated: changes.length, changes };
     } catch (error) {
       return await restoreChanges(error);
@@ -763,7 +763,7 @@ class MemoryService {
       state: memory.state,
       updatedAt: memory.updatedAt
     };
-    this.repository.update(
+    await this.repository.update(
       id,
       {
         state: 'archived',
@@ -774,7 +774,7 @@ class MemoryService {
     );
 
     try {
-      this.audit({
+      await this.audit({
         action: 'memory.archived',
         tenantId: authorization.tenantId,
         memoryId: id,
