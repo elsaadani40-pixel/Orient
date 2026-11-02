@@ -26,10 +26,10 @@ function createFixture() {
   };
 }
 
-test('memory.consolidate restores all touched records when a later write fails', () => {
+test('memory.consolidate restores all touched records when a later write fails', async () => {
   const fixture = createFixture();
   try {
-    const first = fixture.service.add('duplicate record', {
+    const first = await fixture.service.add('duplicate record', {
       type: 'note',
       confidence: 0.6,
       importance: 0.4
@@ -54,8 +54,8 @@ test('memory.consolidate restores all touched records when a later write fails',
       return originalUpdate(...args);
     };
 
-    assert.throws(
-      () => fixture.service.consolidate(fixture.context),
+    await assert.rejects(
+      async () => fixture.service.consolidate(fixture.context),
       /injected second consolidation write failure/
     );
 
@@ -76,10 +76,10 @@ test('memory.consolidate restores all touched records when a later write fails',
   }
 });
 
-test('memory.consolidate restores touched records when the final audit append fails', () => {
+test('memory.consolidate restores touched records when the final audit append fails', async () => {
   const fixture = createFixture();
   try {
-    const first = fixture.service.add('audit duplicate', {
+    const first = await fixture.service.add('audit duplicate', {
       type: 'note',
       confidence: 0.6
     }, fixture.context);
@@ -103,8 +103,8 @@ test('memory.consolidate restores touched records when the final audit append fa
       return originalAppend(event);
     };
 
-    assert.throws(
-      () => fixture.service.consolidate(fixture.context),
+    await assert.rejects(
+      async () => fixture.service.consolidate(fixture.context),
       /injected consolidation audit failure/
     );
 
