@@ -89,3 +89,37 @@ test('recovery releases a dispatch claim when the worker lacks required capabili
   assert.equal(released, true);
   assert.equal(scheduler.depth(), 0);
 });
+
+
+test('recovered queued cancellation releases its dispatch claim', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'recovered-cancel-claim-wf',
+    tenantId: 'tenant-compensation'
+  });
+  let released = null;
+  const workflowRepository = {
+    workerRegistry: { async register(worker) { return worker; } },
+    async claimQueued() { return [instance.toJSON()]; },
+    async save() { return true; },
+    async releaseDispatchClaim(workflowId, workerId, tenantId) {
+      released = { workflowId, workerId, tenantId };
+      return true;
+    }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    clock: () => 1000,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+  assert.equal(await scheduler.recoverPersisted(), 1);
+  const owner = scheduler.queue[0].dispatchClaimWorkerId;
+  assert.equal(await scheduler.cancelAsync(instance.workflowId), true);
+  assert.deepEqual(released, {
+    workflowId: instance.workflowId,
+    workerId: owner,
+    tenantId: 'tenant-compensation'
+  });
+});
