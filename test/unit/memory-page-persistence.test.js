@@ -30,7 +30,7 @@ test('memory page renders saved records after repository is reopened and keeps s
   const file = path.join(directory, 'memories.json');
   const context = { agentId: 'ORIENT_RUNTIME', tenantId: 'local' };
   const firstService = new MemoryService(new JsonMemoryRepository(file));
-  const saved = firstService.add('ذاكرة اختبار بعد إعادة التشغيل', {}, context);
+  const saved = await firstService.add('ذاكرة اختبار بعد إعادة التشغيل', {}, context);
   assert.ok(saved.id);
 
   // Simulate a process restart by creating a new repository/service over the same file.
