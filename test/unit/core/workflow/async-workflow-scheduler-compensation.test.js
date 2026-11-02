@@ -123,3 +123,38 @@ test('recovered queued cancellation releases its dispatch claim', async () => {
     tenantId: 'tenant-compensation'
   });
 });
+
+
+test('recovery save failure removes the queue entry and releases its claim', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'recovery-save-failure-wf',
+    tenantId: 'tenant-compensation'
+  });
+  let releasedBy = null;
+  const workflowRepository = {
+    workerRegistry: { async register(worker) { return worker; } },
+    async claimQueued() { return [instance.toJSON()]; },
+    async save() { throw new Error('recovery write failed'); },
+    async releaseDispatchClaim(workflowId, workerId) {
+      releasedBy = { workflowId, workerId };
+      return true;
+    }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    clock: () => 1000,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+  await assert.rejects(
+    () => scheduler.recoverPersisted(),
+    /recovery write failed/
+  );
+  assert.equal(scheduler.depth(), 0);
+  assert.deepEqual(releasedBy, {
+    workflowId: instance.workflowId,
+    workerId: scheduler.recoveryWorkerId
+  });
+});
