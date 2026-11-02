@@ -8,6 +8,13 @@ class PostgresMemoryRepository {
     this.db = db;
   }
 
+  async lockScope(tenantId = 'local', scope = 'personal') {
+    await this.db.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`orient-memory:${tenantId || 'local'}:${scope || 'personal'}`]
+    );
+  }
+
   async findAll(tenantId = 'local', scope = null) {
     const result = scope
       ? await this.db.query('SELECT payload FROM memories WHERE tenant_id=$1 AND scope=$2 ORDER BY created_at DESC,memory_id DESC', [tenantId, scope])
@@ -58,7 +65,17 @@ class PostgresMemoryRepository {
   }
 
   async update(id, patch, tenantId = 'local', scope = null) {
-    const current = await this.findById(id, tenantId, scope);
+    const params = [tenantId || 'local', id];
+    let where = 'tenant_id=$1 AND memory_id=$2';
+    if (scope) {
+      params.push(scope);
+      where += ' AND scope=$3';
+    }
+    const locked = await this.db.query(
+      `SELECT payload FROM memories WHERE ${where} LIMIT 1 FOR UPDATE`,
+      params
+    );
+    const current = locked.rows[0]?.payload || null;
     if (!current) return null;
     const updated = normalizeMemory({
       ...current, ...patch, id: current.id,
