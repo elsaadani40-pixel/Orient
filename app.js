@@ -361,8 +361,7 @@ const agentOrchestrator =
     modelRouter
   });
 
-const persistenceRuntime = createPersistence(config);
-const persistence = persistenceRuntime.adapter;
+// The configured persistence adapter was initialized before memory composition.
 
 // PostgreSQL mode stores the owner work profile in the same durable database;
 // JSON mode retains the restrictive local file-backed implementation.
