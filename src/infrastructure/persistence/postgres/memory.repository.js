@@ -119,7 +119,23 @@ class PostgresMemoryAuditRepository {
       [record.id, record.tenantId || 'local', record.scope || 'personal',
         record.memoryId || null, record.operationId || null, record.occurredAt, record]
     );
-    this.publishAfterDurableAppend(record);
+    const eventTypeByAction = {
+      'memory.created': 'memory.created',
+      'memory.reinforced': 'memory.reinforced',
+      'memory.conflict.resolved': 'memory.conflict.resolved',
+      'memory.accessed': 'memory.accessed',
+      'memory.consolidated': 'memory.consolidated',
+      'memory.archived': 'memory.archived'
+    };
+    const publishedRecord = {
+      ...record,
+      type: record.type || eventTypeByAction[record.action] || 'memory.updated'
+    };
+    if (typeof this.db.afterCommit === 'function') {
+      this.db.afterCommit(() => this.publishAfterDurableAppend(publishedRecord));
+    } else {
+      this.publishAfterDurableAppend(publishedRecord);
+    }
     return record;
   }
 
