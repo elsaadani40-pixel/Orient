@@ -159,7 +159,7 @@ test('SQLite checkpoint sequencing remains monotonic and schema migration marker
   first.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 2 });
 
   const migrationRows = first.db.query('SELECT version FROM schema_migrations ORDER BY version ASC;');
-  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1]);
+  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1, 2]);
   assert.equal(first.checkpoints.findLatest('exec-seq-1').sequence, 2);
 
   const second = new SqlitePersistence({ filePath });
@@ -310,6 +310,106 @@ test('SQLite audit event sink runs only after commit and never publishes rolled-
     assert.deepEqual(published, ['audit-published-after-commit']);
   } finally {
     persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite migrates legacy memory and audit tables to tenant-scoped schema without losing records', () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-migration-'));
+  const filePath = path.join(directory, 'orient.db');
+  const legacyMemory = {
+    id: 'legacy-memory-1',
+    tenantId: 'tenant-legacy',
+    scope: 'personal',
+    type: 'fact',
+    text: 'Preserve this memory during schema migration',
+    state: 'active',
+    createdAt: '2026-10-20T10:00:00.000Z',
+    updatedAt: '2026-10-21T10:00:00.000Z'
+  };
+  const legacyAudit = {
+    id: 'legacy-audit-1',
+    tenantId: 'tenant-legacy',
+    scope: 'personal',
+    memoryId: legacyMemory.id,
+    operationId: 'legacy-operation-1',
+    occurredAt: '2026-10-21T10:00:00.000Z',
+    action: 'memory.created'
+  };
+
+  const legacy = new DatabaseSync(filePath);
+  legacy.exec(`
+    CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+    INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-10-20T00:00:00.000Z');
+    CREATE TABLE memories (
+      memory_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      state TEXT NOT NULL,
+      type TEXT NOT NULL,
+      semantic_key TEXT,
+      text TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE TABLE memory_audit (
+      event_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      scope TEXT,
+      memory_id TEXT,
+      operation_id TEXT,
+      occurred_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+  `);
+  legacy.prepare(
+    'INSERT INTO memories(memory_id,tenant_id,scope,state,type,semantic_key,text,payload) VALUES(?,?,?,?,?,?,?,?)'
+  ).run(
+    legacyMemory.id, legacyMemory.tenantId, legacyMemory.scope, legacyMemory.state,
+    legacyMemory.type, null, legacyMemory.text, JSON.stringify(legacyMemory)
+  );
+  legacy.prepare(
+    'INSERT INTO memory_audit(event_id,tenant_id,scope,memory_id,operation_id,occurred_at,payload) VALUES(?,?,?,?,?,?,?)'
+  ).run(
+    legacyAudit.id, legacyAudit.tenantId, legacyAudit.scope, legacyAudit.memoryId,
+    legacyAudit.operationId, legacyAudit.occurredAt, JSON.stringify(legacyAudit)
+  );
+  legacy.close();
+
+  try {
+    const migrated = new SqlitePersistence({ filePath });
+    const memoryColumns = migrated.db.query('PRAGMA table_info(memories)');
+    const auditColumns = migrated.db.query('PRAGMA table_info(memory_audit)');
+    assert.deepEqual(
+      memoryColumns.filter(column => Number(column.pk) > 0).sort((a, b) => a.pk - b.pk).map(column => column.name),
+      ['tenant_id', 'memory_id']
+    );
+    assert.ok(memoryColumns.some(column => column.name === 'created_at'));
+    assert.ok(memoryColumns.some(column => column.name === 'updated_at'));
+    assert.deepEqual(
+      auditColumns.filter(column => Number(column.pk) > 0).sort((a, b) => a.pk - b.pk).map(column => column.name),
+      ['tenant_id', 'event_id']
+    );
+    assert.equal(
+      migrated.memory.findById(legacyMemory.id, legacyMemory.tenantId, legacyMemory.scope).text,
+      legacyMemory.text
+    );
+    assert.deepEqual(
+      migrated.memoryAudit.findByOperationId(legacyAudit.operationId, legacyAudit.tenantId, legacyAudit.scope),
+      [legacyAudit]
+    );
+    assert.deepEqual(
+      migrated.db.query('SELECT version FROM schema_migrations ORDER BY version').map(row => Number(row.version)),
+      [1, 2]
+    );
+    migrated.close();
+
+    const restarted = new SqlitePersistence({ filePath });
+    assert.equal(restarted.memory.findById(legacyMemory.id, legacyMemory.tenantId, legacyMemory.scope).text, legacyMemory.text);
+    assert.equal(restarted.memoryAudit.findByOperationId(legacyAudit.operationId, legacyAudit.tenantId, legacyAudit.scope).length, 1);
+    restarted.close();
+  } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
