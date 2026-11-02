@@ -200,7 +200,110 @@ class SqliteDatabase {
     return { acquired: true, value: await this.transactionAsync(work) };
   }
 
+  migrateLegacyMemorySchema() {
+    const tableExists = name => Boolean(this.baseConnection.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"
+    ).get(name));
+    const tableInfo = name => this.baseConnection.prepare(`PRAGMA table_info(${name})`).all();
+    const primaryKey = columns => columns
+      .filter(column => Number(column.pk) > 0)
+      .sort((left, right) => Number(left.pk) - Number(right.pk))
+      .map(column => column.name)
+      .join(',');
+
+    const memoryColumns = tableExists('memories') ? tableInfo('memories') : [];
+    const auditColumns = tableExists('memory_audit') ? tableInfo('memory_audit') : [];
+    const memoryNames = new Set(memoryColumns.map(column => column.name));
+    const auditNames = new Set(auditColumns.map(column => column.name));
+    const migrateMemories = memoryColumns.length > 0 &&
+      (!memoryNames.has('created_at') || !memoryNames.has('updated_at') ||
+       primaryKey(memoryColumns) !== 'tenant_id,memory_id');
+    const migrateAudit = auditColumns.length > 0 &&
+      (!auditNames.has('tenant_id') || !auditNames.has('scope') ||
+       primaryKey(auditColumns) !== 'tenant_id,event_id');
+
+    if (!migrateMemories && !migrateAudit) return false;
+
+    this.baseConnection.exec('BEGIN IMMEDIATE;');
+    try {
+      if (migrateMemories) {
+        if (!memoryNames.has('memory_id') || !memoryNames.has('tenant_id') ||
+            !memoryNames.has('scope') || !memoryNames.has('payload')) {
+          throw new Error('Legacy SQLite memories table is missing required columns; refusing destructive migration');
+        }
+        this.baseConnection.exec(`
+          DROP TABLE IF EXISTS memories__migration_v2;
+          CREATE TABLE memories__migration_v2 (
+            memory_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, memory_id)
+          );
+          INSERT INTO memories__migration_v2
+            (memory_id, tenant_id, scope, created_at, updated_at, payload)
+          SELECT
+            memory_id,
+            COALESCE(tenant_id, 'local'),
+            COALESCE(scope, 'personal'),
+            COALESCE(NULLIF(json_extract(payload, '$.createdAt'), ''),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            COALESCE(NULLIF(json_extract(payload, '$.updatedAt'), ''),
+                     NULLIF(json_extract(payload, '$.createdAt'), ''),
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            payload
+          FROM memories;
+          DROP TABLE memories;
+          ALTER TABLE memories__migration_v2 RENAME TO memories;
+        `);
+      }
+
+      if (migrateAudit) {
+        if (!auditNames.has('event_id') || !auditNames.has('tenant_id') ||
+            !auditNames.has('memory_id') || !auditNames.has('operation_id') ||
+            !auditNames.has('occurred_at') || !auditNames.has('payload')) {
+          throw new Error('Legacy SQLite memory_audit table is missing required columns; refusing destructive migration');
+        }
+        this.baseConnection.exec(`
+          DROP TABLE IF EXISTS memory_audit__migration_v2;
+          CREATE TABLE memory_audit__migration_v2 (
+            event_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            memory_id TEXT,
+            operation_id TEXT,
+            occurred_at TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, event_id)
+          );
+          INSERT INTO memory_audit__migration_v2
+            (event_id, tenant_id, scope, memory_id, operation_id, occurred_at, payload)
+          SELECT
+            event_id,
+            COALESCE(tenant_id, 'local'),
+            COALESCE(scope, 'personal'),
+            memory_id,
+            operation_id,
+            occurred_at,
+            payload
+          FROM memory_audit;
+          DROP TABLE memory_audit;
+          ALTER TABLE memory_audit__migration_v2 RENAME TO memory_audit;
+        `);
+      }
+
+      this.baseConnection.exec('COMMIT;');
+      return true;
+    } catch (error) {
+      try { this.baseConnection.exec('ROLLBACK;'); } catch {}
+      throw error;
+    }
+  }
+
   initialize() {
+    this.migrateLegacyMemorySchema();
     this.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
@@ -299,6 +402,7 @@ class SqliteDatabase {
       CREATE INDEX IF NOT EXISTS idx_approvals_expiry ON approvals(expires_at);
       INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'));
     `);
+    this.run("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'))");
   }
 
   close() {
