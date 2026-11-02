@@ -80,7 +80,7 @@ test('search remains tenant- and scope-scoped while applying the relevance gate'
   });
 
   const service = createService([own, otherTenant, otherScope]);
-  const results = service.search('ORIENT runtime', {
+  const results = await service.search('ORIENT runtime', {
     tenantId: 'tenant-a',
     memoryScope: 'personal'
   });
