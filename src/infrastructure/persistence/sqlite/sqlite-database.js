@@ -12,6 +12,7 @@ class SqliteDatabase {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     }
     this.connection = new DatabaseSync(this.filePath);
+    this.asyncTransactionTail = Promise.resolve();
     this.connection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;');
     this.initialize();
   }
@@ -102,6 +103,45 @@ class SqliteDatabase {
       try { this.connection.exec('ROLLBACK;'); } catch {}
       throw error;
     }
+  }
+
+  transactionAsync(work) {
+    if (typeof work !== 'function') throw new TypeError('transactionAsync(work) requires a callback');
+
+    const execute = async () => {
+      this.connection.exec('BEGIN IMMEDIATE;');
+      const callbacks = [];
+      this.afterCommitCallbacks = callbacks;
+      try {
+        const result = await work(this);
+        this.connection.exec('COMMIT;');
+        this.afterCommitCallbacks = null;
+        for (const callback of callbacks) {
+          try { await callback(); } catch (error) {
+            this.lastAfterCommitError = error;
+          }
+        }
+        return result;
+      } catch (error) {
+        this.afterCommitCallbacks = null;
+        try { this.connection.exec('ROLLBACK;'); } catch {}
+        throw error;
+      }
+    };
+
+    // DatabaseSync is one connection. Serialize every async transaction so
+    // another request cannot execute statements inside a suspended transaction.
+    const result = this.asyncTransactionTail.then(execute, execute);
+    this.asyncTransactionTail = result.catch(() => {});
+    return result;
+  }
+
+  async readAsync(work) {
+    return this.transactionAsync(work);
+  }
+
+  async tryReadAsync(work) {
+    return { acquired: true, value: await this.transactionAsync(work) };
   }
 
   initialize() {
