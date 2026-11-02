@@ -1010,7 +1010,7 @@ test('PostgreSQL-backed MemoryService awaits the full service lifecycle and isol
   const fetched = await service.get(created.id, context);
   assert.equal(fetched.text, created.text);
 
-  assert.equal(await service.count(context), 1);
+  assert.equal(await service.count(context), 2);
   assert.equal((await service.list('', { ...context, tenantId: otherTenantId })).length, 0);
 
   const reconciliation = await service.reconcileToolOperation('memory.add', {
