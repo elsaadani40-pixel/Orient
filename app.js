@@ -501,6 +501,7 @@ async function start() {
     await persistenceRuntime.initialize();
   }
   await accessAuditRepository.initialize();
+  await runtime.initialize();
 
   server.listen(
     config.port,
