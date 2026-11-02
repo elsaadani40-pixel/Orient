@@ -362,15 +362,22 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
       HOLDER_RESULT: holderResult,
       RECLAIMER_RESULT: reclaimerResult
     };
-    const launch = script => spawn(process.execPath, ['-e', script], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-      env
-    });
+    const launch = script => {
+      const child = spawn(process.execPath, ['-e', script], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        env
+      });
+      child.diagnosticStderr = '';
+      child.stderr.on('data', chunk => { child.diagnosticStderr += chunk.toString(); });
+      return child;
+    };
     const waitFor = async (signal, child, description) => {
       const deadline = Date.now() + 10000;
       while (!fs.existsSync(signal)) {
-        if (child.exitCode !== null) throw new Error(`${description}: child exited early`);
-        if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}`);
+        if (child.exitCode !== null) {
+          throw new Error(`${description}: child exited early (code=${child.exitCode}, signal=${child.signalCode}): ${child.diagnosticStderr}`);
+        }
+        if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}: ${child.diagnosticStderr}`);
         await new Promise(resolve => setTimeout(resolve, 5));
       }
     };
