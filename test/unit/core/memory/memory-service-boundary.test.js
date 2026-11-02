@@ -45,11 +45,11 @@ function makeService() {
   return { service, records };
 }
 
-test('MemoryService enforces agent scope on writes', () => {
+test('MemoryService enforces agent scope on writes', async () => {
   const { service } = makeService();
 
-  assert.throws(
-    () => service.add('secret', {}, {
+  await assert.rejects(
+    async () => service.add('secret', {}, {
       agentId: 'writer',
       memoryScope: 'research',
       tenantId: 'tenant-a'
@@ -58,23 +58,23 @@ test('MemoryService enforces agent scope on writes', () => {
   );
 });
 
-test('MemoryService keeps tenant memory isolated', () => {
+test('MemoryService keeps tenant memory isolated', async () => {
   const { service } = makeService();
 
-  service.add('tenant A memory', {}, {
+  await service.add('tenant A memory', {}, {
     agentId: 'research',
     memoryScope: 'research',
     tenantId: 'tenant-a'
   });
 
-  service.add('tenant B memory', {}, {
+  await service.add('tenant B memory', {}, {
     agentId: 'research',
     memoryScope: 'research',
     tenantId: 'tenant-b'
   });
 
   assert.equal(
-    service.list('', {
+    await service.list('', {
       agentId: 'research',
       memoryScope: 'research',
       tenantId: 'tenant-a'
@@ -83,7 +83,7 @@ test('MemoryService keeps tenant memory isolated', () => {
   );
 
   assert.equal(
-    service.list('', {
+    await service.list('', {
       agentId: 'research',
       memoryScope: 'research',
       tenantId: 'tenant-b'
@@ -92,7 +92,7 @@ test('MemoryService keeps tenant memory isolated', () => {
   );
 
   assert.equal(
-    service.list('', {
+    await service.list('', {
       agentId: 'research',
       memoryScope: 'research',
       tenantId: 'tenant-a'
