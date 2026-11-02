@@ -175,13 +175,13 @@ class MemoryService {
     if (transactionCoordinator) {
       for (const method of ['add', 'get', 'consolidate', 'delete']) {
         const original = this[method].bind(this);
-        this[method] = (...args) => transactionCoordinator.run(() => original(...args));
+        this[method] = (...args) => transactionCoordinator.runAsync(() => original(...args));
       }
       // Cross-process readers share the transaction lock so they cannot observe
       // a memory file update before its corresponding audit receipt is durable.
       for (const method of ['list', 'history', 'count']) {
         const original = this[method].bind(this);
-        this[method] = (...args) => transactionCoordinator.read(() => original(...args));
+        this[method] = (...args) => transactionCoordinator.readAsync(() => original(...args));
       }
     }
   }
@@ -241,7 +241,7 @@ class MemoryService {
     }
   }
 
-  audit(event, context = {}) {
+  async audit(event, context = {}) {
     if (!this.auditRepository) return null;
     return this.auditRepository.append({
       ...event,
@@ -260,19 +260,19 @@ class MemoryService {
     });
   }
 
-  history(id, context = {}) {
+  async history(id, context = {}) {
     const authorization = this.authorize(context, 'read');
     if (!this.auditRepository || typeof this.auditRepository.findByMemoryId !== 'function') {
       return [];
     }
-    return this.auditRepository.findByMemoryId(
+    return await await this.auditRepository.findByMemoryId(
       id,
       authorization.tenantId,
       authorization.scope
     );
   }
 
-  reconcileToolOperation(toolName, input, context = {}) {
+  async reconcileToolOperation(toolName, input, context = {}) {
     const operationId = context.operationId;
     if (!this.transactionCoordinator ||
         !this.auditRepository ||
@@ -291,8 +291,8 @@ class MemoryService {
     // Reconciliation reads the audit receipt and memory record as one consistent
     // snapshot. Without the shared lock, a concurrent mutation could expose an
     // intermediate memory/audit pair and cause an unsafe replay decision.
-    const snapshot = this.transactionCoordinator.tryRead(() => {
-      const events = this.auditRepository.findByOperationId(
+    const snapshot = await this.transactionCoordinator.tryReadAsync(async () => {
+      const events = await await this.auditRepository.findByOperationId(
         operationId,
         authorization.tenantId,
         authorization.scope
@@ -337,7 +337,7 @@ class MemoryService {
         if (!mutation) {
           return { status: 'unknown', reason: 'add_result_receipt_not_found' };
         }
-        const memory = this.repository.findById(
+        const memory = await await this.repository.findById(
           mutation.memoryId,
           authorization.tenantId,
           authorization.scope
@@ -364,29 +364,29 @@ class MemoryService {
       : { status: 'unknown', reason: 'memory_transaction_in_progress' };
   }
 
-  findExact({ tenantId, scope, type, text }) {
+  async findExact({ tenantId, scope, type, text }) {
     if (typeof this.repository.findByFingerprint === 'function') {
-      return this.repository.findByFingerprint({ tenantId, scope, type, text });
+      return await await this.repository.findByFingerprint({ tenantId, scope, type, text });
     }
-    return this.repository.findAll(tenantId, scope).find(memory =>
+    return (await await this.repository.findAll(tenantId, scope)).find(memory =>
       memory.state !== 'archived' &&
       memory.type === type &&
       String(memory.text || '').trim().toLowerCase() === String(text || '').trim().toLowerCase()
     ) || null;
   }
 
-  findConflict(semanticKey, tenantId, scope) {
+  async findConflict(semanticKey, tenantId, scope) {
     if (!semanticKey) return null;
     if (typeof this.repository.findActiveBySemanticKey === 'function') {
-      return this.repository.findActiveBySemanticKey(semanticKey, tenantId, scope);
+      return await await this.repository.findActiveBySemanticKey(semanticKey, tenantId, scope);
     }
-    return this.repository.findAll(tenantId, scope).find(memory =>
+    return (await this.repository.findAll(tenantId, scope)).find(memory =>
       memory.state === 'active' &&
       memory.semanticKey === semanticKey
     ) || null;
   }
 
-  list(query = '', context = {}, options = {}) {
+  async list(query = '', context = {}, options = {}) {
     const authorization = this.authorize(context, 'read', options.scope);
     const memories = this.repository
       .findAll(authorization.tenantId, authorization.scope)
@@ -416,7 +416,7 @@ class MemoryService {
       .sort((a, b) => b.relevance - a.relevance);
   }
 
-  add(text, options = {}, context = {}) {
+  async add(text, options = {}, context = {}) {
     const clean = String(text || '').trim();
     if (!clean) {
       throw new AppError('نص الذاكرة مطلوب', 400, 'MEMORY_TEXT_REQUIRED');
@@ -443,7 +443,7 @@ class MemoryService {
         scope
       });
 
-      const exact = this.findExact({
+      const exact = await this.findExact({
         tenantId,
         scope,
         type: candidate.type,
@@ -451,7 +451,7 @@ class MemoryService {
       });
 
       if (exact) {
-        const updated = this.repository.update(
+        const updated = await this.repository.update(
           exact.id,
           {
             confidence: Math.max(exact.confidence, candidate.confidence),
@@ -465,7 +465,7 @@ class MemoryService {
         );
 
         try {
-          this.audit({
+          await await this.audit({
             action: 'memory.reinforced',
             tenantId,
             memoryId: exact.id,
@@ -474,14 +474,14 @@ class MemoryService {
         } catch (auditError) {
           // Restore the pre-operation snapshot when the audit append fails on
           // the handled exception path. This does not make two files crash-atomic.
-          this.repository.update(exact.id, exact, tenantId, scope);
+          await this.repository.update(exact.id, exact, tenantId, scope);
           throw auditError;
         }
 
         return updated;
       }
 
-      const conflict = this.findConflict(
+      const conflict = await this.findConflict(
         candidate.semanticKey,
         tenantId,
         scope
@@ -492,7 +492,7 @@ class MemoryService {
       let conflictWasUpdated = false;
       let inserted = null;
 
-      const compensateConflictOperation = originalError => {
+      const compensateConflictOperation = async originalError => {
         const rollbackErrors = [];
         if (inserted) {
           if (typeof this.repository.deleteById !== 'function') {
@@ -502,7 +502,7 @@ class MemoryService {
             });
           } else {
             try {
-              const deleted = this.repository.deleteById(inserted.id, tenantId, scope);
+              const deleted = await this.repository.deleteById(inserted.id, tenantId, scope);
               if (!deleted) {
                 throw new Error(`Inserted memory ${inserted.id} could not be removed during rollback`);
               }
@@ -513,7 +513,7 @@ class MemoryService {
         }
         if (conflictWasUpdated && conflictSnapshot) {
           try {
-            const restored = this.repository.update(
+            const restored = await await this.repository.update(
               conflictSnapshot.id,
               conflictSnapshot,
               tenantId,
@@ -548,7 +548,7 @@ class MemoryService {
 
           if (candidateWins) {
             conflictSnapshot = conflict;
-            const updatedConflict = this.repository.update(conflict.id, {
+            const updatedConflict = await this.repository.update(conflict.id, {
               state: 'superseded',
               supersededById: candidate.id,
               updatedAt: new Date().toISOString()
@@ -565,7 +565,7 @@ class MemoryService {
           // The durable audit store and memory store are not transactional.
           // This protects handled repository/audit exceptions, not process crashes
           // or a crash between a successful audit append and a later failure.
-          inserted = this.repository.insert(memory, tenantId, scope);
+          inserted = await await this.repository.insert(memory, tenantId, scope);
 
           this.audit({
             action: 'memory.conflict.resolved',
@@ -596,7 +596,7 @@ class MemoryService {
 
         return inserted;
       } catch (error) {
-        return compensateConflictOperation(error);
+        return await compensateConflictOperation(error);
       }
     } catch (error) {
       if (error instanceof AppError) throw error;
@@ -604,9 +604,9 @@ class MemoryService {
     }
   }
 
-  get(id, context = {}) {
+  async get(id, context = {}) {
     const authorization = this.authorize(context, 'read');
-    const memory = this.repository.findById(
+    const memory = await await await this.repository.findById(
       id,
       authorization.tenantId,
       authorization.scope
@@ -617,7 +617,7 @@ class MemoryService {
     }
 
     const normalized = normalizeMemory(memory);
-    this.repository.update(
+    await this.repository.update(
       id,
       {
         lastAccessedAt: new Date().toISOString(),
@@ -627,7 +627,7 @@ class MemoryService {
       authorization.scope
     );
 
-    this.audit({
+    await this.audit({
       action: 'memory.accessed',
       tenantId: authorization.tenantId,
       memoryId: id
@@ -636,17 +636,15 @@ class MemoryService {
     return normalized;
   }
 
-  search(query, context = {}, options = {}) {
-    return this.list(query, context, options);
+  async search(query, context = {}, options = {}) {
+    return await this.list(query, context, options);
   }
 
-  consolidate(context = {}) {
+  async consolidate(context = {}) {
     const authorization = this.authorize(context, 'write');
     const tenantId = authorization.tenantId;
     const scope = authorization.scope;
-    const memories = this.repository
-      .findAll(tenantId, scope)
-      .map(normalizeMemory);
+    const memories = (await this.repository.findAll(tenantId, scope)).map(normalizeMemory);
 
     const seen = new Map();
     const changes = [];
@@ -660,12 +658,12 @@ class MemoryService {
         beforeById.set(memory.id, memory);
       }
     };
-    const restoreChanges = originalError => {
+    const restoreChanges = async originalError => {
       const snapshots = [...beforeById.values()].reverse();
       const rollbackErrors = [];
       for (const snapshot of snapshots) {
         try {
-          const restored = this.repository.update(
+          const restored = await this.repository.update(
             snapshot.id,
             snapshot,
             tenantId,
@@ -709,7 +707,7 @@ class MemoryService {
         rememberBefore(winner);
         rememberBefore(loser);
 
-        const updatedWinner = this.repository.update(
+        const updatedWinner = await this.repository.update(
           winner.id,
           {
             confidence: Math.max(winner.confidence, loser.confidence),
@@ -724,7 +722,7 @@ class MemoryService {
           throw new Error(`Memory ${winner.id} disappeared during consolidation`);
         }
 
-        const updatedLoser = this.repository.update(
+        const updatedLoser = await this.repository.update(
           loser.id,
           {
             state: 'superseded',
@@ -745,13 +743,13 @@ class MemoryService {
       this.audit({ action: 'memory.consolidated', tenantId, changes }, context);
       return { tenantId, scope, consolidated: changes.length, changes };
     } catch (error) {
-      return restoreChanges(error);
+      return await restoreChanges(error);
     }
   }
 
-  delete(id, context = {}) {
+  async delete(id, context = {}) {
     const authorization = this.authorize(context, 'delete');
-    const memory = this.repository.findById(
+    const memory = await this.repository.findById(
       id,
       authorization.tenantId,
       authorization.scope
@@ -786,7 +784,7 @@ class MemoryService {
       // Compensate a reported audit failure. This closes the ordinary
       // exception path, not a process-crash window; async activation remains
       // blocked until the mutation and audit result share a durable protocol.
-      this.repository.update(
+      await this.repository.update(
         id,
         previousState,
         authorization.tenantId,
@@ -798,16 +796,16 @@ class MemoryService {
     return true;
   }
 
-  forget(id, context = {}) {
+  async forget(id, context = {}) {
     return this.delete(id, context);
   }
 
-  count(context = {}) {
+  async count(context = {}) {
     const authorization = this.authorize(context, 'read');
-    return this.repository.findAll(
+    return (await this.repository.findAll(
       authorization.tenantId,
       authorization.scope
-    ).length;
+    )).length;
   }
 }
 
