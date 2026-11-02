@@ -136,11 +136,11 @@ test('HTTP memory task persists across repository restart and remains tenant-sco
     tenantId,
     memoryScope: 'personal'
   };
-  const recovered = restartedService.list('أختبر', context);
+  const recovered = await restartedService.list('أختبر', context);
   assert.equal(recovered.length, 1);
   assert.equal(recovered[0].text, 'أنني أختبر ORIENT ONE');
 
-  const otherTenant = restartedService.list('أختبر', {
+  const otherTenant = await restartedService.list('أختبر', {
     ...context,
     tenantId: 'tenant-other'
   });
