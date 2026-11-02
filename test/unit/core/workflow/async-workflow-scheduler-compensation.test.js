@@ -158,3 +158,39 @@ test('recovery save failure removes the queue entry and releases its claim', asy
     workerId: scheduler.recoveryWorkerId
   });
 });
+
+
+test('expired recovered workflow releases its dispatch claim', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'recovered-deadline-claim-wf',
+    tenantId: 'tenant-compensation'
+  });
+  instance.setDeadline(new Date(2000).toISOString());
+  let now = 1000;
+  let releasedBy = null;
+  const workflowRepository = {
+    workerRegistry: { async register(worker) { return worker; } },
+    async claimQueued() { return [instance.toJSON()]; },
+    async save() { return true; },
+    async releaseDispatchClaim(workflowId, workerId) {
+      releasedBy = { workflowId, workerId };
+      return true;
+    }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    clock: () => now,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+  assert.equal(await scheduler.recoverPersisted(), 1);
+  const owner = scheduler.queue[0].dispatchClaimWorkerId;
+  now = 3000;
+  assert.equal(await scheduler.leaseAsync('runtime-worker'), null);
+  assert.deepEqual(releasedBy, {
+    workflowId: instance.workflowId,
+    workerId: owner
+  });
+});
