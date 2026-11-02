@@ -128,6 +128,10 @@ const createServer =
 // Select the persistence adapter before constructing memory services so the
 // configured SQLite mode is the actual source of memory and audit data.
 // Persistence adapter was initialized before memory service composition.
+// Initialize the configured adapter before composing memory services.
+const persistenceRuntime = createPersistence(config);
+const persistence = persistenceRuntime.adapter;
+
 const sqliteMemoryEnabled = config.persistenceMode === 'sqlite' &&
   persistence.memory && persistence.memoryAudit &&
   persistence.memoryTransactionCoordinator;
