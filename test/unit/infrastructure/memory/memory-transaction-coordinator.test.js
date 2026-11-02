@@ -289,7 +289,7 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
       `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
       `const owner = c.acquireLock();`,
       `const staleOwner = {...owner, pid: 2147483647, hostname: os.hostname()};`,
-      `fs.writeFileSync(process.env.LOCK_FILE, JSON.stringify(staleOwner) + '\\n');`,
+      `fs.writeFileSync(process.env.LOCK_FILE, JSON.stringify(staleOwner) + '\n');`,
       `const stale = new Date(Date.now() - c.lockTimeoutMs - 5000);`,
       `fs.utimesSync(process.env.LOCK_FILE, stale, stale);`,
       `fs.writeFileSync(process.env.HOLDER_READY, 'ready');`,
@@ -451,17 +451,17 @@ test('async transactions hold the inter-process lock until awaited work commits'
     let secondStarted = false;
     const first = f.coordinator.runAsync(async () => {
       firstStarted = true;
-      fs.writeFileSync(f.memoryFile, '[{"id":"async-first"}]\\n');
+      fs.writeFileSync(f.memoryFile, '[{"id":"async-first"}]\n');
       await firstGate;
-      fs.writeFileSync(f.auditFile, '[{"action":"async-first"}]\\n');
+      fs.writeFileSync(f.auditFile, '[{"action":"async-first"}]\n');
       return 'first';
     });
     while (!firstStarted) await new Promise(resolve => setTimeout(resolve, 1));
 
     const second = f.coordinator.runAsync(async () => {
       secondStarted = true;
-      fs.writeFileSync(f.memoryFile, '[{"id":"async-second"}]\\n');
-      fs.writeFileSync(f.auditFile, '[{"action":"async-second"}]\\n');
+      fs.writeFileSync(f.memoryFile, '[{"id":"async-second"}]\n');
+      fs.writeFileSync(f.auditFile, '[{"action":"async-second"}]\n');
       return 'second';
     });
     await new Promise(resolve => setTimeout(resolve, 30));
@@ -485,15 +485,15 @@ test('failed async transaction restores both before-images after awaited failure
   try {
     await assert.rejects(
       f.coordinator.runAsync(async () => {
-        fs.writeFileSync(f.memoryFile, '[{"id":"async-partial"}]\\n');
+        fs.writeFileSync(f.memoryFile, '[{"id":"async-partial"}]\n');
         await Promise.resolve();
-        fs.writeFileSync(f.auditFile, '[{"action":"async-partial"}]\\n');
+        fs.writeFileSync(f.auditFile, '[{"action":"async-partial"}]\n');
         throw new Error('simulated async transaction failure');
       }),
       /simulated async transaction failure/
     );
-    assert.equal(fs.readFileSync(f.memoryFile, 'utf8'), '[{"id":"before"}]\\n');
-    assert.equal(fs.readFileSync(f.auditFile, 'utf8'), '[{"action":"before"}]\\n');
+    assert.equal(fs.readFileSync(f.memoryFile, 'utf8'), '[{"id":"before"}]\n');
+    assert.equal(fs.readFileSync(f.auditFile, 'utf8'), '[{"action":"before"}]\n');
     assert.equal(fs.existsSync(f.journalFile), false);
     assert.equal(fs.existsSync(f.coordinator.lockFile), false);
   } finally {
