@@ -125,19 +125,29 @@ const createAgentRoutes =
 const createServer =
   require('./src/interfaces/http/server');
 
-const memoryAuditFile = path.join(config.agentDataDirectory, 'memory-audit.json');
-const memoryTransactionCoordinator = new MemoryTransactionCoordinator({
-  memoryFile: config.dataFile,
-  auditFile: memoryAuditFile,
-  journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
-});
+// Select the persistence adapter before constructing memory services so the
+// configured SQLite mode is the actual source of memory and audit data.
+// Persistence adapter was initialized before memory service composition.
+const sqliteMemoryEnabled = config.persistenceMode === 'sqlite' &&
+  persistence.memory && persistence.memoryAudit &&
+  persistence.memoryTransactionCoordinator;
 
-// Recover an interrupted memory/audit transaction before either repository reads
-// its files or the HTTP server can accept requests.
+const memoryAuditFile = path.join(config.agentDataDirectory, 'memory-audit.json');
+const memoryTransactionCoordinator = sqliteMemoryEnabled
+  ? persistence.memoryTransactionCoordinator
+  : new MemoryTransactionCoordinator({
+      memoryFile: config.dataFile,
+      auditFile: memoryAuditFile,
+      journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
+    });
+
+// SQLite uses database transactions and performs crash recovery through SQLite/WAL.
+// JSON keeps the explicit before-image journal and recovers before repository reads.
 memoryTransactionCoordinator.recover();
 
-const repository =
-  new JsonMemoryRepository(config.dataFile);
+const repository = sqliteMemoryEnabled
+  ? persistence.memory
+  : new JsonMemoryRepository(config.dataFile);
 
 const agentRegistry =
   new AgentRegistry();
@@ -154,8 +164,9 @@ const agentInvocationService =
     agentRegistry
   });
 
-const memoryAuditRepository =
-  new MemoryAuditRepository(memoryAuditFile);
+const memoryAuditRepository = sqliteMemoryEnabled
+  ? persistence.memoryAudit
+  : new MemoryAuditRepository(memoryAuditFile);
 
 const accessAuditRepository =
   new JsonAccessAuditRepository(
