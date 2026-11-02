@@ -23,7 +23,15 @@ test('SQLite memory service commits memory and operation receipt atomically and 
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 
   let persistence = new SqlitePersistence({ filePath });
+  t.after(() => {
+    if (persistence) {
+      try { persistence.close(); } catch {}
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
   let service = createService(persistence);
+  let publishedEvents = 0;
+  persistence.memoryAudit.setEventSink(() => { publishedEvents += 1; });
   const context = {
     tenantId: 'tenant-sqlite-a',
     memoryScope: 'personal',
@@ -39,6 +47,7 @@ test('SQLite memory service commits memory and operation receipt atomically and 
   assert.equal(persistence.memoryAudit.findByOperationId(
     'sqlite-add-committed', 'tenant-sqlite-b', 'personal'
   ).length, 0);
+  assert.equal(publishedEvents, 2, 'post-commit event delivery should include both create and access audit events');
 
   persistence.close();
   persistence = new SqlitePersistence({ filePath });
@@ -51,17 +60,21 @@ test('SQLite memory service commits memory and operation receipt atomically and 
     assert.equal(result.result.id, created.id);
   } finally {
     persistence.close();
+    persistence = null;
   }
 });
 
 test('SQLite memory and audit writes roll back together when the audit append fails', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-rollback-'));
   const filePath = path.join(directory, 'orient.db');
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-
   const persistence = new SqlitePersistence({ filePath });
-  t.after(() => persistence.close());
+  t.after(() => {
+    try { persistence.close(); } catch {}
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
   const service = createService(persistence);
+  let publishedEvents = 0;
+  persistence.memoryAudit.setEventSink(() => { publishedEvents += 1; });
   const originalAppend = persistence.memoryAudit.append.bind(persistence.memoryAudit);
   persistence.memoryAudit.append = () => {
     throw new Error('simulated audit storage failure');
@@ -83,15 +96,17 @@ test('SQLite memory and audit writes roll back together when the audit append fa
   assert.equal(persistence.memoryAudit.findByOperationId(
     'sqlite-audit-failure', 'tenant-sqlite-a', 'personal'
   ).length, 0);
+  assert.equal(publishedEvents, 0, 'rolled-back audit events must never be published');
 });
 
 test('SQLite transaction coordinator rejects asynchronous callbacks instead of committing early', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-async-'));
   const filePath = path.join(directory, 'orient.db');
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-
   const persistence = new SqlitePersistence({ filePath });
-  t.after(() => persistence.close());
+  t.after(() => {
+    try { persistence.close(); } catch {}
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
 
   assert.throws(
     () => persistence.memoryTransactionCoordinator.run(async () => 'not allowed'),
