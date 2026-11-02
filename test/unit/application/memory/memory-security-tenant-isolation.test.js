@@ -62,7 +62,7 @@ test('tenant identity cannot be overridden by memory tool input', async () => {
     assert.equal((await fixture.service.list('', {
       agentId: 'MEMORY_AGENT', tenantId: 'tenant-a'
     })).length, 1);
-    assert.equal(await fixture.service.list('', {
+    assert.equal((await fixture.service.list('', {
       agentId: 'MEMORY_AGENT', tenantId: 'tenant-b'
     })).length, 0);
   } finally {
@@ -131,12 +131,12 @@ test('allowed shared scopes are isolated from other scopes', async () => {
       agentId: 'RESEARCH_AGENT',
       tenantId: 'tenant-a',
       memoryScope: 'personal'
-    }).length, 0);
+    })).length, 0);
     assert.equal(await fixture.service.list('', {
       agentId: 'RESEARCH_AGENT',
       tenantId: 'tenant-a',
       memoryScope: 'shared.research'
-    }).length, 1);
+    })).length, 1);
   } finally {
     fixture.cleanup();
   }
