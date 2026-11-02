@@ -57,7 +57,7 @@ async function runInFlightMutation(mode) {
 
   try {
     if (mode === 'delete') {
-      const seeded = fixture.service.add('target memory for in-flight delete', {}, {
+      const seeded = await fixture.service.add('target memory for in-flight delete', {}, {
         tenantId,
         memoryScope: 'personal',
         operationId: 'operation-seed-delete-target'
@@ -118,7 +118,7 @@ async function runInFlightMutation(mode) {
         ? { text, scope: 'personal' }
         : { id: memoryId, scope: 'personal' };
       const context = { tenantId, memoryScope: 'personal', operationId };
-      const duringMutation = fixture.service.reconcileToolOperation(
+      const duringMutation = await fixture.service.reconcileToolOperation(
         mode === 'add' ? 'memory.add' : 'memory.delete',
         input,
         context
@@ -139,7 +139,7 @@ async function runInFlightMutation(mode) {
       ? { text, scope: 'personal' }
       : { id: memoryId, scope: 'personal' };
     const context = { tenantId, memoryScope: 'personal', operationId };
-    const afterCommit = fixture.service.reconcileToolOperation(
+    const afterCommit = await fixture.service.reconcileToolOperation(
       mode === 'add' ? 'memory.add' : 'memory.delete',
       input,
       context
