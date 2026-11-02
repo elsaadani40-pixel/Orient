@@ -1164,9 +1164,31 @@ test('PostgreSQL app composition serves authenticated memory HTTP routes from Po
   const loginPayload = await login.json();
   assert.equal(login.status, 200, JSON.stringify(loginPayload));
   assert.equal(typeof loginPayload.csrfToken, 'string');
+  assert.equal(loginPayload.passwordChangeRequired, true, 'first-run owner must be forced to replace the bootstrap password');
   const cookieHeader = login.headers.get('set-cookie') || '';
-  const cookie = cookieHeader.match(/orient_owner_session=[^;]+/)?.[0];
+  let cookie = cookieHeader.match(/orient_owner_session=[^;]+/)?.[0];
   assert.ok(cookie, 'owner login must issue the authenticated session cookie');
+
+  const passwordChange = await fetch(origin + '/owner/password', {
+    method: 'POST',
+    headers: {
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': csrfToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      password: 'Orient-Postgres-App-Test-2026!',
+      confirmPassword: 'Orient-Postgres-App-Test-2026!'
+    })
+  });
+  const passwordChangePayload = await passwordChange.json();
+  assert.equal(passwordChange.status, 200, JSON.stringify(passwordChangePayload));
+  assert.equal(passwordChangePayload.passwordChangeRequired, false);
+  const rotatedCookie = (passwordChange.headers.get('set-cookie') || '').match(/orient_owner_session=[^;]+/)?.[0];
+  if (rotatedCookie) cookie = rotatedCookie;
+  const csrfToken = passwordChangePayload.csrfToken;
+  assert.equal(typeof csrfToken, 'string');
 
   const memoryText = 'PostgreSQL app composition memory proof ' + Date.now();
   const add = await fetch(origin + '/memory/add', {
@@ -1175,7 +1197,7 @@ test('PostgreSQL app composition serves authenticated memory HTTP routes from Po
     headers: {
       Origin: origin,
       Cookie: cookie,
-      'x-orient-csrf': loginPayload.csrfToken,
+      'x-orient-csrf': csrfToken,
       'Content-Type': 'application/x-www-form-urlencoded'
     },
     body: new URLSearchParams({ text: memoryText }).toString()
@@ -1207,7 +1229,7 @@ test('PostgreSQL app composition serves authenticated memory HTTP routes from Po
     headers: {
       Origin: origin,
       Cookie: cookie,
-      'x-orient-csrf': loginPayload.csrfToken,
+      'x-orient-csrf': csrfToken,
       'Content-Type': 'application/x-www-form-urlencoded'
     },
     body: new URLSearchParams({ id: memoryId }).toString()
