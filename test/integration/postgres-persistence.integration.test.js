@@ -1023,3 +1023,45 @@ test('PostgreSQL-backed MemoryService awaits the full service lifecycle and isol
   await database.query('DELETE FROM memory_audit WHERE tenant_id=$1', [tenantId]);
   await database.query('DELETE FROM memories WHERE tenant_id=$1', [tenantId]);
 });
+
+
+test('PostgreSQL memory audit observations are emitted only after transaction commit', async () => {
+  const tenantId = 'tenant-memory-after-commit-' + Date.now();
+  const delivered = [];
+  persistence.memoryAudit.setEventSink(event => delivered.push(event));
+
+  try {
+    await assert.rejects(
+      () => persistence.db.transaction(async () => {
+        await persistence.memoryAudit.append({
+          id: 'audit-rollback-' + Date.now(),
+          tenantId,
+          scope: 'personal',
+          memoryId: 'memory-rollback',
+          action: 'memory.created'
+        });
+        assert.equal(delivered.length, 0);
+        throw new Error('rollback audit transaction');
+      }),
+      /rollback audit transaction/
+    );
+    assert.equal(delivered.length, 0, 'rolled-back audit records must not publish observations');
+
+    await persistence.db.transaction(async () => {
+      await persistence.memoryAudit.append({
+        id: 'audit-commit-' + Date.now(),
+        tenantId,
+        scope: 'personal',
+        memoryId: 'memory-commit',
+        action: 'memory.created'
+      });
+      assert.equal(delivered.length, 0, 'observation must wait until COMMIT');
+    });
+
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0].type, 'memory.created');
+  } finally {
+    persistence.memoryAudit.setEventSink(null);
+    await pool.query('DELETE FROM memory_audit WHERE tenant_id=$1', [tenantId]);
+  }
+});
