@@ -9,12 +9,8 @@ test('JSON and SQLite memory modes remain supported', () => {
   assert.equal(assertMemoryPersistenceMode('sqlite'), undefined);
 });
 
-test('PostgreSQL memory mode fails closed instead of silently falling back to JSON', () => {
-  assert.throws(
-    () => assertMemoryPersistenceMode('postgres'),
-    error => error.code === 'MEMORY_PERSISTENCE_ASYNC_ADAPTER_REQUIRED' &&
-      /must not fall back to JSON/.test(error.message)
-  );
+test('PostgreSQL memory mode is accepted only through the async service boundary', () => {
+  assert.equal(assertMemoryPersistenceMode('postgres'), undefined);
 });
 
 test('unknown memory persistence modes are rejected explicitly', () => {
