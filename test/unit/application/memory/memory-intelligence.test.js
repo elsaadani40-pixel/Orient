@@ -218,7 +218,7 @@ test('memory history cannot cross tenant or scope boundaries', async () => {
     tenantId: 'other-tenant'
   })).length, 0);
 
-  assert.equal(await service.history(memory.id, {
+  assert.equal((await service.history(memory.id, {
     ...context,
     memoryScope: 'private'
   })).length, 0);
