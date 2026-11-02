@@ -145,3 +145,52 @@ test('SQLite async transactions reject unrelated synchronous writes instead of a
   assert.equal(persistence.db.query('SELECT COUNT(*) AS count FROM memories WHERE memory_id = ?', ['isolated-memory'])[0].count, 0);
   assert.equal(persistence.db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['unrelated-event'])[0].count, 0);
 });
+
+
+test('SQLite memory operation receipts reconcile after closing and reopening the database', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-restart-'));
+  const filePath = path.join(directory, 'orient.sqlite');
+  let firstPersistence = new SqlitePersistence({ filePath });
+  t.after(() => {
+    try { firstPersistence?.close(); } catch {}
+    try { secondPersistence?.close(); } catch {}
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const coordinatorFor = persistence => ({
+    runAsync: operation => persistence.db.transactionAsync(operation),
+    readAsync: operation => persistence.db.readAsync(operation),
+    tryReadAsync: operation => persistence.db.tryReadAsync(operation)
+  });
+  const context = {
+    tenantId: 'tenant-restart',
+    memoryScope: 'personal',
+    operationId: 'sqlite-operation-restart'
+  };
+  const firstService = new MemoryService(firstPersistence.memory, {
+    auditRepository: firstPersistence.memoryAudit,
+    transactionCoordinator: coordinatorFor(firstPersistence)
+  });
+  const created = await firstService.add('durable SQLite operation receipt', {}, context);
+  firstPersistence.close();
+  firstPersistence = null;
+
+  let secondPersistence = new SqlitePersistence({ filePath });
+  const secondService = new MemoryService(secondPersistence.memory, {
+    auditRepository: secondPersistence.memoryAudit,
+    transactionCoordinator: coordinatorFor(secondPersistence)
+  });
+
+  const reconciled = await secondService.reconcileToolOperation('memory.add', {
+    text: 'durable SQLite operation receipt'
+  }, context);
+  assert.equal(reconciled.status, 'completed');
+  assert.equal(reconciled.result.id, created.id);
+  assert.equal(
+    (await secondService.reconcileToolOperation('memory.add', {
+      text: 'durable SQLite operation receipt'
+    }, { ...context, tenantId: 'tenant-other' })).status,
+    'unknown',
+    'a receipt must never cross tenant boundaries after restart'
+  );
+});
