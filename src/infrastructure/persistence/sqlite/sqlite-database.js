@@ -13,6 +13,7 @@ class SqliteDatabase {
     }
     this.connection = new DatabaseSync(this.filePath);
     this.asyncTransactionTail = Promise.resolve();
+    this.asyncTransactionPending = 0;
     this.connection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;');
     this.initialize();
   }
@@ -131,7 +132,10 @@ class SqliteDatabase {
 
     // DatabaseSync is one connection. Serialize every async transaction so
     // another request cannot execute statements inside a suspended transaction.
-    const result = this.asyncTransactionTail.then(execute, execute);
+    this.asyncTransactionPending += 1;
+    const result = this.asyncTransactionTail.then(execute, execute).finally(() => {
+      this.asyncTransactionPending -= 1;
+    });
     this.asyncTransactionTail = result.catch(() => {});
     return result;
   }
@@ -141,6 +145,7 @@ class SqliteDatabase {
   }
 
   async tryReadAsync(work) {
+    if (this.asyncTransactionPending > 0) return { acquired: false };
     return { acquired: true, value: await this.transactionAsync(work) };
   }
 
