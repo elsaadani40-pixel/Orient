@@ -1,13 +1,23 @@
 const { Pool } = require('pg');
+const path = require('node:path');
 const { PostgresPersistence } = require('./postgres/postgres-persistence');
 const JsonPersistence = require('./json-persistence');
 const SqlitePersistence = require('./sqlite/sqlite-persistence');
-const path = require('node:path');
 
 function createPersistence(config) {
   const mode = config.persistenceMode || 'json';
 
-  if (mode === 'sqlite') {\n    const filePath = config.databaseFile || path.join(config.agentDataDirectory, 'orient.db');\n    const adapter = new SqlitePersistence({ filePath });\n    return { adapter, initialize: async () => {}, close: async () => adapter.close() };\n  }\n\n  if (mode === 'json') {
+  if (mode === 'sqlite') {
+    const filePath = config.databaseFile || path.join(config.agentDataDirectory, 'orient.db');
+    const adapter = new SqlitePersistence({ filePath });
+    return {
+      adapter,
+      initialize: async () => {},
+      close: async () => adapter.close()
+    };
+  }
+
+  if (mode === 'json') {
     return {
       adapter: new JsonPersistence({
         dataDirectory: config.agentDataDirectory
@@ -25,9 +35,7 @@ function createPersistence(config) {
 
   if (!config.databaseUrl) {
     throw Object.assign(
-      new Error(
-        'ORIENT_PERSISTENCE=postgres requires ORIENT_DATABASE_URL'
-      ),
+      new Error('ORIENT_PERSISTENCE=postgres requires ORIENT_DATABASE_URL'),
       { code: 'PERSISTENCE_DATABASE_URL_REQUIRED' }
     );
   }
@@ -39,9 +47,7 @@ function createPersistence(config) {
     connectionTimeoutMillis: config.databaseConnectionTimeoutMs,
     application_name: 'orient-one'
   });
-
   const adapter = new PostgresPersistence({ pool });
-
   return {
     adapter,
     initialize: () => adapter.initialize(),

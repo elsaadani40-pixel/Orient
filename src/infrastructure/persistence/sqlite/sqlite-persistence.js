@@ -380,6 +380,10 @@ class SqlitePersistence {
     this.workflowLeases = new SqliteWorkflowLeaseRepository(this.db);
   }
 
+  health() {
+    return { adapter: 'sqlite', repositories: { memory: true, memoryAudit: true, executions: true, events: true, idempotency: true, checkpoints: true, approvals: true, workflows: true, workflowLeases: true } };
+  }
+
   close() {
     this.db.close();
   }
