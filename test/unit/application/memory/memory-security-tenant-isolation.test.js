@@ -59,12 +59,12 @@ test('tenant identity cannot be overridden by memory tool input', async () => {
     );
 
     assert.equal(stored.tenantId, 'tenant-a');
-    assert.equal(await fixture.service.list('', {
+    assert.equal((await fixture.service.list('', {
       agentId: 'MEMORY_AGENT', tenantId: 'tenant-a'
-    }).length, 1);
+    })).length, 1);
     assert.equal(await fixture.service.list('', {
       agentId: 'MEMORY_AGENT', tenantId: 'tenant-b'
-    }).length, 0);
+    })).length, 0);
   } finally {
     fixture.cleanup();
   }
@@ -93,9 +93,9 @@ test('cross-tenant reads and deletes are isolated', async () => {
       error => error.code === 'MEMORY_NOT_FOUND'
     );
 
-    assert.equal(await fixture.service.get(stored.id, {
+    assert.equal((await fixture.service.get(stored.id, {
       agentId: 'MEMORY_AGENT', tenantId: 'tenant-a'
-    }).text, 'Tenant A memory');
+    })).text, 'Tenant A memory');
   } finally {
     fixture.cleanup();
   }
