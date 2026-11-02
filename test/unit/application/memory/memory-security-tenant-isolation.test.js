@@ -127,12 +127,12 @@ test('allowed shared scopes are isolated from other scopes', async () => {
     );
 
     assert.equal(stored.scope, 'shared.research');
-    assert.equal(await fixture.service.list('', {
+    assert.equal((await fixture.service.list('', {
       agentId: 'RESEARCH_AGENT',
       tenantId: 'tenant-a',
       memoryScope: 'personal'
     })).length, 0);
-    assert.equal(await fixture.service.list('', {
+    assert.equal((await fixture.service.list('', {
       agentId: 'RESEARCH_AGENT',
       tenantId: 'tenant-a',
       memoryScope: 'shared.research'
