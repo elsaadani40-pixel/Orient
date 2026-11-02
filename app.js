@@ -91,12 +91,11 @@ const CapabilityGovernance =
 const createPersistence =
   require('./src/infrastructure/persistence/persistence-factory');
 
+// Validate memory backend compatibility before constructing database resources.
+assertMemoryPersistenceMode(config.persistenceMode || 'json');
+
 const persistenceRuntime = createPersistence(config);
 const persistence = persistenceRuntime.adapter;
-// Never let PostgreSQL silently select the JSON memory/audit stores below.
-// PostgreSQL memory activation remains blocked until MemoryService and its
-// transaction/recovery protocol are fully asynchronous and integrated.
-assertMemoryPersistenceMode(config.persistenceMode || 'json');
 
 const { OwnerWorkProfileStore } =
   require('./src/infrastructure/persistence/owner-work-profile-store');
