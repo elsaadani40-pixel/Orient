@@ -84,6 +84,28 @@ class PostgresMemoryAuditRepository {
   constructor(db) {
     if (!db || typeof db.query !== 'function') throw new TypeError('PostgreSQL database adapter is required');
     this.db = db;
+    this.eventSink = null;
+    this.lastEventSinkError = null;
+  }
+
+  setEventSink(sink) {
+    this.eventSink = typeof sink === 'function' ? sink : null;
+  }
+
+  publishAfterDurableAppend(record) {
+    if (!this.eventSink) return;
+    try {
+      Promise.resolve(this.eventSink(record)).then(() => {
+        this.lastEventSinkError = null;
+      }).catch(error => {
+        // PostgreSQL audit persistence is authoritative. Observation delivery
+        // is best-effort and must never turn a committed audit append into a
+        // reported mutation failure that could trigger an unsafe retry.
+        this.lastEventSinkError = error;
+      });
+    } catch (error) {
+      this.lastEventSinkError = error;
+    }
   }
 
   async append(event) {
@@ -97,6 +119,7 @@ class PostgresMemoryAuditRepository {
       [record.id, record.tenantId || 'local', record.scope || 'personal',
         record.memoryId || null, record.operationId || null, record.occurredAt, record]
     );
+    this.publishAfterDurableAppend(record);
     return record;
   }
 
