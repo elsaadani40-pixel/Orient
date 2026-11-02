@@ -16,7 +16,7 @@ function createPersistence(config) {
   }
 
   if (mode === 'sqlite') {
-    const filePath = config.databaseFile || require('node:path').join(config.agentDataDirectory, 'orient.sqlite');
+    const filePath = config.databaseFile || require('node:path').join(config.agentDataDirectory, 'orient.db');
     const adapter = new SqlitePersistence({ filePath });
     return { adapter, close: () => adapter.close() };
   }
