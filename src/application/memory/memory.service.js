@@ -169,16 +169,16 @@ class MemoryService {
     this.auditRepository = auditRepository;
     this.transactionCoordinator = transactionCoordinator;
 
-    // Every public operation that mutates memory or its audit trail shares one
-    // durable before-image journal. Nested calls (forget -> delete) enter only
-    // the wrapped leaf operation, avoiding nested journal transactions.
+    // Every public mutation shares the selected durable transaction boundary:
+    // JSON journal, serialized SQLite transaction, or PostgreSQL transaction.
+    // Nested calls (forget -> delete) enter only the wrapped leaf operation.
     if (transactionCoordinator) {
       for (const method of ['add', 'get', 'consolidate', 'delete']) {
         const original = this[method].bind(this);
         this[method] = (...args) => transactionCoordinator.runAsync(() => original(...args));
       }
-      // Cross-process readers share the transaction lock so they cannot observe
-      // a memory file update before its corresponding audit receipt is durable.
+      // Reads use the selected coordinator's consistent-read boundary so they do
+      // not observe a memory mutation without its corresponding audit receipt.
       for (const method of ['list', 'history', 'count']) {
         const original = this[method].bind(this);
         this[method] = (...args) => transactionCoordinator.readAsync(() => original(...args));
