@@ -374,10 +374,18 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
         await new Promise(resolve => setTimeout(resolve, 5));
       }
     };
-    const waitExit = child => new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => resolve({ code, signal }));
-    });
+    const waitExit = child => {
+      // A child can exit while we await the other process. Check the terminal
+      // state before subscribing so an already-emitted exit event cannot leave
+      // this test waiting forever.
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+      }
+      return new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code, signal) => resolve({ code, signal }));
+      });
+    };
 
     holder = launch(holderScript);
     let holderStderr = '';
