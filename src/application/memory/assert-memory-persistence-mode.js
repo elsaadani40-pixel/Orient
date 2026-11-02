@@ -1,18 +1,9 @@
 'use strict';
 
 function assertMemoryPersistenceMode(mode) {
-  if (mode === 'json' || mode === 'sqlite') return;
+  if (mode === 'json' || mode === 'sqlite' || mode === 'postgres') return;
 
-  if (mode === 'postgres') {
-    const error = new Error(
-      'PostgreSQL persistence is not yet safe for the synchronous MemoryService. ' +
-      'The application must not fall back to JSON or start with a partially wired memory backend.'
-    );
-    error.code = 'MEMORY_PERSISTENCE_ASYNC_ADAPTER_REQUIRED';
-    throw error;
-  }
-
-  const error = new Error(`Unsupported memory persistence mode "${mode}". Supported modes: json, sqlite`);
+  const error = new Error(`Unsupported memory persistence mode "${mode}". Supported modes: json, sqlite, postgres`);
   error.code = 'MEMORY_PERSISTENCE_MODE_UNSUPPORTED';
   throw error;
 }
