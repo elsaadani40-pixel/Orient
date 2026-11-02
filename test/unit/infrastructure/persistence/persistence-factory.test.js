@@ -66,3 +66,23 @@ test('persistence factory selects SQLite and exposes memory repositories', async
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('SQLite factory preserves the existing orient.db location when no override is supplied', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-factory-default-sqlite-'));
+  const result = createPersistence({
+    ...baseConfig,
+    agentDataDirectory: directory,
+    persistenceMode: 'sqlite',
+    databaseFile: undefined
+  });
+  try {
+    assert.equal(result.adapter.db.filePath, path.join(directory, 'orient.db'));
+  } finally {
+    await result.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
