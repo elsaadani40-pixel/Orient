@@ -47,7 +47,7 @@ test('SQLite memory service commits memory and operation receipt atomically and 
   assert.equal(persistence.memoryAudit.findByOperationId(
     'sqlite-add-committed', 'tenant-sqlite-b', 'personal'
   ).length, 0);
-  assert.equal(publishedEvents, 2, 'post-commit event delivery should include both create and access audit events');
+  assert.equal(publishedEvents, 1, 'the committed create audit event should be published once');
 
   persistence.close();
   persistence = new SqlitePersistence({ filePath });
