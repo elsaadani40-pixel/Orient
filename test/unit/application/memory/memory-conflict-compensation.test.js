@@ -20,10 +20,10 @@ function createFixture() {
   };
 }
 
-test('memory.add restores the superseded record when inserting the conflict winner fails', () => {
+test('memory.add restores the superseded record when inserting the conflict winner fails', async () => {
   const fixture = createFixture();
   try {
-    const existing = fixture.service.add('older conflicting fact', {
+    const existing = await fixture.service.add('older conflicting fact', {
       type: 'note',
       semanticKey: 'customer-status',
       confidence: 0.4
@@ -34,8 +34,8 @@ test('memory.add restores the superseded record when inserting the conflict winn
       throw new Error('injected candidate insert failure');
     };
 
-    assert.throws(
-      () => fixture.service.add('newer conflicting fact', {
+    await assert.rejects(
+      async () => fixture.service.add('newer conflicting fact', {
         type: 'note',
         semanticKey: 'customer-status',
         confidence: 0.99
@@ -54,10 +54,10 @@ test('memory.add restores the superseded record when inserting the conflict winn
   }
 });
 
-test('memory.add rolls back conflict changes when the conflict audit append fails', () => {
+test('memory.add rolls back conflict changes when the conflict audit append fails', async () => {
   const fixture = createFixture();
   try {
-    const existing = fixture.service.add('existing conflicting fact', {
+    const existing = await fixture.service.add('existing conflicting fact', {
       type: 'note',
       semanticKey: 'contract-status',
       confidence: 0.3
@@ -71,8 +71,8 @@ test('memory.add rolls back conflict changes when the conflict audit append fail
       return originalAppend(event);
     };
 
-    assert.throws(
-      () => fixture.service.add('candidate conflicting fact', {
+    await assert.rejects(
+      async () => fixture.service.add('candidate conflicting fact', {
         type: 'note',
         semanticKey: 'contract-status',
         confidence: 0.99
