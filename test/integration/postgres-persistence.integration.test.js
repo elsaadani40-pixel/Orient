@@ -1161,7 +1161,9 @@ test('PostgreSQL app composition serves authenticated memory HTTP routes from Po
     },
     body: JSON.stringify({ password })
   });
-  assert.equal(login.status, 200, await login.text());
+  const loginPayload = await login.json();
+  assert.equal(login.status, 200, JSON.stringify(loginPayload));
+  assert.equal(typeof loginPayload.csrfToken, 'string');
   const cookieHeader = login.headers.get('set-cookie') || '';
   const cookie = cookieHeader.match(/orient_owner_session=[^;]+/)?.[0];
   assert.ok(cookie, 'owner login must issue the authenticated session cookie');
@@ -1173,6 +1175,7 @@ test('PostgreSQL app composition serves authenticated memory HTTP routes from Po
     headers: {
       Origin: origin,
       Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken,
       'Content-Type': 'application/x-www-form-urlencoded'
     },
     body: new URLSearchParams({ text: memoryText }).toString()
@@ -1204,6 +1207,7 @@ test('PostgreSQL app composition serves authenticated memory HTTP routes from Po
     headers: {
       Origin: origin,
       Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken,
       'Content-Type': 'application/x-www-form-urlencoded'
     },
     body: new URLSearchParams({ id: memoryId }).toString()
