@@ -235,6 +235,10 @@ class OrientRuntime {
     return this.requestExecutionCoordinator.validateReplannedPlan(plan, previousFingerprint);
   }
 
+  initialize() {
+    return this.infrastructureCoordinator.initialize();
+  }
+
   shutdown(options = {}) {
     return this.infrastructureCoordinator.shutdown(options);
   }
