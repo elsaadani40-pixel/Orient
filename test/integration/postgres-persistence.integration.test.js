@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { Pool } = require('pg');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
+const MemoryService = require('../../src/application/memory/memory.service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
@@ -955,4 +956,70 @@ test('PostgreSQL memory and audit repositories commit atomically and remain tena
   assert.equal((await persistence.memory.findById(memory.id, memory.tenantId, memory.scope)).text, memory.text);
   assert.equal((await persistence.memoryAudit.findByOperationId('operation-pg-commit', memory.tenantId, memory.scope)).length, 1);
   assert.equal(await persistence.memory.findById(memory.id, 'tenant-memory-b', memory.scope), null);
+});
+
+
+test('PostgreSQL-backed MemoryService awaits the full service lifecycle and isolates tenants', async () => {
+  const tenantId = 'tenant-memory-service-' + Date.now();
+  const otherTenantId = tenantId + '-other';
+  const database = persistence.db;
+  const transactionCoordinator = {
+    runAsync: operation => database.transaction(operation),
+    readAsync: operation => database.transaction(operation),
+    tryReadAsync: async operation => ({
+      acquired: true,
+      value: await database.transaction(operation)
+    })
+  };
+  const service = new MemoryService(persistence.memory, {
+    auditRepository: persistence.memoryAudit,
+    transactionCoordinator
+  });
+  const context = {
+    agentId: 'ORIENT_RUNTIME',
+    tenantId,
+    operationId: 'operation-memory-service-' + Date.now()
+  };
+
+  const created = await service.add('async PostgreSQL memory lifecycle proof', {
+    type: 'fact',
+    confidence: 0.91
+  }, context);
+  assert.ok(created.id);
+
+  const listed = await service.list('PostgreSQL lifecycle', context);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, created.id);
+
+  const history = await service.history(created.id, context);
+  assert.ok(history.some(event => event.action === 'memory.created'));
+
+  const fetched = await service.get(created.id, context);
+  assert.equal(fetched.text, created.text);
+
+  assert.equal(await service.count(context), 1);
+  assert.equal((await service.list('', { ...context, tenantId: otherTenantId })).length, 0);
+
+  const reconciliation = await service.reconcileToolOperation('memory.add', {
+    text: 'async PostgreSQL memory lifecycle proof',
+    type: 'fact'
+  }, context);
+  assert.equal(reconciliation.status, 'completed');
+  assert.equal(reconciliation.result.id, created.id);
+
+  assert.equal(await service.delete(created.id, context), true);
+  const deleteRecovery = await service.reconcileToolOperation('memory.delete', created.id, {
+    ...context,
+    operationId: context.operationId
+  });
+  assert.equal(deleteRecovery.status, 'completed');
+
+  const restartedService = new MemoryService(persistence.memory, {
+    auditRepository: persistence.memoryAudit,
+    transactionCoordinator
+  });
+  assert.equal((await restartedService.list('', context)).length, 0);
+
+  await database.query('DELETE FROM memory_audit WHERE tenant_id=$1', [tenantId]);
+  await database.query('DELETE FROM memories WHERE tenant_id=$1', [tenantId]);
 });
