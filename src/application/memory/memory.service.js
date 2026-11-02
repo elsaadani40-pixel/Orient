@@ -566,8 +566,8 @@ class MemoryService {
           }
 
           // The durable audit store and memory store are not transactional.
-          // This protects handled repository/audit exceptions, not process crashes
-          // or a crash between a successful audit append and a later failure.
+          // The outer coordinator provides crash atomicity; compensation also keeps
+          // direct service use without a coordinator from leaving partial writes.
           inserted = await this.repository.insert(memory, tenantId, scope);
 
           await this.audit({
@@ -659,9 +659,9 @@ class MemoryService {
     const changes = [];
     const beforeById = new Map();
 
-    // This is best-effort compensation for handled exceptions only. The JSON
-    // repository and audit log are separate durable stores, so a process crash
-    // between writes still requires a shared operation journal/transaction.
+    // The application composition wraps this operation in the selected durable
+    // coordinator (JSON journal, SQLite transaction, or PostgreSQL transaction).
+    // This compensation remains a fallback for direct service use without one.
     const rememberBefore = memory => {
       if (!beforeById.has(memory.id)) {
         beforeById.set(memory.id, memory);
@@ -793,9 +793,8 @@ class MemoryService {
         reason: context.reason || 'manual'
       }, context);
     } catch (auditError) {
-      // Compensate a reported audit failure. This closes the ordinary
-      // exception path, not a process-crash window; async activation remains
-      // blocked until the mutation and audit result share a durable protocol.
+      // The outer coordinator makes the archive and audit receipt atomic. This
+      // compensation also protects direct service use without that coordinator.
       await this.repository.update(
         id,
         previousState,
