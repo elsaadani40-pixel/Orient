@@ -71,3 +71,44 @@ test('runtime wires optional agent governance services into the execution loop',
   assert.equal(runtime.agentLoop.capabilityGovernance, capabilityGovernance);
   runtime.shutdown({ cancelQueued: false });
 });
+
+
+test('PostgreSQL infrastructure defers quota and workflow recovery until explicit initialization', async () => {
+  const order = [];
+  const workerRegistry = {
+    async register(worker) {
+      order.push('worker:' + worker.status);
+      assert.equal(worker.status, 'READY');
+      assert.ok(worker.workerId.startsWith('orient-recovery-'));
+    }
+  };
+  const workflows = {
+    workerRegistry,
+    async claimQueued() {
+      order.push('recover');
+      return [];
+    }
+  };
+  const tenantQuotas = {
+    async ensureTenant() {
+      order.push('quota');
+    }
+  };
+  const persistence = {
+    isAsync: true,
+    workflows,
+    tenantQuotas,
+    workflowLeases: null
+  };
+  const coordinator = new RuntimeInfrastructureCoordinator({
+    persistence,
+    tenantId: 'tenant-startup-order',
+    workflowDispatchWindow: 1
+  });
+
+  assert.deepEqual(order, [], 'constructing runtime infrastructure must not query an uninitialized database');
+  assert.equal(await coordinator.initialize(), 0);
+  assert.deepEqual(order, ['quota', 'worker:READY', 'recover']);
+  assert.equal(await coordinator.initialize(), 0, 'initialization must be idempotent');
+  assert.deepEqual(order, ['quota', 'worker:READY', 'recover']);
+});
