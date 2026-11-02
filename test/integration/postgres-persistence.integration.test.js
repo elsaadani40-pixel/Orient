@@ -1174,7 +1174,7 @@ test('PostgreSQL app composition serves authenticated memory HTTP routes from Po
     headers: {
       Origin: origin,
       Cookie: cookie,
-      'x-orient-csrf': csrfToken,
+      'x-orient-csrf': loginPayload.csrfToken,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
