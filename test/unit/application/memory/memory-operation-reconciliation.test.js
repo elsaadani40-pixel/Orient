@@ -124,7 +124,7 @@ test('memory.add reconciliation survives process exit after commit but before ex
     transactionCoordinator: coordinator
   });
 
-  const reconciled = restartedService.reconcileToolOperation('memory.add', {
+  const reconciled = await restartedService.reconcileToolOperation('memory.add', {
     text: 'crash-window reconciliation test'
   }, {
     tenantId: 'tenant-crash',
@@ -269,15 +269,15 @@ test('memory.delete reconciliation survives process exit after archive commit an
   const reconciled = restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext);
   assert.deepEqual(reconciled, { status: 'completed', result: true });
   assert.deepEqual(
-    restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext),
+    await restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext),
     reconciled,
     'repeated resume must return the same committed deletion result'
   );
   assert.equal(
-    restartedService.reconcileToolOperation('memory.delete', deleteInput, {
+    (await restartedService.reconcileToolOperation('memory.delete', deleteInput, {
       ...deleteContext,
       tenantId: 'tenant-other'
-    }).status,
+    })).status,
     'unknown',
     'the same operation ID must not expose another tenant receipt'
   );
