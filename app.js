@@ -559,10 +559,14 @@ async function start() {
 }
 
 start().catch((error) => {
-  logger.error('ORIENT ONE startup failed', {
+  const startupFailure = {
     code: error?.code || 'STARTUP_FAILED',
     message: error?.message || String(error)
-  });
+  };
+  logger.error('ORIENT ONE startup failed', startupFailure);
+  // Keep the fatal cause visible to service managers and integration-test logs;
+  // the structured file logger also records the same bounded diagnostic.
+  console.error(JSON.stringify({ event: 'ORIENT_STARTUP_FAILURE', ...startupFailure }));
   if (typeof persistenceRuntime.close === 'function') {
     persistenceRuntime.close().catch(() => {});
   }
