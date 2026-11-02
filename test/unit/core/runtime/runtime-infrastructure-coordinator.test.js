@@ -80,6 +80,10 @@ test('PostgreSQL infrastructure defers quota and workflow recovery until explici
       order.push('worker:' + worker.status);
       assert.equal(worker.status, 'READY');
       assert.ok(worker.workerId.startsWith('orient-recovery-'));
+      assert.ok(Number.isFinite(Date.parse(worker.startedAt)));
+      assert.ok(Number.isFinite(Date.parse(worker.heartbeatAt)));
+      assert.ok(Number.isFinite(Date.parse(worker.expiresAt)));
+      assert.ok(Date.parse(worker.expiresAt) > Date.parse(worker.heartbeatAt));
     }
   };
   const workflows = {
