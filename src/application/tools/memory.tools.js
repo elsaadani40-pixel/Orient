@@ -96,7 +96,7 @@ function createMemoryTools(memoryService) {
       memoryService.reconcileToolOperation('memory.delete', input, {
         ...recoveryContext,
         tenantId: recoveryContext.tenantId || recoveryContext.record?.tenantId,
-        memoryScope: recoveryContext.memoryScope || input?.scope || 'personal'
+        memoryScope: input?.scope || recoveryContext.memoryScope || 'personal'
       }),
   });
 
