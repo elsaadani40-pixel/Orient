@@ -22,6 +22,17 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [35])
 class OwnerSessionClientTest {
     @Test
+    fun manifestDeclaresOnlyInternetPermissionUntilDeviceAdaptersAreImplemented() {
+        val manifest = java.io.File("src/main/AndroidManifest.xml").readText()
+        val permissions = Regex("""<uses-permission\\b[^>]*android:name="([^"]+)"""")
+            .findAll(manifest)
+            .map { it.groupValues[1] }
+            .toSet()
+
+        assertEquals(setOf("android.permission.INTERNET"), permissions)
+    }
+
+    @Test
     fun sessionStartsUnauthenticatedAndRejectsInvalidPorts() {
         assertFalse(OwnerSessionClient(8080).isAuthenticated)
         assertThrows(IllegalArgumentException::class.java) { OwnerSessionClient(0) }
