@@ -85,3 +85,30 @@ test('releaseWorkflow can condition cleanup on the reservation timestamp', async
   assert.match(captured.sql, /fencing_token=\$3 AND reserved_at=\$4/);
   assert.deepEqual(captured.values, ['tenant-a', 'wf-a', 7, reservedAt]);
 });
+
+test('orphan cleanup preserves reservations during the workflow persistence grace period', async () => {
+  const statements = [];
+  const db = {
+    async transaction(work) {
+      return work({ async query(sql) {
+        statements.push(sql);
+        if (sql.includes('SELECT max_concurrent,max_queued')) return { rows: [{ max_concurrent: 2, max_queued: 5 }], rowCount: 1 };
+        if (sql.includes('SELECT tenant_id,workflow_id,state,reserved_at,expires_at')) return { rows: [], rowCount: 0 };
+        if (sql.includes('COUNT(*) FILTER')) return { rows: [{ active: 0, queued: 1 }], rowCount: 1 };
+        if (sql.includes('RETURNING tenant_id,workflow_id,state,reserved_at,expires_at')) return { rows: [{ tenant_id: 'tenant-a', workflow_id: 'wf-next', state: 'QUEUED', reserved_at: new Date().toISOString(), expires_at: null }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }});
+    }
+  };
+
+  await new PostgresTenantQuotaRepository(db).reserveWorkflow({
+    tenantId: 'tenant-a',
+    workflowId: 'wf-next',
+    policy: { maxConcurrent: 2, maxQueued: 5 }
+  });
+
+  const orphanCleanup = statements.find(sql => sql.includes('DELETE FROM tenant_quota_reservations r'));
+  assert.ok(orphanCleanup);
+  assert.match(orphanCleanup, /reserved_at <= NOW\(\) - INTERVAL '5 minutes'/);
+  assert.match(orphanCleanup, /NOT EXISTS/);
+});
