@@ -478,6 +478,7 @@ class MemoryService {
           await this.audit({
             action: 'memory.reinforced',
             tenantId,
+            scope,
             memoryId: exact.id,
             evidence: candidate.evidence
           }, context);
@@ -580,6 +581,7 @@ class MemoryService {
           await this.audit({
             action: 'memory.conflict.resolved',
             tenantId,
+            scope,
             memoryId: inserted.id,
             relatedMemoryId: conflict.id,
             resolution: candidateWins
@@ -599,6 +601,7 @@ class MemoryService {
         await this.audit({
           action: 'memory.created',
           tenantId,
+          scope,
           memoryId: inserted.id,
           source: inserted.source,
           confidence: inserted.confidence
