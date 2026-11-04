@@ -230,6 +230,10 @@ class OwnerIdentityService {
     return count;
   }
 
+  getStableOwnerIdForRuntime() {
+    return this.state.ownerId;
+  }
+
   status() {
     return { username: 'Admin', configured: true, passwordChangeRequired: this.state.mustChangePassword };
   }
