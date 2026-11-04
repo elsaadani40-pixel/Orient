@@ -48,6 +48,65 @@ test('quota promotion deferrals restore the queued workflow state before retryin
   }
 });
 
+test('missing quota reservation is recreated before a queued workflow is retried', async () => {
+  const instance = new WorkflowInstance({ definition: definition(), workflowId: 'quota-reservation-recreated', tenantId: 'tenant-compensation' });
+  let reservationExists = false;
+  let reserveCalls = 0;
+  let promotionCalls = 0;
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save() { return true; } },
+    quotaRepository: {
+      async reserveWorkflow() { reserveCalls += 1; reservationExists = true; return { created: true }; },
+      async promoteWorkflow() {
+        promotionCalls += 1;
+        if (!reservationExists) return null;
+        reservationExists = false;
+        return { promoted: true };
+      },
+      async releaseWorkflow() { reservationExists = false; return true; }
+    },
+    clock: () => 1000
+  });
+  await scheduler.enqueueDurable(instance);
+  reservationExists = false;
+  const lease = await scheduler.leaseAsync('worker-retry');
+  assert.ok(lease);
+  assert.equal(reserveCalls, 2);
+  assert.equal(promotionCalls, 2);
+  assert.equal(instance.state, 'RUNNING');
+});
+
+test('unexpected quota promotion errors restore the workflow to the durable queue', async () => {
+  const instance = new WorkflowInstance({ definition: definition(), workflowId: 'quota-promotion-unexpected-error', tenantId: 'tenant-compensation' });
+  let promotionCalls = 0;
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save() { return true; } },
+    quotaRepository: {
+      async reserveWorkflow() { return { created: true }; },
+      async promoteWorkflow() {
+        promotionCalls += 1;
+        if (promotionCalls === 1) throw new Error('quota database unavailable');
+        return { promoted: true };
+      }
+    },
+    clock: () => 1000
+  });
+  await scheduler.enqueueDurable(instance);
+  const queuedUpdatedAt = instance.updatedAt;
+  const queuedMetadata = { ...instance.metadata };
+  await assert.rejects(() => scheduler.leaseAsync('worker-a'), /quota database unavailable/);
+  assert.equal(instance.state, 'QUEUED');
+  assert.equal(instance.updatedAt, queuedUpdatedAt);
+  assert.deepEqual(instance.metadata, queuedMetadata);
+  assert.equal(scheduler.depth(), 1);
+  assert.equal(await scheduler.leaseStore.get(instance.workflowId), null);
+  const lease = await scheduler.leaseAsync('worker-b');
+  assert.ok(lease);
+  assert.equal(instance.state, 'RUNNING');
+});
+
 test('queued cancellation releases its durable quota reservation', async () => {
   const instance = new WorkflowInstance({
     definition: definition(),
