@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
+const crypto = require('node:crypto');
+const { provisionPostgresRoles } = require('../../scripts/provision-postgres-roles');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
@@ -11,7 +13,12 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
 
 test('PostgreSQL initializes versioned schema idempotently on a real server', async () => {
-  await persistence.migrate();
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword: crypto.randomBytes(24).toString('hex')
+  });
+  await persistence.migrate({ role: 'orient_owner' });
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
@@ -906,5 +913,81 @@ test('PostgreSQL owner work profile persists validated partial updates and isola
     );
   } finally {
     await pool.query('DELETE FROM owner_work_profiles WHERE owner_id = ANY($1::text[])', [[ownerId, otherOwnerId]]);
+  }
+});
+
+
+test('PostgreSQL runtime role is restricted and tenant RLS blocks cross-tenant CRUD', async () => {
+  const role = await pool.query(
+    "SELECT rolname, rolsuper, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname IN ('orient_owner','orient_runtime','orient_runtime_login','orient_migrator') ORDER BY rolname"
+  );
+  const runtime = role.rows.find(row => row.rolname === 'orient_runtime');
+  const runtimeLogin = role.rows.find(row => row.rolname === 'orient_runtime_login');
+  const owner = role.rows.find(row => row.rolname === 'orient_owner');
+  assert.equal(runtime.rolsuper, false);
+  assert.equal(runtime.rolbypassrls, false);
+  assert.equal(runtime.rolcanlogin, false);
+  assert.equal(runtimeLogin.rolsuper, false);
+  assert.equal(runtimeLogin.rolbypassrls, false);
+  assert.equal(runtimeLogin.rolcanlogin, true);
+  assert.equal(owner.rolcanlogin, false);
+
+  const a = 'rls-a-' + crypto.randomUUID();
+  const b = 'rls-b-' + crypto.randomUUID();
+  const now = new Date().toISOString();
+  await pool.query(
+    'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES ($1,$2,$3,$4),($5,$6,$7,$4)',
+    [a,'tenant-a',{id:a,tenantId:'tenant-a'},now,b,'tenant-b',{id:b,tenantId:'tenant-b'}]
+  );
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE orient_runtime');
+    await client.query(
+      "SELECT set_config('app.orient_tenant_id',$1,true), set_config('app.orient_owner_id',$2,true)",
+      ['tenant-a','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']
+    );
+    const visible = await client.query('SELECT execution_id FROM executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id',[ [a,b] ]);
+    assert.deepEqual(visible.rows.map(row => row.execution_id), [a]);
+    const changed = await client.query('UPDATE executions SET payload=$1 WHERE execution_id=$2', [{changed:true},b]);
+    assert.equal(changed.rowCount, 0);
+    const deleted = await client.query('DELETE FROM executions WHERE execution_id=$1',[b]);
+    assert.equal(deleted.rowCount, 0);
+    await assert.rejects(
+      () => client.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES ($1,$2,$3,$4)',
+        ['rls-insert-'+crypto.randomUUID(),'tenant-b',{id:'cross-tenant'},now]
+      ),
+      error => error.code === '42501'
+    );
+    await client.query('ROLLBACK');
+  } finally {
+    client.release();
+    await pool.query('DELETE FROM executions WHERE execution_id = ANY($1::text[])',[[a,b]]);
+  }
+});
+
+test('PostgreSQL owner RLS blocks another owner chat profile', async () => {
+  const ownerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ownerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const messageA = 'owner-a-' + crypto.randomUUID();
+  const messageB = 'owner-b-' + crypto.randomUUID();
+  const now = new Date().toISOString();
+  await pool.query(
+    'INSERT INTO owner_chat_messages(owner_id,message_id,role,content,created_at) VALUES ($1,$2,$3,$4,$5),($6,$7,$3,$4,$5)',
+    [ownerA,messageA,'user','private A',now,ownerB,messageB]
+  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE orient_runtime');
+    await client.query("SELECT set_config('app.orient_owner_id',$1,true)",[ownerA]);
+    const visible = await client.query('SELECT message_id FROM owner_chat_messages ORDER BY message_id');
+    assert.deepEqual(visible.rows.map(row => row.message_id), [messageA]);
+    await client.query('ROLLBACK');
+  } finally {
+    client.release();
+    await pool.query('DELETE FROM owner_chat_messages WHERE message_id = ANY($1::text[])',[[messageA,messageB]]);
   }
 });
