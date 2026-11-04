@@ -114,3 +114,19 @@ test('runtime principal scope rejects invalid tenant and workspace configuration
   assert.throws(() => new OwnerIdentityRuntimeAdapter({ identity, tenantId: '' }), /tenantId/);
   assert.throws(() => new OwnerIdentityRuntimeAdapter({ identity, workspaceId: 'x'.repeat(129) }), /workspaceId/);
 });
+
+test('runtime composition receives a stable internal owner principal distinct from login sessions', t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
+  const adapter = new OwnerIdentityRuntimeAdapter({ identity, tenantId: 'tenant-runtime', workspaceId: 'workspace-runtime' });
+  const first = adapter.createRuntimePrincipal();
+  const second = adapter.createRuntimePrincipal();
+  assert.equal(first.ownerId, identity.getStableOwnerIdForRuntime());
+  assert.equal(first.principalId, first.ownerId);
+  assert.equal(first.tenantId, 'tenant-runtime');
+  assert.equal(first.workspaceId, 'workspace-runtime');
+  assert.equal(first.authSource, 'orient-runtime-owner');
+  assert.equal(first.sessionId, second.sessionId);
+  assert.equal(Object.isFrozen(first), true);
+  assert.equal(Object.hasOwn(adapter.status(), 'ownerId'), false);
+});
