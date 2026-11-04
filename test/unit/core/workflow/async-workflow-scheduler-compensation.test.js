@@ -356,3 +356,30 @@ test('workers cannot lease a durable queue item before its persistence completes
   assert.ok(lease);
   assert.equal(lease.workflowId, instance.workflowId);
 });
+
+test('recovery save failure preserves a quota reservation that already existed', async () => {
+  const instance = new WorkflowInstance({ definition: definition(), workflowId: 'recovery-existing-reservation', tenantId: 'tenant-compensation' });
+  let quotaReleases = 0;
+  let claimReleases = 0;
+  const workflowRepository = {
+    workerRegistry: { async register(worker) { return worker; } },
+    async claimQueued() { return [instance.toJSON()]; },
+    async save() { throw new Error('recovery write failed'); },
+    async releaseDispatchClaim() { claimReleases += 1; return true; }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    quotaRepository: {
+      async reserveWorkflow() { return { created: false }; },
+      async releaseWorkflow() { quotaReleases += 1; return true; }
+    },
+    clock: () => 1000,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+  await assert.rejects(() => scheduler.recoverPersisted(), /recovery write failed/);
+  assert.equal(scheduler.depth(), 0);
+  assert.equal(claimReleases, 1);
+  assert.equal(quotaReleases, 0);
+});
