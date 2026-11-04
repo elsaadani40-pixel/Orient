@@ -65,7 +65,7 @@ test('persistence factory selects SQLite and exposes memory repositories', async
     assert.equal(typeof closeResult?.then, 'function', 'persistence close must always return a Promise');
     await closeResult;
   } finally {
-    if (result.adapter.db) result.adapter.db.close();
+    await result.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
