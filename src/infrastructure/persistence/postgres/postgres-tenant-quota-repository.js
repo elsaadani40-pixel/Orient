@@ -85,8 +85,11 @@ class PostgresTenantQuotaRepository {
           throw error;
         }
         if (conflict.rowCount === 1) return { ...conflict.rows[0], created: false };
-        const error = new Error('Workflow quota reservation already exists');
-        error.code = 'TENANT_QUOTA_RESERVATION_EXISTS';
+        // The conflicting row disappeared before it could be observed. Do not
+        // report this as an existing reservation: callers may safely tolerate
+        // TENANT_QUOTA_RESERVATION_EXISTS only when that reservation is real.
+        const error = new Error('Workflow quota reservation conflict could not be resolved');
+        error.code = 'TENANT_QUOTA_RESERVATION_RACE';
         throw error;
       }
       return { ...inserted.rows[0], created: true };
