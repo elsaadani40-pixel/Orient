@@ -528,14 +528,22 @@ class PostgresWorkflowRepository {
       }
       return item;
     }
-    await this.db.query(
+    const result = await this.db.query(
       `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
        VALUES($1,$2,$3,$4,$5)
        ON CONFLICT(workflow_id) DO UPDATE SET
-         tenant_id=EXCLUDED.tenant_id,state=EXCLUDED.state,
-         updated_at=EXCLUDED.updated_at,payload=EXCLUDED.payload`,
+         state=EXCLUDED.state,
+         updated_at=EXCLUDED.updated_at,
+         payload=EXCLUDED.payload
+       WHERE workflows.tenant_id=EXCLUDED.tenant_id
+       RETURNING workflow_id`,
       [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
     );
+    if (result.rowCount !== 1) {
+      const error = new Error('Workflow ID is already owned by another tenant');
+      error.code = 'WORKFLOW_TENANT_MISMATCH';
+      throw error;
+    }
     return item;
   }
 
