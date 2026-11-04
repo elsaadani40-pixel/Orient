@@ -94,14 +94,35 @@ class AgentService {
           ? error.executionContext?.executionId
           : null;
         if (typeof approvalExecutionId !== 'string' || !approvalExecutionId) throw error;
+        if (approvalExecutionId !== executionId) {
+          throw new AppError(
+            'Runtime returned an approval execution ID that does not match the reserved task ID',
+            502,
+            'TASK_EXECUTION_ID_MISMATCH'
+          );
+        }
         result = { execution: { executionId: approvalExecutionId }, awaitingApproval: true };
       }
-      const executionId = result?.execution?.executionId || result?.executionId;
-      if (typeof executionId !== 'string' || !executionId) {
+      const actualExecutionId = result?.execution?.executionId || result?.executionId;
+      if (typeof actualExecutionId !== 'string' || !actualExecutionId) {
         throw new AppError('لم يُرجع Runtime معرّف مهمة قابلًا للتحقق', 502, 'TASK_EXECUTION_ID_MISSING');
+      }
+      if (actualExecutionId !== executionId) {
+        throw new AppError(
+          'Runtime returned an execution ID that does not match the reserved task ID',
+          502,
+          'TASK_EXECUTION_ID_MISMATCH'
+        );
       }
 
       const execution = await this.getExecutionStatus(executionId);
+      if (execution.executionId !== executionId) {
+        throw new AppError(
+          'Persisted execution identity does not match the reserved task ID',
+          502,
+          'TASK_EXECUTION_ID_MISMATCH'
+        );
+      }
       task = {
         id: execution.executionId,
         status: execution.status,
