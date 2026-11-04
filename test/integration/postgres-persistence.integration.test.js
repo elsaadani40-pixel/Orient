@@ -924,6 +924,7 @@ test('PostgreSQL runtime role is restricted and tenant RLS blocks cross-tenant C
   const runtime = role.rows.find(row => row.rolname === 'orient_runtime');
   const runtimeLogin = role.rows.find(row => row.rolname === 'orient_runtime_login');
   const owner = role.rows.find(row => row.rolname === 'orient_owner');
+  const migrator = role.rows.find(row => row.rolname === 'orient_migrator');
   assert.equal(runtime.rolsuper, false);
   assert.equal(runtime.rolbypassrls, false);
   assert.equal(runtime.rolcanlogin, false);
@@ -931,6 +932,11 @@ test('PostgreSQL runtime role is restricted and tenant RLS blocks cross-tenant C
   assert.equal(runtimeLogin.rolbypassrls, false);
   assert.equal(runtimeLogin.rolcanlogin, true);
   assert.equal(owner.rolcanlogin, false);
+  assert.equal(migrator.rolsuper, false);
+  assert.equal(migrator.rolbypassrls, false);
+  const membership = await pool.query("SELECT pg_has_role('orient_runtime_login','orient_runtime','MEMBER') AS runtime_member, pg_has_role('orient_migrator','orient_owner','MEMBER') AS migrator_member");
+  assert.equal(membership.rows[0].runtime_member, true);
+  assert.equal(membership.rows[0].migrator_member, true);
   const tableOwner = await pool.query("SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE oid = 'public.executions'::regclass");
   assert.equal(tableOwner.rows[0].owner, 'orient_owner');
 
