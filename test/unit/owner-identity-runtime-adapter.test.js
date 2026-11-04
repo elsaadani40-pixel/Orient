@@ -102,6 +102,7 @@ test('owner identity receives a persistent UUID and legacy state is upgraded onc
   const { stateFile } = fixture(t);
   const first = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
   const ownerId = first.state.ownerId;
+  assert.equal(Object.hasOwn(first.status(), 'ownerId'), false, 'public status must not disclose the stable owner identifier');
   assert.match(ownerId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   const second = new OwnerIdentityService({ stateFile });
   assert.equal(second.state.ownerId, ownerId);
