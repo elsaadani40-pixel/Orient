@@ -5,10 +5,10 @@ const { Pool } = require('pg');
 const { PostgresPersistence } = require('../src/infrastructure/persistence/postgres/postgres-persistence');
 
 async function main() {
-  const connectionString = process.env.ORIENT_DATABASE_URL;
+  const connectionString = process.env.ORIENT_MIGRATION_DATABASE_URL;
   if (!connectionString) {
     throw Object.assign(
-      new Error('ORIENT_DATABASE_URL is required to run database migrations.'),
+      new Error('ORIENT_MIGRATION_DATABASE_URL is required for the dedicated migration-owner connection.'),
       { code: 'PERSISTENCE_DATABASE_URL_REQUIRED' }
     );
   }
