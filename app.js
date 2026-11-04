@@ -192,6 +192,12 @@ const ownerIdentityService = new OwnerIdentityService({
   bootstrapPassword: ownerBootstrapPassword
 });
 const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService, tenantId: config.defaultTenantId });
+if (typeof persistence.setOwnerId === 'function') {
+  persistence.setOwnerId(ownerIdentityService.getStableOwnerIdForRuntime());
+}
+if (typeof persistence.bindPrincipal === 'function') {
+  persistence.bindPrincipal(ownerAuthService.createRuntimePrincipal());
+}
 const website = createOwnerServer({
   dataDir: websiteDataDir,
   identity: ownerAuthService,
