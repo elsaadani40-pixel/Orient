@@ -582,6 +582,41 @@ test('PostgreSQL approval authorization is durable, tenant-scoped and replay-saf
   );
 });
 
+test('PostgreSQL workflow IDs cannot be reassigned across tenants', async () => {
+  const workflowId = 'workflow-tenant-owner-' + Date.now();
+  const ownerTenant = 'tenant-workflow-owner';
+  const otherTenant = 'tenant-workflow-other';
+  const original = {
+    workflowId,
+    tenantId: ownerTenant,
+    state: 'QUEUED',
+    updatedAt: new Date().toISOString(),
+    metadata: {},
+    toJSON() { return this; }
+  };
+  const attemptedTransfer = {
+    ...original,
+    tenantId: otherTenant,
+    updatedAt: new Date(Date.now() + 1).toISOString(),
+    toJSON() { return this; }
+  };
+
+  try {
+    await persistence.workflows.save(original, ownerTenant);
+    await assert.rejects(
+      () => persistence.workflows.save(attemptedTransfer, otherTenant),
+      error => error.code === 'WORKFLOW_TENANT_MISMATCH'
+    );
+
+    const ownerRecord = await persistence.workflows.findById(workflowId, ownerTenant);
+    const otherRecord = await persistence.workflows.findById(workflowId, otherTenant);
+    assert.equal(ownerRecord.tenantId, ownerTenant);
+    assert.equal(otherRecord, null);
+  } finally {
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, ownerTenant]);
+  }
+});
+
 test('PostgreSQL quota admission preserves a recent reservation while its workflow row is being persisted', async () => {
   const suffix = Date.now();
   const tenantId = 'tenant-quota-inflight-' + suffix;
