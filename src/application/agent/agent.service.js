@@ -60,6 +60,13 @@ class AgentService {
         );
         if (persistedExecution) {
           const execution = await this.getExecutionStatus(begun.record.executionId);
+          if (!execution || execution.executionId !== begun.record.executionId) {
+            throw new AppError(
+              'Recovered execution identity does not match the idempotency reservation',
+              502,
+              'TASK_EXECUTION_ID_MISMATCH'
+            );
+          }
           const task = {
             id: execution.executionId,
             status: execution.status,
