@@ -291,6 +291,13 @@ jobs:
           ORIENT_PERSISTENCE: "json"
         run: |
           set -euo pipefail
+          export ORIENT_ADMIN_DATABASE_URL="$DATABASE_URL"
+          export ORIENT_MIGRATOR_PASSWORD="$(openssl rand -hex 32)"
+          export ORIENT_RUNTIME_PASSWORD="$(openssl rand -hex 32)"
+          node scripts/provision-postgres-roles.js
+          export ORIENT_MIGRATION_DATABASE_URL="postgresql://orient_migrator:${ORIENT_MIGRATOR_PASSWORD}@localhost:5432/orient_test"
+          export ORIENT_MIGRATION_ROLE="orient_owner"
+          node scripts/migrate-postgres.js
           data_dir="$(mktemp -d)"
           log_file="$(mktemp)"
           export ORIENT_DATA_DIR="$data_dir"
