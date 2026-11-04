@@ -75,6 +75,16 @@ class PostgresTenantQuotaRepository {
         [tenantId,workflowId,expiresAt]
       );
       if (inserted.rowCount !== 1) {
+        const conflict = await client.query(
+          'SELECT tenant_id,workflow_id,state,reserved_at,expires_at FROM tenant_quota_reservations WHERE workflow_id=$1 LIMIT 1',
+          [workflowId]
+        );
+        if (conflict.rowCount === 1 && conflict.rows[0].tenant_id !== tenantId) {
+          const error = new Error('Workflow quota reservation belongs to another tenant');
+          error.code = 'TENANT_QUOTA_RESERVATION_TENANT_MISMATCH';
+          throw error;
+        }
+        if (conflict.rowCount === 1) return { ...conflict.rows[0], created: false };
         const error = new Error('Workflow quota reservation already exists');
         error.code = 'TENANT_QUOTA_RESERVATION_EXISTS';
         throw error;
