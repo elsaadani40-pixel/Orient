@@ -364,3 +364,42 @@ test('memory.delete tool forwards explicit scope to async execution and reconcil
     'memory.archived'
   );
 });
+
+
+test('memory reconciliation locks the tenant scope before reading its receipt and target record', async t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
+  const calls = [];
+
+  const originalLockScope = fixture.repository.lockScope;
+  fixture.repository.lockScope = async (...args) => {
+    calls.push('scope-lock');
+    if (typeof originalLockScope === 'function') await originalLockScope.apply(fixture.repository, args);
+  };
+  const originalFindReceipt = fixture.auditRepository.findByOperationId;
+  fixture.auditRepository.findByOperationId = (...args) => {
+    calls.push('audit-receipt');
+    return originalFindReceipt.apply(fixture.auditRepository, args);
+  };
+  const originalFindMemory = fixture.repository.findById;
+  fixture.repository.findById = (...args) => {
+    calls.push('memory-record');
+    return originalFindMemory.apply(fixture.repository, args);
+  };
+
+  const context = {
+    tenantId: 'tenant-lock-order',
+    memoryScope: 'personal',
+    operationId: 'operation-lock-order'
+  };
+  const created = await fixture.service.add('scope lock reconciliation proof', {}, context);
+  calls.length = 0;
+
+  const reconciled = await fixture.service.reconcileToolOperation('memory.add', {
+    text: 'scope lock reconciliation proof'
+  }, context);
+
+  assert.equal(reconciled.status, 'completed');
+  assert.equal(reconciled.result.id, created.id);
+  assert.deepEqual(calls, ['scope-lock', 'audit-receipt', 'memory-record']);
+});
