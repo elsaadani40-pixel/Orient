@@ -92,6 +92,8 @@ test('SQLite audit observation failure captures async rejection after durable co
       1,
       'the durable audit receipt must remain committed'
     );
+    // Observation delivery is deliberately non-blocking after the durable commit.
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(persistence.memoryAudit.lastEventSinkError.code, 'OBSERVATION_DOWN');
   } finally {
     persistence.close();
