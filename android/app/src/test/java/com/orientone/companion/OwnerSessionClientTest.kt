@@ -24,7 +24,7 @@ class OwnerSessionClientTest {
     @Test
     fun manifestDeclaresOnlyInternetPermissionUntilDeviceAdaptersAreImplemented() {
         val manifest = java.io.File("src/main/AndroidManifest.xml").readText()
-        val permissions = Regex("""<uses-permission\\b[^>]*android:name="([^"]+)"""")
+        val permissions = Regex("""<uses-permission\b[^>]*android:name="([^"]+)"""")
             .findAll(manifest)
             .map { it.groupValues[1] }
             .toSet()
