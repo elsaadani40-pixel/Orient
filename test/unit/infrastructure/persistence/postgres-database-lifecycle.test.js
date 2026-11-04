@@ -63,3 +63,125 @@ test('PostgreSQL runtime initialization rejects an outdated schema', async () =>
       && error.expectedVersion === Math.max(...MIGRATIONS.map(migration => migration.version))
   );
 });
+
+const validPrincipal = (overrides = {}) => ({
+  principalId: '11111111-1111-4111-8111-111111111111',
+  ownerId: '11111111-1111-4111-8111-111111111111',
+  tenantId: 'tenant-alpha',
+  workspaceId: 'workspace-main',
+  sessionId: '22222222-2222-4222-8222-222222222222',
+  authSource: 'orient-owner-session',
+  ...overrides
+});
+
+test('principal-scoped unit of work pins all repository queries to one transaction client', async () => {
+  const calls = [];
+  let releases = 0;
+  const client = {
+    async query(sql, values = []) {
+      calls.push({ sql, values });
+      return { rows: [], rowCount: 0 };
+    },
+    release() { releases += 1; }
+  };
+  const pool = {
+    async query() { throw new Error('scoped work must not use pool.query'); },
+    async connect() { return client; }
+  };
+  const database = new PostgresDatabase({ pool });
+
+  const result = await database.withPrincipal(validPrincipal(), async () => {
+    await database.query('SELECT scoped_repository_call');
+    await database.transaction(async tx => {
+      await database.query('SELECT nested_repository_call');
+      await tx.query('SELECT explicit_transaction_call');
+    });
+    return 'committed';
+  });
+
+  assert.equal(result, 'committed');
+  assert.deepEqual(calls.map(call => call.sql), [
+    'BEGIN',
+    "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+    'SELECT scoped_repository_call',
+    'SAVEPOINT orient_nested_1',
+    'SELECT nested_repository_call',
+    'SELECT explicit_transaction_call',
+    'RELEASE SAVEPOINT orient_nested_1',
+    'COMMIT'
+  ]);
+  assert.deepEqual(calls[1].values, [
+    '11111111-1111-4111-8111-111111111111',
+    '11111111-1111-4111-8111-111111111111',
+    'tenant-alpha',
+    'workspace-main',
+    '22222222-2222-4222-8222-222222222222'
+  ]);
+  assert.equal(releases, 1);
+});
+
+test('principal context cannot be switched inside a transaction and rolls back', async () => {
+  const calls = [];
+  const client = {
+    async query(sql) { calls.push(sql); return { rows: [] }; },
+    release() {}
+  };
+  const database = new PostgresDatabase({ pool: { query() {}, async connect() { return client; } } });
+  const other = validPrincipal({
+    principalId: '33333333-3333-4333-8333-333333333333',
+    ownerId: '33333333-3333-4333-8333-333333333333',
+    tenantId: 'tenant-beta',
+    sessionId: '44444444-4444-4444-8444-444444444444'
+  });
+
+  await assert.rejects(
+    () => database.withPrincipal(validPrincipal(), () =>
+      database.withPrincipal(other, async () => database.query('SHOULD_NOT_RUN'))
+    ),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_SWITCH_REJECTED'
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(calls.includes('SHOULD_NOT_RUN'), false);
+});
+
+test('principal context is transaction-local and re-established for each pooled connection lease', async () => {
+  const calls = [];
+  let releases = 0;
+  const client = {
+    async query(sql, values = []) { calls.push({ sql, values }); return { rows: [] }; },
+    release() { releases += 1; }
+  };
+  const database = new PostgresDatabase({ pool: { query() {}, async connect() { return client; } } });
+  const alpha = validPrincipal();
+  const beta = validPrincipal({
+    principalId: '33333333-3333-4333-8333-333333333333',
+    ownerId: '33333333-3333-4333-8333-333333333333',
+    tenantId: 'tenant-beta',
+    sessionId: '44444444-4444-4444-8444-444444444444'
+  });
+
+  await database.withPrincipal(alpha, async () => database.query('SELECT alpha'));
+  await database.withPrincipal(beta, async () => database.query('SELECT beta'));
+
+  const contextCalls = calls.filter(call => /set_config/.test(call.sql));
+  assert.equal(contextCalls.length, 2);
+  assert.equal(contextCalls[0].values[2], 'tenant-alpha');
+  assert.equal(contextCalls[1].values[2], 'tenant-beta');
+  assert.deepEqual(calls.filter(call => ['BEGIN', 'COMMIT'].includes(call.sql)).map(call => call.sql),
+    ['BEGIN', 'COMMIT', 'BEGIN', 'COMMIT']);
+  assert.equal(releases, 2);
+});
+
+test('principal-scoped unit of work rejects unverified or malformed principals before connecting', async () => {
+  let connects = 0;
+  const database = new PostgresDatabase({ pool: { query() {}, async connect() { connects += 1; return { query() {}, release() {} }; } } });
+  await assert.rejects(
+    () => database.withPrincipal({ tenantId: 'tenant-alpha' }, async () => {}),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_INVALID'
+  );
+  await assert.rejects(
+    () => database.withPrincipal(validPrincipal({ authSource: 'supabase-user-metadata' }), async () => {}),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_INVALID'
+  );
+  assert.equal(connects, 0);
+});
