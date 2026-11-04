@@ -921,6 +921,10 @@ class PostgresPersistence {
     return this.db.initialize();
   }
 
+  migrate() {
+    return this.db.migrate();
+  }
+
   health() {
     return {
       adapter: 'postgres',
