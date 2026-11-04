@@ -1,7 +1,7 @@
 'use strict';
 
 class OwnerIdentityRuntimeAdapter {
-  constructor({ identity, maxFailures = 5, lockoutMs = 15 * 60 * 1000, now = Date.now } = {}) {
+  constructor({ identity, tenantId = 'local', workspaceId = 'local', maxFailures = 5, lockoutMs = 15 * 60 * 1000, now = Date.now } = {}) {
     if (!identity || typeof identity.login !== 'function' ||
         typeof identity.authenticate !== 'function' ||
         typeof identity.verifyCsrf !== 'function' ||
@@ -14,7 +14,14 @@ class OwnerIdentityRuntimeAdapter {
         typeof now !== 'function') {
       throw new RangeError('Invalid owner authentication adapter policy');
     }
+    for (const [label, value] of [['tenantId', tenantId], ['workspaceId', workspaceId]]) {
+      if (typeof value !== 'string' || !value.trim() || value.length > 128) {
+        throw new TypeError(`${label} must be a non-empty string of at most 128 characters`);
+      }
+    }
     this.identity = identity;
+    this.tenantId = tenantId;
+    this.workspaceId = workspaceId;
     this.maxFailures = maxFailures;
     this.lockoutMs = lockoutMs;
     this.now = now;
@@ -56,7 +63,18 @@ class OwnerIdentityRuntimeAdapter {
   }
 
   authenticate(token) {
-    return this.identity.authenticate(token);
+    const session = this.identity.authenticate(token);
+    if (!session) return null;
+    if (typeof session.ownerId !== 'string' || !session.ownerId) return null;
+    const principal = Object.freeze({
+      principalId: session.ownerId,
+      ownerId: session.ownerId,
+      tenantId: this.tenantId,
+      workspaceId: this.workspaceId,
+      authSource: 'orient-owner-session',
+      sessionId: session.sessionId
+    });
+    return Object.freeze({ ...session, principal });
   }
 
   isActiveSession(sessionId) {
