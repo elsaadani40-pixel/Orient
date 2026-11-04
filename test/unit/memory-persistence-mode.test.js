@@ -67,3 +67,33 @@ test('PostgreSQL audit observation failure does not fail a committed append', as
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(repository.lastEventSinkError.code, 'OBSERVATION_DOWN');
 });
+
+const SqlitePersistence = require('../../src/infrastructure/persistence/sqlite/sqlite-persistence');
+
+test('SQLite audit observation failure captures async rejection after durable commit', async () => {
+  const persistence = new SqlitePersistence({ filePath: ':memory:' });
+  try {
+    persistence.memoryAudit.setEventSink(async () => {
+      throw Object.assign(new Error('observation unavailable'), { code: 'OBSERVATION_DOWN' });
+    });
+
+    await persistence.db.transactionAsync(async () => {
+      persistence.memoryAudit.append({
+        id: 'sqlite-audit-observation-failure',
+        action: 'memory.created',
+        tenantId: 'tenant-a',
+        scope: 'personal',
+        memoryId: 'memory-a'
+      });
+    });
+
+    assert.equal(
+      persistence.memoryAudit.findByMemoryId('memory-a', 'tenant-a', 'personal').length,
+      1,
+      'the durable audit receipt must remain committed'
+    );
+    assert.equal(persistence.memoryAudit.lastEventSinkError.code, 'OBSERVATION_DOWN');
+  } finally {
+    persistence.close();
+  }
+});
