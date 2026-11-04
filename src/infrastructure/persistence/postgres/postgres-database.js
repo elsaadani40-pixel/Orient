@@ -130,6 +130,32 @@ class PostgresDatabase {
     this.pool=pool; this.schema=schema;
   }
   async initialize() {
+    const exists = await this.pool.query(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ready"
+    );
+    if (!exists.rows[0]?.ready) {
+      throw Object.assign(
+        new Error('PostgreSQL schema is not installed. Run the explicit database migration command before starting ORIENT.'),
+        { code: 'PERSISTENCE_SCHEMA_NOT_READY' }
+      );
+    }
+
+    const current = await this.pool.query(
+      'SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations'
+    );
+    const version = Number(current.rows[0]?.version || 0);
+    const latest = Math.max(...MIGRATIONS.map(migration => migration.version));
+    if (version < latest) {
+      throw Object.assign(
+        new Error(`PostgreSQL schema is outdated (version ${version}; expected ${latest}). Run the explicit database migration command.`),
+        { code: 'PERSISTENCE_SCHEMA_OUTDATED', currentVersion: version, expectedVersion: latest }
+      );
+    }
+
+    return { schemaVersion: version };
+  }
+
+  async migrate() {
     const client=await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -149,6 +175,7 @@ class PostgresDatabase {
         }
       }
       await client.query('COMMIT');
+      return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
     } catch(error){try{await client.query('ROLLBACK');}catch{}throw error;} finally{client.release();}
   }
   async query(text,values=[]){return this.pool.query(text,values);}
