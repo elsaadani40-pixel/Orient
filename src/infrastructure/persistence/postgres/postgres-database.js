@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -128,6 +129,8 @@ class PostgresDatabase {
   constructor({pool,schema=null}={}) {
     if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
     this.pool=pool; this.schema=schema;
+    this.contextStorage = new AsyncLocalStorage();
+    this.savepointCounter = 0;
   }
   async initialize() {
     const exists = await this.pool.query(
@@ -178,8 +181,78 @@ class PostgresDatabase {
       return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
     } catch(error){try{await client.query('ROLLBACK');}catch{}throw error;} finally{client.release();}
   }
-  async query(text,values=[]){return this.pool.query(text,values);}
-  async transaction(work){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await work(client);await client.query('COMMIT');return result;}catch(error){try{await client.query('ROLLBACK');}catch{}throw error;}finally{client.release();}}
+  validatePrincipal(principal) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!principal || principal.authSource !== 'orient-owner-session' ||
+        typeof principal.ownerId !== 'string' || !uuid.test(principal.ownerId) ||
+        principal.principalId !== principal.ownerId ||
+        typeof principal.sessionId !== 'string' || !uuid.test(principal.sessionId) ||
+        typeof principal.tenantId !== 'string' || !principal.tenantId.trim() || principal.tenantId.length > 128 ||
+        typeof principal.workspaceId !== 'string' || !principal.workspaceId.trim() || principal.workspaceId.length > 128) {
+      throw Object.assign(new Error('A verified ORIENT owner principal is required for a scoped PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_INVALID' });
+    }
+    return Object.freeze({ principalId: principal.principalId, ownerId: principal.ownerId, tenantId: principal.tenantId, workspaceId: principal.workspaceId, sessionId: principal.sessionId, authSource: principal.authSource });
+  }
+
+  async withPrincipal(principal, work) {
+    if (typeof work !== 'function') throw new TypeError('work callback is required');
+    const verifiedPrincipal = this.validatePrincipal(principal);
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const current = active.principal;
+      if (current.principalId !== verifiedPrincipal.principalId || current.tenantId !== verifiedPrincipal.tenantId || current.workspaceId !== verifiedPrincipal.workspaceId || current.sessionId !== verifiedPrincipal.sessionId) {
+        throw Object.assign(new Error('Cannot change ORIENT principal inside an active PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_SWITCH_REJECTED' });
+      }
+      return work();
+    }
+
+    const client = await this.pool.connect();
+    const context = { client, principal: verifiedPrincipal };
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+        [verifiedPrincipal.principalId, verifiedPrincipal.ownerId, verifiedPrincipal.tenantId, verifiedPrincipal.workspaceId, verifiedPrincipal.sessionId]
+      );
+      const result = await this.contextStorage.run(context, () => work());
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async query(text, values = []) {
+    const active = this.contextStorage.getStore();
+    return active ? active.client.query(text, values) : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const savepoint = 'orient_nested_' + (++this.savepointCounter);
+      await active.client.query('SAVEPOINT ' + savepoint);
+      try {
+        const result = await work(active.client);
+        await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        return result;
+      } catch (error) {
+        try { await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint); await active.client.query('RELEASE SAVEPOINT ' + savepoint); } catch {}
+        throw error;
+      }
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch {}
+      throw error;
+    } finally { client.release(); }
+  }
   static json(value){return value===undefined?null:value;}
   static uuid(){return crypto.randomUUID();}
 }
