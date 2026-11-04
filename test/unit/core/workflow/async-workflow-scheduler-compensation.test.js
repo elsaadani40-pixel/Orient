@@ -158,6 +158,36 @@ test('recovery retries quota cleanup for workflows already in a terminal state',
   }]);
 });
 
+test('delayed durable workflows keep their queued quota reservation until terminal cleanup', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'delayed-quota-reservation-retention',
+    tenantId: 'tenant-compensation'
+  });
+  let now = 1000;
+  let reservedExpiresAt = 'not-called';
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save() { return true; } },
+    quotaRepository: {
+      async reserveWorkflow(args) {
+        reservedExpiresAt = args.expiresAt;
+        return { created: true };
+      },
+      async promoteWorkflow() { return { promoted: true }; }
+    },
+    clock: () => now,
+    leaseDurationMs: 30000
+  });
+
+  await scheduler.enqueueDurable(instance, { delayMs: 60000 });
+  assert.equal(reservedExpiresAt, null);
+  now = 200000;
+  const lease = await scheduler.leaseAsync('worker-a');
+  assert.ok(lease);
+  assert.equal(instance.state, 'RUNNING');
+});
+
 test('async scheduler compensates lease and durable quota when persistence fails after acquisition',async()=>{
   const instance=new WorkflowInstance({definition:definition(),workflowId:'persist-failure-wf',tenantId:'tenant-compensation'});
   const leases=new Map(); const quotaCalls=[];
