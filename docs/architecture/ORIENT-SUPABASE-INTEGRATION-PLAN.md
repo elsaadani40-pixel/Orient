@@ -128,31 +128,33 @@ The initial cloud database path should reuse the existing `pg`-based PostgreSQL 
 - No migration of existing owner identity or production data before a separately reviewed migration plan.
 - No automatic resume of an inactive Supabase project until its purpose, owner, cost, data, and environment are confirmed.
 
-## 8. Current verified blockers
+## 8. Current verified blockers and implementation status
 
-- A dedicated ORIENT development Supabase project has now been provisioned and verified:
+- Dedicated ORIENT development project:
   - Project ref: `wjbavkwgsyphyzpztyoc`
   - Region: `eu-central-1` (Frankfurt)
-  - Status: `ACTIVE_HEALTHY`
+  - Status at Phase 0 inspection: `ACTIVE_HEALTHY`
   - PostgreSQL: `17.11`
   - Project URL: `https://wjbavkwgsyphyzpztyoc.supabase.co`
-- Read-only Phase 0 inspection on 2026-11-05 found zero application tables in `public`, zero recorded migrations, and no security or performance advisor lints. No schema, migration, row, or project configuration was changed during this inspection.
-- Supabase's catalog reports five installed extensions on this new project: `plpgsql`, `pgcrypto`, `pg_stat_statements`, `uuid-ossp`, and `supabase_vault`. No ORIENT extension dependency has been enabled.
-- The existing PostgreSQL bootstrap is not yet safe to run unchanged against Supabase. `PostgresDatabase.initialize()` executes the complete baseline schema and versioned migrations as part of runtime initialization. It creates tenant-scoped tables but does not enable RLS or define policies. It also performs schema DDL, which should not be granted to the normal runtime identity.
-- The MCP SQL inspection connected as `postgres`; this is an administrative role and is not an acceptable production/runtime credential. A separate migration-owner role and a restricted runtime role must be designed before any application schema is deployed.
-- Several existing repositories enforce tenant scope in SQL predicates, while owner conversation/profile tables use `owner_id`. A safe RLS design must map the ORIENT authenticated principal to those identifiers and must not assume every table has the same ownership model.
-- Supabase's 2026-04-28 Data API change became enforced for all projects on 2026-10-30: newly created public tables are not automatically exposed through Data API. Keep application tables unexposed unless an explicit API surface is approved; this default is defense-in-depth, not a substitute for database-role restrictions and RLS.
-- Supabase's 2026-11-04 CLI v3 release changes hosted database command targeting: database commands are local by default, and hosted changes require explicit remote targeting/confirmation. Any future CLI workflow must be verified against the v3 migration guidance and must never assume `db push` targets the hosted project.
-- PR #318 remains independent and must be governed by its own exact-head checks. PR #319 remains documentation/architecture work and is not merged.
+- Phase 0 found zero application tables in `public`, zero recorded migrations, and no security or performance advisor lints. No Supabase schema, data, migration, extension, or project setting was changed.
+- **Implemented on the integration branch:** `PostgresDatabase.initialize()` now performs read-only schema readiness/version checks. It no longer creates tables or runs migrations during application startup.
+- **Implemented on the integration branch:** explicit schema migration is exposed through `PostgresDatabase.migrate()`, `PostgresPersistence.migrate()`, and the factory's `migrate()` method. The operator command is `ORIENT_DATABASE_URL=... npm run db:migrate`; it requires a deliberate operator invocation and does not run automatically during app startup.
+- **Tests added/updated:** lifecycle unit tests assert startup performs no DDL and fails closed when the schema is absent/outdated; the real-PostgreSQL integration test now calls `migrate()` explicitly before verifying schema idempotency. CI results for this code revision are still pending.
+- **Not yet implemented:** separate migration-owner and restricted runtime database roles, entity-specific RLS policies, trusted tenant/owner identity context, and connection-pool context isolation tests.
+- The existing schema contains both `tenant_id` and `owner_id` ownership models. A generic `auth.uid()` policy or caller-controlled session variable would not be a valid substitute for an explicit ORIENT identity contract.
+- The MCP inspection role was `postgres`, an administrative role. It must not be used as the normal application runtime credential.
+- Supabase CLI v3 (released 2026-11-02) defaults database commands to the local stack; hosted database changes require explicit `--remote` targeting and confirmation. See the [CLI v3 migration guide](https://supabase.com/docs/guides/local-development/cli/migrating-to-v3).
+- PR #318 remains independent. PR #319 remains Draft and unmerged.
 
-## 9. Immediate next action
+## 9. Next security gate
 
-Complete the database security design before the first DDL:
-1. Define an explicit ORIENT-to-database identity contract for `tenant_id` and `owner_id`.
-2. Separate schema migration ownership from the restricted application runtime role.
-3. Decide whether RLS is driven by transaction-local trusted tenant context or by signed Supabase Auth claims. Do not use client-editable metadata or caller-controlled session variables.
-4. Update the existing PostgreSQL adapter so runtime initialization does not silently perform migrations; add an explicit, auditable migration command/path.
-5. Add tests proving tenant isolation, role privilege boundaries, migration repeatability, and local-only operation.
-6. Only then create and apply a reviewed, versioned Supabase migration to this empty development project, followed by advisors and end-to-end integration tests.
+Before applying any schema to Supabase:
+1. Define a trusted ORIENT principal/tenant identity contract for both `tenant_id` and `owner_id`.
+2. Create distinct migration-owner and restricted runtime roles; grant the runtime role only required DML and sequence privileges, without schema ownership, superuser, or RLS bypass.
+3. Choose a database-verifiable transaction-scoped identity propagation design. Never trust caller-controlled tenant session variables or editable user metadata.
+4. Add entity-specific RLS and explicit grants; test SELECT/INSERT/UPDATE/DELETE and cross-tenant/owner denial.
+5. Test transaction-local context reset under pooled connection reuse.
+6. Run the migration and integration suite against disposable/local PostgreSQL 17, then run security/performance advisors.
+7. Only after review, apply a versioned migration to the empty Supabase development project.
 
-Until those gates pass, do not run `PostgresDatabase.initialize()` against the Supabase project, do not expose application tables through the Data API, and do not place any database credential in the repository or client applications.
+Until those gates pass, do not run `npm run db:migrate` against the Supabase project, do not expose ORIENT tables through the Data API, and do not place credentials in source control or client applications.
