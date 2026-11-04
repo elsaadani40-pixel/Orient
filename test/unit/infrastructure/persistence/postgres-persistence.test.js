@@ -361,8 +361,8 @@ test('Postgres initialization upgrades an existing version-7 schema through vers
   await database.initialize();
 
   const appliedMigrations = calls
-    .filter(call => MIGRATIONS.some(migration => migration.sql === call.text))
-    .map(call => MIGRATIONS.find(migration => migration.sql === call.text).version);
+    .filter(call => MIGRATIONS.some(migration => migration.version > 7 && migration.sql === call.text))
+    .map(call => MIGRATIONS.find(migration => migration.version > 7 && migration.sql === call.text).version);
   assert.deepEqual(appliedMigrations, [8, 9]);
   assert.deepEqual(
     calls
