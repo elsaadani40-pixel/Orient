@@ -75,22 +75,22 @@ The database context boundary is now integrated into the PostgreSQL runtime comp
 - A nested attempt to switch principal, tenant, workspace, or session is rejected.
 - Unit tests cover context pinning, nested transactions, principal-switch rejection, rollback, and re-establishment on pooled connection reuse.
 
-**Important limitation:** existing repositories have not all been migrated to require `withPrincipal()`; unscoped calls still use `pool.query()`. Therefore this is groundwork, not an RLS-ready enforcement boundary. Do not enable policies yet.
+**Important limitation:** direct low-level database access remains available to infrastructure code. Application repositories are bound, but this is not a cryptographic boundary against arbitrary SQL executed with the runtime credential.
 
 ## 7. Trust boundary and remaining database work
 
-The application-level principal contract and initial database context transport are implemented. PostgreSQL RLS is **not** enabled and is not yet safe to enable.
+The application-level principal contract, repository binding, separate database roles, and version-9 RLS policies are implemented in code. The hosted Supabase project has not been migrated. The GUC context remains a trusted-server transport mechanism, not cryptographic proof of identity.
 
-Before RLS can be enabled:
-1. Remove or explicitly classify any future unscoped repository/database access; the app-level repositories are now bound, but direct low-level DB access remains possible to infrastructure code.
-2. Tenant and owner context must remain transaction-local and cannot be accepted from untrusted callers.
-3. All tables must have an explicit ownership mapping: tenant-owned, owner-owned, or intentionally global.
-4. Runtime database credentials must not own tables and must not have `BYPASSRLS`.
-5. Per-table policies and grants must be tested with the actual restricted runtime role.
-6. Pool reuse tests must prove that identity context is reset after success, rollback, and exceptions.
+Before enabling this on a hosted project:
+1. Run `npm run db:roles` with `ORIENT_ADMIN_DATABASE_URL`, `ORIENT_MIGRATOR_PASSWORD`, and `ORIENT_RUNTIME_PASSWORD` supplied through a secure environment; this provisions `orient_owner`, `orient_migrator`, `orient_runtime`, and `orient_runtime_login` and transfers existing ORIENT table ownership.
+2. Configure `ORIENT_MIGRATION_DATABASE_URL` to use `orient_migrator` and set `ORIENT_MIGRATION_ROLE=orient_owner`; then run `npm run db:migrate`.
+3. Configure application `DATABASE_URL` with `orient_runtime_login`, never the admin or migration login.
+4. Verify the runtime role is not a table owner, superuser, or `BYPASSRLS` role. The version-9 migration grants only required table CRUD, read-only access to migration metadata, and sequence usage.
+5. Run the integration suite and advisors against the target project; review all grants, policies, and exposed schemas.
+6. Keep database credentials server-side. Do not expose the runtime login to browser/mobile clients.
 7. Local JSON/SQLite must continue working without Supabase.
 
-Do not use `auth.uid()` for the local ORIENT owner session: it is not a Supabase Auth user. Do not use unsigned `SET app.tenant_id` as proof of identity. A PostgreSQL custom setting is context transport, not authentication.
+Do not use `auth.uid()` for the local ORIENT owner session: it is not a Supabase Auth user. Policies use transaction-local `app.orient_tenant_id` and `app.orient_owner_id` values installed by the trusted server. PostgreSQL custom settings are user-settable: a caller with arbitrary SQL under `orient_runtime_login` can spoof them. This design protects against omitted tenant predicates and accidental cross-scope queries, but it does not defend against SQL injection/arbitrary SQL or a compromised application process. If that threat is in scope, add a database-verifiable signed-principal mechanism before claiming hostile-client isolation.
 
 ## 8. Verification
 
@@ -107,3 +107,30 @@ Unit coverage now verifies:
 - transaction-local context re-established across pooled connection leases.
 
 The next implementation milestone is migrating every PostgreSQL repository path behind the scoped unit of work and classifying system/background work explicitly. No Supabase schema or project setting is changed by this contract.
+
+
+## 9. Database role and RLS implementation
+
+The explicit provisioning command is `npm run db:roles` (`scripts/provision-postgres-roles.js`). It requires an administrative connection and two independently generated passwords supplied through environment variables; it never prints passwords.
+
+| Role | Login | Purpose |
+|---|---:|---|
+| `orient_owner` | No | Owns ORIENT application tables; can bypass ordinary RLS as table owner, but is not a login and has no BYPASSRLS attribute. |
+| `orient_migrator` | Yes | Dedicated migration credential; NOINHERIT membership permits explicit SET ROLE to `orient_owner`. |
+| `orient_runtime` | No | Restricted policy/grant group; NOSUPERUSER, NOBYPASSRLS, does not own tables. |
+| `orient_runtime_login` | Yes | Application connection credential; inherits `orient_runtime`, not owner privileges. |
+
+The version-9 migration enables RLS on all tenant-owned and owner-owned application tables. Tenant policies compare `tenant_id` to the transaction-local tenant context; owner policies compare `owner_id` to the transaction-local owner context. `schema_migrations` is global infrastructure metadata and is SELECT-only for the runtime role. The workflow fencing sequence is granted only for sequence use.
+
+The runtime role is not granted DDL, TRUNCATE, REFERENCES, TRIGGER, or migration-table write access. Table ownership is transferred to `orient_owner` by the administrative provisioning step before migrations execute as that role.
+
+### Verification added
+
+The PostgreSQL integration suite now provisions the role topology, applies migrations as `orient_owner`, and verifies:
+- runtime role is not superuser, table owner, or BYPASSRLS;
+- tenant-A SELECT cannot see tenant-B rows;
+- UPDATE and DELETE against tenant-B rows affect zero rows;
+- INSERT with a mismatched tenant is rejected by RLS;
+- owner-scoped chat rows are invisible across owner IDs.
+
+These tests use a real PostgreSQL 17 service in CI. They validate the policy/grant behavior under `SET ROLE orient_runtime`; they do not prove resistance to a malicious SQL caller able to change custom GUC values.
