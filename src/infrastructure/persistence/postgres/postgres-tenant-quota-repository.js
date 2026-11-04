@@ -40,6 +40,10 @@ class PostgresTenantQuotaRepository {
       await client.query(
         `DELETE FROM tenant_quota_reservations r
          WHERE r.tenant_id=$1
+           -- Admission reserves quota before the workflow payload is persisted.
+           -- Keep recent reservations visible so concurrent admission cannot
+           -- mistake an in-flight enqueue for an orphan.
+           AND r.reserved_at <= NOW() - INTERVAL '5 minutes'
            AND NOT EXISTS (SELECT 1 FROM workflows w WHERE w.workflow_id=r.workflow_id AND w.tenant_id=r.tenant_id)`,
         [tenantId]
       );
