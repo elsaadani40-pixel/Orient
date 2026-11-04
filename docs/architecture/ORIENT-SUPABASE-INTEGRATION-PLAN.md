@@ -130,11 +130,29 @@ The initial cloud database path should reuse the existing `pg`-based PostgreSQL 
 
 ## 8. Current verified blockers
 
-- The linked Supabase account currently lists two projects, both `INACTIVE`: `elsaadani40-pixel's Project` (`dpbnxsrasugzuuogxwwj`) and `Ice-air` (`kulqiwukytgyaprgpcdo`).
-- Read-only table/migration inspection of the first inactive project failed because its database was not accessible. No database was changed.
-- Repository `.env.example` currently documents `json` as default and `json/sqlite/postgres` persistence modes. The persistence factory already instantiates the existing PostgreSQL adapter using `pg`.
-- PR #318 is independent of this work and must remain governed by its own exact-head checks; this branch does not modify it.
+- A dedicated ORIENT development Supabase project has now been provisioned and verified:
+  - Project ref: `wjbavkwgsyphyzpztyoc`
+  - Region: `eu-central-1` (Frankfurt)
+  - Status: `ACTIVE_HEALTHY`
+  - PostgreSQL: `17.11`
+  - Project URL: `https://wjbavkwgsyphyzpztyoc.supabase.co`
+- Read-only Phase 0 inspection on 2026-11-05 found zero application tables in `public`, zero recorded migrations, and no security or performance advisor lints. No schema, migration, row, or project configuration was changed during this inspection.
+- Supabase's catalog reports five installed extensions on this new project: `plpgsql`, `pgcrypto`, `pg_stat_statements`, `uuid-ossp`, and `supabase_vault`. No ORIENT extension dependency has been enabled.
+- The existing PostgreSQL bootstrap is not yet safe to run unchanged against Supabase. `PostgresDatabase.initialize()` executes the complete baseline schema and versioned migrations as part of runtime initialization. It creates tenant-scoped tables but does not enable RLS or define policies. It also performs schema DDL, which should not be granted to the normal runtime identity.
+- The MCP SQL inspection connected as `postgres`; this is an administrative role and is not an acceptable production/runtime credential. A separate migration-owner role and a restricted runtime role must be designed before any application schema is deployed.
+- Several existing repositories enforce tenant scope in SQL predicates, while owner conversation/profile tables use `owner_id`. A safe RLS design must map the ORIENT authenticated principal to those identifiers and must not assume every table has the same ownership model.
+- Supabase's 2026-04-28 Data API change became enforced for all projects on 2026-10-30: newly created public tables are not automatically exposed through Data API. Keep application tables unexposed unless an explicit API surface is approved; this default is defense-in-depth, not a substitute for database-role restrictions and RLS.
+- Supabase's 2026-11-04 CLI v3 release changes hosted database command targeting: database commands are local by default, and hosted changes require explicit remote targeting/confirmation. Any future CLI workflow must be verified against the v3 migration guidance and must never assume `db push` targets the hosted project.
+- PR #318 remains independent and must be governed by its own exact-head checks. PR #319 remains documentation/architecture work and is not merged.
 
 ## 9. Immediate next action
 
-The owner must identify which existing Supabase project, if either, is intended for ORIENT. If neither is the correct environment, provision a new development project only after organization and cost are explicitly confirmed. Once the target is identified and active, continue Phase 0 with read-only schema/migration inspection before any DDL or data movement.
+Complete the database security design before the first DDL:
+1. Define an explicit ORIENT-to-database identity contract for `tenant_id` and `owner_id`.
+2. Separate schema migration ownership from the restricted application runtime role.
+3. Decide whether RLS is driven by transaction-local trusted tenant context or by signed Supabase Auth claims. Do not use client-editable metadata or caller-controlled session variables.
+4. Update the existing PostgreSQL adapter so runtime initialization does not silently perform migrations; add an explicit, auditable migration command/path.
+5. Add tests proving tenant isolation, role privilege boundaries, migration repeatability, and local-only operation.
+6. Only then create and apply a reviewed, versioned Supabase migration to this empty development project, followed by advisors and end-to-end integration tests.
+
+Until those gates pass, do not run `PostgresDatabase.initialize()` against the Supabase project, do not expose application tables through the Data API, and do not place any database credential in the repository or client applications.
