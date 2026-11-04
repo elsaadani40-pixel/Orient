@@ -198,10 +198,14 @@ class SqliteDatabase {
       const connection = ownsConnection
         ? new DatabaseSync(this.filePath)
         : this.baseConnection;
-      connection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
       const context = { connection, afterCommitCallbacks: [], active: true, mode: 'async', poisoned: false };
-      connection.exec('BEGIN IMMEDIATE;');
+      let transactionStarted = false;
       try {
+        // Connection setup and BEGIN are inside the resource guard: either may
+        // throw before user work starts (for example SQLITE_BUSY on BEGIN).
+        connection.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
+        connection.exec('BEGIN IMMEDIATE;');
+        transactionStarted = true;
         const result = await this.transactionContext.run(context, () => work(this));
         if (context.poisoned) {
           throw Object.assign(new Error('SQLite transaction was poisoned by an unsupported nested transaction'), {
@@ -209,6 +213,7 @@ class SqliteDatabase {
           });
         }
         connection.exec('COMMIT;');
+        transactionStarted = false;
         for (const afterCommit of context.afterCommitCallbacks) {
           try {
             await this.transactionContext.run(context, afterCommit);
@@ -218,7 +223,9 @@ class SqliteDatabase {
         }
         return result;
       } catch (error) {
-        try { connection.exec('ROLLBACK;'); } catch {}
+        if (transactionStarted) {
+          try { connection.exec('ROLLBACK;'); } catch {}
+        }
         throw error;
       } finally {
         context.active = false;
