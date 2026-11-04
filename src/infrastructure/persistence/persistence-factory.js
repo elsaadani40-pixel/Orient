@@ -51,6 +51,7 @@ function createPersistence(config) {
   return {
     adapter,
     initialize: () => adapter.initialize(),
+    migrate: () => adapter.migrate(),
     close: () => pool.end()
   };
 }
