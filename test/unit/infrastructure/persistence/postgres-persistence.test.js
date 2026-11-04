@@ -105,6 +105,26 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
   assert.match(insertCall.text, /RETURNING fencing_token/);
 });
 
+test('Postgres workflow upserts cannot transfer a workflow ID across tenants', async () => {
+  const db = fakeDb([{ rows: [], rowCount: 0 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  const instance = {
+    workflowId: 'shared-workflow-id',
+    tenantId: 'tenant-b',
+    state: 'QUEUED',
+    updatedAt: new Date().toISOString(),
+    metadata: {},
+    toJSON() { return this; }
+  };
+
+  await assert.rejects(
+    () => repo.save(instance, 'tenant-b'),
+    error => error.code === 'WORKFLOW_TENANT_MISMATCH'
+  );
+  assert.match(db.calls[0].text, /WHERE workflows\.tenant_id=EXCLUDED\.tenant_id/);
+  assert.match(db.calls[0].text, /RETURNING workflow_id/);
+});
+
 test('Postgres workflow writes reject stale fencing tokens', async () => {
   const db = fakeDb([{ rows: [], rowCount: 0 }]);
   const repo = new PostgresWorkflowRepository(db);
