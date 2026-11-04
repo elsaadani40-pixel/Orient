@@ -26,6 +26,28 @@ function createFixture() {
   };
 }
 
+test('memory.add writes audit receipts into the requested memory scope', async () => {
+  const fixture = createFixture();
+  try {
+    const memory = await fixture.service.add(
+      'scope-specific audit receipt',
+      { type: 'note', scope: 'shared.research' },
+      fixture.context
+    );
+
+    const scopedHistory = await fixture.service.history(memory.id, {
+      ...fixture.context,
+      memoryScope: 'shared.research'
+    });
+    const defaultScopeHistory = await fixture.service.history(memory.id, fixture.context);
+
+    assert.equal(scopedHistory.some(event => event.action === 'memory.created'), true);
+    assert.deepEqual(defaultScopeHistory, []);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('memory.add compensates the committed insert when the created audit append throws', async () => {
   const fixture = createFixture();
   try {
