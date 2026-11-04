@@ -39,6 +39,8 @@ async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword 
     await client.query('GRANT USAGE, CREATE ON SCHEMA public TO orient_owner');
     await client.query('GRANT USAGE ON SCHEMA public TO orient_runtime');
     await client.query('REVOKE CREATE ON SCHEMA public FROM orient_runtime');
+    await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO orient_runtime');
+    await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO orient_runtime');
     const tables = await client.query(
       'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename = ANY($2::text[])',
       ['public', applicationTables]
