@@ -191,7 +191,7 @@ const ownerIdentityService = new OwnerIdentityService({
   stateFile: require('path').join(websiteDataDir, 'owner.json'),
   bootstrapPassword: ownerBootstrapPassword
 });
-const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService });
+const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService, tenantId: config.defaultTenantId });
 const website = createOwnerServer({
   dataDir: websiteDataDir,
   identity: ownerAuthService,
