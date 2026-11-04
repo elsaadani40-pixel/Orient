@@ -235,3 +235,63 @@ test('Postgres approval repository supports durable tenant-scoped execution and 
   assert.match(db.calls[1].text, /tenant_id=\$1 AND used=FALSE AND expires_at>\$2.*LIMIT \$3/);
   assert.deepEqual(db.calls[1].values, ['tenant-a', '2026-10-10T10:00:00.000Z', 10]);
 });
+
+test('PostgresPersistence binds every repository method to a trusted principal transaction', async () => {
+  const calls = [];
+  const client = {
+    async query(sql, values = []) {
+      calls.push({ sql, values });
+      if (sql.includes('SELECT payload FROM executions')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    },
+    release() {}
+  };
+  const pool = {
+    async query(sql, values = []) { calls.push({ sql, values }); return { rows: [], rowCount: 0 }; },
+    async connect() { return client; }
+  };
+  const persistence = new PostgresPersistence({ pool });
+  const principal = {
+    principalId: '11111111-1111-4111-8111-111111111111',
+    ownerId: '11111111-1111-4111-8111-111111111111',
+    tenantId: 'tenant-a',
+    workspaceId: 'workspace-a',
+    sessionId: '22222222-2222-4222-8222-222222222222',
+    authSource: 'orient-runtime-owner'
+  };
+  persistence.bindPrincipal(principal);
+  await persistence.executions.findById('exec-1', { tenantId: 'tenant-a' });
+  assert.deepEqual(calls.map(call => call.sql), [
+    'BEGIN',
+    "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+    'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2 LIMIT 1',
+    'COMMIT'
+  ]);
+  assert.deepEqual(calls[1].values, [
+    principal.principalId, principal.ownerId, principal.tenantId, principal.workspaceId, principal.sessionId
+  ]);
+});
+
+test('PostgresPersistence binds stable owner UUID into both owner-scoped repositories', () => {
+  const persistence = new PostgresPersistence({ pool: fakeDb() });
+  const ownerId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  persistence.setOwnerId(ownerId);
+  assert.equal(persistence.ownerChat.ownerId, ownerId);
+  assert.equal(persistence.ownerProfile.ownerId, ownerId);
+  assert.throws(() => persistence.setOwnerId('owner'), /stable UUID/);
+});
+
+test('PostgresPersistence refuses rebinding to a different tenant or owner principal', () => {
+  const persistence = new PostgresPersistence({ pool: fakeDb() });
+  const principal = {
+    principalId: '11111111-1111-4111-8111-111111111111',
+    ownerId: '11111111-1111-4111-8111-111111111111',
+    tenantId: 'tenant-a', workspaceId: 'workspace-a',
+    sessionId: '22222222-2222-4222-8222-222222222222',
+    authSource: 'orient-runtime-owner'
+  };
+  persistence.bindPrincipal(principal);
+  assert.throws(() => persistence.bindPrincipal({
+    ...principal, tenantId: 'tenant-b'
+  }), error => error.code === 'PERSISTENCE_PRINCIPAL_ALREADY_BOUND');
+});
