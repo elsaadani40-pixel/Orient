@@ -21,13 +21,13 @@ async function main() {
   try {
     const persistence = new PostgresPersistence({ pool });
     const result = await persistence.migrate();
-    process.stdout.write(`ORIENT PostgreSQL schema is at version ${result.schemaVersion}.\\n`);
+    process.stdout.write(`ORIENT PostgreSQL schema is at version ${result.schemaVersion}.\n`);
   } finally {
     await pool.end();
   }
 }
 
 main().catch(error => {
-  process.stderr.write(`ORIENT database migration failed: ${error.message}\\n`);
+  process.stderr.write(`ORIENT database migration failed: ${error.message}\n`);
   process.exitCode = 1;
 });
