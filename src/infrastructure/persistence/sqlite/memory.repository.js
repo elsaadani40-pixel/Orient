@@ -118,14 +118,23 @@ class SqliteMemoryAuditRepository {
     );
     if (this.eventSink) {
       const publish = () => {
+        let delivery;
         try {
-          this.eventSink(record);
-          this.lastEventSinkError = null;
+          delivery = this.eventSink(record);
         } catch (error) {
           // The durable database audit record is authoritative; the in-memory
           // observation stream is best-effort and must not undo the transaction.
           this.lastEventSinkError = error;
+          return;
         }
+
+        // Match PostgreSQL behavior: async observation sinks must never leak an
+        // unhandled rejection after the SQLite audit row has committed.
+        return Promise.resolve(delivery).then(() => {
+          this.lastEventSinkError = null;
+        }).catch(error => {
+          this.lastEventSinkError = error;
+        });
       };
       if (typeof this.db.afterCommit === 'function') {
         this.db.afterCommit(publish);
