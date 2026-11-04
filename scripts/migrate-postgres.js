@@ -13,6 +13,11 @@ async function main() {
     );
   }
 
+  const migrationRole = process.env.ORIENT_MIGRATION_ROLE;
+  if (migrationRole !== 'orient_owner') {
+    throw new Error('ORIENT_MIGRATION_ROLE=orient_owner is required; provision roles before running migrations.');
+  }
+
   const pool = new Pool({
     connectionString,
     application_name: 'orient-schema-migration'
@@ -20,7 +25,7 @@ async function main() {
 
   try {
     const persistence = new PostgresPersistence({ pool });
-    const result = await persistence.migrate();
+    const result = await persistence.migrate({ role: migrationRole });
     process.stdout.write(`ORIENT PostgreSQL schema is at version ${result.schemaVersion}.\n`);
   } finally {
     await pool.end();
