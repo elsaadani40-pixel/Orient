@@ -28,8 +28,12 @@ class AgentService {
     const digest = crypto.createHash('sha256').update(idempotencyKey, 'utf8').digest('hex');
     const requestDigest = crypto.createHash('sha256').update(clean, 'utf8').digest('hex');
     const operationId = 'api-v1-task-create:' + tenantId + ':' + digest;
+    // Use one canonical ID for both the idempotency operation and the
+    // Runtime execution. This lets a retry reconcile a crash after the
+    // execution was durably created but before the idempotency result committed.
+    const executionId = crypto.randomUUID();
     const begun = await repository.begin({
-      executionId: crypto.randomUUID(),
+      executionId,
       step: 1,
       tool: 'api.v1.tasks.create:' + requestDigest,
       planRevision: 1,
@@ -44,6 +48,33 @@ class AgentService {
       if (begun.record?.status === 'completed' && begun.record.result) {
         return { task: begun.record.result, replayed: true };
       }
+      // A process may stop after Runtime persisted the execution but before
+      // the idempotency record was completed. Reconcile only from the exact
+      // tenant-scoped execution ID stored in the running idempotency record.
+      if (begun.record?.status === 'running' &&
+          typeof begun.record.executionId === 'string' &&
+          typeof this.runtime.persistence?.executions?.findById === 'function') {
+        const persistedExecution = await this.runtime.persistence.executions.findById(
+          begun.record.executionId,
+          { tenantId }
+        );
+        if (persistedExecution) {
+          const execution = await this.getExecutionStatus(begun.record.executionId);
+          const task = {
+            id: execution.executionId,
+            status: execution.status,
+            currentStep: execution.currentStep ?? null,
+            createdAt: execution.startedAt || null,
+            updatedAt: execution.updatedAt || null,
+            completedAt: execution.completedAt || null,
+            cancellationRequested: Boolean(execution.cancellationRequested),
+            agentLifecycle: execution.agentLifecycle || null,
+            version: 1
+          };
+          await repository.complete(begun.key, task, { tenantId });
+          return { task, replayed: true };
+        }
+      }
       throw new AppError(
         'هذا الطلب قيد التنفيذ أو استُخدم مفتاحه مع طلب سابق غير مكتمل',
         409,
@@ -55,7 +86,7 @@ class AgentService {
     try {
       let result;
       try {
-        result = await this.execute(clean);
+        result = await this.execute(clean, { executionId });
       } catch (error) {
         // Approval-required executions have a durable ID and are paused, not failed.
         // Accept the task without retrying the high-risk side effect.
@@ -180,7 +211,7 @@ class AgentService {
     return { text: null, status: 'pending' };
   }
 
-  execute(input) {
+  execute(input, options = {}) {
     const clean = String(input || '').trim();
 
     if (!clean) {
@@ -199,7 +230,7 @@ class AgentService {
       );
     }
 
-    return this.runtime.execute(clean);
+    return this.runtime.execute(clean, options);
   }
 
   listExecutionSummaries(options = {}) {
