@@ -112,3 +112,27 @@ test('orphan cleanup preserves reservations during the workflow persistence grac
   assert.match(orphanCleanup, /reserved_at <= NOW\(\) - INTERVAL '5 minutes'/);
   assert.match(orphanCleanup, /NOT EXISTS/);
 });
+
+test('reserveWorkflow rejects a workflow ID already reserved by another tenant', async () => {
+  const db = {
+    async transaction(work) {
+      return work({ async query(sql) {
+        if (sql.includes('SELECT max_concurrent,max_queued')) return { rows: [{ max_concurrent: 2, max_queued: 5 }], rowCount: 1 };
+        if (sql.includes('SELECT tenant_id,workflow_id,state,reserved_at,expires_at FROM tenant_quota_reservations WHERE tenant_id=$1')) return { rows: [], rowCount: 0 };
+        if (sql.includes('COUNT(*) FILTER')) return { rows: [{ active: 0, queued: 0 }], rowCount: 1 };
+        if (sql.includes('RETURNING tenant_id,workflow_id,state,reserved_at,expires_at')) return { rows: [], rowCount: 0 };
+        if (sql.includes('WHERE workflow_id=$1 LIMIT 1')) return { rows: [{ tenant_id: 'tenant-owner', workflow_id: 'shared-id', state: 'QUEUED', reserved_at: new Date().toISOString(), expires_at: null }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }});
+    }
+  };
+
+  await assert.rejects(
+    () => new PostgresTenantQuotaRepository(db).reserveWorkflow({
+      tenantId: 'tenant-attacker',
+      workflowId: 'shared-id',
+      policy: { maxConcurrent: 2, maxQueued: 5 }
+    }),
+    error => error.code === 'TENANT_QUOTA_RESERVATION_TENANT_MISMATCH'
+  );
+});
