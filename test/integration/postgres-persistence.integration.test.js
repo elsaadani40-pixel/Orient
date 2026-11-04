@@ -22,7 +22,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -931,6 +931,8 @@ test('PostgreSQL runtime role is restricted and tenant RLS blocks cross-tenant C
   assert.equal(runtimeLogin.rolbypassrls, false);
   assert.equal(runtimeLogin.rolcanlogin, true);
   assert.equal(owner.rolcanlogin, false);
+  const tableOwner = await pool.query("SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE oid = 'public.executions'::regclass");
+  assert.equal(tableOwner.rows[0].owner, 'orient_owner');
 
   const a = 'rls-a-' + crypto.randomUUID();
   const b = 'rls-b-' + crypto.randomUUID();
