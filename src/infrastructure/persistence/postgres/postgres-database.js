@@ -133,12 +133,12 @@ const MIGRATIONS = [
     DO $policies$ DECLARE t TEXT; BEGIN
       FOREACH t IN ARRAY ARRAY['executions','events','idempotency','checkpoints','execution_resume_leases','workflows','workflow_leases','workflow_dispatch_claims','approvals','worker_nodes','tenant_quota_limits','tenant_quota_reservations'] LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
-        EXECUTE format('CREATE POLICY orient_tenant_scope ON public.%I TO orient_runtime USING (tenant_id = NULLIF(current_setting(''app.orient_tenant_id'', true), '''')) WITH CHECK (tenant_id = NULLIF(current_setting(''app.orient_tenant_id'', true), ''''))', t);
+        EXECUTE format('CREATE POLICY orient_tenant_scope ON public.%I TO orient_runtime USING (tenant_id = current_setting(''app.orient_tenant_id'', true)) WITH CHECK (tenant_id = current_setting(''app.orient_tenant_id'', true))', t);
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO orient_runtime', t);
       END LOOP;
       FOREACH t IN ARRAY ARRAY['owner_chat_messages','owner_work_profiles'] LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
-        EXECUTE format('CREATE POLICY orient_owner_scope ON public.%I TO orient_runtime USING (owner_id = NULLIF(current_setting(''app.orient_owner_id'', true), '''')) WITH CHECK (owner_id = NULLIF(current_setting(''app.orient_owner_id'', true), ''''))', t);
+        EXECUTE format('CREATE POLICY orient_owner_scope ON public.%I TO orient_runtime USING (owner_id = current_setting(''app.orient_owner_id'', true)) WITH CHECK (owner_id = current_setting(''app.orient_owner_id'', true))', t);
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO orient_runtime', t);
       END LOOP;
     END $policies$;
