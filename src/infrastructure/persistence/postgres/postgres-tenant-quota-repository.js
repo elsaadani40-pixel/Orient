@@ -47,7 +47,7 @@ class PostgresTenantQuotaRepository {
         'SELECT tenant_id,workflow_id,state,reserved_at,expires_at FROM tenant_quota_reservations WHERE tenant_id=$1 AND workflow_id=$2 LIMIT 1',
         [tenantId,workflowId]
       );
-      if (existing.rowCount === 1) return existing.rows[0];
+      if (existing.rowCount === 1) return { ...existing.rows[0], created: false };
       const counts = (await client.query(
         `SELECT
            COUNT(*) FILTER (WHERE state='RUNNING')::int AS active,
@@ -75,9 +75,9 @@ class PostgresTenantQuotaRepository {
         error.code = 'TENANT_QUOTA_RESERVATION_EXISTS';
         throw error;
       }
-      return inserted.rows[0];
+      return { ...inserted.rows[0], created: true };
     });
-    return this.toModel(result);
+    return { ...this.toModel(result), created: Boolean(result.created) };
   }
 
   async promoteWorkflow({tenantId,workflowId,expiresAt=null,fencingToken=null}) {
