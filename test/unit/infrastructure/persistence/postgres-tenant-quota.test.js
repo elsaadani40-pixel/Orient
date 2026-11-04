@@ -64,3 +64,13 @@ test('reserveWorkflow marks a newly inserted reservation as created', async () =
   const result = await new PostgresTenantQuotaRepository(db).reserveWorkflow({ tenantId: 'tenant-a', workflowId: 'wf-new', policy: { maxConcurrent: 2, maxQueued: 5 } });
   assert.equal(result.created, true);
 });
+
+test('reserveWorkflow marks a previously existing reservation as not created', async () => {
+  const db = { async transaction(work) { return work({ async query(sql) {
+    if (sql.includes('SELECT max_concurrent,max_queued')) return { rows: [{ max_concurrent: 2, max_queued: 5 }], rowCount: 1 };
+    if (sql.includes('SELECT tenant_id,workflow_id,state,reserved_at,expires_at')) return { rows: [{ tenant_id: 'tenant-a', workflow_id: 'wf-old', state: 'QUEUED', reserved_at: new Date().toISOString(), expires_at: null }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  }}); } };
+  const result = await new PostgresTenantQuotaRepository(db).reserveWorkflow({ tenantId: 'tenant-a', workflowId: 'wf-old', policy: { maxConcurrent: 2, maxQueued: 5 } });
+  assert.equal(result.created, false);
+});
