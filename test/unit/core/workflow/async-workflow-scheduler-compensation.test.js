@@ -329,7 +329,7 @@ test('durable enqueue does not release a quota reservation created by an earlier
     tenantId: 'tenant-compensation',
     workflowRepository: { async save() { throw new Error('durable write failed'); } },
     quotaRepository: {
-      async reserveWorkflow() { throw Object.assign(new Error('exists'), { code: 'TENANT_QUOTA_RESERVATION_EXISTS' }); },
+      async reserveWorkflow() { return { created: false }; },
       async releaseWorkflow({ workflowId }) { released.push(workflowId); reservations.delete(workflowId); return true; }
     }
   });
