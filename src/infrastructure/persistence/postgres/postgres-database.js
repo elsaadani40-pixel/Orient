@@ -124,6 +124,29 @@ const MIGRATIONS = [
     );
   `},
 
+  {version:9,sql:`
+    DO $roles$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orient_owner') OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orient_runtime') THEN
+        RAISE EXCEPTION 'ORIENT roles missing; run scripts/provision-postgres-roles.js first';
+      END IF;
+    END $roles$;
+    DO $policies$ DECLARE t TEXT; BEGIN
+      FOREACH t IN ARRAY ARRAY['executions','events','idempotency','checkpoints','execution_resume_leases','workflows','workflow_leases','workflow_dispatch_claims','approvals','worker_nodes','tenant_quota_limits','tenant_quota_reservations'] LOOP
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+        EXECUTE format('CREATE POLICY orient_tenant_scope ON public.%I TO orient_runtime USING (tenant_id = NULLIF(current_setting(''app.orient_tenant_id'', true), '''')) WITH CHECK (tenant_id = NULLIF(current_setting(''app.orient_tenant_id'', true), ''''))', t);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO orient_runtime', t);
+      END LOOP;
+      FOREACH t IN ARRAY ARRAY['owner_chat_messages','owner_work_profiles'] LOOP
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+        EXECUTE format('CREATE POLICY orient_owner_scope ON public.%I TO orient_runtime USING (owner_id = NULLIF(current_setting(''app.orient_owner_id'', true), '''')) WITH CHECK (owner_id = NULLIF(current_setting(''app.orient_owner_id'', true), ''''))', t);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO orient_runtime', t);
+      END LOOP;
+    END $policies$;
+    GRANT USAGE ON SCHEMA public TO orient_runtime;
+    GRANT SELECT ON TABLE public.schema_migrations TO orient_runtime;
+    REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.schema_migrations FROM orient_runtime;
+    GRANT USAGE, SELECT ON SEQUENCE public.workflow_lease_fencing_seq TO orient_runtime;
+  `},
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -158,9 +181,13 @@ class PostgresDatabase {
     return { schemaVersion: version };
   }
 
-  async migrate() {
+  async migrate({ role = null } = {}) {
     const client=await this.pool.connect();
     try {
+      if (role !== null) {
+        if (typeof role !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(role)) throw new TypeError('Invalid PostgreSQL migration role name');
+        await client.query('SET ROLE ' + role);
+      }
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
       await client.query(BASE_SCHEMA);
