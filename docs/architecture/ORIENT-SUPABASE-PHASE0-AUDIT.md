@@ -77,7 +77,7 @@ Supabase CLI v3 runs database commands against the local stack by default; hoste
 ## Safe next implementation sequence
 
 1. Define the identity/tenant contract for both `tenant_id` and `owner_id`.
-2. Split migration execution from runtime startup.
+2. Split migration execution from runtime startup. This is now implemented on the integration branch: runtime initialization only checks schema readiness/version, and the explicit command is `ORIENT_DATABASE_URL=... npm run db:migrate`; CI verification is pending.
 3. Create and test restricted runtime/migration roles.
 4. Add entity-specific RLS policies and role grants.
 5. Add tests for tenant isolation, owner isolation, pooled-connection context leakage, and migration idempotency.
