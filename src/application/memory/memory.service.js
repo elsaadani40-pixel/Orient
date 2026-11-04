@@ -292,6 +292,13 @@ class MemoryService {
     // snapshot. Without the shared lock, a concurrent mutation could expose an
     // intermediate memory/audit pair and cause an unsafe replay decision.
     const snapshot = await this.transactionCoordinator.tryReadAsync(async () => {
+      // PostgreSQL READ COMMITTED gives each statement a fresh snapshot. Acquire
+      // the same tenant/scope advisory lock used by mutations so the receipt and
+      // target record cannot be observed across two different committed states.
+      if (typeof this.repository.lockScope === 'function') {
+        await this.repository.lockScope(authorization.tenantId, authorization.scope);
+      }
+
       const events = await this.auditRepository.findByOperationId(
         operationId,
         authorization.tenantId,
