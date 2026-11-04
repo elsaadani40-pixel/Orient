@@ -4,9 +4,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const AgentService = require('../../../../src/application/agent/agent.service');
 
-function createRuntime({ execute, status = 'completed' } = {}) {
+function createRuntime({ execute, status = 'completed', statusExecutionId, failFirstComplete = false } = {}) {
   const records = new Map();
   let executions = 0;
+  let completeCalls = 0;
   const idempotency = {
     async begin(args) {
       const existing = records.get(args.operationId);
@@ -21,6 +22,8 @@ function createRuntime({ execute, status = 'completed' } = {}) {
       return { created: true, key: args.operationId, record };
     },
     async complete(key, result) {
+      completeCalls += 1;
+      if (failFirstComplete && completeCalls === 1) throw new Error('simulated persistence interruption');
       const record = records.get(key);
       assert.ok(record);
       record.status = 'completed';
@@ -53,7 +56,7 @@ function createRuntime({ execute, status = 'completed' } = {}) {
     },
     async getExecutionStatus(id) {
       return {
-        executionId: id,
+        executionId: statusExecutionId || id,
         status,
         currentStep: 2,
         startedAt: '2026-10-10T10:00:00.000Z',
@@ -169,5 +172,49 @@ test('approval-required execution is accepted as a durable task and does not ret
   assert.equal(first.replayed, false);
   assert.equal(replay.replayed, true);
   assert.deepEqual(replay.task, first.task);
+  assert.equal(fixture.executions, 1);
+});
+
+
+test('task creation fails closed when Runtime returns a different execution ID', async () => {
+  const fixture = createRuntime({
+    execute: async () => ({ execution: { executionId: 'different-execution-id' } })
+  });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'verify canonical identity', idempotencyKey: 'request-key-mismatch-01' }),
+    error => error.code === 'TASK_EXECUTION_ID_MISMATCH'
+  );
+  assert.equal(fixture.executions, 1);
+});
+
+test('task creation fails closed when persisted status has a different execution ID', async () => {
+  const fixture = createRuntime({
+    statusExecutionId: 'different-persisted-execution-id'
+  });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'verify persisted identity', idempotencyKey: 'request-key-mismatch-02' }),
+    error => error.code === 'TASK_EXECUTION_ID_MISMATCH'
+  );
+  assert.equal(fixture.executions, 1);
+});
+
+test('task retry reconciles an execution persisted before idempotency completion', async () => {
+  const fixture = createRuntime({ failFirstComplete: true });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'recover durable task', idempotencyKey: 'request-key-recovery-01' }),
+    /simulated persistence interruption/
+  );
+
+  const retry = await fixture.service.createTask({
+    goal: 'recover durable task',
+    idempotencyKey: 'request-key-recovery-01'
+  });
+
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.task.status, 'completed');
+  assert.match(retry.task.id, /^[0-9a-f-]{36}$/i);
   assert.equal(fixture.executions, 1);
 });
