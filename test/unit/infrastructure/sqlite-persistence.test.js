@@ -221,6 +221,37 @@ test('SQLite callback transactions reject asynchronous work and roll it back', (
 });
 
 
+
+test('SQLite async transaction closes its owned connection when BEGIN fails', async () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-begin-failure-'));
+  const db = new SqliteDatabase(path.join(directory, 'orient.db'));
+  const originalExec = DatabaseSync.prototype.exec;
+  let ownedConnection = null;
+
+  try {
+    DatabaseSync.prototype.exec = function patchedExec(sql) {
+      if (this !== db.baseConnection && sql === 'BEGIN IMMEDIATE;') {
+        ownedConnection = this;
+        throw Object.assign(new Error('injected SQLITE_BUSY during BEGIN'), { code: 'SQLITE_BUSY' });
+      }
+      return originalExec.call(this, sql);
+    };
+
+    await assert.rejects(
+      db.transactionAsync(async () => 'unreachable'),
+      error => error.code === 'SQLITE_BUSY'
+    );
+    assert.ok(ownedConnection, 'file-backed async transaction must create an owned connection');
+    assert.throws(() => ownedConnection.exec('SELECT 1;'));
+  } finally {
+    DatabaseSync.prototype.exec = originalExec;
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('SQLite memory mutation and audit receipt commit or roll back together', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-atomic-'));
   const filePath = path.join(directory, 'orient.db');
