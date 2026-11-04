@@ -293,3 +293,66 @@ test('durable enqueue rolls back queue admission and quota when persistence fail
   assert.equal(reservations.has(instance.workflowId), false);
   assert.equal(await scheduler.leaseAsync('worker-after-failure'), null);
 });
+
+test('durable enqueue restores the original state and releases its reservation when the queue is full', async () => {
+  const first = new WorkflowInstance({ definition: definition(), workflowId: 'durable-first', tenantId: 'tenant-compensation' });
+  const rejected = new WorkflowInstance({ definition: definition(), workflowId: 'durable-rejected', tenantId: 'tenant-compensation' });
+  const reservations = new Set();
+  const released = [];
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    maxQueueDepth: 1,
+    workflowRepository: { async save() { return true; } },
+    quotaRepository: {
+      async reserveWorkflow({ workflowId }) { reservations.add(workflowId); return {}; },
+      async releaseWorkflow({ workflowId }) { released.push(workflowId); reservations.delete(workflowId); return true; }
+    },
+    clock: () => 1000
+  });
+  await scheduler.enqueueDurable(first);
+  const originalUpdatedAt = rejected.updatedAt;
+  await assert.rejects(() => scheduler.enqueueDurable(rejected, { deadlineAt: new Date(5000).toISOString() }), error => error.code === 'SCHEDULER_QUEUE_FULL');
+  assert.equal(scheduler.depth(), 1);
+  assert.equal(scheduler.queue[0].instance, first);
+  assert.equal(rejected.state, 'CREATED');
+  assert.equal(rejected.deadlineAt, null);
+  assert.equal(rejected.updatedAt, originalUpdatedAt);
+  assert.equal(reservations.has(rejected.workflowId), false);
+  assert.deepEqual(released, [rejected.workflowId]);
+});
+
+test('durable enqueue does not release a quota reservation created by an earlier attempt', async () => {
+  const instance = new WorkflowInstance({ definition: definition(), workflowId: 'durable-existing-reservation', tenantId: 'tenant-compensation' });
+  const reservations = new Set([instance.workflowId]);
+  const released = [];
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save() { throw new Error('durable write failed'); } },
+    quotaRepository: {
+      async reserveWorkflow() { throw Object.assign(new Error('exists'), { code: 'TENANT_QUOTA_RESERVATION_EXISTS' }); },
+      async releaseWorkflow({ workflowId }) { released.push(workflowId); reservations.delete(workflowId); return true; }
+    }
+  });
+  await assert.rejects(() => scheduler.enqueueDurable(instance), /durable write failed/);
+  assert.equal(scheduler.depth(), 0);
+  assert.equal(reservations.has(instance.workflowId), true);
+  assert.deepEqual(released, []);
+});
+
+test('workers cannot lease a durable queue item before its persistence completes', async () => {
+  const instance = new WorkflowInstance({ definition: definition(), workflowId: 'durable-pending-write', tenantId: 'tenant-compensation' });
+  let finishSave;
+  const saveGate = new Promise(resolve => { finishSave = resolve; });
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save() { await saveGate; return true; } },
+    clock: () => 1000
+  });
+  const admission = scheduler.enqueueDurable(instance);
+  assert.equal(await scheduler.leaseAsync('early-worker'), null);
+  finishSave();
+  await admission;
+  const lease = await scheduler.leaseAsync('committed-worker');
+  assert.ok(lease);
+  assert.equal(lease.workflowId, instance.workflowId);
+});
