@@ -257,3 +257,4 @@ class PostgresDatabase {
   static uuid(){return crypto.randomUUID();}
 }
 module.exports={PostgresDatabase,BASE_SCHEMA,MIGRATIONS,SCHEMA:BASE_SCHEMA};
+
