@@ -231,7 +231,7 @@ class OwnerIdentityService {
   }
 
   status() {
-    return { username: 'Admin', ownerId: this.state.ownerId, configured: true, passwordChangeRequired: this.state.mustChangePassword };
+    return { username: 'Admin', configured: true, passwordChangeRequired: this.state.mustChangePassword };
   }
 }
 
