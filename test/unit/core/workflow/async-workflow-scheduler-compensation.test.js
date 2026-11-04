@@ -48,6 +48,116 @@ test('quota promotion deferrals restore the queued workflow state before retryin
   }
 });
 
+test('queued cancellation releases its durable quota reservation', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'queued-cancel-quota-release',
+    tenantId: 'tenant-compensation'
+  });
+  const savedStates = [];
+  const released = [];
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save(value) { savedStates.push(value.state); return true; } },
+    quotaRepository: {
+      async reserveWorkflow() { return { created: true }; },
+      async releaseWorkflow(args) { released.push(args); return true; }
+    },
+    clock: () => 1000
+  });
+
+  await scheduler.enqueueDurable(instance);
+  assert.equal(await scheduler.cancelAsync(instance.workflowId), true);
+  assert.equal(instance.state, 'CANCELLED');
+  assert.equal(savedStates.at(-1), 'CANCELLED');
+  assert.deepEqual(released, [{
+    tenantId: 'tenant-compensation',
+    workflowId: instance.workflowId
+  }]);
+  assert.equal(scheduler.depth(), 0);
+});
+
+test('queued deadline expiry releases its durable quota reservation', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'queued-deadline-quota-release',
+    tenantId: 'tenant-compensation'
+  });
+  let now = 1000;
+  const released = [];
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save() { return true; } },
+    quotaRepository: {
+      async reserveWorkflow() { return { created: true }; },
+      async releaseWorkflow(args) { released.push(args); return true; }
+    },
+    clock: () => now
+  });
+
+  await scheduler.enqueueDurable(instance, { deadlineAt: new Date(2000).toISOString() });
+  now = 3000;
+  assert.equal(await scheduler.leaseAsync('worker-a'), null);
+  assert.equal(instance.state, 'FAILED');
+  assert.equal(instance.metadata.failureCode, 'WORKFLOW_DEADLINE_EXCEEDED');
+  assert.deepEqual(released, [{
+    tenantId: 'tenant-compensation',
+    workflowId: instance.workflowId
+  }]);
+  assert.equal(scheduler.depth(), 0);
+});
+
+test('shutdown cancellation releases quota reservations for queued workflows', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'shutdown-cancel-quota-release',
+    tenantId: 'tenant-compensation'
+  });
+  const released = [];
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save() { return true; } },
+    quotaRepository: {
+      async reserveWorkflow() { return { created: true }; },
+      async releaseWorkflow(args) { released.push(args); return true; }
+    },
+    clock: () => 1000
+  });
+
+  await scheduler.enqueueDurable(instance);
+  await scheduler.shutdown({ cancelQueued: true });
+  assert.equal(instance.state, 'CANCELLED');
+  assert.deepEqual(released, [{
+    tenantId: 'tenant-compensation',
+    workflowId: instance.workflowId
+  }]);
+  assert.equal(scheduler.depth(), 0);
+});
+
+test('recovery retries quota cleanup for workflows already in a terminal state', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'terminal-recovery-quota-release',
+    tenantId: 'tenant-compensation'
+  });
+  instance.state = 'CANCELLED';
+  const released = [];
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async findAll() { return [instance.toJSON()]; } },
+    quotaRepository: {
+      async releaseWorkflow(args) { released.push(args); return true; }
+    },
+    clock: () => 1000
+  });
+
+  assert.equal(await scheduler.recoverPersisted(), 0);
+  assert.deepEqual(released, [{
+    tenantId: 'tenant-compensation',
+    workflowId: instance.workflowId
+  }]);
+});
+
 test('async scheduler compensates lease and durable quota when persistence fails after acquisition',async()=>{
   const instance=new WorkflowInstance({definition:definition(),workflowId:'persist-failure-wf',tenantId:'tenant-compensation'});
   const leases=new Map(); const quotaCalls=[];
