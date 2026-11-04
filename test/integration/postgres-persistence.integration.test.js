@@ -13,12 +13,25 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
 
 test('PostgreSQL initializes versioned schema idempotently on a real server', async () => {
-  await provisionPostgresRoles({
-    pool,
-    migratorPassword: crypto.randomBytes(24).toString('hex'),
-    runtimePassword: crypto.randomBytes(24).toString('hex')
-  });
-  await persistence.migrate({ role: 'orient_owner' });
+  const readiness = await pool.query("SELECT to_regclass('public.schema_migrations') IS NOT NULL AS ready");
+  if (!readiness.rows[0].ready) {
+    await provisionPostgresRoles({
+      pool,
+      migratorPassword: crypto.randomBytes(24).toString('hex'),
+      runtimePassword: crypto.randomBytes(24).toString('hex')
+    });
+    await persistence.migrate({ role: 'orient_owner' });
+  } else {
+    const current = await pool.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
+    if (Number(current.rows[0].version) < 9) {
+      await provisionPostgresRoles({
+        pool,
+        migratorPassword: crypto.randomBytes(24).toString('hex'),
+        runtimePassword: crypto.randomBytes(24).toString('hex')
+      });
+      await persistence.migrate({ role: 'orient_owner' });
+    }
+  }
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
