@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const AgentEventStore = require('../../../../src/core/agent/observation/agent-event-store');
+const AgentEventStore = require('../../../../../src/core/agent/observation/agent-event-store');
 
 test('tenant filtering supports durable memory audit events with top-level tenantId', () => {
   const store = new AgentEventStore();
