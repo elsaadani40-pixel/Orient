@@ -70,7 +70,7 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
   let reservationReservedAt=null;
   if(this.quotaRepository){
    try{
-    const reservation=await this.quotaRepository.reserveWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,policy:this.quotaPolicy,expiresAt:options.delayMs?new Date(this.clock()+options.delayMs+this.leaseDurationMs).toISOString():null});
+    const reservation=await this.quotaRepository.reserveWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,policy:this.quotaPolicy,expiresAt:null});
     reservationCreated=reservation?.created!==false;
     reservationReservedAt=reservation?.reservedAt||null;
    }catch(error){
