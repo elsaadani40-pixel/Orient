@@ -130,7 +130,7 @@ class SqliteMemoryAuditRepository {
 
         // Match PostgreSQL behavior: async observation sinks must never leak an
         // unhandled rejection after the SQLite audit row has committed.
-        return Promise.resolve(delivery).then(() => {
+        Promise.resolve(delivery).then(() => {
           this.lastEventSinkError = null;
         }).catch(error => {
           this.lastEventSinkError = error;
