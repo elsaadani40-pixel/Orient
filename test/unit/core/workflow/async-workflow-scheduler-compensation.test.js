@@ -3,6 +3,51 @@ const assert=require('node:assert/strict');
 const AsyncWorkflowScheduler=require('../../../../src/core/workflow/async-workflow-scheduler');
 const {WorkflowDefinition,WorkflowInstance}=require('../../../../src/core/workflow');
 function definition(){return new WorkflowDefinition({id:'compensation',version:1,name:'Compensation',steps:[{id:'step',tool:'noop',input:{}}]});}
+test('quota promotion deferrals restore the queued workflow state before retrying lease acquisition', async () => {
+  for (const mode of ['reservation-missing', 'concurrent-quota']) {
+    const instance = new WorkflowInstance({
+      definition: definition(),
+      workflowId: 'quota-promotion-' + mode,
+      tenantId: 'tenant-compensation'
+    });
+    let promotionAttempts = 0;
+    const scheduler = new AsyncWorkflowScheduler({
+      tenantId: 'tenant-compensation',
+      workflowRepository: { async save() { return true; } },
+      quotaRepository: {
+        async reserveWorkflow() { return { created: true, reservedAt: '2026-11-04T00:00:00.000Z' }; },
+        async promoteWorkflow() {
+          promotionAttempts += 1;
+          if (promotionAttempts === 1 && mode === 'reservation-missing') return null;
+          if (promotionAttempts === 1) {
+            throw Object.assign(new Error('concurrent quota limit reached'), {
+              code: 'TENANT_CONCURRENT_QUOTA_EXCEEDED'
+            });
+          }
+          return { promoted: true };
+        }
+      },
+      clock: () => 1000,
+      leaseDurationMs: 30000
+    });
+
+    await scheduler.enqueueDurable(instance);
+    const queuedUpdatedAt = instance.updatedAt;
+    const queuedMetadata = { ...instance.metadata };
+
+    assert.equal(await scheduler.leaseAsync('worker-a'), null);
+    assert.equal(instance.state, 'QUEUED', mode + ': state must return to QUEUED');
+    assert.equal(instance.updatedAt, queuedUpdatedAt, mode + ': timestamp must be restored');
+    assert.deepEqual(instance.metadata, queuedMetadata, mode + ': fencing metadata must be restored');
+    assert.equal(scheduler.depth(), 1, mode + ': workflow must remain queued');
+    assert.equal(await scheduler.leaseStore.get(instance.workflowId), null, mode + ': lease must be released');
+
+    const retriedLease = await scheduler.leaseAsync('worker-a');
+    assert.ok(retriedLease, mode + ': a later successful quota promotion must lease the workflow');
+    assert.equal(instance.state, 'RUNNING');
+  }
+});
+
 test('async scheduler compensates lease and durable quota when persistence fails after acquisition',async()=>{
   const instance=new WorkflowInstance({definition:definition(),workflowId:'persist-failure-wf',tenantId:'tenant-compensation'});
   const leases=new Map(); const quotaCalls=[];
