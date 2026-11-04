@@ -183,7 +183,7 @@ class PostgresDatabase {
   }
   validatePrincipal(principal) {
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (!principal || principal.authSource !== 'orient-owner-session' ||
+    if (!principal || !['orient-owner-session', 'orient-runtime-owner'].includes(principal.authSource) ||
         typeof principal.ownerId !== 'string' || !uuid.test(principal.ownerId) ||
         principal.principalId !== principal.ownerId ||
         typeof principal.sessionId !== 'string' || !uuid.test(principal.sessionId) ||
