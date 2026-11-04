@@ -37,11 +37,19 @@ function createRuntime({ execute, status = 'completed' } = {}) {
   };
   const runtime = {
     tenantId: 'tenant-test',
-    persistence: { idempotency },
-    async execute(goal) {
+    persistence: {
+      idempotency,
+      executions: {
+        async findById(id, options = {}) {
+          if (options.tenantId !== 'tenant-test') return null;
+          return { executionId: id, tenantId: 'tenant-test' };
+        }
+      }
+    },
+    async execute(goal, options = {}) {
       executions += 1;
-      if (execute) return execute(goal);
-      return { execution: { executionId: 'execution-1' } };
+      if (execute) return execute(goal, options);
+      return { execution: { executionId: options.executionId } };
     },
     async getExecutionStatus(id) {
       return {
@@ -74,7 +82,7 @@ test('unified task creation is durably idempotent and returns a sanitized task s
   assert.equal(first.replayed, false);
   assert.equal(replay.replayed, true);
   assert.deepEqual(replay.task, first.task);
-  assert.equal(first.task.id, 'execution-1');
+  assert.match(first.task.id, /^[0-9a-f-]{36}$/i);
   assert.equal(first.task.status, 'completed');
   assert.equal(Object.hasOwn(first.task, 'tenantId'), false);
   assert.equal(fixture.executions, 1);
@@ -139,10 +147,10 @@ test('runtime failures are persisted as failed idempotency records and cannot re
 test('approval-required execution is accepted as a durable task and does not retry the high-risk action', async () => {
   const fixture = createRuntime({
     status: 'awaiting_approval',
-    execute: async () => {
+    execute: async (_goal, options) => {
       throw Object.assign(new Error('Owner approval is required'), {
         code: 'APPROVAL_REQUIRED',
-        executionContext: { executionId: 'execution-pending-approval' }
+        executionContext: { executionId: options.executionId }
       });
     }
   });
@@ -156,7 +164,7 @@ test('approval-required execution is accepted as a durable task and does not ret
     idempotencyKey: 'request-key-approval-0001'
   });
 
-  assert.equal(first.task.id, 'execution-pending-approval');
+  assert.match(first.task.id, /^[0-9a-f-]{36}$/i);
   assert.equal(first.task.status, 'awaiting_approval');
   assert.equal(first.replayed, false);
   assert.equal(replay.replayed, true);
