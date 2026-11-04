@@ -271,3 +271,25 @@ test('recovery releases its dispatch claim when persisting a quota failure throw
   });
   assert.equal(scheduler.depth(), 0);
 });
+
+test('durable enqueue rolls back queue admission and quota when persistence fails', async () => {
+  const instance = new WorkflowInstance({ definition: definition(), workflowId: 'durable-save-failure', tenantId: 'tenant-compensation' });
+  const reservations = new Set();
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository: { async save() { throw new Error('durable write failed'); } },
+    quotaRepository: {
+      async reserveWorkflow({ workflowId }) { reservations.add(workflowId); return {}; },
+      async releaseWorkflow({ workflowId }) { reservations.delete(workflowId); return true; }
+    },
+    clock: () => 1000
+  });
+  const originalUpdatedAt = instance.updatedAt;
+  await assert.rejects(() => scheduler.enqueueDurable(instance, { deadlineAt: new Date(5000).toISOString() }), /durable write failed/);
+  assert.equal(scheduler.depth(), 0);
+  assert.equal(instance.state, 'CREATED');
+  assert.equal(instance.deadlineAt, null);
+  assert.equal(instance.updatedAt, originalUpdatedAt);
+  assert.equal(reservations.has(instance.workflowId), false);
+  assert.equal(await scheduler.leaseAsync('worker-after-failure'), null);
+});
