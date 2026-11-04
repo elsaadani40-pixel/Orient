@@ -332,3 +332,43 @@ test('Postgres database rolls back and releases its pinned client when work fail
   );
   assert.deepEqual(calls, ['BEGIN', 'WRITE_THEN_FAIL', 'ROLLBACK', 'RELEASE']);
 });
+
+
+test('Postgres initialization upgrades an existing version-7 schema through versions 8 and 9 in order', async () => {
+  const { PostgresDatabase, MIGRATIONS } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
+  const calls = [];
+  const pool = {
+    async connect() {
+      return {
+        async query(text, values = []) {
+          calls.push({ text, values });
+          if (text.includes('COALESCE(MAX(version),0)::int AS version')) {
+            return { rows: [{ version: 7 }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        },
+        release() {
+          calls.push({ text: 'RELEASE', values: [] });
+        }
+      };
+    },
+    async query() {
+      throw new Error('initialization must use its pinned client');
+    }
+  };
+
+  const database = new PostgresDatabase({ pool });
+  await database.initialize();
+
+  const appliedMigrations = calls
+    .filter(call => MIGRATIONS.some(migration => migration.sql === call.text))
+    .map(call => MIGRATIONS.find(migration => migration.sql === call.text).version);
+  assert.deepEqual(appliedMigrations, [8, 9]);
+  assert.deepEqual(
+    calls
+      .filter(call => call.text === 'INSERT INTO schema_migrations(version) VALUES($1)')
+      .map(call => call.values[0]),
+    [8, 9]
+  );
+  assert.equal(calls.at(-1).text, 'RELEASE');
+});
