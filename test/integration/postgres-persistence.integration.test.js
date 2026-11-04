@@ -582,6 +582,27 @@ test('PostgreSQL approval authorization is durable, tenant-scoped and replay-saf
   );
 });
 
+test('PostgreSQL quota admission preserves a recent reservation while its workflow row is being persisted', async () => {
+  const suffix = Date.now();
+  const tenantId = 'tenant-quota-inflight-' + suffix;
+  const firstWorkflowId = 'quota-inflight-a-' + suffix;
+  const secondWorkflowId = 'quota-inflight-b-' + suffix;
+  const policy = { maxConcurrent: 1, maxQueued: 2, maxInputChars: 1000, maxToolInputChars: 1000, maxRetries: 2 };
+
+  await persistence.tenantQuotas.ensureTenant(tenantId, policy);
+  try {
+    await persistence.tenantQuotas.reserveWorkflow({ tenantId, workflowId: firstWorkflowId, policy });
+    await persistence.tenantQuotas.reserveWorkflow({ tenantId, workflowId: secondWorkflowId, policy });
+
+    const snapshot = await persistence.tenantQuotas.snapshot({ tenantId });
+    assert.deepEqual(snapshot, { tenantId, active: 0, queued: 2 });
+  } finally {
+    await persistence.tenantQuotas.releaseWorkflow({ tenantId, workflowId: firstWorkflowId });
+    await persistence.tenantQuotas.releaseWorkflow({ tenantId, workflowId: secondWorkflowId });
+    await pool.query('DELETE FROM tenant_quota_limits WHERE tenant_id=$1', [tenantId]);
+  }
+});
+
 test('PostgreSQL quota admission is atomic across concurrent reservations', async () => {
   await pool.query("INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ('quota-wf-a','tenant-quota','QUEUED',NOW(),'{}'), ('quota-wf-b','tenant-quota','QUEUED',NOW(),'{}')");
   const policy = { maxConcurrent: 1, maxQueued: 1, maxInputChars: 1000, maxToolInputChars: 1000, maxRetries: 2 };
