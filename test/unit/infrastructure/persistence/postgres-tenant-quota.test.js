@@ -52,3 +52,15 @@ test('quota cleanup never expires running reservations', async () => {
   const cleanup = queries.find(sql => sql.includes('DELETE FROM tenant_quota_reservations'));
   assert.match(cleanup, /state='QUEUED'/);
 });
+
+test('reserveWorkflow marks a newly inserted reservation as created', async () => {
+  const db = { async transaction(work) { return work({ async query(sql) {
+    if (sql.includes('SELECT max_concurrent,max_queued')) return { rows: [{ max_concurrent: 2, max_queued: 5 }], rowCount: 1 };
+    if (sql.includes('SELECT tenant_id,workflow_id,state,reserved_at,expires_at')) return { rows: [], rowCount: 0 };
+    if (sql.includes('COUNT(*) FILTER')) return { rows: [{ active: 0, queued: 0 }], rowCount: 1 };
+    if (sql.includes('RETURNING tenant_id,workflow_id,state,reserved_at,expires_at')) return { rows: [{ tenant_id: 'tenant-a', workflow_id: 'wf-new', state: 'QUEUED', reserved_at: new Date().toISOString(), expires_at: null }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  }}); } };
+  const result = await new PostgresTenantQuotaRepository(db).reserveWorkflow({ tenantId: 'tenant-a', workflowId: 'wf-new', policy: { maxConcurrent: 2, maxQueued: 5 } });
+  assert.equal(result.created, true);
+});
