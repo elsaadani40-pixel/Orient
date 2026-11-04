@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 class OwnerIdentityRuntimeAdapter {
   constructor({ identity, tenantId = 'local', workspaceId = 'local', maxFailures = 5, lockoutMs = 15 * 60 * 1000, now = Date.now } = {}) {
     if (!identity || typeof identity.login !== 'function' ||
@@ -26,6 +28,7 @@ class OwnerIdentityRuntimeAdapter {
     this.lockoutMs = lockoutMs;
     this.now = now;
     this.failures = new Map();
+    this.runtimeSessionId = crypto.randomUUID();
   }
 
   get enabled() {
@@ -75,6 +78,19 @@ class OwnerIdentityRuntimeAdapter {
       sessionId: session.sessionId
     });
     return Object.freeze({ ...session, principal });
+  }
+
+  createRuntimePrincipal() {
+    const ownerId = this.identity.getStableOwnerIdForRuntime?.();
+    if (typeof ownerId !== 'string' || !ownerId) throw new Error('Stable owner identity is unavailable');
+    return Object.freeze({
+      principalId: ownerId,
+      ownerId,
+      tenantId: this.tenantId,
+      workspaceId: this.workspaceId,
+      authSource: 'orient-runtime-owner',
+      sessionId: this.runtimeSessionId
+    });
   }
 
   isActiveSession(sessionId) {
