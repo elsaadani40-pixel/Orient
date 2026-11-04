@@ -61,8 +61,11 @@ test('persistence factory selects SQLite and exposes memory repositories', async
     assert.equal(result.adapter.health().repositories.memory, true);
     assert.equal(typeof result.adapter.memory.findAll, 'function');
     assert.equal(typeof result.adapter.memoryAudit.append, 'function');
+    const closeResult = result.close();
+    assert.equal(typeof closeResult?.then, 'function', 'persistence close must always return a Promise');
+    await closeResult;
   } finally {
-    await result.close();
+    if (result.adapter.db) result.adapter.db.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
