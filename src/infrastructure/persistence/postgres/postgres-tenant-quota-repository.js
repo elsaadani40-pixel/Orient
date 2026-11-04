@@ -152,8 +152,8 @@ class PostgresTenantQuotaRepository {
   async releaseWorkflow({tenantId,workflowId,fencingToken=null,reservedAt=null}) {
     const params=[tenantId,workflowId];
     let predicate='tenant_id=$1 AND workflow_id=$2';
-    if(fencingToken!=null){params.push(Number(fencingToken));predicate+=` AND fencing_token=${params.length}`;}
-    if(reservedAt!=null){params.push(reservedAt);predicate+=` AND reserved_at=${params.length}`;}
+    if(fencingToken!=null){params.push(Number(fencingToken));predicate+=` AND fencing_token=$${params.length}`;}
+    if(reservedAt!=null){params.push(reservedAt);predicate+=` AND reserved_at=$${params.length}`;}
     const result = await this.db.query(
       `DELETE FROM tenant_quota_reservations WHERE ${predicate}`,
       params
