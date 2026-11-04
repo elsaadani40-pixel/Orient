@@ -38,13 +38,26 @@ The current deployment model is still one configured tenant per Runtime process.
 
 `workspaceId` is currently server-configured and defaults to `local`; workspace membership/authorization remains a separate future gate.
 
-## 4. Trust boundary and remaining database work
+## 4. PostgreSQL principal-scoped unit of work
 
-This change establishes an application-level identity contract only. It does not yet enforce PostgreSQL RLS.
+A first database context boundary is now implemented in `PostgresDatabase.withPrincipal(principal, work)` and exposed through `PostgresPersistence.withPrincipal()`.
+
+- It validates the owner-principal contract before acquiring a connection.
+- It opens one transaction and installs principal, owner, tenant, workspace, and session identifiers with parameterized `set_config(..., true)` calls, making the values transaction-local.
+- `AsyncLocalStorage` routes repository calls through the active transaction client without requiring every repository to pass the client explicitly.
+- Nested transactions use savepoints on the same client.
+- A nested attempt to switch principal, tenant, workspace, or session is rejected.
+- Unit tests cover context pinning, nested transactions, principal-switch rejection, rollback, and re-establishment on pooled connection reuse.
+
+**Important limitation:** existing repositories have not all been migrated to require `withPrincipal()`; unscoped calls still use `pool.query()`. Therefore this is groundwork, not an RLS-ready enforcement boundary. Do not enable policies yet.
+
+## 5. Trust boundary and remaining database work
+
+The application-level principal contract and initial database context transport are implemented. PostgreSQL RLS is **not** enabled and is not yet safe to enable.
 
 Before RLS can be enabled:
-1. Every PostgreSQL repository operation must execute inside a mandatory transaction/unit-of-work that receives this verified principal.
-2. Tenant and owner context must be transaction-local and cannot be accepted from untrusted callers.
+1. Every PostgreSQL repository operation must be migrated behind a mandatory transaction/unit-of-work that receives this verified principal; remove or explicitly classify unscoped pool access.
+2. Tenant and owner context must remain transaction-local and cannot be accepted from untrusted callers.
 3. All tables must have an explicit ownership mapping: tenant-owned, owner-owned, or intentionally global.
 4. Runtime database credentials must not own tables and must not have `BYPASSRLS`.
 5. Per-table policies and grants must be tested with the actual restricted runtime role.
@@ -53,13 +66,16 @@ Before RLS can be enabled:
 
 Do not use `auth.uid()` for the local ORIENT owner session: it is not a Supabase Auth user. Do not use unsigned `SET app.tenant_id` as proof of identity. A PostgreSQL custom setting is context transport, not authentication.
 
-## 5. Verification
+## 6. Verification
 
 Unit coverage now verifies:
 - stable UUID persistence across owner-service restart;
 - principal construction only after a valid owner session;
 - trusted tenant/workspace configuration validation;
-- principal immutability;
-- rejection of a random non-owner session token.
+- principal immutability and no disclosure from the public status response;
+- rejection of a random non-owner session token;
+- scoped queries pinned to one transaction client;
+- nested savepoints and rejection of principal switching;
+- transaction-local context re-established across pooled connection leases.
 
-The next implementation milestone is a mandatory PostgreSQL unit-of-work boundary and repository migration to that boundary. No Supabase schema or project setting is changed by this contract.
+The next implementation milestone is migrating every PostgreSQL repository path behind the scoped unit of work and classifying system/background work explicitly. No Supabase schema or project setting is changed by this contract.
