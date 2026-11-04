@@ -11,6 +11,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
 
 test('PostgreSQL initializes versioned schema idempotently on a real server', async () => {
+  await persistence.migrate();
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
