@@ -70,6 +70,9 @@ test('missing quota reservation is recreated before a queued workflow is retried
   });
   await scheduler.enqueueDurable(instance);
   reservationExists = false;
+  assert.equal(await scheduler.leaseAsync('worker-retry'), null);
+  assert.equal(instance.state, 'QUEUED');
+  assert.equal(scheduler.depth(), 1);
   const lease = await scheduler.leaseAsync('worker-retry');
   assert.ok(lease);
   assert.equal(reserveCalls, 2);
