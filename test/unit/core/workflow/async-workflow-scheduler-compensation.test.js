@@ -275,12 +275,14 @@ test('recovery releases its dispatch claim when persisting a quota failure throw
 test('durable enqueue rolls back queue admission and quota when persistence fails', async () => {
   const instance = new WorkflowInstance({ definition: definition(), workflowId: 'durable-save-failure', tenantId: 'tenant-compensation' });
   const reservations = new Set();
+  let releasedReservation = null;
+  const reservationTimestamp = '2026-11-04T12:00:00.000Z';
   const scheduler = new AsyncWorkflowScheduler({
     tenantId: 'tenant-compensation',
     workflowRepository: { async save() { throw new Error('durable write failed'); } },
     quotaRepository: {
-      async reserveWorkflow({ workflowId }) { reservations.add(workflowId); return {}; },
-      async releaseWorkflow({ workflowId }) { reservations.delete(workflowId); return true; }
+      async reserveWorkflow({ workflowId }) { reservations.add(workflowId); return { created: true, reservedAt: reservationTimestamp }; },
+      async releaseWorkflow(args) { releasedReservation = args; reservations.delete(args.workflowId); return true; }
     },
     clock: () => 1000
   });
@@ -291,6 +293,7 @@ test('durable enqueue rolls back queue admission and quota when persistence fail
   assert.equal(instance.deadlineAt, null);
   assert.equal(instance.updatedAt, originalUpdatedAt);
   assert.equal(reservations.has(instance.workflowId), false);
+  assert.equal(releasedReservation.reservedAt, reservationTimestamp);
   assert.equal(await scheduler.leaseAsync('worker-after-failure'), null);
 });
 
