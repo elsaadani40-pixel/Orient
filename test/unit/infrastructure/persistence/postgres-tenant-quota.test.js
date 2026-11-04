@@ -74,3 +74,14 @@ test('reserveWorkflow marks a previously existing reservation as not created', a
   const result = await new PostgresTenantQuotaRepository(db).reserveWorkflow({ tenantId: 'tenant-a', workflowId: 'wf-old', policy: { maxConcurrent: 2, maxQueued: 5 } });
   assert.equal(result.created, false);
 });
+
+test('releaseWorkflow can condition cleanup on the reservation timestamp', async () => {
+  let captured;
+  const db = { async query(sql, values) { captured = { sql, values }; return { rowCount: 1, rows: [] }; } };
+  const reservedAt = '2026-11-04T12:00:00.000Z';
+  await new PostgresTenantQuotaRepository(db).releaseWorkflow({
+    tenantId: 'tenant-a', workflowId: 'wf-a', fencingToken: 7, reservedAt
+  });
+  assert.match(captured.sql, /fencing_token=\$3 AND reserved_at=\$4/);
+  assert.deepEqual(captured.values, ['tenant-a', 'wf-a', 7, reservedAt]);
+});
