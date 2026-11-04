@@ -149,9 +149,13 @@ const MIGRATIONS = [
       END LOOP;
     END $policies$;
     GRANT USAGE ON SCHEMA public TO orient_runtime;
-    REVOKE ALL ON TABLE public.schema_migrations FROM PUBLIC;
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN REVOKE ALL ON TABLE public.schema_migrations FROM anon; END IF;
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN REVOKE ALL ON TABLE public.schema_migrations FROM authenticated; END IF;
+    DO $metadata$
+    BEGIN
+      EXECUTE 'REVOKE ALL ON TABLE public.schema_migrations FROM PUBLIC';
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN EXECUTE 'REVOKE ALL ON TABLE public.schema_migrations FROM anon'; END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN EXECUTE 'REVOKE ALL ON TABLE public.schema_migrations FROM authenticated'; END IF;
+    END
+    $metadata$;
     GRANT SELECT ON TABLE public.schema_migrations TO orient_runtime;
     REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.schema_migrations FROM orient_runtime;
     GRANT USAGE, SELECT ON SEQUENCE public.workflow_lease_fencing_seq TO orient_runtime;
