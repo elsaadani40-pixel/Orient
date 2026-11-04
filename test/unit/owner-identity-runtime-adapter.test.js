@@ -75,3 +75,41 @@ test('Runtime adapter never accepts a public-user token as an owner session', t 
 test('Runtime adapter rejects an incompatible identity service at construction', () => {
   assert.throws(() => new OwnerIdentityRuntimeAdapter({ identity: {} }), /compatible OwnerIdentityService/);
 });
+
+test('authenticated owner sessions resolve to a stable trusted principal', async t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
+  const adapter = new OwnerIdentityRuntimeAdapter({ identity, tenantId: 'tenant-local', workspaceId: 'workspace-main' });
+  const login = await adapter.login({ password: 'temporary-owner-password-9F!x' });
+  const session = adapter.authenticate(login.token);
+  assert.ok(session);
+  assert.deepEqual(session.principal, {
+    principalId: identity.status().ownerId,
+    ownerId: identity.status().ownerId,
+    tenantId: 'tenant-local',
+    workspaceId: 'workspace-main',
+    authSource: 'orient-owner-session',
+    sessionId: session.sessionId
+  });
+  assert.equal(Object.isFrozen(session.principal), true);
+  assert.equal(adapter.authenticate(require('node:crypto').randomBytes(32).toString('base64url')), null);
+  const restarted = new OwnerIdentityService({ stateFile });
+  const reloadedAdapter = new OwnerIdentityRuntimeAdapter({ identity: restarted, tenantId: 'tenant-local', workspaceId: 'workspace-main' });
+  assert.equal(reloadedAdapter.authenticate(login.token).principal.ownerId, session.principal.ownerId);
+});
+
+test('owner identity receives a persistent UUID and legacy state is upgraded once', t => {
+  const { stateFile } = fixture(t);
+  const first = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
+  const ownerId = first.status().ownerId;
+  assert.match(ownerId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  const second = new OwnerIdentityService({ stateFile });
+  assert.equal(second.status().ownerId, ownerId);
+});
+
+test('runtime principal scope rejects invalid tenant and workspace configuration', t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
+  assert.throws(() => new OwnerIdentityRuntimeAdapter({ identity, tenantId: '' }), /tenantId/);
+  assert.throws(() => new OwnerIdentityRuntimeAdapter({ identity, workspaceId: 'x'.repeat(129) }), /workspaceId/);
+});
