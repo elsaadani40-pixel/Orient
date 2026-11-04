@@ -134,15 +134,24 @@ const MIGRATIONS = [
       FOREACH t IN ARRAY ARRAY['executions','events','idempotency','checkpoints','execution_resume_leases','workflows','workflow_leases','workflow_dispatch_claims','approvals','worker_nodes','tenant_quota_limits','tenant_quota_reservations'] LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('CREATE POLICY orient_tenant_scope ON public.%I TO orient_runtime USING (tenant_id = current_setting(''app.orient_tenant_id'', true)) WITH CHECK (tenant_id = current_setting(''app.orient_tenant_id'', true))', t);
+        EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC', t);
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon', t); END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN EXECUTE format('REVOKE ALL ON TABLE public.%I FROM authenticated', t); END IF;
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO orient_runtime', t);
       END LOOP;
       FOREACH t IN ARRAY ARRAY['owner_chat_messages','owner_work_profiles'] LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('CREATE POLICY orient_owner_scope ON public.%I TO orient_runtime USING (owner_id = current_setting(''app.orient_owner_id'', true)) WITH CHECK (owner_id = current_setting(''app.orient_owner_id'', true))', t);
+        EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC', t);
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon', t); END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN EXECUTE format('REVOKE ALL ON TABLE public.%I FROM authenticated', t); END IF;
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO orient_runtime', t);
       END LOOP;
     END $policies$;
     GRANT USAGE ON SCHEMA public TO orient_runtime;
+    REVOKE ALL ON TABLE public.schema_migrations FROM PUBLIC;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN REVOKE ALL ON TABLE public.schema_migrations FROM anon; END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN REVOKE ALL ON TABLE public.schema_migrations FROM authenticated; END IF;
     GRANT SELECT ON TABLE public.schema_migrations TO orient_runtime;
     REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.schema_migrations FROM orient_runtime;
     GRANT USAGE, SELECT ON SEQUENCE public.workflow_lease_fencing_seq TO orient_runtime;
