@@ -23,7 +23,8 @@ class AgentEventStore {
         return false;
       }
 
-      if (tenantId && event.data?.tenantId !== tenantId) {
+      const eventTenantId = event.tenantId ?? event.data?.tenantId;
+      if (tenantId && eventTenantId !== tenantId) {
         return false;
       }
 
