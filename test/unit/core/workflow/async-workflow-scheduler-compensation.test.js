@@ -420,6 +420,39 @@ test('recovery releases its dispatch claim when quota recovery fails', async () 
 });
 
 
+test('recovery releases quota when an oversized persisted workflow is marked failed', async () => {
+  const instance = new WorkflowInstance({
+    definition: definition(),
+    workflowId: 'recovery-terminal-quota-release',
+    tenantId: 'tenant-compensation',
+    input: { oversized: 'input' }
+  });
+  const released = [];
+  const workflowRepository = {
+    workerRegistry: { async register(worker) { return worker; } },
+    async claimQueued() { return [instance.toJSON()]; },
+    async save(value) { assert.equal(value.state, 'FAILED'); return true; },
+    async releaseDispatchClaim() { return true; }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-compensation',
+    workflowRepository,
+    quotaRepository: {
+      async releaseWorkflow(args) { released.push(args); return true; }
+    },
+    quotaPolicy: { maxInputChars: 1 },
+    clock: () => 1000,
+    dispatchWindow: 1,
+    maxQueueDepth: 10
+  });
+
+  assert.equal(await scheduler.recoverPersisted(), 0);
+  assert.deepEqual(released, [{
+    tenantId: 'tenant-compensation',
+    workflowId: instance.workflowId
+  }]);
+});
+
 test('recovery releases its dispatch claim when persisting a quota failure throws', async () => {
   const instance = new WorkflowInstance({
     definition: definition(),
