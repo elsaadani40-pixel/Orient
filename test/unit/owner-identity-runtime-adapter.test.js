@@ -84,8 +84,8 @@ test('authenticated owner sessions resolve to a stable trusted principal', async
   const session = adapter.authenticate(login.token);
   assert.ok(session);
   assert.deepEqual(session.principal, {
-    principalId: identity.status().ownerId,
-    ownerId: identity.status().ownerId,
+    principalId: identity.state.ownerId,
+    ownerId: identity.state.ownerId,
     tenantId: 'tenant-local',
     workspaceId: 'workspace-main',
     authSource: 'orient-owner-session',
@@ -101,10 +101,10 @@ test('authenticated owner sessions resolve to a stable trusted principal', async
 test('owner identity receives a persistent UUID and legacy state is upgraded once', t => {
   const { stateFile } = fixture(t);
   const first = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
-  const ownerId = first.status().ownerId;
+  const ownerId = first.state.ownerId;
   assert.match(ownerId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   const second = new OwnerIdentityService({ stateFile });
-  assert.equal(second.status().ownerId, ownerId);
+  assert.equal(second.state.ownerId, ownerId);
 });
 
 test('runtime principal scope rejects invalid tenant and workspace configuration', t => {
