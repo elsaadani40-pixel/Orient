@@ -921,8 +921,8 @@ class PostgresPersistence {
     return this.db.initialize();
   }
 
-  migrate() {
-    return this.db.migrate();
+  migrate(options = {}) {
+    return this.db.migrate(options);
   }
 
   withPrincipal(principal, work) {
