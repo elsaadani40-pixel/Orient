@@ -196,6 +196,7 @@ class PostgresDatabase {
 
   async migrate({ role = null } = {}) {
     const client=await this.pool.connect();
+    let releaseError = null;
     try {
       await client.query('BEGIN');
       if (role !== null) {
@@ -221,7 +222,11 @@ class PostgresDatabase {
       }
       await client.query('COMMIT');
       return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
-    } catch(error){try{await client.query('ROLLBACK');}catch{}throw error;} finally{client.release();}
+    } catch(error){
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
   }
   validatePrincipal(principal) {
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -249,7 +254,8 @@ class PostgresDatabase {
     }
 
     const client = await this.pool.connect();
-    const context = { client, principal: verifiedPrincipal };
+    const context = { client, principal: verifiedPrincipal, poisoned: null };
+    let releaseError = null;
     try {
       await client.query('BEGIN');
       await client.query(
@@ -257,12 +263,19 @@ class PostgresDatabase {
         [verifiedPrincipal.principalId, verifiedPrincipal.ownerId, verifiedPrincipal.tenantId, verifiedPrincipal.workspaceId, verifiedPrincipal.sessionId]
       );
       const result = await this.contextStorage.run(context, () => work());
+      if (context.poisoned) {
+        throw Object.assign(
+          new Error('A nested PostgreSQL savepoint could not be rolled back; the outer transaction cannot commit.'),
+          { code: 'PERSISTENCE_TRANSACTION_CLEANUP_FAILED', cause: context.poisoned }
+        );
+      }
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      try { await client.query('ROLLBACK'); } catch {}
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
       throw error;
-    } finally { client.release(); }
+    } finally { client.release(releaseError || undefined); }
   }
 
   async query(text, values = []) {
@@ -280,20 +293,27 @@ class PostgresDatabase {
         await active.client.query('RELEASE SAVEPOINT ' + savepoint);
         return result;
       } catch (error) {
-        try { await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint); await active.client.query('RELEASE SAVEPOINT ' + savepoint); } catch {}
+        try {
+          await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint);
+          await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        } catch (rollbackError) {
+          active.poisoned = rollbackError;
+        }
         throw error;
       }
     }
     const client = await this.pool.connect();
+    let releaseError = null;
     try {
       await client.query('BEGIN');
       const result = await work(client);
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      try { await client.query('ROLLBACK'); } catch {}
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
       throw error;
-    } finally { client.release(); }
+    } finally { client.release(releaseError || undefined); }
   }
   static json(value){return value===undefined?null:value;}
   static uuid(){return crypto.randomUUID();}
