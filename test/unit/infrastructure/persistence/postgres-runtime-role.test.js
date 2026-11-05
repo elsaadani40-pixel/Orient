@@ -68,7 +68,7 @@ test('runtime database preflight rejects SET ROLE and elevated runtime group att
     validIdentity({ runtime_bypasses_rls: true }),
     validIdentity({ runtime_can_create_roles: true }),
     validIdentity({ runtime_can_login: true }),
-    validIdentity({ can_create_public_schema_objects: true }),
+    validIdentity({ can_create_any_schema_objects: true }),
     validIdentity({ has_runtime_membership: false }),
     validIdentity({ has_owner_membership: true }),
     validIdentity({ can_create_any_schema_objects: true }),
