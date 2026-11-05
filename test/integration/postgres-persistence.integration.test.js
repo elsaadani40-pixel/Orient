@@ -932,7 +932,8 @@ test('PostgreSQL owner work profile persists validated partial updates and isola
 
 test('PostgreSQL runtime role is restricted and tenant RLS blocks cross-tenant CRUD', async () => {
   const role = await pool.query(
-    "SELECT rolname, rolsuper, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname IN ('orient_owner','orient_runtime','orient_runtime_login','orient_migrator') ORDER BY rolname"
+    "SELECT rolname, rolsuper, rolbypassrls, rolcanlogin, rolcreatedb, rolcreaterole, rolreplication " +
+    "FROM pg_roles WHERE rolname IN ('orient_owner','orient_runtime','orient_runtime_login','orient_migrator') ORDER BY rolname"
   );
   const runtime = role.rows.find(row => row.rolname === 'orient_runtime');
   const runtimeLogin = role.rows.find(row => row.rolname === 'orient_runtime_login');
@@ -941,12 +942,49 @@ test('PostgreSQL runtime role is restricted and tenant RLS blocks cross-tenant C
   assert.equal(runtime.rolsuper, false);
   assert.equal(runtime.rolbypassrls, false);
   assert.equal(runtime.rolcanlogin, false);
+  assert.equal(runtime.rolcreatedb, false);
+  assert.equal(runtime.rolcreaterole, false);
+  assert.equal(runtime.rolreplication, false);
   assert.equal(runtimeLogin.rolsuper, false);
   assert.equal(runtimeLogin.rolbypassrls, false);
   assert.equal(runtimeLogin.rolcanlogin, true);
+  assert.equal(runtimeLogin.rolcreatedb, false);
+  assert.equal(runtimeLogin.rolcreaterole, false);
+  assert.equal(runtimeLogin.rolreplication, false);
   assert.equal(owner.rolcanlogin, false);
+  assert.equal(owner.rolcreatedb, false);
+  assert.equal(owner.rolcreaterole, false);
+  assert.equal(owner.rolreplication, false);
   assert.equal(migrator.rolsuper, false);
   assert.equal(migrator.rolbypassrls, false);
+  assert.equal(migrator.rolcreatedb, false);
+  assert.equal(migrator.rolcreaterole, false);
+  assert.equal(migrator.rolreplication, false);
+  const privileges = await pool.query(
+    "SELECT " +
+    "has_schema_privilege('orient_runtime_login','public','CREATE') AS schema_create, " +
+    "has_table_privilege('orient_runtime_login','public.executions','SELECT') AS can_select, " +
+    "has_table_privilege('orient_runtime_login','public.executions','INSERT') AS can_insert, " +
+    "has_table_privilege('orient_runtime_login','public.executions','UPDATE') AS can_update, " +
+    "has_table_privilege('orient_runtime_login','public.executions','DELETE') AS can_delete, " +
+    "has_table_privilege('orient_runtime_login','public.executions','TRUNCATE') AS can_truncate, " +
+    "has_table_privilege('orient_runtime_login','public.executions','REFERENCES') AS can_reference, " +
+    "has_table_privilege('orient_runtime_login','public.executions','TRIGGER') AS can_trigger, " +
+    "has_sequence_privilege('orient_runtime_login','public.workflow_lease_fencing_seq','USAGE') AS sequence_usage, " +
+    "has_sequence_privilege('orient_runtime_login','public.workflow_lease_fencing_seq','UPDATE') AS sequence_update"
+  );
+  assert.deepEqual(privileges.rows[0], {
+    schema_create: false,
+    can_select: true,
+    can_insert: true,
+    can_update: true,
+    can_delete: true,
+    can_truncate: false,
+    can_reference: false,
+    can_trigger: false,
+    sequence_usage: true,
+    sequence_update: false
+  });
   const membership = await pool.query("SELECT pg_has_role('orient_runtime_login','orient_runtime','MEMBER') AS runtime_member, pg_has_role('orient_migrator','orient_owner','MEMBER') AS migrator_member");
   assert.equal(membership.rows[0].runtime_member, true);
   assert.equal(membership.rows[0].migrator_member, true);
