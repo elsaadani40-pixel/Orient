@@ -33,7 +33,7 @@ async function normalizeManagedRoleMemberships(client) {
   );
 
   const rows = memberships.rows;
-  const keyOf = row => [row.granted_role, row.member_role, row.grantor_role].join('\\u0000');
+  const keyOf = row => JSON.stringify([row.granted_role, row.member_role, row.grantor_role]);
   const byKey = new Map(rows.map(row => [keyOf(row), row]));
   const outgoing = new Map(rows.map(row => [keyOf(row), new Set()]));
   const indegree = new Map(rows.map(row => [keyOf(row), 0]));
