@@ -22,7 +22,7 @@ SELECT
     SELECT bool_or(has_schema_privilege(session_user, namespace.nspname, 'CREATE'))
     FROM pg_namespace AS namespace
     WHERE namespace.nspname <> 'information_schema'
-      AND namespace.nspname NOT LIKE 'pg\\_%' ESCAPE '\\\\'
+      AND left(namespace.nspname, 3) <> 'pg_'
   ), false) AS can_create_any_schema_objects,
   EXISTS (
     SELECT 1
@@ -31,7 +31,7 @@ SELECT
     WHERE relation.relowner = login_role.oid
       AND relation.relkind IN ('r', 'p', 'S')
       AND namespace.nspname <> 'information_schema'
-      AND namespace.nspname NOT LIKE 'pg\\_%' ESCAPE '\\\\'
+      AND left(namespace.nspname, 3) <> 'pg_'
   ) AS owns_application_relations
 FROM pg_roles AS login_role
 LEFT JOIN pg_roles AS runtime_role ON runtime_role.rolname = 'orient_runtime'
