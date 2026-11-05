@@ -70,7 +70,7 @@ test('PostgreSQL migration role is transaction-local and cannot leak through a p
   const client = {
     async query(sql) {
       calls.push(sql);
-      if (/SELECT COALESCE\\(MAX\\(version\\),0\\)::int AS version/.test(sql)) {
+      if (sql.includes('SELECT COALESCE(MAX(version),0)::int AS version')) {
         return { rows: [{ version: Math.max(...MIGRATIONS.map(migration => migration.version)) }] };
       }
       return { rows: [] };
