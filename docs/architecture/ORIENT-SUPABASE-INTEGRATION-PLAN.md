@@ -140,22 +140,23 @@ The initial cloud database path should reuse the existing `pg`-based PostgreSQL 
 - **Implemented on the integration branch:** `PostgresDatabase.initialize()` now performs read-only schema readiness/version checks. It no longer creates tables or runs migrations during application startup.
 - **Implemented on the integration branch:** explicit schema migration is exposed through `PostgresDatabase.migrate()`, `PostgresPersistence.migrate()`, and the factory's `migrate()` method. The operator command is `ORIENT_MIGRATION_DATABASE_URL=... npm run db:migrate`; it requires a deliberate operator invocation and does not run automatically during app startup.
 - **Tests added/updated:** lifecycle unit tests assert startup performs no DDL and fails closed when the schema is absent/outdated; the real-PostgreSQL integration test now calls `migrate()` explicitly before verifying schema idempotency. CI results for this code revision are still pending.
-- **Not yet implemented:** separate migration-owner and restricted runtime database roles, entity-specific RLS policies, trusted tenant/owner identity context, and connection-pool context isolation tests.
-- The existing schema contains both `tenant_id` and `owner_id` ownership models. A generic `auth.uid()` policy or caller-controlled session variable would not be a valid substitute for an explicit ORIENT identity contract.
-- A dedicated repository audit now confirms the current owner login is a single local `Admin` identity persisted in `owner.json`, not a Supabase Auth principal; the runtime tenant is currently process-configured by `ORIENT_TENANT_ID` (default `local`). The PostgreSQL adapter also issues ordinary reads/writes through `pool.query()` rather than a mandatory trusted tenant-scoped transaction. Therefore neither `auth.uid()` nor an unsigned `current_setting('app.tenant_id')` policy is safe to introduce yet. See [ORIENT-SUPABASE-IDENTITY-RLS-READINESS.md](./ORIENT-SUPABASE-IDENTITY-RLS-READINESS.md).
+- **Implemented on the integration branch:** a stable owner UUID and immutable internal Runtime principal are derived from local ORIENT identity state and trusted server configuration; request-supplied tenant/owner fields are not authoritative.
+- **Implemented on the integration branch:** every repository exposed by `PostgresPersistence` is bound to the internal principal and executes through the transaction-scoped context boundary.
+- **Implemented on the integration branch:** dedicated `orient_owner`, `orient_migrator`, `orient_runtime`, and `orient_runtime_login` roles, plus version-9 entity-specific tenant/owner RLS policies and restricted grants. Migration role elevation uses transaction-local `SET LOCAL ROLE`.
+- **Security limitation:** policies use transaction-local custom PostgreSQL settings. These protect against omitted tenant predicates and accidental cross-scope queries, but they are not cryptographic authentication and do not defend against arbitrary SQL or a compromised application process that can call `set_config()`. A database-verifiable signed-principal mechanism remains a decision gate if that threat is in scope. See [ORIENT-SUPABASE-IDENTITY-RLS-READINESS.md](./ORIENT-SUPABASE-IDENTITY-RLS-READINESS.md).
+- **Not yet verified against hosted Supabase:** provisioning the roles, applying version-9 migrations, runtime login restrictions, complete grants/advisor review, and connection-pool behavior using the actual hosted credentials. No hosted changes have been performed.
 - The MCP inspection role was `postgres`, an administrative role. It must not be used as the normal application runtime credential.
 - Supabase CLI v3 (released 2026-11-02) defaults database commands to the local stack; hosted database changes require explicit `--remote` targeting and confirmation. See the [CLI v3 migration guide](https://supabase.com/docs/guides/local-development/cli/migrating-to-v3).
 - PR #318 remains independent. PR #319 remains Draft and unmerged.
 
 ## 9. Next security gate
 
-Before applying any schema to Supabase:
-1. Define a trusted ORIENT principal/tenant identity contract for both `tenant_id` and `owner_id`.
-2. Create distinct migration-owner and restricted runtime roles; grant the runtime role only required DML and sequence privileges, without schema ownership, superuser, or RLS bypass.
-3. Choose a database-verifiable transaction-scoped identity propagation design. Never trust caller-controlled tenant session variables or editable user metadata.
-4. Add entity-specific RLS and explicit grants; test SELECT/INSERT/UPDATE/DELETE and cross-tenant/owner denial.
-5. Test transaction-local context reset under pooled connection reuse.
-6. Run the migration and integration suite against disposable/local PostgreSQL 17, then run security/performance advisors.
-7. Only after review, apply a versioned migration to the empty Supabase development project.
+Before applying the migration to hosted Supabase:
+1. Confirm the intended threat boundary: the current GUC design protects against accidental cross-scope access, not arbitrary SQL under the runtime credential. Decide whether signed database-verifiable principal context is required before hosted use.
+2. Run role provisioning and migrations against disposable/local PostgreSQL 17 using the exact restricted login topology; verify migration role elevation cannot leak across pooled connections.
+3. Verify the actual `orient_runtime_login` credential cannot own tables, bypass RLS, create schema objects, or read/write migration metadata.
+4. Review every grant, policy, exposed schema, and Supabase Data API setting; keep application tables unexposed unless explicitly reviewed.
+5. Run the full integration suite and Supabase security/performance advisors against the development target.
+6. Only after explicit approval, apply the reviewed migration to the empty Supabase development project and repeat the grant/RLS/advisor verification.
 
 Until those gates pass, do not run `npm run db:migrate` against the Supabase project, do not expose ORIENT tables through the Data API, and do not place credentials in source control or client applications.
