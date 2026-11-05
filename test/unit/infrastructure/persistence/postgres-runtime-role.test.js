@@ -19,7 +19,9 @@ function validIdentity(overrides = {}) {
     runtime_can_replicate: false,
     runtime_can_login: false,
     has_runtime_membership: true,
-    can_create_public_schema_objects: false,
+    has_owner_membership: false,
+    can_create_any_schema_objects: false,
+    owns_application_relations: false,
     ...overrides
   };
 }
@@ -68,6 +70,9 @@ test('runtime database preflight rejects SET ROLE and elevated runtime group att
     validIdentity({ runtime_can_login: true }),
     validIdentity({ can_create_public_schema_objects: true }),
     validIdentity({ has_runtime_membership: false }),
+    validIdentity({ has_owner_membership: true }),
+    validIdentity({ can_create_any_schema_objects: true }),
+    validIdentity({ owns_application_relations: true }),
     validIdentity({ login_inherits_roles: false })
   ]) {
     const pool = { async query() { return { rows: [identity] }; } };
