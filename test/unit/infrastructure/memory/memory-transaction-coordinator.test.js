@@ -374,9 +374,39 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
         await new Promise(resolve => setTimeout(resolve, 5));
       }
     };
-    const waitExit = child => new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => resolve({ code, signal }));
+    const waitExit = (child, description) => new Promise((resolve, reject) => {
+      const alreadyExited = () => child.exitCode !== null || child.signalCode !== null;
+      if (alreadyExited()) {
+        resolve({ code: child.exitCode, signal: child.signalCode });
+        return;
+      }
+
+      let settled = false;
+      let timer;
+      const cleanup = () => {
+        clearTimeout(timer);
+        child.removeListener('error', onError);
+        child.removeListener('exit', onExit);
+      };
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        callback(value);
+      };
+      const onError = error => finish(reject, error);
+      const onExit = (code, signal) => finish(resolve, { code, signal });
+
+      timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        finish(reject, new Error(`timed out waiting for ${description} process to exit`));
+      }, 15000);
+      child.once('error', onError);
+      child.once('exit', onExit);
+
+      // A child may exit after the first check but before the listeners are
+      // attached. Re-check its terminal state so the exit event cannot be lost.
+      if (alreadyExited()) onExit(child.exitCode, child.signalCode);
     });
 
     holder = launch(holderScript);
@@ -398,8 +428,8 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
     assert.equal(replacementOnDisk.token, replacementOwner.token, 'a new owner can acquire the now-vacant path');
 
     fs.writeFileSync(continueGateRelease, 'continue');
-    assert.deepEqual(await waitExit(reclaimer), { code: 0, signal: null }, reclaimerStderr);
-    assert.deepEqual(await waitExit(holder), { code: 0, signal: null }, holderStderr);
+    assert.deepEqual(await waitExit(reclaimer, 'reclaimer'), { code: 0, signal: null }, reclaimerStderr);
+    assert.deepEqual(await waitExit(holder, 'holder'), { code: 0, signal: null }, holderStderr);
     assert.ok(['released', 'ownership-lost'].includes(fs.readFileSync(holderResult, 'utf8')));
     assert.equal(
       JSON.parse(fs.readFileSync(f.coordinator.lockFile, 'utf8')).token,
