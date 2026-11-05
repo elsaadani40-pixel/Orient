@@ -16,9 +16,9 @@ test('PostgreSQL role provisioning revokes broad default privileges for future o
         return {
           rowCount: 3,
           rows: [
-            { granted_role: 'orient_owner', member_role: 'orient_runtime_login' },
-            { granted_role: 'unrelated_admin', member_role: 'orient_migrator' },
-            { granted_role: 'orient_owner', member_role: 'orient_migrator' }
+            { granted_role: 'orient_owner', member_role: 'orient_runtime_login', grantor_role: 'postgres', grantor_is_superuser: true, admin_option: true },
+            { granted_role: 'unrelated_admin', member_role: 'orient_migrator', grantor_role: 'postgres', grantor_is_superuser: true, admin_option: true },
+            { granted_role: 'orient_owner', member_role: 'orient_migrator', grantor_role: 'postgres', grantor_is_superuser: true, admin_option: false }
           ]
         };
       }
@@ -50,6 +50,8 @@ test('PostgreSQL role provisioning revokes broad default privileges for future o
   assert.ok(sql.includes('REVOKE "orient_owner" FROM "orient_runtime_login"'));
   assert.ok(sql.includes('REVOKE "unrelated_admin" FROM "orient_migrator"'));
   assert.ok(sql.includes('REVOKE "orient_owner" FROM "orient_migrator"'));
+  assert.equal(sql.filter(statement => statement === 'SET LOCAL ROLE "postgres"').length, 3);
+  assert.equal(sql.filter(statement => statement === 'RESET ROLE').length, 3);
   assert.ok(sql.includes('GRANT orient_owner TO orient_migrator'));
   assert.ok(sql.includes('GRANT orient_runtime TO orient_runtime_login'));
 });
