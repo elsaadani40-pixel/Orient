@@ -216,3 +216,109 @@ test('principal-scoped unit of work rejects unverified or malformed principals b
   );
   assert.equal(connects, 0);
 });
+
+
+test('principal transaction discards its pooled client when rollback fails', async () => {
+  const operationError = new Error('operation failed');
+  const rollbackError = new Error('connection lost during rollback');
+  const calls = [];
+  let releasedWith;
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (sql === 'ROLLBACK') throw rollbackError;
+      return { rows: [] };
+    },
+    release(error) { releasedWith = error; }
+  };
+  const database = new PostgresDatabase({
+    pool: { query() {}, async connect() { return client; } }
+  });
+
+  await assert.rejects(
+    () => database.withPrincipal(validPrincipal(), async () => { throw operationError; }),
+    error => error === operationError
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(releasedWith, rollbackError);
+});
+
+test('standalone transaction discards its pooled client when rollback fails', async () => {
+  const operationError = new Error('transaction work failed');
+  const rollbackError = new Error('rollback connection failure');
+  let releasedWith;
+  const client = {
+    async query(sql) {
+      if (sql === 'ROLLBACK') throw rollbackError;
+      return { rows: [] };
+    },
+    release(error) { releasedWith = error; }
+  };
+  const database = new PostgresDatabase({
+    pool: { query() {}, async connect() { return client; } }
+  });
+
+  await assert.rejects(
+    () => database.transaction(async () => { throw operationError; }),
+    error => error === operationError
+  );
+  assert.equal(releasedWith, rollbackError);
+});
+
+test('migration discards its pooled client when rollback after commit failure fails', async () => {
+  const commitError = new Error('commit transport failure');
+  const rollbackError = new Error('rollback transport failure');
+  const latest = Math.max(...MIGRATIONS.map(migration => migration.version));
+  let releasedWith;
+  const client = {
+    async query(sql) {
+      if (sql === 'SELECT COALESCE(MAX(version),0)::int AS version') {
+        return { rows: [{ version: latest }] };
+      }
+      if (sql === 'COMMIT') throw commitError;
+      if (sql === 'ROLLBACK') throw rollbackError;
+      return { rows: [] };
+    },
+    release(error) { releasedWith = error; }
+  };
+  const database = new PostgresDatabase({
+    pool: { query() {}, async connect() { return client; } }
+  });
+
+  await assert.rejects(
+    () => database.migrate({ role: 'orient_owner' }),
+    error => error === commitError
+  );
+  assert.equal(releasedWith, rollbackError);
+});
+
+test('failed nested savepoint rollback poisons the outer transaction and prevents commit', async () => {
+  const nestedError = new Error('nested work failed');
+  const rollbackError = new Error('savepoint rollback failed');
+  const calls = [];
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (sql === 'ROLLBACK TO SAVEPOINT orient_nested_1') throw rollbackError;
+      return { rows: [] };
+    },
+    release() {}
+  };
+  const database = new PostgresDatabase({
+    pool: { query() {}, async connect() { return client; } }
+  });
+
+  await assert.rejects(
+    () => database.withPrincipal(validPrincipal(), async () => {
+      await assert.rejects(
+        () => database.transaction(async () => { throw nestedError; }),
+        error => error === nestedError
+      );
+      return 'must-not-commit';
+    }),
+    error => error.code === 'PERSISTENCE_TRANSACTION_CLEANUP_FAILED' &&
+      error.cause === rollbackError
+  );
+  assert.ok(calls.includes('ROLLBACK'));
+  assert.equal(calls.includes('COMMIT'), false);
+});
