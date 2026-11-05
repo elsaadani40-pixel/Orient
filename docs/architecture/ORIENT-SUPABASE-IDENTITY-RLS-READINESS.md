@@ -71,9 +71,10 @@ The database context boundary is now integrated into the PostgreSQL runtime comp
 - It validates the owner-principal contract before acquiring a connection.
 - It opens one transaction and installs principal, owner, tenant, workspace, and session identifiers with parameterized `set_config(..., true)` calls, making the values transaction-local.
 - `AsyncLocalStorage` routes repository calls through the active transaction client without requiring every repository to pass the client explicitly.
-- Nested transactions use savepoints on the same client.
+- Nested transactions use savepoints on the same client. A failed savepoint rollback poisons the outer unit of work and prevents it from reporting a successful commit.
 - A nested attempt to switch principal, tenant, workspace, or session is rejected.
-- Unit tests cover context pinning, nested transactions, principal-switch rejection, rollback, and re-establishment on pooled connection reuse.
+- If a full transaction rollback fails, the client is released with the rollback error so `pg.Pool` discards the connection rather than reusing a potentially aborted or role-contaminated session. The same rule applies to migrations and standalone transactions.
+- Unit tests cover context pinning, nested transactions, principal-switch rejection, rollback failure disposal, and re-establishment on pooled connection reuse.
 
 **Important limitation:** direct low-level database access remains available to infrastructure code. Application repositories are bound, but this is not a cryptographic boundary against arbitrary SQL executed with the runtime credential.
 
@@ -106,7 +107,8 @@ Unit coverage now verifies:
 - all PostgresPersistence repositories bound to the internal runtime principal;
 - owner chat/profile repositories mapped to the stable owner UUID;
 - nested savepoints and rejection of principal switching;
-- transaction-local context re-established across pooled connection leases.
+- transaction-local context re-established across pooled connection leases;
+- failed rollback causes pooled client disposal, and failed nested savepoint rollback prevents the outer transaction from committing.
 
 The repository-binding milestone is implemented for every repository exposed by `PostgresPersistence`; remaining work is hosted-project verification of the actual runtime connection credential, grants/advisors, pooler behavior, GUC threat boundary, and an explicitly approved development migration. The repository CI now verifies the runtime login and pooled role reset against a real PostgreSQL 17 service. No Supabase schema or project setting is changed by this contract.
 
