@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
 const path = require('node:path');
 const { PostgresPersistence } = require('./postgres/postgres-persistence');
+const { assertRuntimeDatabaseRole } = require('./postgres/assert-runtime-database-role');
 const JsonPersistence = require('./json-persistence');
 const SqlitePersistence = require('./sqlite/sqlite-persistence');
 
@@ -50,7 +51,10 @@ function createPersistence(config) {
   const adapter = new PostgresPersistence({ pool });
   return {
     adapter,
-    initialize: () => adapter.initialize(),
+    initialize: async () => {
+      await assertRuntimeDatabaseRole(pool);
+      return adapter.initialize();
+    },
     migrate: () => adapter.migrate(),
     close: () => pool.end()
   };
