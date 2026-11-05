@@ -38,6 +38,60 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
+test('PostgreSQL runtime login preflight validates a real least-privilege connection and pooled role reset', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({
+    connectionString: runtimeUrl.toString(),
+    max: 1,
+    application_name: 'orient-runtime-role-integration'
+  });
+
+  try {
+    const { assertRuntimeDatabaseRole } = require('../../src/infrastructure/persistence/postgres/assert-runtime-database-role');
+    assert.deepEqual(await assertRuntimeDatabaseRole(runtimePool), {
+      role: 'orient_runtime_login',
+      leastPrivilege: true
+    });
+
+    const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+    const readiness = await runtimePersistence.initialize();
+    assert.equal(readiness.schemaVersion, 9);
+
+    const client = await runtimePool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SET LOCAL ROLE orient_runtime');
+      const elevated = await client.query('SELECT session_user::text AS session_user, current_user::text AS current_user');
+      assert.equal(elevated.rows[0].session_user, 'orient_runtime_login');
+      assert.equal(elevated.rows[0].current_user, 'orient_runtime');
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+
+    const afterRelease = await runtimePool.query(
+      'SELECT session_user::text AS session_user, current_user::text AS current_user'
+    );
+    assert.equal(afterRelease.rows[0].session_user, 'orient_runtime_login');
+    assert.equal(afterRelease.rows[0].current_user, 'orient_runtime_login');
+    assert.deepEqual(await assertRuntimeDatabaseRole(runtimePool), {
+      role: 'orient_runtime_login',
+      leastPrivilege: true
+    });
+  } finally {
+    await runtimePool.end();
+  }
+});
+
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
   const a = await persistence.idempotency.begin({ executionId: 'exec-a', step: 1, tool: 'memory.read', tenantId: 'tenant-a' });
   const b = await persistence.idempotency.begin({ executionId: 'exec-a', step: 1, tool: 'memory.read', tenantId: 'tenant-b' });
