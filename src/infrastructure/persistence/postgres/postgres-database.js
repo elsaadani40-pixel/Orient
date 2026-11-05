@@ -197,11 +197,13 @@ class PostgresDatabase {
   async migrate({ role = null } = {}) {
     const client=await this.pool.connect();
     try {
+      await client.query('BEGIN');
       if (role !== null) {
         if (typeof role !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(role)) throw new TypeError('Invalid PostgreSQL migration role name');
-        await client.query('SET ROLE ' + role);
+        // Keep the elevated migration identity transaction-local so a pooled
+        // connection can never return to the pool still running as orient_owner.
+        await client.query('SET LOCAL ROLE ' + role);
       }
-      await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
       await client.query(BASE_SCHEMA);
       const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
