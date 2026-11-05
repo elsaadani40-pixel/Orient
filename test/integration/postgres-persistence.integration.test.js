@@ -1069,6 +1069,12 @@ test('PostgreSQL role provisioning normalizes unexpected memberships and multipl
     ]);
   } finally {
     await pool.query('REVOKE ' + helperRole + ' FROM orient_migrator').catch(() => {});
+    await pool.query('SET ROLE ' + grantorRole).then(async () => {
+      await pool.query('REVOKE orient_owner FROM orient_runtime_login');
+      await pool.query('RESET ROLE');
+    }).catch(async () => {
+      await pool.query('RESET ROLE').catch(() => {});
+    });
     await pool.query('REVOKE orient_owner FROM orient_runtime_login').catch(() => {});
     await pool.query('REVOKE orient_owner FROM ' + grantorRole).catch(() => {});
     await pool.query('DROP ROLE IF EXISTS ' + helperRole);
