@@ -17,7 +17,22 @@ SELECT
   runtime_role.rolreplication AS runtime_can_replicate,
   runtime_role.rolcanlogin AS runtime_can_login,
   pg_has_role(session_user, 'orient_runtime', 'MEMBER') AS has_runtime_membership,
-  has_schema_privilege(session_user, 'public', 'CREATE') AS can_create_public_schema_objects
+  pg_has_role(session_user, 'orient_owner', 'MEMBER') AS has_owner_membership,
+  COALESCE((
+    SELECT bool_or(has_schema_privilege(session_user, namespace.nspname, 'CREATE'))
+    FROM pg_namespace AS namespace
+    WHERE namespace.nspname <> 'information_schema'
+      AND namespace.nspname NOT LIKE 'pg\\_%' ESCAPE '\\\\'
+  ), false) AS can_create_any_schema_objects,
+  EXISTS (
+    SELECT 1
+    FROM pg_class AS relation
+    JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+    WHERE relation.relowner = login_role.oid
+      AND relation.relkind IN ('r', 'p', 'S')
+      AND namespace.nspname <> 'information_schema'
+      AND namespace.nspname NOT LIKE 'pg\\_%' ESCAPE '\\\\'
+  ) AS owns_application_relations
 FROM pg_roles AS login_role
 LEFT JOIN pg_roles AS runtime_role ON runtime_role.rolname = 'orient_runtime'
 WHERE login_role.rolname = session_user
@@ -51,13 +66,15 @@ async function assertRuntimeDatabaseRole(pool) {
     'runtime_can_create_roles',
     'runtime_can_replicate',
     'runtime_can_login',
-    'can_create_public_schema_objects'
+    'can_create_any_schema_objects',
+    'owns_application_relations'
   ];
   const elevated = forbiddenFlags.filter(flag => identity[flag] === true);
   const valid = identity.session_user === 'orient_runtime_login' &&
     identity.current_user === 'orient_runtime_login' &&
     identity.login_inherits_roles === true &&
     identity.has_runtime_membership === true &&
+    identity.has_owner_membership === false &&
     elevated.length === 0;
 
   if (!valid) {
@@ -66,6 +83,7 @@ async function assertRuntimeDatabaseRole(pool) {
       current_user: identity.current_user,
       elevated_flags: elevated,
       has_runtime_membership: identity.has_runtime_membership,
+      has_owner_membership: identity.has_owner_membership,
       login_inherits_roles: identity.login_inherits_roles
     });
   }
