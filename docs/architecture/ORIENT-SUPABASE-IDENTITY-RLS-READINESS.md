@@ -1,6 +1,6 @@
 # ORIENT Canonical Owner Principal Contract
 
-**Status:** Implemented foundation; database enforcement not yet enabled  
+**Status:** Principal, repository binding, role topology, and version-9 RLS migration implemented on this branch; hosted project not migrated  
 **Branch:** `feat/supabase-optional-cloud-architecture`  
 **Scope:** Local owner authentication and server-side principal derivation
 
@@ -106,7 +106,7 @@ Unit coverage now verifies:
 - nested savepoints and rejection of principal switching;
 - transaction-local context re-established across pooled connection leases.
 
-The next implementation milestone is migrating every PostgreSQL repository path behind the scoped unit of work and classifying system/background work explicitly. No Supabase schema or project setting is changed by this contract.
+The repository-binding milestone is implemented for every repository exposed by `PostgresPersistence`; remaining work is independent security verification of the runtime connection credential, pool lifecycle, GUC threat boundary, hosted grants/advisors, and an explicitly approved development migration. No Supabase schema or project setting is changed by this contract.
 
 
 ## 9. Database role and RLS implementation
@@ -120,7 +120,7 @@ The explicit provisioning command is `npm run db:roles` (`scripts/provision-post
 | `orient_runtime` | No | Restricted policy/grant group; NOSUPERUSER, NOBYPASSRLS, does not own tables. |
 | `orient_runtime_login` | Yes | Application connection credential; inherits `orient_runtime`, not owner privileges. |
 
-The version-9 migration enables RLS on all tenant-owned and owner-owned application tables. Tenant policies compare `tenant_id` to the transaction-local tenant context; owner policies compare `owner_id` to the transaction-local owner context. `schema_migrations` is global infrastructure metadata and is SELECT-only for the runtime role. The workflow fencing sequence is granted only for sequence use.
+The version-9 migration enables RLS on all tenant-owned and owner-owned application tables. Migration role elevation uses `SET LOCAL ROLE` inside the migration transaction so a pooled connection cannot be returned with the owner role still active. Tenant policies compare `tenant_id` to the transaction-local tenant context; owner policies compare `owner_id` to the transaction-local owner context. `schema_migrations` is global infrastructure metadata and is SELECT-only for the runtime role. The workflow fencing sequence is granted only for sequence use.
 
 The runtime role is not granted DDL, TRUNCATE, REFERENCES, TRIGGER, or migration-table write access. Table ownership is transferred to `orient_owner` by the administrative provisioning step before migrations execute as that role.
 
