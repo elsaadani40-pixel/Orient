@@ -63,3 +63,20 @@ test('persistence factory selects SQLite with durable memory repositories', asyn
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('PostgreSQL runtime factory does not expose migrations through runtime credentials', async () => {
+  const runtime = createPersistence({
+    ...baseConfig,
+    persistenceMode: 'postgres',
+    databaseUrl: 'postgres://orient_runtime_login:unused@127.0.0.1:5432/orient_test'
+  });
+
+  try {
+    assert.equal(Object.hasOwn(runtime, 'migrate'), false);
+    assert.equal(typeof runtime.initialize, 'function');
+    assert.equal(typeof runtime.close, 'function');
+  } finally {
+    await runtime.close();
+  }
+});
