@@ -82,13 +82,15 @@ The database context boundary is now integrated into the PostgreSQL runtime comp
 The application-level principal contract, repository binding, separate database roles, and version-9 RLS policies are implemented in code. The hosted Supabase project has not been migrated. The GUC context remains a trusted-server transport mechanism, not cryptographic proof of identity.
 
 Before enabling this on a hosted project:
-1. Run `npm run db:roles` with `ORIENT_ADMIN_DATABASE_URL`, `ORIENT_MIGRATOR_PASSWORD`, and `ORIENT_RUNTIME_PASSWORD` supplied through a secure environment; this provisions `orient_owner`, `orient_migrator`, `orient_runtime`, and `orient_runtime_login` and transfers existing ORIENT table ownership.
-2. Configure `ORIENT_MIGRATION_DATABASE_URL` to use `orient_migrator` and set `ORIENT_MIGRATION_ROLE=orient_owner`; then run `npm run db:migrate`.
-3. Configure application `DATABASE_URL` with `orient_runtime_login`, never the admin or migration login.
-4. Verify the runtime role is not a table owner, superuser, or `BYPASSRLS` role. The version-9 migration grants only required table CRUD, read-only access to migration metadata, and sequence usage.
-5. Run the integration suite and advisors against the target project; review all grants, policies, and exposed schemas.
-6. Keep database credentials server-side. Do not expose the runtime login to browser/mobile clients.
-7. Local JSON/SQLite must continue working without Supabase.
+1. The application persistence factory now runs a fail-closed PostgreSQL runtime-role preflight before schema readiness checks. It requires `session_user` and `current_user` to be `orient_runtime_login`, verifies inherited membership in `orient_runtime`, rejects membership in `orient_owner`, rejects elevated role attributes, rejects CREATE on every non-system schema, and rejects ownership of application relations.
+2. A real PostgreSQL 17 integration test provisions a fresh runtime password, connects using `orient_runtime_login`, runs the preflight and read-only schema initialization, then proves a transaction-local `SET ROLE orient_runtime` is rolled back before the pooled connection is reused. The integration test passes with the current branch validation.
+3. Run `npm run db:roles` with `ORIENT_ADMIN_DATABASE_URL`, `ORIENT_MIGRATOR_PASSWORD`, and `ORIENT_RUNTIME_PASSWORD` supplied through a secure environment; this provisions `orient_owner`, `orient_migrator`, `orient_runtime`, and `orient_runtime_login` and transfers existing ORIENT table ownership.
+4. Configure `ORIENT_MIGRATION_DATABASE_URL` to use `orient_migrator` and set `ORIENT_MIGRATION_ROLE=orient_owner`; then run `npm run db:migrate`.
+5. Configure application `ORIENT_DATABASE_URL` with `orient_runtime_login`, never the admin or migration login.
+6. Verify the runtime role is not a table owner, superuser, or `BYPASSRLS` role. The version-9 migration grants only required table CRUD, read-only access to migration metadata, and sequence usage.
+7. Run the integration suite and advisors against the target project; review all grants, policies, and exposed schemas.
+8. Keep database credentials server-side. Do not expose the runtime login to browser/mobile clients.
+9. Local JSON/SQLite must continue working without Supabase.
 
 Do not use `auth.uid()` for the local ORIENT owner session: it is not a Supabase Auth user. Policies use transaction-local `app.orient_tenant_id` and `app.orient_owner_id` values installed by the trusted server. PostgreSQL custom settings are user-settable: a caller with arbitrary SQL under `orient_runtime_login` can spoof them. This design protects against omitted tenant predicates and accidental cross-scope queries, but it does not defend against SQL injection/arbitrary SQL or a compromised application process. If that threat is in scope, add a database-verifiable signed-principal mechanism before claiming hostile-client isolation.
 
@@ -106,7 +108,7 @@ Unit coverage now verifies:
 - nested savepoints and rejection of principal switching;
 - transaction-local context re-established across pooled connection leases.
 
-The repository-binding milestone is implemented for every repository exposed by `PostgresPersistence`; remaining work is independent security verification of the runtime connection credential, pool lifecycle, GUC threat boundary, hosted grants/advisors, and an explicitly approved development migration. No Supabase schema or project setting is changed by this contract.
+The repository-binding milestone is implemented for every repository exposed by `PostgresPersistence`; remaining work is hosted-project verification of the actual runtime connection credential, grants/advisors, pooler behavior, GUC threat boundary, and an explicitly approved development migration. The repository CI now verifies the runtime login and pooled role reset against a real PostgreSQL 17 service. No Supabase schema or project setting is changed by this contract.
 
 
 ## 9. Database role and RLS implementation
