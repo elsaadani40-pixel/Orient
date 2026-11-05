@@ -1077,20 +1077,35 @@ test('PostgreSQL role provisioning normalizes unexpected memberships and multipl
       }
     ]);
   } finally {
-    await pool.query('REVOKE ' + helperRole + ' FROM orient_migrator').catch(() => {});
     const cleanupClient = await pool.connect();
     try {
       await cleanupClient.query('BEGIN');
-      await cleanupClient.query('SET LOCAL ROLE ' + grantorRole);
-      await cleanupClient.query('REVOKE orient_owner FROM orient_runtime_login');
+      const residual = await cleanupClient.query(
+        'SELECT granted.rolname AS granted_role, member.rolname AS member_role, grantor.rolname AS grantor_role ' +
+        'FROM pg_auth_members membership ' +
+        'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
+        'JOIN pg_roles member ON member.oid = membership.member ' +
+        'JOIN pg_roles grantor ON grantor.oid = membership.grantor ' +
+        'WHERE (granted.rolname = $1 AND member.rolname = ANY($2::text[])) ' +
+        'OR (granted.rolname = $3 AND member.rolname = $4) ' +
+        'ORDER BY CASE WHEN member.rolname = $5 THEN 0 ELSE 1 END',
+        ['orient_owner', ['orient_runtime_login', grantorRole], helperRole, 'orient_migrator', 'orient_runtime_login']
+      );
+      for (const membership of residual.rows) {
+        const quoteIdentifier = value => '"' + value.replace(/"/g, '""') + '"';
+        await cleanupClient.query('SET LOCAL ROLE ' + quoteIdentifier(membership.grantor_role));
+        await cleanupClient.query(
+          'REVOKE ' + quoteIdentifier(membership.granted_role) +
+          ' FROM ' + quoteIdentifier(membership.member_role)
+        );
+      }
       await cleanupClient.query('COMMIT');
-    } catch {
+    } catch (error) {
       await cleanupClient.query('ROLLBACK').catch(() => {});
+      throw error;
     } finally {
       cleanupClient.release();
     }
-    await pool.query('REVOKE orient_owner FROM orient_runtime_login').catch(() => {});
-    await pool.query('REVOKE orient_owner FROM ' + grantorRole).catch(() => {});
     await pool.query('DROP ROLE IF EXISTS ' + helperRole);
     await pool.query('DROP ROLE IF EXISTS ' + grantorRole);
   }
