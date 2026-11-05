@@ -1043,6 +1043,21 @@ test('PostgreSQL role provisioning normalizes unexpected memberships and multipl
     }
     await pool.query('GRANT ' + helperRole + ' TO orient_migrator WITH ADMIN OPTION');
 
+    const initialGrantors = await pool.query(
+      'SELECT grantor.rolname AS grantor_role, membership.admin_option ' +
+      'FROM pg_auth_members membership ' +
+      'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
+      'JOIN pg_roles member ON member.oid = membership.member ' +
+      'JOIN pg_roles grantor ON grantor.oid = membership.grantor ' +
+      'WHERE granted.rolname = $1 AND member.rolname = $2 ' +
+      'ORDER BY grantor.rolname',
+      ['orient_owner', 'orient_runtime_login']
+    );
+    assert.deepEqual(initialGrantors.rows, [
+      { grantor_role: 'orient_test_membership_grantor', admin_option: true },
+      { grantor_role: 'postgres', admin_option: true }
+    ]);
+
     await provisionPostgresRoles({
       pool,
       migratorPassword: crypto.randomBytes(24).toString('hex'),
