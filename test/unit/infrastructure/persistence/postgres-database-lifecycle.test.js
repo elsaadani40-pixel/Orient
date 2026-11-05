@@ -64,6 +64,37 @@ test('PostgreSQL runtime initialization rejects an outdated schema', async () =>
   );
 });
 
+test('PostgreSQL migration role is transaction-local and cannot leak through a pooled connection', async () => {
+  const calls = [];
+  let releases = 0;
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (/SELECT COALESCE\\(MAX\\(version\\),0\\)::int AS version/.test(sql)) {
+        return { rows: [{ version: Math.max(...MIGRATIONS.map(migration => migration.version)) }] };
+      }
+      return { rows: [] };
+    },
+    release() { releases += 1; }
+  };
+  const database = new PostgresDatabase({
+    pool: {
+      async query() { throw new Error('migration must use its checked-out client'); },
+      async connect() { return client; }
+    }
+  });
+
+  const result = await database.migrate({ role: 'orient_owner' });
+
+  assert.equal(result.schemaVersion, Math.max(...MIGRATIONS.map(migration => migration.version)));
+  assert.equal(calls[0], 'BEGIN');
+  assert.equal(calls[1], 'SET LOCAL ROLE orient_owner');
+  assert.ok(calls.indexOf('SET LOCAL ROLE orient_owner') < calls.indexOf('COMMIT'));
+  assert.equal(calls.some(sql => /^SET ROLE /i.test(sql)), false);
+  assert.equal(calls.at(-1), 'COMMIT');
+  assert.equal(releases, 1);
+});
+
 const validPrincipal = (overrides = {}) => ({
   principalId: '11111111-1111-4111-8111-111111111111',
   ownerId: '11111111-1111-4111-8111-111111111111',
