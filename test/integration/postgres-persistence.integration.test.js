@@ -1029,9 +1029,18 @@ test('PostgreSQL role provisioning normalizes unexpected memberships and multipl
     );
     await pool.query('GRANT orient_owner TO orient_runtime_login WITH ADMIN OPTION');
     await pool.query('GRANT orient_owner TO ' + grantorRole + ' WITH ADMIN OPTION');
-    await pool.query('SET ROLE ' + grantorRole);
-    await pool.query('GRANT orient_owner TO orient_runtime_login WITH ADMIN OPTION');
-    await pool.query('RESET ROLE');
+    const grantorClient = await pool.connect();
+    try {
+      await grantorClient.query('BEGIN');
+      await grantorClient.query('SET LOCAL ROLE ' + grantorRole);
+      await grantorClient.query('GRANT orient_owner TO orient_runtime_login WITH ADMIN OPTION');
+      await grantorClient.query('COMMIT');
+    } catch (error) {
+      await grantorClient.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      grantorClient.release();
+    }
     await pool.query('GRANT ' + helperRole + ' TO orient_migrator WITH ADMIN OPTION');
 
     await provisionPostgresRoles({
@@ -1069,12 +1078,17 @@ test('PostgreSQL role provisioning normalizes unexpected memberships and multipl
     ]);
   } finally {
     await pool.query('REVOKE ' + helperRole + ' FROM orient_migrator').catch(() => {});
-    await pool.query('SET ROLE ' + grantorRole).then(async () => {
-      await pool.query('REVOKE orient_owner FROM orient_runtime_login');
-      await pool.query('RESET ROLE');
-    }).catch(async () => {
-      await pool.query('RESET ROLE').catch(() => {});
-    });
+    const cleanupClient = await pool.connect();
+    try {
+      await cleanupClient.query('BEGIN');
+      await cleanupClient.query('SET LOCAL ROLE ' + grantorRole);
+      await cleanupClient.query('REVOKE orient_owner FROM orient_runtime_login');
+      await cleanupClient.query('COMMIT');
+    } catch {
+      await cleanupClient.query('ROLLBACK').catch(() => {});
+    } finally {
+      cleanupClient.release();
+    }
     await pool.query('REVOKE orient_owner FROM orient_runtime_login').catch(() => {});
     await pool.query('REVOKE orient_owner FROM ' + grantorRole).catch(() => {});
     await pool.query('DROP ROLE IF EXISTS ' + helperRole);
