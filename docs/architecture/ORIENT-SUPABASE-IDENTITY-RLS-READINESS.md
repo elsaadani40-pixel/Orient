@@ -128,6 +128,10 @@ The runtime role is not granted DDL, TRUNCATE, REFERENCES, TRIGGER, or migration
 
 The PostgreSQL integration suite now provisions the role topology, applies migrations as `orient_owner`, and verifies:
 - runtime role is not superuser, table owner, or BYPASSRLS;
+- runtime login has no CREATEDB, CREATEROLE, or REPLICATION attributes;
+- runtime login has no CREATE privilege on the `public` schema;
+- runtime login has only SELECT/INSERT/UPDATE/DELETE on application tables, with no TRUNCATE, REFERENCES, or TRIGGER privilege;
+- runtime login has sequence USAGE but not sequence UPDATE privilege;
 - tenant-A SELECT cannot see tenant-B rows;
 - UPDATE and DELETE against tenant-B rows affect zero rows;
 - INSERT with a mismatched tenant is rejected by RLS;
