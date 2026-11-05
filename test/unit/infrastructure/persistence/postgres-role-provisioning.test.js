@@ -14,10 +14,11 @@ test('PostgreSQL role provisioning revokes broad default privileges for future o
       }
       if (sql.includes('FROM pg_auth_members')) {
         return {
-          rowCount: 2,
+          rowCount: 3,
           rows: [
             { granted_role: 'orient_owner', member_role: 'orient_runtime_login' },
-            { granted_role: 'unrelated_admin', member_role: 'orient_migrator' }
+            { granted_role: 'unrelated_admin', member_role: 'orient_migrator' },
+            { granted_role: 'orient_owner', member_role: 'orient_migrator' }
           ]
         };
       }
@@ -48,6 +49,7 @@ test('PostgreSQL role provisioning revokes broad default privileges for future o
   assert.ok(sql.includes('GRANT USAGE ON SCHEMA public TO orient_runtime'));
   assert.ok(sql.includes('REVOKE "orient_owner" FROM "orient_runtime_login"'));
   assert.ok(sql.includes('REVOKE "unrelated_admin" FROM "orient_migrator"'));
+  assert.ok(sql.includes('REVOKE "orient_owner" FROM "orient_migrator"'));
   assert.ok(sql.includes('GRANT orient_owner TO orient_migrator'));
   assert.ok(sql.includes('GRANT orient_runtime TO orient_runtime_login'));
 });
