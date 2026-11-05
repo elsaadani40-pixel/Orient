@@ -92,6 +92,50 @@ test('PostgreSQL runtime login preflight validates a real least-privilege connec
   }
 });
 
+test('PostgreSQL migration uses the restricted migrator login and resets owner role after migration', async () => {
+  const migratorPassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword,
+    runtimePassword: crypto.randomBytes(24).toString('hex')
+  });
+
+  const migrationUrl = new URL(process.env.DATABASE_URL);
+  migrationUrl.username = 'orient_migrator';
+  migrationUrl.password = migratorPassword;
+  const migrationPool = new Pool({
+    connectionString: migrationUrl.toString(),
+    max: 1,
+    application_name: 'orient-migration-role-integration'
+  });
+
+  try {
+    const { assertMigrationDatabaseRole } = require('../../src/infrastructure/persistence/postgres/assert-migration-database-role');
+    assert.deepEqual(await assertMigrationDatabaseRole(migrationPool), {
+      role: 'orient_migrator',
+      targetRole: 'orient_owner',
+      leastPrivilege: true
+    });
+
+    const migrationPersistence = new PostgresPersistence({ pool: migrationPool });
+    const result = await migrationPersistence.migrate({ role: 'orient_owner' });
+    assert.equal(result.schemaVersion, 9);
+
+    const identityAfterMigration = await migrationPool.query(
+      'SELECT session_user::text AS session_user, current_user::text AS current_user'
+    );
+    assert.equal(identityAfterMigration.rows[0].session_user, 'orient_migrator');
+    assert.equal(identityAfterMigration.rows[0].current_user, 'orient_migrator');
+    assert.deepEqual(await assertMigrationDatabaseRole(migrationPool), {
+      role: 'orient_migrator',
+      targetRole: 'orient_owner',
+      leastPrivilege: true
+    });
+  } finally {
+    await migrationPool.end();
+  }
+});
+
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
   const a = await persistence.idempotency.begin({ executionId: 'exec-a', step: 1, tool: 'memory.read', tenantId: 'tenant-a' });
   const b = await persistence.idempotency.begin({ executionId: 'exec-a', step: 1, tool: 'memory.read', tenantId: 'tenant-b' });
