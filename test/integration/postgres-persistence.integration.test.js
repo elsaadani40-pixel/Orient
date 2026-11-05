@@ -1014,15 +1014,24 @@ test('PostgreSQL owner RLS blocks another owner chat profile', async () => {
 });
 
 
-test('PostgreSQL role provisioning normalizes unexpected memberships on a real server', async () => {
+test('PostgreSQL role provisioning normalizes unexpected memberships and multiple grantors on a real server', async () => {
   const helperRole = 'orient_test_unrelated_admin';
+  const grantorRole = 'orient_test_membership_grantor';
   const managedRoles = ['orient_owner', 'orient_migrator', 'orient_runtime', 'orient_runtime_login'];
   try {
     await pool.query('DROP ROLE IF EXISTS ' + helperRole);
+    await pool.query('DROP ROLE IF EXISTS ' + grantorRole);
     await pool.query(
       'CREATE ROLE ' + helperRole + ' NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
     );
+    await pool.query(
+      'CREATE ROLE ' + grantorRole + ' NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
+    );
     await pool.query('GRANT orient_owner TO orient_runtime_login WITH ADMIN OPTION');
+    await pool.query('GRANT orient_owner TO ' + grantorRole + ' WITH ADMIN OPTION');
+    await pool.query('SET ROLE ' + grantorRole);
+    await pool.query('GRANT orient_owner TO orient_runtime_login WITH ADMIN OPTION');
+    await pool.query('RESET ROLE');
     await pool.query('GRANT ' + helperRole + ' TO orient_migrator WITH ADMIN OPTION');
 
     await provisionPostgresRoles({
@@ -1060,6 +1069,9 @@ test('PostgreSQL role provisioning normalizes unexpected memberships on a real s
     ]);
   } finally {
     await pool.query('REVOKE ' + helperRole + ' FROM orient_migrator').catch(() => {});
+    await pool.query('REVOKE orient_owner FROM orient_runtime_login').catch(() => {});
+    await pool.query('REVOKE orient_owner FROM ' + grantorRole).catch(() => {});
     await pool.query('DROP ROLE IF EXISTS ' + helperRole);
+    await pool.query('DROP ROLE IF EXISTS ' + grantorRole);
   }
 });
