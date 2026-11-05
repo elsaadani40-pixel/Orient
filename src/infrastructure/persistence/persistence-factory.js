@@ -55,7 +55,6 @@ function createPersistence(config) {
       await assertRuntimeDatabaseRole(pool);
       return adapter.initialize();
     },
-    migrate: () => adapter.migrate(),
     close: () => pool.end()
   };
 }
