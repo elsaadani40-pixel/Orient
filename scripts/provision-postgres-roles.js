@@ -27,13 +27,7 @@ async function normalizeManagedRoleMemberships(client) {
     'WHERE granted.rolname = ANY($1::text[]) OR member.rolname = ANY($1::text[])',
     [managedRoles]
   );
-  const expected = new Set([
-    'orient_owner:orient_migrator',
-    'orient_runtime:orient_runtime_login'
-  ]);
   for (const membership of memberships.rows) {
-    const key = membership.granted_role + ':' + membership.member_role;
-    if (expected.has(key)) continue;
     await client.query(
       'REVOKE ' + quoteIdentifier(membership.granted_role) +
       ' FROM ' + quoteIdentifier(membership.member_role)
