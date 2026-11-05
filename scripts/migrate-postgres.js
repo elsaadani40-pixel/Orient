@@ -3,6 +3,7 @@
 
 const { Pool } = require('pg');
 const { PostgresPersistence } = require('../src/infrastructure/persistence/postgres/postgres-persistence');
+const { assertMigrationDatabaseRole } = require('../src/infrastructure/persistence/postgres/assert-migration-database-role');
 
 async function main() {
   const connectionString = process.env.ORIENT_MIGRATION_DATABASE_URL;
@@ -24,6 +25,7 @@ async function main() {
   });
 
   try {
+    await assertMigrationDatabaseRole(pool);
     const persistence = new PostgresPersistence({ pool });
     const result = await persistence.migrate({ role: migrationRole });
     process.stdout.write(`ORIENT PostgreSQL schema is at version ${result.schemaVersion}.\n`);
