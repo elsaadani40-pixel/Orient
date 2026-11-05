@@ -1012,3 +1012,54 @@ test('PostgreSQL owner RLS blocks another owner chat profile', async () => {
     await pool.query('DELETE FROM owner_chat_messages WHERE message_id = ANY($1::text[])',[[messageA,messageB]]);
   }
 });
+
+
+test('PostgreSQL role provisioning normalizes unexpected memberships on a real server', async () => {
+  const helperRole = 'orient_test_unrelated_admin';
+  const managedRoles = ['orient_owner', 'orient_migrator', 'orient_runtime', 'orient_runtime_login'];
+  try {
+    await pool.query('DROP ROLE IF EXISTS ' + helperRole);
+    await pool.query(
+      'CREATE ROLE ' + helperRole + ' NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
+    );
+    await pool.query('GRANT orient_owner TO orient_runtime_login WITH ADMIN OPTION');
+    await pool.query('GRANT ' + helperRole + ' TO orient_migrator WITH ADMIN OPTION');
+
+    await provisionPostgresRoles({
+      pool,
+      migratorPassword: crypto.randomBytes(24).toString('hex'),
+      runtimePassword: crypto.randomBytes(24).toString('hex')
+    });
+
+    const memberships = await pool.query(
+      'SELECT granted.rolname AS granted_role, member.rolname AS member_role, ' +
+      'membership.admin_option, membership.inherit_option, membership.set_option ' +
+      'FROM pg_auth_members membership ' +
+      'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
+      'JOIN pg_roles member ON member.oid = membership.member ' +
+      'WHERE granted.rolname = ANY($1::text[]) OR member.rolname = ANY($1::text[]) ' +
+      'ORDER BY granted.rolname, member.rolname',
+      [managedRoles]
+    );
+
+    assert.deepEqual(memberships.rows, [
+      {
+        granted_role: 'orient_owner',
+        member_role: 'orient_migrator',
+        admin_option: false,
+        inherit_option: false,
+        set_option: true
+      },
+      {
+        granted_role: 'orient_runtime',
+        member_role: 'orient_runtime_login',
+        admin_option: false,
+        inherit_option: true,
+        set_option: true
+      }
+    ]);
+  } finally {
+    await pool.query('REVOKE ' + helperRole + ' FROM orient_migrator').catch(() => {});
+    await pool.query('DROP ROLE IF EXISTS ' + helperRole);
+  }
+});
