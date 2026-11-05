@@ -272,7 +272,7 @@ test('migration discards its pooled client when rollback after commit failure fa
   let releasedWith;
   const client = {
     async query(sql) {
-      if (sql === 'SELECT COALESCE(MAX(version),0)::int AS version') {
+      if (sql.includes('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations')) {
         return { rows: [{ version: latest }] };
       }
       if (sql === 'COMMIT') throw commitError;
