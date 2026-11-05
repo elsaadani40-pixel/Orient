@@ -20,18 +20,66 @@ function quoteIdentifier(value) {
 async function normalizeManagedRoleMemberships(client) {
   const managedRoles = ['orient_owner', 'orient_migrator', 'orient_runtime', 'orient_runtime_login'];
   const memberships = await client.query(
-    'SELECT granted.rolname AS granted_role, member.rolname AS member_role ' +
+    'SELECT granted.rolname AS granted_role, member.rolname AS member_role, ' +
+    'grantor.rolname AS grantor_role, grantor.rolsuper AS grantor_is_superuser, ' +
+    'membership.admin_option ' +
     'FROM pg_auth_members membership ' +
     'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
     'JOIN pg_roles member ON member.oid = membership.member ' +
+    'JOIN pg_roles grantor ON grantor.oid = membership.grantor ' +
     'WHERE granted.rolname = ANY($1::text[]) OR member.rolname = ANY($1::text[])',
     [managedRoles]
   );
-  for (const membership of memberships.rows) {
+
+  const rows = memberships.rows;
+  const keyOf = row => [row.granted_role, row.member_role, row.grantor_role].join('\\u0000');
+  const byKey = new Map(rows.map(row => [keyOf(row), row]));
+  const outgoing = new Map(rows.map(row => [keyOf(row), new Set()]));
+  const indegree = new Map(rows.map(row => [keyOf(row), 0]));
+
+  // A grantor's ADMIN OPTION membership must remain until every membership
+  // it granted in that role has been revoked. Build those dependencies first.
+  for (const membership of rows) {
+    if (membership.grantor_is_superuser) continue;
+    const dependentKey = keyOf(membership);
+    for (const grantorAdminMembership of rows) {
+      if (
+        grantorAdminMembership.granted_role === membership.granted_role &&
+        grantorAdminMembership.member_role === membership.grantor_role &&
+        grantorAdminMembership.admin_option
+      ) {
+        const sourceKey = keyOf(grantorAdminMembership);
+        if (sourceKey !== dependentKey && !outgoing.get(dependentKey).has(sourceKey)) {
+          outgoing.get(dependentKey).add(sourceKey);
+          indegree.set(sourceKey, indegree.get(sourceKey) + 1);
+        }
+      }
+    }
+  }
+
+  const ready = rows.filter(row => indegree.get(keyOf(row)) === 0);
+  const ordered = [];
+  while (ready.length > 0) {
+    const membership = ready.shift();
+    const key = keyOf(membership);
+    ordered.push(membership);
+    for (const dependentKey of outgoing.get(key)) {
+      const next = indegree.get(dependentKey) - 1;
+      indegree.set(dependentKey, next);
+      if (next === 0) ready.push(byKey.get(dependentKey));
+    }
+  }
+  if (ordered.length !== rows.length) {
+    throw new Error('Managed PostgreSQL role memberships contain an unresolvable grant dependency cycle.');
+  }
+
+  for (const membership of ordered) {
+    await client.query('SET LOCAL ROLE ' + quoteIdentifier(membership.grantor_role));
     await client.query(
       'REVOKE ' + quoteIdentifier(membership.granted_role) +
       ' FROM ' + quoteIdentifier(membership.member_role)
     );
+    await client.query('RESET ROLE');
   }
 }
 
