@@ -10,6 +10,37 @@ function quoteLiteral(value) {
   return "'" + value.replace(/'/g, "''") + "'";
 }
 
+function quoteIdentifier(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError('A PostgreSQL identifier is required.');
+  }
+  return '"' + value.replace(/"/g, '""') + '"';
+}
+
+async function normalizeManagedRoleMemberships(client) {
+  const managedRoles = ['orient_owner', 'orient_migrator', 'orient_runtime', 'orient_runtime_login'];
+  const memberships = await client.query(
+    'SELECT granted.rolname AS granted_role, member.rolname AS member_role ' +
+    'FROM pg_auth_members membership ' +
+    'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
+    'JOIN pg_roles member ON member.oid = membership.member ' +
+    'WHERE granted.rolname = ANY($1::text[]) OR member.rolname = ANY($1::text[])',
+    [managedRoles]
+  );
+  const expected = new Set([
+    'orient_owner:orient_migrator',
+    'orient_runtime:orient_runtime_login'
+  ]);
+  for (const membership of memberships.rows) {
+    const key = membership.granted_role + ':' + membership.member_role;
+    if (expected.has(key)) continue;
+    await client.query(
+      'REVOKE ' + quoteIdentifier(membership.granted_role) +
+      ' FROM ' + quoteIdentifier(membership.member_role)
+    );
+  }
+}
+
 async function ensureRole(client, name, options, password = null) {
   const found = await client.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [name]);
   const passwordSql = password === null ? '' : ' PASSWORD ' + quoteLiteral(password);
@@ -34,6 +65,7 @@ async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword 
     await ensureRole(client, 'orient_runtime', 'NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS');
     await ensureRole(client, 'orient_migrator', 'LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', migratorPassword);
     await ensureRole(client, 'orient_runtime_login', 'LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', runtimePassword);
+    await normalizeManagedRoleMemberships(client);
     await client.query('GRANT orient_owner TO orient_migrator');
     await client.query('GRANT orient_runtime TO orient_runtime_login');
     await client.query('GRANT USAGE, CREATE ON SCHEMA public TO orient_owner');
