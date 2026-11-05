@@ -27,7 +27,8 @@ async function normalizeManagedRoleMemberships(client) {
     'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
     'JOIN pg_roles member ON member.oid = membership.member ' +
     'JOIN pg_roles grantor ON grantor.oid = membership.grantor ' +
-    'WHERE granted.rolname = ANY($1::text[]) OR member.rolname = ANY($1::text[])',
+    'WHERE granted.rolname = ANY($1::text[]) OR member.rolname = ANY($1::text[]) ' +
+    'OR grantor.rolname = ANY($1::text[])',
     [managedRoles]
   );
 
