@@ -109,8 +109,11 @@ test('expiring trust manifests require schema version 2', () => {
   assert.equal(manifest.schemaVersion, 2);
   assert.equal(verifyTrustManifest({ ...manifest, schemaVersion: 1 }, f.trustedRootKeys), null);
   assert.throws(() => signTrustManifest({
-    ...manifest,
-    schemaVersion: 1
+    schemaVersion: 1,
+    version: manifest.version,
+    issuedAt: manifest.issuedAt,
+    expiresAt: manifest.expiresAt,
+    keys: manifest.keys
   }, { rootKeyId: 'offline-root-1', rootPrivateKey: f.rootPrivateKey }),
   error => error.code === 'EVIDENCE_TRUST_MANIFEST_VERSION_INVALID');
 });
