@@ -156,7 +156,9 @@ function recoveryPolicyDigest(policy) {
   const normalized = normalizeRecoveryPolicy(policy);
   return sha256(Buffer.from(canonicalJson({
     threshold: normalized.threshold,
-    authorities: normalized.authorities.map(({ keyId, fingerprint }) => ({ keyId, fingerprint }))
+    authorities: normalized.authorities.map(({ keyId, fingerprint, validFrom, revokedAt }) => ({
+      keyId, fingerprint, validFrom: validFrom || null, revokedAt: revokedAt || null
+    }))
   }), 'utf8'));
 }
 
@@ -280,6 +282,8 @@ function verifyRootTransition(envelope, {
     if (!isPlainRecord(expectedState) || !Number.isSafeInteger(expectedState.rootEpoch) ||
         !Number.isSafeInteger(expectedState.transitionSequence) || expectedState.transitionSequence < 0 ||
         (expectedState.transitionSequence === 0 ? expectedState.transitionDigest !== null : !HASH_PATTERN.test(expectedState.transitionDigest || '')) ||
+        !Array.isArray(expectedState.usedRootKeyIds) ||
+        !expectedState.usedRootKeyIds.includes(payload.previousRootKeyId) ||
         expectedState.rootEpoch !== payload.previousRootEpoch ||
         expectedState.rootKeyId !== payload.previousRootKeyId ||
         expectedState.rootFingerprint !== payload.previousRootFingerprint ||
@@ -304,8 +308,9 @@ function verifyRootTransition(envelope, {
         (payload.mode === 'planned-rotation' && !validAt(currentRootEntry, payload.issuedAt, now))) return null;
     const currentRootPublicKey = publicKeyObject(currentRootKeyText, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
 
-    if (Array.isArray(expectedState.usedRootKeyIds) &&
-        expectedState.usedRootKeyIds.includes(payload.nextRootKeyId)) return null;
+    if (expectedState.usedRootKeyIds.includes(payload.nextRootKeyId) ||
+        (Array.isArray(expectedState.usedRootFingerprints) &&
+          expectedState.usedRootFingerprints.includes(payload.nextRootFingerprint))) return null;
     if (publicKeyFingerprint(payload.nextRootPublicKey) === payload.previousRootFingerprint) return null;
     const nextRootPublicKey = publicKeyObject(payload.nextRootPublicKey, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
 
@@ -326,11 +331,14 @@ function verifyRootTransition(envelope, {
           authorizationSignatures.length < policy.threshold) return null;
       const authorities = new Map(policy.authorities.map(authority => [authority.keyId, authority]));
       const seen = new Set();
+      let previousSignerId = null;
       for (const signature of authorizationSignatures) {
         assertFields(signature, ['keyId', 'signature'], 'EVIDENCE_ROOT_TRANSITION_SIGNATURE_INVALID');
         const keyId = readDataProperty(signature, 'keyId', 'EVIDENCE_ROOT_TRANSITION_SIGNATURE_INVALID');
-        if (typeof keyId !== 'string' || seen.has(keyId)) return null;
+        if (typeof keyId !== 'string' || seen.has(keyId) ||
+            (previousSignerId !== null && keyId.localeCompare(previousSignerId) <= 0)) return null;
         seen.add(keyId);
+        previousSignerId = keyId;
         const authority = authorities.get(keyId);
         if (!authority || !validAt(authority, payload.issuedAt, now) ||
             !verifyBytes(TRANSITION_DOMAIN, payload,
