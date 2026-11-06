@@ -5,6 +5,11 @@ const crypto = require('node:crypto');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const HEADER = Object.freeze({ alg: 'EdDSA', typ: 'JWT' });
+const CLAIM_KEYS = new Set([
+  'iss', 'aud', 'sub', 'owner_id', 'tenant_id', 'workspace_id', 'session_id',
+  'scope', 'iat', 'nbf', 'exp', 'jti', 'kid', 'challenge_id',
+  'operation', 'operation_id', 'request_id'
+]);
 
 function fail(code) {
   throw Object.assign(new Error('Identity token rejected'), { code });
@@ -17,7 +22,9 @@ function encode(value) {
 function decode(segment) {
   if (typeof segment !== 'string' || !BASE64URL.test(segment)) fail('IDENTITY_TOKEN_MALFORMED');
   try {
-    const value = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
+    const decoded = Buffer.from(segment, 'base64url');
+    if (decoded.toString('base64url') !== segment) fail('IDENTITY_TOKEN_MALFORMED');
+    const value = JSON.parse(decoded.toString('utf8'));
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail('IDENTITY_TOKEN_MALFORMED');
     return value;
   } catch (error) {
@@ -31,6 +38,9 @@ function nonEmpty(value, max = 256) {
 }
 
 function validateClaims(claims, { issuer, audience, nowSeconds, maxTtlSeconds, clockToleranceSeconds }) {
+  if (Object.keys(claims).some(key => !CLAIM_KEYS.has(key))) {
+    fail('IDENTITY_TOKEN_CLAIMS_REJECTED');
+  }
   if (claims.iss !== issuer || claims.aud !== audience) fail('IDENTITY_TOKEN_AUDIENCE_REJECTED');
   if (!UUID.test(claims.owner_id || '') || claims.sub !== claims.owner_id ||
       !UUID.test(claims.session_id || '') ||
@@ -171,7 +181,15 @@ class Ed25519IdentityTokenVerifier {
     if (!key) fail('IDENTITY_TOKEN_KEY_UNKNOWN');
     const signingInput = parts[0] + '.' + parts[1];
     let signature;
-    try { signature = Buffer.from(parts[2], 'base64url'); } catch { fail('IDENTITY_TOKEN_MALFORMED'); }
+    try {
+      signature = Buffer.from(parts[2], 'base64url');
+      if (signature.toString('base64url') !== parts[2] || signature.length !== 64) {
+        fail('IDENTITY_TOKEN_MALFORMED');
+      }
+    } catch (error) {
+      if (error.code === 'IDENTITY_TOKEN_MALFORMED') throw error;
+      fail('IDENTITY_TOKEN_MALFORMED');
+    }
     if (!crypto.verify(null, Buffer.from(signingInput), key, signature)) fail('IDENTITY_TOKEN_SIGNATURE_INVALID');
 
     const verified = validateClaims(claims, {
