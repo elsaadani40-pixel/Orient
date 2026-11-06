@@ -268,10 +268,15 @@ test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RL
     );
   } finally {
     await runtimePool.end();
-    await pool.query(
-      'DELETE FROM public.execution_evidence WHERE tenant_id IN ($1,$2)',
-      ['tenant-evidence-a', 'tenant-evidence-b']
-    );
+    await pool.query('ALTER TABLE public.execution_evidence DISABLE TRIGGER ALL');
+    try {
+      await pool.query(
+        'DELETE FROM public.execution_evidence WHERE tenant_id IN ($1,$2)',
+        ['tenant-evidence-a', 'tenant-evidence-b']
+      );
+    } finally {
+      await pool.query('ALTER TABLE public.execution_evidence ENABLE TRIGGER ALL');
+    }
   }
 });
 
