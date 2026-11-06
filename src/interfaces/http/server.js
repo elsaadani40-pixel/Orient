@@ -336,7 +336,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           }
           try {
             if (requestUrl.pathname === '/owner/gateway/challenges') {
-              const challenge = await gatewayIdentityRoutes.createChallenge({ ownerSession, operation: payload.operation });
+              const challenge = await gatewayIdentityRoutes.createChallenge({ ownerSession, operation: payload.operation, request: payload.request });
               sendJson(res, 201, { ok: true, challenge });
             } else {
               const identity = await gatewayIdentityRoutes.issueToken({
