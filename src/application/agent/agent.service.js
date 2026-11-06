@@ -17,6 +17,13 @@ class AgentService {
       throw new AppError('مفتاح منع التكرار غير صالح', 400, 'IDEMPOTENCY_KEY_REQUIRED');
     }
 
+    if (ownerSessionContext !== null) {
+      if (typeof this.runtime.assertOwnerSessionContext !== 'function') {
+        throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
+      }
+      await this.runtime.assertOwnerSessionContext(ownerSessionContext);
+    }
+
     const repository = this.runtime.persistence?.idempotency;
     if (!repository || typeof repository.begin !== 'function' ||
         typeof repository.complete !== 'function' || typeof repository.fail !== 'function') {
