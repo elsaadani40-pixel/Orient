@@ -9,6 +9,7 @@ const { AnchoredTrustManifestAcceptanceService } = require('./anchored-trust-man
 class TrustManifestAcceptanceService {
   constructor({
     trustedRootKeys,
+    rootTransitionLedger,
     versionStore,
     externalAnchorStore,
     authorize,
@@ -17,6 +18,7 @@ class TrustManifestAcceptanceService {
   } = {}) {
     this.anchoredService = new AnchoredTrustManifestAcceptanceService({
       trustedRootKeys,
+      rootTransitionLedger,
       versionStore,
       externalAnchorStore,
       authorize,
