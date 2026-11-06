@@ -137,12 +137,20 @@ test('manifest acceptance uses reconstructed active root and rejects retired-roo
   const oldPublic = oldRoot.publicKey.export({ type: 'spki', format: 'pem' });
   const nextPublic = nextRoot.publicKey.export({ type: 'spki', format: 'pem' });
   const evidencePublic = evidence.publicKey.export({ type: 'spki', format: 'pem' });
+  const initialRoots = { 'root-1': { publicKey: oldPublic } };
+  const initialManifests = [1, 2, 3, 4].map(version => signTrustManifest({
+    version,
+    issuedAt: `2026-11-06T10:00:0${version}.000Z`,
+    expiresAt: `2026-12-06T10:00:0${version}.000Z`,
+    keys: { 'evidence-key-1': { publicKey: evidencePublic } }
+  }, { rootKeyId: 'root-1', rootPrivateKey: oldPrivate }));
   const rootState = {
     rootEpoch: 2,
     rootKeyId: 'root-2',
     rootFingerprint: crypto.createHash('sha256').update(nextRoot.publicKey.export({ type: 'spki', format: 'der' })).digest('hex'),
     manifestHeadVersion: 4,
-    manifestHeadDigest: 'a'.repeat(64),
+    manifestHeadDigest: require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest')
+      .verifyTrustManifest(initialManifests[3], initialRoots).digest,
     trustedRootKeys: {
       'root-1': { publicKey: oldPublic, revokedAt: '2026-11-06T10:02:00.000Z' },
       'root-2': { publicKey: nextPublic, validFrom: '2026-11-06T10:02:00.000Z' }
@@ -150,6 +158,9 @@ test('manifest acceptance uses reconstructed active root and rejects retired-roo
   };
   const rootTransitionLedger = { async readState() { return rootState; } };
   const backend = new MemoryImmutableBackend();
+  for (const manifest of initialManifests) {
+    backend.objects.set(manifestKey(manifest.version), canonicalJson(manifest));
+  }
   const externalAnchorStore = new ExternalTrustManifestAnchorStore({
     backend,
     trustedRootKeysProvider: async () => (await rootTransitionLedger.readState()).trustedRootKeys
@@ -278,7 +289,7 @@ test('manifest acceptance fails closed when reconstructed root history is unavai
     versionStore: f.versionStore,
     externalAnchorStore: f.externalAnchorStore,
     authorize: async () => true,
-    now: f.now
+    now: () => f.now
   });
   await assert.rejects(
     service.accept({ manifest: f.create(1), principal: { id: 'owner' } }),
