@@ -114,6 +114,20 @@ class AnchoredTrustManifestAcceptanceService {
     }
 
     const externalHead = await this.externalAnchorStore.readHead();
+    const cachedState = await this.versionStore.read();
+    if (cachedState !== null && (!cachedState || !Number.isSafeInteger(cachedState.version) ||
+        cachedState.version < 1 || !/^[a-f0-9]{64}$/.test(cachedState.digest || ''))) {
+      fail('EVIDENCE_TRUST_MANIFEST_STORE_INVALID', 'Monotonic trust cache is malformed');
+    }
+    if (cachedState && externalHead && cachedState.version > externalHead.version) {
+      fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_BEHIND_CACHE', 'External trust history is behind the local cache; refusing to append');
+    }
+    if (cachedState && cachedState.version > verified.version) {
+      fail('EVIDENCE_TRUST_MANIFEST_ROLLBACK', 'Manifest is older than the local monotonic trust cache');
+    }
+    if (cachedState && cachedState.version === verified.version && cachedState.digest !== verified.digest) {
+      fail('EVIDENCE_TRUST_MANIFEST_VERSION_CONFLICT', 'Manifest conflicts with the local monotonic trust cache');
+    }
     if (externalHead && verified.version === externalHead.version) {
       if (verified.digest !== externalHead.digest) {
         fail('EVIDENCE_TRUST_MANIFEST_VERSION_CONFLICT', 'Manifest conflicts with the independently anchored trust head');
