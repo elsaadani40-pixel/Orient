@@ -1199,9 +1199,9 @@ test('PostgreSQL Gateway RLS isolates challenge and idempotency rows by tenant, 
      (tenant_id,idempotency_key,request_fingerprint,owner_id,session_id,challenge_id,
       operation,operation_id,request_id,status,response,created_at,completed_at)
      VALUES
-     ($1,$2,$3,$4,$5,$6,'execution.get',$7,$8,'COMPLETED,'{"ok":true}'::jsonb,$9,$9),
-     ($1,$10,$11,$12,$13,$14,'execution.get',$15,$16,'COMPLETED,'{"ok":true}'::jsonb,$9,$9),
-     ($1,$17,$18,$4,$19,$20,'execution.get',$21,$22,'COMPLETED,'{"ok":true}'::jsonb,$9,$9)`,
+     ($1,$2,$3,$4,$5,$6,'execution.get',$7,$8,'COMPLETED','{"ok":true}'::jsonb,$9,$9),
+     ($1,$10,$11,$12,$13,$14,'execution.get',$15,$16,'COMPLETED','{"ok":true}'::jsonb,$9,$9),
+     ($1,$17,$18,$4,$19,$20,'execution.get',$21,$22,'COMPLETED','{"ok":true}'::jsonb,$9,$9)`,
     [
       tenantId,keyA,fingerprintA,ownerA,sessionA,challengeA,
       crypto.randomUUID(),crypto.randomUUID(),now,
@@ -1255,8 +1255,8 @@ test('PostgreSQL Gateway RLS isolates challenge and idempotency rows by tenant, 
     await client.query('ROLLBACK');
   } finally {
     client.release();
-    await pool.query('DELETE FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key = ANY($2::text[])',[[tenantId],[keyA,keyB,keyA2]]);
-    await pool.query('DELETE FROM gateway_challenges WHERE tenant_id=$1 AND challenge_id = ANY($2::uuid[])',[[tenantId],[challengeA,challengeB,challengeA2]]);
+    await pool.query('DELETE FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key = ANY($2::text[])',[tenantId,[keyA,keyB,keyA2]]);
+    await pool.query('DELETE FROM gateway_challenges WHERE tenant_id=$1 AND challenge_id = ANY($2::uuid[])',[tenantId,[challengeA,challengeB,challengeA2]]);
   }
 });
 
