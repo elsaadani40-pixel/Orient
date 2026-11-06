@@ -310,7 +310,7 @@ test('S3 Object Lock backend rejects invalid configuration and unnamespaced keys
 });
 
 test('S3 Object Lock backend verifies actual buffered string bytes against ContentLength and limit', async () => {
-  const { backend, client, commands } = fixture({ maxObjectBytes: 16 });
+  const { backend, client, commands } = fixture({ maxObjectBytes: 32 });
   client.send = async command => {
     if (command instanceof commands.GetObjectCommand) {
       return {
@@ -329,7 +329,7 @@ test('S3 Object Lock backend verifies actual buffered string bytes against Conte
     if (command instanceof commands.GetObjectCommand) {
       return {
         ContentLength: 16,
-        Body: { transformToString: async () => 'this body is too long' }
+        Body: { transformToString: async () => 'x'.repeat(40) }
       };
     }
     throw new Error('unexpected');
