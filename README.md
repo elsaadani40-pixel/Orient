@@ -126,6 +126,20 @@ The first owner sign-in requires the configured bootstrap password. Complete the
 
 Set `ORIENT_PERSISTENCE=postgres` and `ORIENT_DATABASE_URL` (or `DATABASE_URL`) in your local environment. Use a dedicated development/test database and least-privilege credentials. Never commit real connection strings or credentials.
 
+### Optional Gateway identity issuance
+
+Gateway owner-session challenge and Ed25519 identity-token issuance is available only when PostgreSQL persistence is enabled. Configure a stable Ed25519 private key and key identifier outside the repository:
+
+```sh
+openssl genpkey -algorithm ED25519 -out orient-gateway-ed25519-private.pem
+export ORIENT_GATEWAY_SIGNING_KID='orient-gateway-2026-01'
+export ORIENT_GATEWAY_SIGNING_PRIVATE_KEY="$(cat orient-gateway-ed25519-private.pem)"
+```
+
+Keep the private key in a protected secret store or file with restrictive permissions; do not commit it, print it, or generate a replacement on every restart. On rotation, deploy the new key with a new `kid` and retain the corresponding public key for verifiers during the planned overlap window. The HTTP routes `POST /owner/gateway/challenges` and `POST /owner/gateway/identity-token` require an active owner session, same-origin request, and CSRF token.
+
+**Boundary:** these routes issue a persisted challenge and a short-lived identity token. They do not expose a generic SQL endpoint or execute protected operations. A concrete operation still requires a server-owned handler, verified token claims, and the atomic challenge/idempotency transaction.
+
 A sample environment file is provided in [`.env.example`](.env.example). Copy it to `.env` locally; `.env` is ignored by Git.
 
 ## Repository map
