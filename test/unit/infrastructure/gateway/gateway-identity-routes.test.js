@@ -12,7 +12,7 @@ test('persists owner-scoped challenge and delegates token signing', async () => 
     authority: { operationScopes: new Map([['execution.get', 'execution.read']]), issueForSession: async input => { signed.push(input); return { token: 'signed', requiredScope: 'execution.read' }; } },
     tenantId: 'tenant-a', workspaceId: 'workspace-a', now: () => 10000, challengeTtlMs: 20000
   });
-  const challenge = await routes.createChallenge({ ownerSession: { ownerId, sessionId, principal }, operation: 'execution.get' });
+  const challenge = await routes.createChallenge({ ownerSession: { ownerId, sessionId, principal }, operation: 'execution.get', request: { id: 'task-1' } });
   assert.equal(saved.length, 1);
   assert.equal(saved[0].options.principal, principal);
   assert.equal(challenge.expiresAt, 30000);
