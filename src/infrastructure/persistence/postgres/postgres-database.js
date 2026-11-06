@@ -208,6 +208,16 @@ const MIGRATIONS = [
       USING (tenant_id = current_setting('app.orient_tenant_id', true))
       WITH CHECK (tenant_id = current_setting('app.orient_tenant_id', true));
     REVOKE ALL ON TABLE gateway_challenges, gateway_idempotency FROM PUBLIC;
+    DO $gateway_grants$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.gateway_challenges, public.gateway_idempotency FROM anon';
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.gateway_challenges, public.gateway_idempotency FROM authenticated';
+      END IF;
+    END
+    $gateway_grants$;
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE gateway_challenges, gateway_idempotency TO orient_runtime;
   `},
 ];
