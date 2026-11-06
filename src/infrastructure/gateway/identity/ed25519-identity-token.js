@@ -141,7 +141,7 @@ class Ed25519IdentityTokenIssuer {
       operation_id: operationId,
       request_id: requestId
     };
-    const signingInput = encode(HEADER) + '.' + encode(claims);
+    const signingInput = encode({ ...HEADER, kid: this.kid }) + '.' + encode(claims);
     const signature = crypto.sign(null, Buffer.from(signingInput), this.privateKey).toString('base64url');
     return signingInput + '.' + signature;
   }
