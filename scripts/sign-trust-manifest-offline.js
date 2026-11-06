@@ -40,7 +40,7 @@ function readPrivateKeyFile(filePath, {
   let keyBytes;
   let bounded;
   try {
-    const before = fs.lstatSync(absolutePath);
+    const before = fs.lstatSync(absolutePath, { bigint: true });
     if (before.isSymbolicLink() || !before.isFile()) {
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private key must be a regular non-symlink file');
     }
@@ -81,7 +81,7 @@ function readPrivateKeyFile(filePath, {
       if (read === 0) break;
       total += read;
     }
-    const afterRead = fs.fstatSync(descriptor);
+    const afterRead = fs.fstatSync(descriptor, { bigint: true });
     if (total < 1 || total > MAX_PRIVATE_KEY_BYTES || afterRead.size !== total ||
         afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
         afterRead.nlink !== 1 ||
@@ -116,9 +116,9 @@ function readManifestFile(filePath) {
       fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must be a regular non-symlink file no larger than 1 MiB');
     }
     descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-    const opened = fs.fstatSync(descriptor);
+    const opened = fs.fstatSync(descriptor, { bigint: true });
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino ||
-        opened.size < 1 || opened.size > MAX_MANIFEST_BYTES) {
+        opened.size < 1n || opened.size > BigInt(MAX_MANIFEST_BYTES)) {
       fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input changed while it was being opened');
     }
     const bounded = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
@@ -130,8 +130,9 @@ function readManifestFile(filePath) {
       total += read;
     }
     const afterRead = fs.fstatSync(descriptor);
-    if (total < 1 || total > MAX_MANIFEST_BYTES || afterRead.size !== total ||
-        afterRead.dev !== before.dev || afterRead.ino !== before.ino) {
+    if (total < 1 || total > MAX_MANIFEST_BYTES || afterRead.size !== BigInt(total) ||
+        afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
+        afterRead.mtimeNs !== opened.mtimeNs || afterRead.ctimeNs !== opened.ctimeNs) {
       bounded.fill(0);
       fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input changed or exceeded its size limit while reading');
     }
