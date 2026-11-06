@@ -1406,8 +1406,8 @@ test('PostgreSQL runtime role is restricted and tenant RLS blocks cross-tenant C
   const b = 'rls-b-' + crypto.randomUUID();
   const now = new Date().toISOString();
   await pool.query(
-    'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES ($1,$2,$3,$4),($5,$6,$7,$4)',
-    [a,'tenant-a',{id:a,tenantId:'tenant-a'},now,b,'tenant-b',{id:b,tenantId:'tenant-b'}]
+    'INSERT INTO executions(execution_id,tenant_id,owner_id,payload,updated_at) VALUES ($1,$2,$3,$4,$5),($6,$7,$3,$8,$5)',
+    [a,'tenant-a','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',{id:a,tenantId:'tenant-a'},now,b,'tenant-b',{id:b,tenantId:'tenant-b'}]
   );
 
   const client = await pool.connect();
