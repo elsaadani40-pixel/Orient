@@ -83,11 +83,20 @@ class ExternalTrustManifestAnchorStore {
       (expectedRootKeyId === undefined || stored.manifest.rootKeyId === expectedRootKeyId));
   }
 
-  async readHead({ trustedRootKeys: suppliedRootKeys } = {}) {
+  async readHead({
+    trustedRootKeys: suppliedRootKeys,
+    activeRootKeyId,
+    activeFromVersion
+  } = {}) {
     const trustedRootKeys = await this.resolveTrustedRootKeys(suppliedRootKeys);
     const entries = await this.backend.list('orient/trust-manifests/v1/');
     if (!Array.isArray(entries)) {
       fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CONTRACT_INVALID', 'Backend list must return an array');
+    }
+    if (activeRootKeyId !== undefined &&
+        (typeof activeRootKeyId !== 'string' || !activeRootKeyId.trim() ||
+          !Number.isSafeInteger(activeFromVersion) || activeFromVersion < 0)) {
+      fail('EVIDENCE_TRUST_MANIFEST_ROOT_STATE_INVALID', 'Active root ID and activation manifest version must be supplied together');
     }
     const manifests = entries.map(entry => {
       if (!entry || typeof entry.key !== 'string' ||
@@ -98,6 +107,10 @@ class ExternalTrustManifestAnchorStore {
       if (manifestKey(manifest.version) !== entry.key ||
           !verifyTrustManifest(manifest, trustedRootKeys)) {
         fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CORRUPT', 'Stored trust manifest failed key or signature verification');
+      }
+      if (activeRootKeyId !== undefined && manifest.version > activeFromVersion &&
+          manifest.rootKeyId !== activeRootKeyId) {
+        fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_ROOT_MISMATCH', 'A manifest after root activation was signed by a retired or unexpected root');
       }
       return manifest;
     }).sort((a, b) => a.version - b.version);
