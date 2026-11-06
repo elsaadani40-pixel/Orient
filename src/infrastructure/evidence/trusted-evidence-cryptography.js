@@ -19,10 +19,17 @@ function normalizeKeyEntry(entry, keyId) {
   if (!entry || typeof entry !== 'object' || !entry.publicKey) {
     fail('EVIDENCE_KEY_UNKNOWN', `No trusted public key configured for ${keyId}`);
   }
+  const validFrom = entry.validFrom ? new Date(entry.validFrom) : null;
+  const revokedAt = entry.revokedAt ? new Date(entry.revokedAt) : null;
+  if ((validFrom && !Number.isFinite(validFrom.getTime())) ||
+      (revokedAt && !Number.isFinite(revokedAt.getTime())) ||
+      (validFrom && revokedAt && revokedAt < validFrom)) {
+    fail('EVIDENCE_KEY_METADATA_INVALID', `Invalid validity metadata for signing key ${keyId}`);
+  }
   return {
     publicKey: crypto.createPublicKey(entry.publicKey),
-    validFrom: entry.validFrom ? new Date(entry.validFrom) : null,
-    revokedAt: entry.revokedAt ? new Date(entry.revokedAt) : null
+    validFrom,
+    revokedAt
   };
 }
 
@@ -36,7 +43,7 @@ function buildUnsignedEnvelope({ tenantId, executionId, sequence, evidence, prev
   if (!Number.isSafeInteger(sequence) || sequence < 1) {
     fail('EVIDENCE_SEQUENCE_INVALID', 'Evidence sequence must be a positive safe integer');
   }
-  if (!verifyEvidenceRecord(evidence) || evidence.executionId !== executionId) {
+  if (!verifyEvidenceRecord(evidence) || evidence.schemaVersion !== 1 || evidence.executionId !== executionId) {
     fail('EVIDENCE_RECORD_INVALID', 'A valid evidence record for this execution is required');
   }
   if (previousHash !== null && !HASH_PATTERN.test(previousHash || '')) {
