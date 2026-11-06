@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { signTrustManifest } = require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest');
+const { ExternalTrustManifestAnchorStore } = require('../../../../src/infrastructure/evidence/external-trust-manifest-anchor-store');
 const {
   S3ObjectLockTrustManifestAnchorBackend
 } = require('../../../../src/infrastructure/evidence/s3-object-lock-trust-manifest-anchor-backend');
@@ -93,4 +96,34 @@ test('trust manifest S3 backend makes conditional creation idempotently readable
     created: false,
     existingValue: '{"version":2}'
   });
+});
+
+
+test('S3 Object Lock backend interoperates with the external trust-manifest ledger', async () => {
+  const { client, backend } = fixture();
+  const root = crypto.generateKeyPairSync('ed25519');
+  const evidence = crypto.generateKeyPairSync('ed25519');
+  const rootPrivateKey = root.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const rootPublicKey = root.publicKey.export({ type: 'spki', format: 'pem' });
+  const evidencePublicKey = evidence.publicKey.export({ type: 'spki', format: 'pem' });
+  const trustedRootKeys = { 'offline-root-1': { publicKey: rootPublicKey } };
+  const store = new ExternalTrustManifestAnchorStore({ backend, trustedRootKeys });
+  const manifest = signTrustManifest({
+    version: 1,
+    issuedAt: '2026-11-06T10:01:00.000Z',
+    expiresAt: '2026-12-06T10:01:00.000Z',
+    keys: { 'evidence-key-1': { publicKey: evidencePublicKey } }
+  }, { rootKeyId: 'offline-root-1', rootPrivateKey });
+
+  const appended = await store.append(manifest, {
+    verificationTime: '2026-11-06T10:03:00.000Z'
+  });
+  assert.equal(appended.created, true);
+  assert.deepEqual(await store.readHead(), {
+    version: 1,
+    digest: require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest')
+      .verifyTrustManifest(manifest, trustedRootKeys).digest
+  });
+  assert.equal(client.objects.size, 1);
+  assert.equal([...client.objects.keys()][0], 'orient/trust-manifests/v1/0000000000000001.json');
 });
