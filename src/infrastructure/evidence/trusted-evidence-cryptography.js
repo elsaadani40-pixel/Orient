@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { canonicalJson, verifyEvidenceRecord } = require('../../core/execution/evidence-record');
 
 const RECORD_DOMAIN = Buffer.from('ORIENT-TRUSTED-EVIDENCE-V1\0', 'utf8');
+const ANCHOR_DOMAIN = Buffer.from('ORIENT-TRUSTED-EVIDENCE-ANCHOR-V1\\0', 'utf8');
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const KEY_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 
