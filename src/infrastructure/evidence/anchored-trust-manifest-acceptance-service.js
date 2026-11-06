@@ -14,14 +14,20 @@ function fail(code, message) {
 class AnchoredTrustManifestAcceptanceService {
   constructor({
     trustedRootKeys,
+    rootTransitionLedger,
     versionStore,
     externalAnchorStore,
     authorize,
     maxManifestBytes = 256 * 1024,
     now = () => new Date().toISOString()
   } = {}) {
-    if (!trustedRootKeys || typeof trustedRootKeys !== 'object') {
-      throw new TypeError('Pinned trust-manifest root public keys are required');
+    if ((!trustedRootKeys || typeof trustedRootKeys !== 'object') &&
+        (!rootTransitionLedger || typeof rootTransitionLedger.readState !== 'function')) {
+      throw new TypeError('Pinned root public keys or a verified root-transition ledger are required');
+    }
+    if (rootTransitionLedger !== undefined &&
+        (!rootTransitionLedger || typeof rootTransitionLedger.readState !== 'function')) {
+      throw new TypeError('rootTransitionLedger must expose readState()');
     }
     if (!versionStore || typeof versionStore.read !== 'function' ||
         typeof versionStore.compareAndSet !== 'function') {
@@ -39,12 +45,31 @@ class AnchoredTrustManifestAcceptanceService {
       throw new TypeError('maxManifestBytes must be between 1 KiB and 1 MiB');
     }
     if (typeof now !== 'function') throw new TypeError('now must be a clock function');
-    this.trustedRootKeys = trustedRootKeys;
+    this.trustedRootKeys = trustedRootKeys || null;
+    this.rootTransitionLedger = rootTransitionLedger || null;
     this.versionStore = versionStore;
     this.externalAnchorStore = externalAnchorStore;
     this.authorize = authorize;
     this.maxManifestBytes = maxManifestBytes;
     this.now = now;
+  }
+
+  async resolveTrustContext() {
+    if (!this.rootTransitionLedger) {
+      return { trustedRootKeys: this.trustedRootKeys, rootState: null };
+    }
+    let state;
+    try {
+      state = await this.rootTransitionLedger.readState();
+    } catch {
+      fail('EVIDENCE_TRUST_ROOT_STATE_UNAVAILABLE', 'Verified root-transition history could not be reconstructed');
+    }
+    if (!state || !state.trustedRootKeys || typeof state.trustedRootKeys !== 'object' ||
+        typeof state.rootKeyId !== 'string' || !Number.isSafeInteger(state.manifestHeadVersion) ||
+        !/^[a-f0-9]{64}$/.test(state.manifestHeadDigest || '')) {
+      fail('EVIDENCE_TRUST_ROOT_STATE_INVALID', 'Root-transition ledger returned an invalid active trust state');
+    }
+    return { trustedRootKeys: state.trustedRootKeys, rootState: state };
   }
 
   async recover({ principal } = {}) {
@@ -58,9 +83,15 @@ class AnchoredTrustManifestAcceptanceService {
       fail('EVIDENCE_TRUST_MANIFEST_FORBIDDEN', 'Principal is not authorized to recover trust state');
     }
 
-    const head = await this.externalAnchorStore.readHead();
+    const trustContext = await this.resolveTrustContext();
+    const head = await this.externalAnchorStore.readHead({ trustedRootKeys: trustContext.trustedRootKeys });
     if (!head) {
       fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_EMPTY', 'No independently anchored trust history is available for recovery');
+    }
+    if (trustContext.rootState && (head.version < trustContext.rootState.manifestHeadVersion ||
+        (head.version === trustContext.rootState.manifestHeadVersion &&
+          head.digest !== trustContext.rootState.manifestHeadDigest))) {
+      fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_BEHIND_ROOT_STATE', 'Manifest anchor history is behind or conflicts with the root-transition manifest head');
     }
     const current = await this.versionStore.read();
     if (current !== null && (!current || !Number.isSafeInteger(current.version) ||
@@ -97,6 +128,14 @@ class AnchoredTrustManifestAcceptanceService {
       fail('EVIDENCE_TRUST_MANIFEST_FORBIDDEN', 'Principal is not authorized to update trust state');
     }
 
+    const trustContext = await this.resolveTrustContext();
+    if (trustContext.rootState && manifest?.rootKeyId !== trustContext.rootState.rootKeyId) {
+      fail('EVIDENCE_TRUST_MANIFEST_ROOT_NOT_ACTIVE', 'Only the currently effective root may authorize a new trust manifest');
+    }
+    if (trustContext.rootState && (!Number.isSafeInteger(manifest?.version) ||
+        manifest.version <= trustContext.rootState.manifestHeadVersion)) {
+      fail('EVIDENCE_TRUST_MANIFEST_ROOT_HEAD_ROLLBACK', 'A manifest signed under the active root must advance beyond the manifest head bound by its activation transition');
+    }
     let serialized;
     try {
       serialized = canonicalJson(manifest);
@@ -108,12 +147,12 @@ class AnchoredTrustManifestAcceptanceService {
     }
 
     const now = this.now();
-    const verified = verifyTrustManifest(manifest, this.trustedRootKeys, { verificationTime: now });
+    const verified = verifyTrustManifest(manifest, trustContext.trustedRootKeys, { verificationTime: now });
     if (!verified) {
       fail('EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID', 'Trust manifest signature or validity is invalid');
     }
 
-    const externalHead = await this.externalAnchorStore.readHead();
+    const externalHead = await this.externalAnchorStore.readHead({ trustedRootKeys: trustContext.trustedRootKeys });
     const cachedState = await this.versionStore.read();
     if (cachedState !== null && (!cachedState || !Number.isSafeInteger(cachedState.version) ||
         cachedState.version < 1 || !/^[a-f0-9]{64}$/.test(cachedState.digest || ''))) {
@@ -141,11 +180,14 @@ class AnchoredTrustManifestAcceptanceService {
       if (verified.version > expectedNextVersion) {
         fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_GAP', 'Manifest skips an independently anchored trust version');
       }
-      await this.externalAnchorStore.append(manifest, { verificationTime: now });
+      await this.externalAnchorStore.append(manifest, {
+        verificationTime: now,
+        trustedRootKeys: trustContext.trustedRootKeys
+      });
     }
 
     const accepted = await verifyAndAcceptTrustManifest(manifest, {
-      trustedRootKeys: this.trustedRootKeys,
+      trustedRootKeys: trustContext.trustedRootKeys,
       versionStore: this.versionStore,
       now
     });
