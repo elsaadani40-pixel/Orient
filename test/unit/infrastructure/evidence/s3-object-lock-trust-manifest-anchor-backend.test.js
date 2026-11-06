@@ -21,13 +21,25 @@ const commands = {
 };
 
 class FakeS3 {
-  constructor() { this.objects = new Map(); }
+  constructor() {
+    this.objects = new Map();
+    this.objectLockEnabled = 'Enabled';
+    this.retentionMode = 'COMPLIANCE';
+    this.defaultRetentionDays = 365;
+    this.versioningStatus = 'Enabled';
+    this.lockConfigurationReads = 0;
+    this.versioningReads = 0;
+  }
   async send(command) {
     const input = command.input;
     if (command instanceof commands.GetObjectLockConfigurationCommand) {
-      return { ObjectLockConfiguration: { ObjectLockEnabled: 'Enabled', Rule: { DefaultRetention: { Mode: 'COMPLIANCE', Days: 365 } } } };
+      this.lockConfigurationReads += 1;
+      return { ObjectLockConfiguration: { ObjectLockEnabled: this.objectLockEnabled, Rule: { DefaultRetention: { Mode: this.retentionMode, Days: this.defaultRetentionDays } } } };
     }
-    if (command instanceof commands.GetBucketVersioningCommand) return { Status: 'Enabled' };
+    if (command instanceof commands.GetBucketVersioningCommand) {
+      this.versioningReads += 1;
+      return { Status: this.versioningStatus };
+    }
     if (command instanceof commands.PutObjectCommand) {
       if (this.objects.has(input.Key)) {
         throw Object.assign(new Error('exists'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } });
@@ -149,6 +161,8 @@ test('trust manifest S3 backend verifies versioning and exact default compliance
     retentionMode: 'COMPLIANCE',
     retentionDays: 365
   });
+  assert.equal(client.lockConfigurationReads, 2, 'configuration must be re-read for each verification');
+  assert.equal(client.versioningReads, 2, 'versioning must be re-read for each verification');
 
   const invalid = new FakeS3();
   invalid.send = async command => {
@@ -178,4 +192,17 @@ test('trust manifest S3 backend requires an explicit expected retention policy',
     commands,
     bucket: 'orient-trust-manifests'
   }), /expected bucket COMPLIANCE retention/);
+});
+
+
+test('trust manifest S3 backend detects retention drift during a long-lived process', async () => {
+  const { client, backend } = fixture();
+  await backend.verifyConfiguration();
+  client.defaultRetentionDays = 30;
+
+  await assert.rejects(
+    backend.putIfAbsent('orient/trust-manifests/v1/0000000000000003.json', '{"version":3}'),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_S3_CONFIGURATION_INVALID'
+  );
+  assert.equal(client.objects.size, 0, 'no trust object may be written after retention drift');
 });
