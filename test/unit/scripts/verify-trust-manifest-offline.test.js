@@ -46,7 +46,8 @@ test('offline verifier validates a current manifest against an independently pin
   });
   assert.equal(result.version, 1);
   assert.equal(result.rootKeyId, 'offline-root-2026');
-  assert.equal(result.verificationMode, 'current-acceptance');
+  assert.equal(result.verificationMode, 'current-signature-time-verification');
+  assert.equal(result.rootValidityMetadataProvided, false);
   assert.equal(result.verifiedAt, '2026-11-06T19:00:00.000Z');
   assert.equal(result.expiresAt, '2026-12-06T18:59:00.000Z');
   assert.match(result.digest, /^[a-f0-9]{64}$/);
@@ -92,6 +93,27 @@ test('offline verifier distinguishes expired current acceptance from historical 
   assert.equal(historical.version, 1);
 });
 
+test('offline verifier enforces supplied pinned-root validity and revocation metadata', t => {
+  const f = fixture(t);
+  assert.throws(() => verifyManifestFile({
+    manifestPath: f.manifestPath,
+    rootKeyId: 'offline-root-2026',
+    rootPublicKeyPath: f.publicKeyPath,
+    rootValidFrom: '2026-11-06T18:00:00.000Z',
+    rootRevokedAt: '2026-11-06T19:00:00.000Z',
+    now: () => '2026-11-06T19:00:00.000Z'
+  }), error => error.code === 'TRUST_VERIFY_MANIFEST_REJECTED');
+
+  const historical = verifyManifestFile({
+    manifestPath: f.manifestPath,
+    rootKeyId: 'offline-root-2026',
+    rootPublicKeyPath: f.publicKeyPath,
+    rootValidFrom: '2026-11-06T18:00:00.000Z',
+    rootRevokedAt: '2026-11-06T19:00:00.000Z',
+    historical: true
+  });
+  assert.equal(historical.verificationMode, 'historical-audit-only');
+});
 test('offline verifier rejects non-Ed25519 pinned root keys', t => {
   const f = fixture(t);
   const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -122,11 +144,15 @@ test('offline verifier argument parser rejects duplicate, unknown, and conflicti
     '--manifest', 'signed.json',
     '--root-key-id', 'offline-root-2026',
     '--root-public-key', 'root.pem',
+    '--root-valid-from', '2026-11-06T18:00:00.000Z',
+    '--root-revoked-at', '2026-11-06T19:00:00.000Z',
     '--historical'
   ]), {
     manifestPath: 'signed.json',
     rootKeyId: 'offline-root-2026',
     rootPublicKeyPath: 'root.pem',
+    rootValidFrom: '2026-11-06T18:00:00.000Z',
+    rootRevokedAt: '2026-11-06T19:00:00.000Z',
     historical: true
   });
   assert.throws(() => parseArgs([
