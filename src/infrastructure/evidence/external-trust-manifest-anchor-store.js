@@ -37,19 +37,54 @@ function parseManifest(value) {
  * This adapter cannot create those provider-side guarantees.
  */
 class ExternalTrustManifestAnchorStore {
-  constructor({ backend, trustedRootKeys } = {}) {
+  constructor({ backend, trustedRootKeys, trustedRootKeysProvider } = {}) {
     if (!backend || typeof backend.putIfAbsent !== 'function' ||
         typeof backend.get !== 'function' || typeof backend.list !== 'function') {
       throw new TypeError('An immutable external trust-manifest backend is required');
     }
-    if (!trustedRootKeys || typeof trustedRootKeys !== 'object') {
-      throw new TypeError('Pinned trust-manifest root public keys are required');
+    if ((!trustedRootKeys || typeof trustedRootKeys !== 'object') &&
+        typeof trustedRootKeysProvider !== 'function') {
+      throw new TypeError('Pinned trust-manifest root public keys or a verified root-key provider are required');
+    }
+    if (trustedRootKeysProvider !== undefined && typeof trustedRootKeysProvider !== 'function') {
+      throw new TypeError('trustedRootKeysProvider must be a function');
     }
     this.backend = backend;
-    this.trustedRootKeys = trustedRootKeys;
+    this.trustedRootKeys = trustedRootKeys || null;
+    this.trustedRootKeysProvider = trustedRootKeysProvider || null;
   }
 
-  async readHead() {
+  async resolveTrustedRootKeys(supplied) {
+    const keys = supplied || (this.trustedRootKeysProvider
+      ? await this.trustedRootKeysProvider()
+      : this.trustedRootKeys);
+    if (!keys || typeof keys !== 'object' || Array.isArray(keys)) {
+      fail('EVIDENCE_TRUST_MANIFEST_ROOT_STATE_UNAVAILABLE', 'Verified root public-key state is unavailable');
+    }
+    return keys;
+  }
+
+  async getManifest(version, { trustedRootKeys } = {}) {
+    const key = manifestKey(version);
+    const value = await this.backend.get(key);
+    if (value === null || value === undefined) return null;
+    const manifest = parseManifest(value);
+    const keys = await this.resolveTrustedRootKeys(trustedRootKeys);
+    const verified = verifyTrustManifest(manifest, keys);
+    if (!verified || manifestKey(verified.version) !== key) {
+      fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CORRUPT', 'Stored trust manifest failed key or signature verification');
+    }
+    return Object.freeze({ manifest, version: verified.version, digest: verified.digest });
+  }
+
+  async hasAnchor({ version, digest, expectedRootKeyId, trustedRootKeys } = {}) {
+    const stored = await this.getManifest(version, { trustedRootKeys });
+    return Boolean(stored && stored.digest === digest &&
+      (expectedRootKeyId === undefined || stored.manifest.rootKeyId === expectedRootKeyId));
+  }
+
+  async readHead({ trustedRootKeys: suppliedRootKeys } = {}) {
+    const trustedRootKeys = await this.resolveTrustedRootKeys(suppliedRootKeys);
     const entries = await this.backend.list('orient/trust-manifests/v1/');
     if (!Array.isArray(entries)) {
       fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CONTRACT_INVALID', 'Backend list must return an array');
@@ -81,8 +116,12 @@ class ExternalTrustManifestAnchorStore {
     return Object.freeze({ version: verified.version, digest: verified.digest });
   }
 
-  async append(manifest, { verificationTime = new Date().toISOString() } = {}) {
-    const verified = verifyTrustManifest(manifest, this.trustedRootKeys, { verificationTime });
+  async append(manifest, {
+    verificationTime = new Date().toISOString(),
+    trustedRootKeys: suppliedRootKeys
+  } = {}) {
+    const trustedRootKeys = await this.resolveTrustedRootKeys(suppliedRootKeys);
+    const verified = verifyTrustManifest(manifest, trustedRootKeys, { verificationTime });
     if (!verified) {
       fail('EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID', 'Only a currently valid root-signed manifest can be anchored');
     }
@@ -112,7 +151,7 @@ class ExternalTrustManifestAnchorStore {
       fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_RACE', 'Existing external anchor could not be read back');
     }
     const existing = parseManifest(existingValue);
-    const existingVerified = verifyTrustManifest(existing, this.trustedRootKeys);
+    const existingVerified = verifyTrustManifest(existing, trustedRootKeys);
     if (!existingVerified || existingVerified.digest !== verified.digest) {
       fail('EVIDENCE_TRUST_MANIFEST_VERSION_CONFLICT', 'An immutable external anchor already binds this version to different content');
     }
