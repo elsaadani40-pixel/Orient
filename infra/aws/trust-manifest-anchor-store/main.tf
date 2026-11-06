@@ -19,10 +19,10 @@ resource "aws_s3_bucket" "trust_manifest" {
   force_destroy       = false
 
   tags = {
-    Project     = "ORIENT"
-    Component   = "trusted-evidence"
-    DataClass   = "trust-manifest"
-    ManagedBy   = "Terraform"
+    Project   = "ORIENT"
+    Component = "trusted-evidence"
+    DataClass = "trust-manifest"
+    ManagedBy = "Terraform"
   }
 }
 
