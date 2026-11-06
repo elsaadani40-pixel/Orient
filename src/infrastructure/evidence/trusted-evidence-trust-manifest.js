@@ -58,7 +58,7 @@ function normalizeManifestPayload(input) {
   const expiresAtValue = ownDataProperty(input, 'expiresAt', 'EVIDENCE_TRUST_MANIFEST_EXPIRY_INVALID');
   const expiresAt = expiresAtValue === undefined ? null : isoTimestamp(expiresAtValue, 'EVIDENCE_TRUST_MANIFEST_EXPIRY_INVALID');
   const keys = ownDataProperty(input, 'keys', 'EVIDENCE_TRUST_MANIFEST_KEYS_INVALID');
-  if (schemaVersion !== undefined && schemaVersion !== 1) {
+  if (schemaVersion !== undefined && schemaVersion !== 2) {
     fail('EVIDENCE_TRUST_MANIFEST_VERSION_INVALID', 'Unsupported trust manifest schema version');
   }
   if (!Number.isSafeInteger(version) || version < 1) {
@@ -97,7 +97,7 @@ function normalizeManifestPayload(input) {
   if (Object.keys(normalizedKeys).length === 0) {
     fail('EVIDENCE_TRUST_MANIFEST_KEYS_INVALID', 'Trust manifest must contain at least one verification key');
   }
-  return { schemaVersion: 1, version, issuedAt, expiresAt, keys: normalizedKeys };
+  return { schemaVersion: 2, version, issuedAt, expiresAt, keys: normalizedKeys };
 }
 
 function signTrustManifest(input, { rootKeyId, rootPrivateKey } = {}) {
@@ -132,7 +132,7 @@ function verifyTrustManifest(manifest, trustedRootKeys, { verificationTime } = {
     const schemaVersion = ownDataProperty(manifest, 'schemaVersion', 'EVIDENCE_TRUST_MANIFEST_INVALID');
     const rootKeyId = ownDataProperty(manifest, 'rootKeyId', 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
     const signature = ownDataProperty(manifest, 'signature', 'EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID');
-    if (schemaVersion !== 1 || typeof rootKeyId !== 'string' || !KEY_ID_PATTERN.test(rootKeyId) ||
+    if (schemaVersion !== 2 || typeof rootKeyId !== 'string' || !KEY_ID_PATTERN.test(rootKeyId) ||
         typeof signature !== 'string') return null;
     const unsigned = {
       schemaVersion,
