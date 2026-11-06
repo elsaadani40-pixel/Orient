@@ -51,5 +51,5 @@ test('PostgreSQL trust manifest CAS serializes concurrent writers and survives p
   restartedPool = new Pool({ connectionString, max: 1, application_name: 'orient-trust-manifest-restarted-reader' });
   const afterRestart = new PostgresTrustManifestVersionStore({ pool: restartedPool, schema });
   assert.deepEqual(await afterRestart.read(), accepted);
-  assert.equal(await afterRestart.compareAndSet(accepted, { version: 1, digest: 'f'.repeat(64) }), false);
+  assert.equal(await afterRestart.compareAndSet(v1, { version: accepted.version + 1, digest: 'f'.repeat(64) }), false);
 });
