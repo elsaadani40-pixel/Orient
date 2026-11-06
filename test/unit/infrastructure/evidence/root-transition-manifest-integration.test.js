@@ -101,8 +101,12 @@ test('manifest acceptance and root transitions share one verified external trust
     usedRootFingerprints: [publicKeyFingerprint(root1.publicKey)]
   };
 
-  const resolveCurrentManifestHead = async ({ trustedRootKeys, expectedRootKeyId }) => {
-    const head = await manifestStore.readHead({ trustedRootKeys });
+  const resolveCurrentManifestHead = async ({ trustedRootKeys, expectedRootKeyId, activeFromVersion }) => {
+    const head = await manifestStore.readHead({
+      trustedRootKeys,
+      activeRootKeyId: expectedRootKeyId,
+      activeFromVersion
+    });
     if (!head) return null;
     const stored = await manifestStore.getManifest(head.version, { trustedRootKeys });
     return {
