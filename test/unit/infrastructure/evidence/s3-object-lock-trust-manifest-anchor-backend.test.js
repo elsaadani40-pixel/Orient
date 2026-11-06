@@ -51,7 +51,6 @@ function fixture() {
     client,
     commands,
     bucket: 'orient-trust-manifests',
-    retentionSeconds: 31536000,
     now: () => new Date('2026-11-06T12:00:00.000Z')
   });
   return { client, backend };
@@ -64,8 +63,8 @@ test('trust manifest S3 backend writes only to its dedicated namespace with comp
   assert.equal(client.lastPut.Bucket, 'orient-trust-manifests');
   assert.equal(client.lastPut.Key, key);
   assert.equal(client.lastPut.IfNoneMatch, '*');
-  assert.equal(client.lastPut.ObjectLockMode, 'COMPLIANCE');
-  assert.equal(client.lastPut.ObjectLockRetainUntilDate.toISOString(), '2027-11-06T12:00:00.000Z');
+  assert.equal(client.lastPut.ObjectLockMode, undefined);
+  assert.equal(client.lastPut.ObjectLockRetainUntilDate, undefined);
   assert.equal(await backend.get(key), '{"schemaVersion":2}');
   assert.deepEqual(await backend.list('orient/trust-manifests/v1/'), [
     { key, value: '{"schemaVersion":2}' }
