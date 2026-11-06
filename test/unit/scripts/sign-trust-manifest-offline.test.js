@@ -10,7 +10,8 @@ const {
   signManifestFile,
   readPrivateKeyFile,
   parseArgs,
-  MAX_PRIVATE_KEY_BYTES
+  MAX_PRIVATE_KEY_BYTES,
+  MAX_MANIFEST_BYTES
 } = require('../../../scripts/sign-trust-manifest-offline');
 const { verifyTrustManifest } = require('../../../src/infrastructure/evidence/trusted-evidence-trust-manifest');
 
@@ -74,6 +75,33 @@ test('offline signer creates and locally verifies a root-signed manifest without
   assert.equal(verified.version, 1);
   assert.equal(result.digest, verified.digest);
   assert.equal(JSON.stringify(signed).includes(f.privateKeyPem), false);
+});
+
+test('offline signer rejects manifest input symlinks', t => {
+  const f = fixture(t);
+  const linkPath = path.join(f.root, 'manifest-link.json');
+  fs.symlinkSync(f.inputPath, linkPath);
+  assert.throws(() => signManifestFile({
+    inputPath: linkPath,
+    keyPath: f.keyPath,
+    rootKeyId: 'offline-root-2026',
+    outputPath: f.outputPath,
+    repoRoot: f.repoRoot,
+    now: () => f.now
+  }), error => error.code === 'TRUST_SIGNER_INPUT_INVALID');
+});
+
+test('offline signer rejects manifest input above the bounded read limit', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.inputPath, Buffer.alloc(MAX_MANIFEST_BYTES + 1, 0x20));
+  assert.throws(() => signManifestFile({
+    inputPath: f.inputPath,
+    keyPath: f.keyPath,
+    rootKeyId: 'offline-root-2026',
+    outputPath: f.outputPath,
+    repoRoot: f.repoRoot,
+    now: () => f.now
+  }), error => error.code === 'TRUST_SIGNER_INPUT_INVALID');
 });
 
 test('offline signer refuses to overwrite an existing signed manifest', t => {
