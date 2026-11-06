@@ -23,41 +23,69 @@ function isoTimestamp(value, code) {
   return value;
 }
 
-function normalizeManifestPayload({ version, issuedAt, keys }) {
+function isPlainRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function ownDataProperty(object, key, code) {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  if (!descriptor) return undefined;
+  if (!descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+    fail(code, 'Trust manifest accepts enumerable data properties only');
+  }
+  return descriptor.value;
+}
+
+function assertAllowedDataProperties(object, allowed, code) {
+  for (const key of Reflect.ownKeys(object)) {
+    if (typeof key !== 'string' || !allowed.includes(key)) {
+      fail(code, 'Trust manifest contains unsupported properties');
+    }
+    ownDataProperty(object, key, code);
+  }
+}
+
+function normalizeManifestPayload(input) {
+  if (!isPlainRecord(input)) fail('EVIDENCE_TRUST_MANIFEST_INVALID', 'Trust manifest payload must be a plain record');
+  assertAllowedDataProperties(input, ['schemaVersion', 'version', 'issuedAt', 'keys'], 'EVIDENCE_TRUST_MANIFEST_INVALID');
+  const schemaVersion = ownDataProperty(input, 'schemaVersion', 'EVIDENCE_TRUST_MANIFEST_INVALID');
+  const version = ownDataProperty(input, 'version', 'EVIDENCE_TRUST_MANIFEST_INVALID');
+  const issuedAt = ownDataProperty(input, 'issuedAt', 'EVIDENCE_TRUST_MANIFEST_INVALID');
+  const keys = ownDataProperty(input, 'keys', 'EVIDENCE_TRUST_MANIFEST_KEYS_INVALID');
+  if (schemaVersion !== undefined && schemaVersion !== 1) {
+    fail('EVIDENCE_TRUST_MANIFEST_VERSION_INVALID', 'Unsupported trust manifest schema version');
+  }
   if (!Number.isSafeInteger(version) || version < 1) {
     fail('EVIDENCE_TRUST_MANIFEST_VERSION_INVALID', 'Trust manifest version must be a positive safe integer');
   }
   isoTimestamp(issuedAt, 'EVIDENCE_TRUST_MANIFEST_TIMESTAMP_INVALID');
-  if (!keys || typeof keys !== 'object' || Array.isArray(keys) ||
-      Object.getPrototypeOf(keys) !== Object.prototype) {
-    fail('EVIDENCE_TRUST_MANIFEST_KEYS_INVALID', 'Trust manifest keys must be a plain object');
-  }
+  if (!isPlainRecord(keys)) fail('EVIDENCE_TRUST_MANIFEST_KEYS_INVALID', 'Trust manifest keys must be a plain record');
   const normalizedKeys = {};
-  for (const keyId of Object.keys(keys).sort()) {
-    if (!KEY_ID_PATTERN.test(keyId)) {
+  for (const keyId of Reflect.ownKeys(keys).sort()) {
+    if (typeof keyId !== 'string' || !KEY_ID_PATTERN.test(keyId)) {
       fail('EVIDENCE_TRUST_MANIFEST_KEY_ID_INVALID', 'Trust manifest contains an invalid key identifier');
     }
-    const entry = keys[keyId];
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
-        typeof entry.publicKey !== 'string' || !entry.publicKey.trim()) {
+    const entry = ownDataProperty(keys, keyId, 'EVIDENCE_TRUST_MANIFEST_KEY_INVALID');
+    if (!isPlainRecord(entry)) fail('EVIDENCE_TRUST_MANIFEST_KEY_INVALID', `Trust manifest key ${keyId} must be a plain record`);
+    assertAllowedDataProperties(entry, ['publicKey', 'validFrom', 'revokedAt'], 'EVIDENCE_TRUST_MANIFEST_KEY_INVALID');
+    const publicKeyText = ownDataProperty(entry, 'publicKey', 'EVIDENCE_TRUST_MANIFEST_KEY_INVALID');
+    if (typeof publicKeyText !== 'string' || !publicKeyText.trim()) {
       fail('EVIDENCE_TRUST_MANIFEST_KEY_INVALID', `Trust manifest key ${keyId} has no public key`);
     }
-    const publicKey = crypto.createPublicKey(entry.publicKey);
+    const publicKey = crypto.createPublicKey(publicKeyText);
     if (publicKey.asymmetricKeyType !== 'ed25519') {
       fail('EVIDENCE_TRUST_MANIFEST_KEY_INVALID', `Trust manifest key ${keyId} must be Ed25519`);
     }
-    const validFrom = entry.validFrom === undefined ? null :
-      isoTimestamp(entry.validFrom, 'EVIDENCE_TRUST_MANIFEST_KEY_METADATA_INVALID');
-    const revokedAt = entry.revokedAt === undefined ? null :
-      isoTimestamp(entry.revokedAt, 'EVIDENCE_TRUST_MANIFEST_KEY_METADATA_INVALID');
+    const validFromValue = ownDataProperty(entry, 'validFrom', 'EVIDENCE_TRUST_MANIFEST_KEY_METADATA_INVALID');
+    const revokedAtValue = ownDataProperty(entry, 'revokedAt', 'EVIDENCE_TRUST_MANIFEST_KEY_METADATA_INVALID');
+    const validFrom = validFromValue === undefined ? null : isoTimestamp(validFromValue, 'EVIDENCE_TRUST_MANIFEST_KEY_METADATA_INVALID');
+    const revokedAt = revokedAtValue === undefined ? null : isoTimestamp(revokedAtValue, 'EVIDENCE_TRUST_MANIFEST_KEY_METADATA_INVALID');
     if (validFrom && revokedAt && revokedAt < validFrom) {
       fail('EVIDENCE_TRUST_MANIFEST_KEY_METADATA_INVALID', `Trust manifest key ${keyId} has an invalid validity interval`);
     }
-    normalizedKeys[keyId] = {
-      publicKey: entry.publicKey,
-      ...(validFrom ? { validFrom } : {}),
-      ...(revokedAt ? { revokedAt } : {})
-    };
+    normalizedKeys[keyId] = { publicKey: publicKeyText, ...(validFrom ? { validFrom } : {}), ...(revokedAt ? { revokedAt } : {}) };
   }
   if (Object.keys(normalizedKeys).length === 0) {
     fail('EVIDENCE_TRUST_MANIFEST_KEYS_INVALID', 'Trust manifest must contain at least one verification key');
@@ -91,27 +119,37 @@ function signTrustManifest(input, { rootKeyId, rootPrivateKey } = {}) {
 
 function verifyTrustManifest(manifest, trustedRootKeys) {
   try {
-    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) ||
-        manifest.schemaVersion !== 1 || typeof manifest.rootKeyId !== 'string' ||
-        !KEY_ID_PATTERN.test(manifest.rootKeyId) || typeof manifest.signature !== 'string') return null;
-    const { signature, ...unsigned } = manifest;
+    if (!isPlainRecord(manifest)) return null;
+    assertAllowedDataProperties(manifest, ['schemaVersion', 'version', 'issuedAt', 'keys', 'rootKeyId', 'signature'],
+      'EVIDENCE_TRUST_MANIFEST_INVALID');
+    const schemaVersion = ownDataProperty(manifest, 'schemaVersion', 'EVIDENCE_TRUST_MANIFEST_INVALID');
+    const rootKeyId = ownDataProperty(manifest, 'rootKeyId', 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
+    const signature = ownDataProperty(manifest, 'signature', 'EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID');
+    if (schemaVersion !== 1 || typeof rootKeyId !== 'string' || !KEY_ID_PATTERN.test(rootKeyId) ||
+        typeof signature !== 'string') return null;
+    const unsigned = {
+      schemaVersion,
+      version: ownDataProperty(manifest, 'version', 'EVIDENCE_TRUST_MANIFEST_INVALID'),
+      issuedAt: ownDataProperty(manifest, 'issuedAt', 'EVIDENCE_TRUST_MANIFEST_INVALID'),
+      keys: ownDataProperty(manifest, 'keys', 'EVIDENCE_TRUST_MANIFEST_INVALID')
+    };
     const payload = normalizeManifestPayload(unsigned);
-    const rebuilt = { ...payload, rootKeyId: unsigned.rootKeyId };
-    if (canonicalJson(rebuilt) !== canonicalJson(unsigned)) return null;
-    const rootEntry = trustedRootKeys?.[unsigned.rootKeyId];
-    if (!rootEntry || typeof rootEntry.publicKey !== 'string') return null;
-    const rootPublicKey = crypto.createPublicKey(rootEntry.publicKey);
+    const rebuilt = { ...payload, rootKeyId };
+    if (canonicalJson(rebuilt) !== canonicalJson({ ...unsigned, rootKeyId })) return null;
+    if (!isPlainRecord(trustedRootKeys)) return null;
+    const rootEntry = ownDataProperty(trustedRootKeys, rootKeyId, 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
+    if (!isPlainRecord(rootEntry)) return null;
+    assertAllowedDataProperties(rootEntry, ['publicKey', 'validFrom', 'revokedAt'], 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
+    const rootPublicKeyText = ownDataProperty(rootEntry, 'publicKey', 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
+    if (typeof rootPublicKeyText !== 'string' || !rootPublicKeyText.trim()) return null;
+    const rootPublicKey = crypto.createPublicKey(rootPublicKeyText);
     if (rootPublicKey.asymmetricKeyType !== 'ed25519') return null;
     const signatureBytes = Buffer.from(signature, 'base64');
     if (signatureBytes.toString('base64') !== signature) return null;
-    const valid = crypto.verify(
-      null,
-      Buffer.concat([MANIFEST_DOMAIN, Buffer.from(canonicalJson(rebuilt), 'utf8')]),
-      rootPublicKey,
-      signatureBytes
-    );
+    const valid = crypto.verify(null, Buffer.concat([MANIFEST_DOMAIN, Buffer.from(canonicalJson(rebuilt), 'utf8')]),
+      rootPublicKey, signatureBytes);
     if (!valid) return null;
-    return Object.freeze({ ...payload, digest: sha256(canonicalJson(manifest)) });
+    return Object.freeze({ ...payload, digest: sha256(canonicalJson({ ...rebuilt, signature })) });
   } catch {
     return null;
   }
