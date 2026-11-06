@@ -295,6 +295,7 @@ class ExternalTrustRootTransitionLedger {
     const history = await this.readHistory();
     return Object.freeze({
       ...history.state,
+      trustedRootKeys: history.trustedRootKeys,
       activeRoot: history.trustedRootKeys[history.state.rootKeyId],
       verifiedTransitionCount: history.transitions.length
     });
