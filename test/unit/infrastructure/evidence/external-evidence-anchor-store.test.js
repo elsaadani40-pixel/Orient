@@ -98,11 +98,9 @@ test('external anchor store isolates tenant and execution namespaces', async () 
 test('external anchor store normalizes over-depth stored JSON as a corruption error', async () => {
   const { backend, store, makeAnchor } = fixture();
   const anchor = makeAnchor(1);
-  const deeplyNested = JSON.stringify({ value: '['.repeat(0) });
   let nested = null;
   for (let i = 0; i < 70; i += 1) nested = [nested];
   backend.objects.set(anchorKey(anchor), JSON.stringify(nested));
-  assert.notEqual(deeplyNested, JSON.stringify(nested));
   await assert.rejects(
     store.get({ tenantId: anchor.tenantId, executionId: anchor.executionId, sequence: 1 }),
     error => error.code === 'EVIDENCE_ANCHOR_STORE_CORRUPT'
