@@ -8,8 +8,9 @@ The offline signing and independent verification utilities are:
 
 - `scripts/sign-trust-manifest-offline.js`
 - `scripts/verify-trust-manifest-offline.js`
+- `scripts/trust-root-transition-offline.js` (`npm run trust:sign-root-transition:offline` / `npm run trust:verify-root-transition:offline`)
 
-It signs a manifest payload and verifies the resulting signature locally. It does not generate root keys, contact a server, deploy trust state, write to PostgreSQL, or append to the external immutable history. Root-key distribution and root rotation remain explicit out-of-band operator procedures; they are not automatically negotiated by the Runtime.
+The transition utility signs planned rotations or emergency recovery envelopes, requires next-root proof of possession, self-verifies against an operator-supplied pinned context, and independently verifies signed envelopes. It does not generate root keys, contact a server, deploy trust state, write to PostgreSQL, or append to the external immutable history. Root-key distribution and activation remain explicit operator-controlled steps; they are not automatically negotiated by Runtime.
 
 ## Roles and separation of duties
 
@@ -111,7 +112,50 @@ A planned root rotation requires an explicit, reviewed software/configuration re
 5. Set the old root's `revokedAt` in the pinned configuration and deploy that revocation. Verify that current acceptance rejects the old root while historical verification of manifests issued before revocation remains possible.
 6. Record both fingerprints, the approval identities, configuration release, manifest version/digest, external anchor receipt, and effective revocation time.
 
-This transition is intentionally out-of-band today: the current manifest format does not carry or automatically install a new trusted root key set. A signed in-band root-key transition protocol, dual signatures, and automated root-key distribution are not implemented. Do not claim automated root rotation.
+The root-transition protocol and offline tooling now support a signed, verifiable transition envelope:
+
+- Planned rotation requires the current root signature and the next root's proof of possession.
+- Emergency recovery requires the configured recovery-authority quorum and next-root proof of possession; the compromised root is not counted.
+- The signer uses private-key files outside the repository, requires restrictive file permissions, reads bounded files, refuses output overwrite, and clears bounded key buffers after use.
+- The verifier can perform a current acceptance check or an explicitly labelled historical audit check.
+
+Prepare a **public verification context** from the independently verified transition ledger and pinned recovery configuration. It must contain `expectedState`, `trustedRootKeys`, `recoveryPolicy`, `clockSkewMs`, and `maxValidityMs`. The context contains no private keys, but its provenance is security-critical: independently verify its root fingerprint, manifest head, transition head, used-root history, and recovery threshold before using it. The offline tool does not fetch or reconstruct this context from the external ledger.
+
+Planned rotation example:
+
+```sh
+node scripts/trust-root-transition-offline.js sign \\
+  --payload root-transition.payload.json \\
+  --context /secure/trust/current-context.json \\
+  --next-root-key /secure/offline/next-root-private.pem \\
+  --current-root-key-id offline-root-2026 \\
+  --current-root-key /secure/offline/current-root-private.pem \\
+  --output signed-root-transition.json
+```
+
+Emergency recovery example (use the exact recovery IDs pinned in the context):
+
+```sh
+node scripts/trust-root-transition-offline.js sign \\
+  --payload emergency-recovery.payload.json \\
+  --context /secure/trust/current-context.json \\
+  --next-root-key /secure/offline/recovery-root-private.pem \\
+  --recovery-signer recovery-1=/secure/recovery/recovery-1.pem \\
+  --recovery-signer recovery-2=/secure/recovery/recovery-2.pem \\
+  --output signed-emergency-transition.json
+```
+
+Verify the result independently:
+
+```sh
+node scripts/trust-root-transition-offline.js verify \\
+  --transition signed-root-transition.json \\
+  --context /secure/trust/current-context.json
+```
+
+For forensic signature verification only, use `--historical`; its output is labelled `historical-audit-only` and cannot activate trust. A future-effective transition can be signed and self-verified against its effective time, but the tool explicitly reports that this is not activation. The external ledger adapter and manifest acceptance service still perform current-state checks at append/acceptance time.
+
+The protocol, adapter, replay loader, and manifest acceptance integration are implemented and covered by automated fake-backend tests. Real root custody, context provenance, production immutable storage, operator quorum ceremony, and actual deployment/activation remain operator responsibilities. Do not claim production-ready automated root rotation until those gates are demonstrated.
 
 ## Emergency root compromise
 
