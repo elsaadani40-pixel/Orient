@@ -96,7 +96,7 @@ class ExternalTrustManifestAnchorStore {
       }
       const manifest = parseManifest(entry.value);
       if (manifestKey(manifest.version) !== entry.key ||
-          !verifyTrustManifest(manifest, this.trustedRootKeys)) {
+          !verifyTrustManifest(manifest, trustedRootKeys)) {
         fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CORRUPT', 'Stored trust manifest failed key or signature verification');
       }
       return manifest;
@@ -112,7 +112,7 @@ class ExternalTrustManifestAnchorStore {
     }
     const head = manifests.at(-1) || null;
     if (!head) return null;
-    const verified = verifyTrustManifest(head, this.trustedRootKeys);
+    const verified = verifyTrustManifest(head, trustedRootKeys);
     return Object.freeze({ version: verified.version, digest: verified.digest });
   }
 
@@ -125,7 +125,7 @@ class ExternalTrustManifestAnchorStore {
     if (!verified) {
       fail('EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID', 'Only a currently valid root-signed manifest can be anchored');
     }
-    const head = await this.readHead();
+    const head = await this.readHead({ trustedRootKeys });
     if (head && verified.version === head.version) {
       if (verified.digest !== head.digest) {
         fail('EVIDENCE_TRUST_MANIFEST_VERSION_CONFLICT', 'An immutable external anchor already binds this version to different content');
