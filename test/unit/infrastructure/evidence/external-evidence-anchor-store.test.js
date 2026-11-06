@@ -95,6 +95,30 @@ test('external anchor store isolates tenant and execution namespaces', async () 
   assert.equal(await store.get({ tenantId: anchor.tenantId, executionId: 'another-execution', sequence: 1 }), null);
 });
 
+test('external anchor store normalizes over-depth stored JSON as a corruption error', async () => {
+  const { backend, store, makeAnchor } = fixture();
+  const anchor = makeAnchor(1);
+  const deeplyNested = JSON.stringify({ value: '['.repeat(0) });
+  let nested = null;
+  for (let i = 0; i < 70; i += 1) nested = [nested];
+  backend.objects.set(anchorKey(anchor), JSON.stringify(nested));
+  assert.notEqual(deeplyNested, JSON.stringify(nested));
+  await assert.rejects(
+    store.get({ tenantId: anchor.tenantId, executionId: anchor.executionId, sequence: 1 }),
+    error => error.code === 'EVIDENCE_ANCHOR_STORE_CORRUPT'
+  );
+});
+
+test('external anchor store handles concurrent exact writes through atomic create-only semantics', async () => {
+  const { backend, store, makeAnchor } = fixture();
+  const anchor = makeAnchor(1);
+  const results = await Promise.all(Array.from({ length: 12 }, () => store.append(anchor)));
+  assert.equal(results.filter(result => result.created).length, 1);
+  assert.equal(results.filter(result => !result.created).length, 11);
+  assert.deepEqual(await store.get({ tenantId: anchor.tenantId, executionId: anchor.executionId, sequence: 1 }), anchor);
+  assert.equal((await backend.list('orient/evidence-anchors/v1/')).length, 1);
+});
+
 test('external anchor store fails closed when backend contract is incomplete', async () => {
   assert.throws(
     () => new ExternalEvidenceAnchorStore({ backend: { get() {} }, trustedAnchorKeys: {} }),
