@@ -255,7 +255,7 @@ const MIGRATIONS = [
         AND session_id::text = current_setting('app.orient_session_id', true)
       );
   `},
-  {version:13,sql:\`
+  {version:13,sql:`
     CREATE TABLE IF NOT EXISTS execution_evidence (
       tenant_id TEXT NOT NULL CHECK (length(tenant_id) BETWEEN 1 AND 128),
       execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
@@ -310,7 +310,7 @@ const MIGRATIONS = [
     CREATE TRIGGER execution_evidence_reject_truncate
       BEFORE TRUNCATE ON public.execution_evidence
       FOR EACH STATEMENT EXECUTE FUNCTION public.orient_reject_execution_evidence_mutation();
-  \`},
+  `},
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
