@@ -792,7 +792,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           req,
           res,
           decodeURIComponent(executionResumeMatch[1]),
-          body
+          body,
+          ownerSession ? { sessionId: ownerSession.sessionId } : null
         );
         return;
       }
@@ -802,7 +803,12 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         requestUrl.pathname === '/agent'
       ) {
         const body = await readBody(req);
-        await agentRoutes.execute(req, res, body);
+        await agentRoutes.execute(
+          req,
+          res,
+          body,
+          ownerSession ? { sessionId: ownerSession.sessionId } : null
+        );
         return;
       }
 
