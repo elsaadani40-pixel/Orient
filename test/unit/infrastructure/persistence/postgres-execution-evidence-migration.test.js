@@ -40,3 +40,21 @@ test('PostgresPersistence exposes evidence repository only with explicit signing
   assert.ok(withSigning.executionEvidence);
   assert.equal(withSigning.health().repositories.executionEvidence, true);
 });
+
+
+test('migration 14 binds execution rows to the authenticated runtime owner', () => {
+  const migration = MIGRATIONS.find(item => item.version === 14);
+  assert.ok(migration, 'migration 14 must exist');
+  const sql = migration.sql;
+  for (const fragment of [
+    'ADD COLUMN IF NOT EXISTS owner_id UUID',
+    'idx_executions_tenant_owner_updated',
+    "pg_has_role(current_user, 'orient_runtime', 'MEMBER')",
+    "current_setting('app.orient_owner_id', true)",
+    'NEW.owner_id := configured_owner::uuid',
+    'ORIENT execution ownership is immutable',
+    'BEFORE INSERT OR UPDATE ON public.executions'
+  ]) {
+    assert.ok(sql.includes(fragment), `migration 14 must include: ${fragment}`);
+  }
+});
