@@ -16,6 +16,7 @@ function fixture() {
   const manifest = signTrustManifest({
     version: 1,
     issuedAt: '2026-11-06T10:01:00.000Z',
+    expiresAt: '2026-12-06T10:01:00.000Z',
     keys: { evidence: { publicKey: evidencePublicKey } }
   }, { rootKeyId: 'root', rootPrivateKey });
   let state = null;
