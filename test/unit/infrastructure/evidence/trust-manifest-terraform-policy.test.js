@@ -42,7 +42,7 @@ test('trust-store bucket policy requires conditional create-only object writes',
   assert.match(conditional, /s3:PutObject/);
   assert.match(conditional, /s3:if-none-match/);
   assert.match(conditional, /values\s*=\s*\["true"\]/);
-  assert.match(terraform, /IfNoneMatch:\s*"\*"/);
+  assert.match(adapter, /IfNoneMatch:\s*'\\*'/);
 });
 
 test('trust-store Terraform inputs and operator documentation use the isolated service role', () => {
