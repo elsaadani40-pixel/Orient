@@ -159,7 +159,7 @@ const MIGRATIONS = [
     GRANT SELECT ON TABLE public.schema_migrations TO orient_runtime;
     REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.schema_migrations FROM orient_runtime;
     GRANT USAGE, SELECT ON SEQUENCE public.workflow_lease_fencing_seq TO orient_runtime;
-  `},,
+  `},
   {version:10,sql:`
     CREATE TABLE IF NOT EXISTS gateway_challenges (
       challenge_id UUID PRIMARY KEY,
