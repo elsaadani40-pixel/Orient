@@ -146,6 +146,93 @@ test('execution observations carry evidence metadata without duplicating raw res
   );
 });
 
+test('versioned snapshots require complete matching evidence in context and AgentState', () => {
+  const execution = new ExecutionContext({
+    requestId: 'request-versioned',
+    executionId: 'execution-versioned',
+    input: 'verify persisted observations'
+  });
+  execution.addObservation({
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'completed' }
+  });
+  execution.addObservation({
+    step: 2,
+    tool: 'memory.search',
+    success: true,
+    result: { count: 3 }
+  });
+
+  const snapshot = execution.snapshot();
+  assert.equal(snapshot.evidenceSchemaVersion, 1);
+  assert.equal(
+    ExecutionContext.restore(snapshot).agentState.observations.length,
+    2
+  );
+
+  const missingAgentEvidence = structuredClone(snapshot);
+  delete missingAgentEvidence.agentState.observations[0].evidence;
+  assert.throws(
+    () => ExecutionContext.restore(missingAgentEvidence),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
+  const missingAgentObservation = structuredClone(snapshot);
+  missingAgentObservation.agentState.observations.pop();
+  assert.throws(
+    () => ExecutionContext.restore(missingAgentObservation),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
+  const mismatchedAgentObservation = structuredClone(snapshot);
+  mismatchedAgentObservation.agentState.observations[0].id = 'different-observation';
+  assert.throws(
+    () => ExecutionContext.restore(mismatchedAgentObservation),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
+  const missingContextEvidence = structuredClone(snapshot);
+  delete missingContextEvidence.observations[0].evidence;
+  assert.throws(
+    () => ExecutionContext.restore(missingContextEvidence),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
+  const unsupportedVersion = structuredClone(snapshot);
+  unsupportedVersion.evidenceSchemaVersion = 2;
+  assert.throws(
+    () => ExecutionContext.restore(unsupportedVersion),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+});
+
+test('legacy snapshots without evidence remain restorable', () => {
+  const execution = new ExecutionContext({
+    requestId: 'request-legacy',
+    executionId: 'execution-legacy',
+    input: 'restore historical execution'
+  });
+  execution.addObservation({
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'completed' }
+  });
+
+  const legacySnapshot = structuredClone(execution.snapshot());
+  delete legacySnapshot.evidenceSchemaVersion;
+  delete legacySnapshot.observations[0].evidence;
+  delete legacySnapshot.agentState.observations[0].evidence;
+
+  const restored = ExecutionContext.restore(legacySnapshot);
+  assert.equal(restored.observations.length, 1);
+  assert.equal(restored.observations[0].evidence, undefined);
+  assert.equal(restored.agentState.observations.length, 1);
+  assert.equal(restored.agentState.observations[0].evidence, undefined);
+});
+
 test('failed observations preserve a bounded error code in their evidence record', () => {
   const execution = new ExecutionContext({
     requestId: 'request-2',
