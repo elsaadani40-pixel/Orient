@@ -152,8 +152,8 @@ test('manifest acceptance uses reconstructed active root and rejects retired-roo
     manifestHeadDigest: require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest')
       .verifyTrustManifest(initialManifests[3], initialRoots).digest,
     trustedRootKeys: {
-      'root-1': { publicKey: oldPublic, revokedAt: '2026-11-06T10:02:00.000Z' },
-      'root-2': { publicKey: nextPublic, validFrom: '2026-11-06T10:02:00.000Z' }
+      'root-1': { publicKey: oldPublic, revokedAt: '2026-11-06T10:05:00.000Z' },
+      'root-2': { publicKey: nextPublic, validFrom: '2026-11-06T10:05:00.000Z' }
     }
   };
   const rootTransitionLedger = { async readState() { return rootState; } };
@@ -171,12 +171,12 @@ test('manifest acceptance uses reconstructed active root and rejects retired-roo
     versionStore,
     externalAnchorStore,
     authorize: async () => true,
-    now: () => '2026-11-06T10:05:00.000Z'
+    now: () => '2026-11-06T10:08:00.000Z'
   });
   const nextManifest = signTrustManifest({
     version: 5,
-    issuedAt: '2026-11-06T10:03:00.000Z',
-    expiresAt: '2026-12-06T10:03:00.000Z',
+    issuedAt: '2026-11-06T10:06:00.000Z',
+    expiresAt: '2026-12-06T10:06:00.000Z',
     keys: { 'evidence-key-1': { publicKey: evidencePublic } }
   }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
   const accepted = await service.accept({ manifest: nextManifest, principal: { id: 'owner' } });
@@ -185,8 +185,8 @@ test('manifest acceptance uses reconstructed active root and rejects retired-roo
 
   const nextManifestAgain = signTrustManifest({
     version: 6,
-    issuedAt: '2026-11-06T10:04:00.000Z',
-    expiresAt: '2026-12-06T10:04:00.000Z',
+    issuedAt: '2026-11-06T10:07:00.000Z',
+    expiresAt: '2026-12-06T10:07:00.000Z',
     keys: { 'evidence-key-1': { publicKey: evidencePublic } }
   }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
   assert.equal((await service.accept({
@@ -196,8 +196,8 @@ test('manifest acceptance uses reconstructed active root and rejects retired-roo
 
   const retiredManifest = signTrustManifest({
     version: 7,
-    issuedAt: '2026-11-06T10:04:30.000Z',
-    expiresAt: '2026-12-06T10:04:30.000Z',
+    issuedAt: '2026-11-06T10:07:30.000Z',
+    expiresAt: '2026-12-06T10:07:30.000Z',
     keys: { 'evidence-key-1': { publicKey: evidencePublic } }
   }, { rootKeyId: 'root-1', rootPrivateKey: oldPrivate });
   await assert.rejects(
