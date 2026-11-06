@@ -103,6 +103,18 @@ test('historical verification remains possible but acceptance fails after root r
   );
 });
 
+test('expiring trust manifests require schema version 2', () => {
+  const f = fixture();
+  const manifest = f.create(1);
+  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(verifyTrustManifest({ ...manifest, schemaVersion: 1 }, f.trustedRootKeys), null);
+  assert.throws(() => signTrustManifest({
+    ...manifest,
+    schemaVersion: 1
+  }, { rootKeyId: 'offline-root-1', rootPrivateKey: f.rootPrivateKey }),
+  error => error.code === 'EVIDENCE_TRUST_MANIFEST_VERSION_INVALID');
+});
+
 test('trust manifest rejects payload tampering, unknown roots, and noncanonical signatures', () => {
   const f = fixture();
   const manifest = f.create(1);
