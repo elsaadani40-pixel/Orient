@@ -26,7 +26,29 @@ function createFixture() {
   };
 }
 
-test('memory.add compensates the committed insert when the created audit append throws', () => {
+test('memory.add writes audit receipts into the requested memory scope', async () => {
+  const fixture = createFixture();
+  try {
+    const memory = await fixture.service.add(
+      'scope-specific audit receipt',
+      { type: 'note', scope: 'shared.research' },
+      fixture.context
+    );
+
+    const scopedHistory = await fixture.service.history(memory.id, {
+      ...fixture.context,
+      memoryScope: 'shared.research'
+    });
+    const defaultScopeHistory = await fixture.service.history(memory.id, fixture.context);
+
+    assert.equal(scopedHistory.some(event => event.action === 'memory.created'), true);
+    assert.deepEqual(defaultScopeHistory, []);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('memory.add compensates the committed insert when the created audit append throws', async () => {
   const fixture = createFixture();
   try {
     const originalAppend = fixture.audit.append.bind(fixture.audit);
@@ -37,7 +59,7 @@ test('memory.add compensates the committed insert when the created audit append 
       return originalAppend(event);
     };
 
-    assert.throws(
+    await assert.rejects(
       () => fixture.service.add('must not remain after reported failure', { type: 'note' }, fixture.context),
       error => error.code === 'INVALID_MEMORY' && /injected audit append failure/.test(error.message)
     );
@@ -54,10 +76,10 @@ test('memory.add compensates the committed insert when the created audit append 
   }
 });
 
-test('memory.delete restores the prior active state when the archive audit append throws', () => {
+test('memory.delete restores the prior active state when the archive audit append throws', async () => {
   const fixture = createFixture();
   try {
-    const memory = fixture.service.add('restore me when audit fails', { type: 'note' }, fixture.context);
+    const memory = await fixture.service.add('restore me when audit fails', { type: 'note' }, fixture.context);
     const originalAppend = fixture.audit.append.bind(fixture.audit);
     fixture.audit.append = event => {
       if (event.action === 'memory.archived') {
@@ -66,7 +88,7 @@ test('memory.delete restores the prior active state when the archive audit appen
       return originalAppend(event);
     };
 
-    assert.throws(
+    await assert.rejects(
       () => fixture.service.delete(memory.id, fixture.context),
       /injected archive audit failure/
     );
@@ -79,10 +101,10 @@ test('memory.delete restores the prior active state when the archive audit appen
   }
 });
 
-test('memory.add restores the original record when duplicate reinforcement audit fails', () => {
+test('memory.add restores the original record when duplicate reinforcement audit fails', async () => {
   const fixture = createFixture();
   try {
-    const original = fixture.service.add('same fact', {
+    const original = await fixture.service.add('same fact', {
       type: 'note',
       confidence: 0.6
     }, fixture.context);
@@ -94,7 +116,7 @@ test('memory.add restores the original record when duplicate reinforcement audit
       return originalAppend(event);
     };
 
-    assert.throws(
+    await assert.rejects(
       () => fixture.service.add('same fact', {
         type: 'note',
         confidence: 0.99
@@ -111,7 +133,7 @@ test('memory.add restores the original record when duplicate reinforcement audit
   }
 });
 
-test('a downstream event sink failure does not contradict an already committed audit record', () => {
+test('a downstream event sink failure does not contradict an already committed audit record', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-audit-sink-failure-'));
   try {
     const repository = new JsonMemoryRepository(path.join(directory, 'memories.json'));
@@ -123,7 +145,7 @@ test('a downstream event sink failure does not contradict an already committed a
     const service = new MemoryService(repository, { auditRepository: audit });
     const context = { agentId: 'ORIENT_RUNTIME', tenantId: 'tenant-a' };
 
-    const memory = service.add('durable audit must remain consistent', { type: 'note' }, context);
+    const memory = await service.add('durable audit must remain consistent', { type: 'note' }, context);
     assert.equal(repository.findById(memory.id, 'tenant-a', 'personal').text, memory.text);
     assert.equal(
       audit.findByMemoryId(memory.id, 'tenant-a', 'personal').some(event => event.action === 'memory.created'),
@@ -133,5 +155,18 @@ test('a downstream event sink failure does not contradict an already committed a
     assert.match(audit.lastEventSinkError.message, /injected event sink failure/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('memory audit records inherit the authorized tenant when the event omits tenantId', async () => {
+  const fixture = createFixture();
+  try {
+    const memory = await fixture.service.add('tenant-bound audit event', { type: 'note' }, fixture.context);
+    const events = fixture.audit.findByMemoryId(memory.id, 'tenant-a', 'personal');
+    assert.ok(events.length > 0);
+    assert.equal(events.every(event => event.tenantId === 'tenant-a'), true);
+  } finally {
+    fixture.cleanup();
   }
 });

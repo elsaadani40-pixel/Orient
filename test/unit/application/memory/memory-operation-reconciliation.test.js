@@ -30,7 +30,7 @@ function createFixture() {
   return { directory, coordinator, repository, auditRepository, service };
 }
 
-test('memory.add reconciliation returns the committed memory from its tenant-scoped audit receipt', t => {
+test('memory.add reconciliation returns the committed memory from its tenant-scoped audit receipt', async t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
   const context = {
@@ -39,8 +39,8 @@ test('memory.add reconciliation returns the committed memory from its tenant-sco
     operationId: 'operation-add-a'
   };
 
-  const created = fixture.service.add('reconciliation receipt test', {}, context);
-  const reconciled = fixture.service.reconcileToolOperation('memory.add', {
+  const created = await fixture.service.add('reconciliation receipt test', {}, context);
+  const reconciled = await fixture.service.reconcileToolOperation('memory.add', {
     text: 'reconciliation receipt test'
   }, context);
 
@@ -48,14 +48,14 @@ test('memory.add reconciliation returns the committed memory from its tenant-sco
   assert.equal(reconciled.result.id, created.id);
   assert.equal(reconciled.result.tenantId, 'tenant-a');
   assert.deepEqual(
-    fixture.service.reconcileToolOperation('memory.add', {
+    await fixture.service.reconcileToolOperation('memory.add', {
       text: 'different payload reusing the same operation ID'
     }, context),
     { status: 'unknown', reason: 'add_receipt_target_mismatch' },
     'an operation receipt must not suppress a different requested memory payload'
   );
   assert.deepEqual(
-    fixture.service.reconcileToolOperation('memory.add', {
+    await fixture.service.reconcileToolOperation('memory.add', {
       text: 'reconciliation receipt test',
       type: 'fact'
     }, context),
@@ -63,7 +63,7 @@ test('memory.add reconciliation returns the committed memory from its tenant-sco
     'an operation receipt must not suppress a request for the same text with a different memory type'
   );
   assert.deepEqual(
-    fixture.service.reconcileToolOperation('memory.add', {}, context),
+    await fixture.service.reconcileToolOperation('memory.add', {}, context),
     { status: 'unknown', reason: 'add_target_text_missing' },
     'reconciliation without a target payload must fail closed'
   );
@@ -78,7 +78,7 @@ test('memory.add reconciliation returns the committed memory from its tenant-sco
 });
 
 
-test('memory.add reconciliation survives process exit after commit but before execution completion is recorded', t => {
+test('memory.add reconciliation survives process exit after commit but before execution completion is recorded', async t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
   const root = path.resolve(__dirname, '../../../../');
@@ -100,14 +100,14 @@ test('memory.add reconciliation survives process exit after commit but before ex
       new Repository(path.join(directory, 'memory.json')),
       { auditRepository: new AuditRepository(path.join(directory, 'memory-audit.json')), transactionCoordinator: coordinator }
     );
-    service.add('crash-window reconciliation test', {}, {
+    (async () => { await service.add('crash-window reconciliation test', {}, {
       tenantId: 'tenant-crash',
       memoryScope: 'personal',
       operationId: 'operation-crash-after-commit'
     });
     // Simulate a process crash after the transactional tool mutation committed,
     // but before the AgentLoop could persist idempotency completion.
-    process.exit(23);
+    process.exit(23); })();
   `;
   const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
   assert.equal(child.status, 23, child.stderr || child.stdout);
@@ -125,7 +125,7 @@ test('memory.add reconciliation survives process exit after commit but before ex
     transactionCoordinator: coordinator
   });
 
-  const reconciled = restartedService.reconcileToolOperation('memory.add', {
+  const reconciled = await restartedService.reconcileToolOperation('memory.add', {
     text: 'crash-window reconciliation test'
   }, {
     tenantId: 'tenant-crash',
@@ -136,7 +136,7 @@ test('memory.add reconciliation survives process exit after commit but before ex
   assert.equal(reconciled.result.text, 'crash-window reconciliation test');
 });
 
-test('memory.delete reconciliation reports completion only when its durable archive receipt exists', t => {
+test('memory.delete reconciliation reports completion only when its durable archive receipt exists', async t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
   const createContext = {
@@ -144,25 +144,25 @@ test('memory.delete reconciliation reports completion only when its durable arch
     memoryScope: 'personal',
     operationId: 'operation-create-before-delete'
   };
-  const created = fixture.service.add('delete reconciliation receipt test', {}, createContext);
+  const created = await fixture.service.add('delete reconciliation receipt test', {}, createContext);
   const deleteContext = {
     tenantId: 'tenant-a',
     memoryScope: 'personal',
     operationId: 'operation-delete-a'
   };
 
-  assert.equal(fixture.service.delete(created.id, deleteContext), true);
+  assert.equal(await fixture.service.delete(created.id, deleteContext), true);
   assert.deepEqual(
-    fixture.service.reconcileToolOperation('memory.delete', { id: created.id }, deleteContext),
+    await fixture.service.reconcileToolOperation('memory.delete', { id: created.id }, deleteContext),
     { status: 'completed', result: true }
   );
   assert.deepEqual(
-    fixture.service.reconcileToolOperation('memory.delete', { id: 'different-memory-id' }, deleteContext),
+    await fixture.service.reconcileToolOperation('memory.delete', { id: 'different-memory-id' }, deleteContext),
     { status: 'unknown', reason: 'delete_receipt_not_found_for_target' },
     'a receipt for another memory must not prove this target was deleted'
   );
   assert.deepEqual(
-    fixture.service.reconcileToolOperation('memory.delete', {}, deleteContext),
+    await fixture.service.reconcileToolOperation('memory.delete', {}, deleteContext),
     { status: 'unknown', reason: 'delete_target_id_missing' },
     'reconciliation without a target ID must fail closed'
   );
@@ -172,11 +172,11 @@ test('memory.delete reconciliation reports completion only when its durable arch
   );
 });
 
-test('memory reconciliation fails closed when no committed operation receipt exists', t => {
+test('memory reconciliation fails closed when no committed operation receipt exists', async t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
 
-  const result = fixture.service.reconcileToolOperation('memory.add', {
+  const result = await fixture.service.reconcileToolOperation('memory.add', {
     text: 'not committed'
   }, {
     tenantId: 'tenant-a',
@@ -190,14 +190,14 @@ test('memory reconciliation fails closed when no committed operation receipt exi
   });
 });
 
-test('memory reconciliation fails closed without the durable transaction coordinator', () => {
+test('memory reconciliation fails closed without the durable transaction coordinator', async () => {
   const service = new MemoryService({
     findById() { return null; }
   }, {
     auditRepository: { findByOperationId() { return []; } }
   });
 
-  assert.deepEqual(service.reconcileToolOperation('memory.add', {}, {
+  assert.deepEqual(await service.reconcileToolOperation('memory.add', {}, {
     tenantId: 'tenant-a',
     operationId: 'operation-without-coordinator'
   }), {
@@ -207,10 +207,10 @@ test('memory reconciliation fails closed without the durable transaction coordin
 });
 
 
-test('memory.delete reconciliation survives process exit after archive commit and remains tenant-scoped', t => {
+test('memory.delete reconciliation survives process exit after archive commit and remains tenant-scoped', async t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
-  const created = fixture.service.add('delete crash-window reconciliation test', {}, {
+  const created = await fixture.service.add('delete crash-window reconciliation test', {}, {
     tenantId: 'tenant-delete-crash',
     memoryScope: 'personal',
     operationId: 'operation-create-before-delete-crash'
@@ -235,14 +235,14 @@ test('memory.delete reconciliation survives process exit after archive commit an
       new Repository(path.join(directory, 'memory.json')),
       { auditRepository: new AuditRepository(path.join(directory, 'memory-audit.json')), transactionCoordinator: coordinator }
     );
-    service.delete(memoryId, {
+    (async () => { await service.delete(memoryId, {
       tenantId: 'tenant-delete-crash',
       memoryScope: 'personal',
       operationId: 'operation-delete-crash'
     });
     // Simulate process termination after the archive transaction committed,
     // but before AgentLoop could commit its operation result.
-    process.exit(23);
+    process.exit(23); })();
   `;
   const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
   assert.equal(child.status, 23, child.stderr || child.stdout);
@@ -267,18 +267,18 @@ test('memory.delete reconciliation survives process exit after archive commit an
     operationId: 'operation-delete-crash'
   };
 
-  const reconciled = restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext);
+  const reconciled = await restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext);
   assert.deepEqual(reconciled, { status: 'completed', result: true });
   assert.deepEqual(
-    restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext),
+    await restartedService.reconcileToolOperation('memory.delete', deleteInput, deleteContext),
     reconciled,
     'repeated resume must return the same committed deletion result'
   );
   assert.equal(
-    restartedService.reconcileToolOperation('memory.delete', deleteInput, {
+    (await restartedService.reconcileToolOperation('memory.delete', deleteInput, {
       ...deleteContext,
       tenantId: 'tenant-other'
-    }).status,
+    })).status,
     'unknown',
     'the same operation ID must not expose another tenant receipt'
   );
@@ -292,7 +292,7 @@ test('memory.delete reconciliation survives process exit after archive commit an
 });
 
 
-test('memory.add tool forwards explicit scope to execution and reconciliation', async t => {
+test('memory.add tool forwards explicit scope to async execution and reconciliation', async t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
   const tool = createMemoryTools(fixture.service).find(item => item.name === 'memory.add');
@@ -317,8 +317,7 @@ test('memory.add tool forwards explicit scope to execution and reconciliation', 
       context.tenantId,
       'project'
     ).length,
-    1,
-    'the durable receipt must be written under the same explicit scope used by reconciliation'
+    1
   );
   assert.equal(
     fixture.auditRepository.findByOperationId(
@@ -330,10 +329,10 @@ test('memory.add tool forwards explicit scope to execution and reconciliation', 
   );
 });
 
-test('memory.delete tool forwards explicit scope to execution and reconciliation', async t => {
+test('memory.delete tool forwards explicit scope to async execution and reconciliation', async t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
-  const created = fixture.service.add('project-scoped memory to delete', {
+  const created = await fixture.service.add('project-scoped memory to delete', {
     scope: 'project'
   }, {
     tenantId: 'tenant-scoped-delete',
@@ -364,4 +363,43 @@ test('memory.delete tool forwards explicit scope to execution and reconciliation
     )[0]?.action,
     'memory.archived'
   );
+});
+
+
+test('memory reconciliation locks the tenant scope before reading its receipt and target record', async t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.directory, { recursive: true, force: true }));
+  const calls = [];
+
+  const originalLockScope = fixture.repository.lockScope;
+  fixture.repository.lockScope = async (...args) => {
+    calls.push('scope-lock');
+    if (typeof originalLockScope === 'function') await originalLockScope.apply(fixture.repository, args);
+  };
+  const originalFindReceipt = fixture.auditRepository.findByOperationId;
+  fixture.auditRepository.findByOperationId = (...args) => {
+    calls.push('audit-receipt');
+    return originalFindReceipt.apply(fixture.auditRepository, args);
+  };
+  const originalFindMemory = fixture.repository.findById;
+  fixture.repository.findById = (...args) => {
+    calls.push('memory-record');
+    return originalFindMemory.apply(fixture.repository, args);
+  };
+
+  const context = {
+    tenantId: 'tenant-lock-order',
+    memoryScope: 'personal',
+    operationId: 'operation-lock-order'
+  };
+  const created = await fixture.service.add('scope lock reconciliation proof', {}, context);
+  calls.length = 0;
+
+  const reconciled = await fixture.service.reconcileToolOperation('memory.add', {
+    text: 'scope lock reconciliation proof'
+  }, context);
+
+  assert.equal(reconciled.status, 'completed');
+  assert.equal(reconciled.result.id, created.id);
+  assert.deepEqual(calls, ['scope-lock', 'audit-receipt', 'memory-record']);
 });

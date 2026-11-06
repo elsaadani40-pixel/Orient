@@ -24,20 +24,20 @@ function responseRecorder() {
   };
 }
 
-test('memory page renders saved records after repository is reopened and keeps search on /memory', t => {
+test('memory page renders saved records after repository is reopened and keeps search on /memory', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-page-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'memories.json');
   const context = { agentId: 'ORIENT_RUNTIME', tenantId: 'local' };
   const firstService = new MemoryService(new JsonMemoryRepository(file));
-  const saved = firstService.add('ذاكرة اختبار بعد إعادة التشغيل', {}, context);
+  const saved = await firstService.add('ذاكرة اختبار بعد إعادة التشغيل', {}, context);
   assert.ok(saved.id);
 
   // Simulate a process restart by creating a new repository/service over the same file.
   const restartedService = new MemoryService(new JsonMemoryRepository(file));
   const routes = createMemoryRoutes(restartedService, { appName: 'ORIENT', version: 'test', defaultTenantId: 'local' });
   const response = responseRecorder();
-  routes.home({}, response, new URL('http://localhost/memory'));
+  await routes.home({}, response, new URL('http://localhost/memory'));
 
   assert.equal(response.statusCode, 200);
   assert.match(response.body, /ذاكرة اختبار بعد إعادة التشغيل/);
@@ -45,22 +45,22 @@ test('memory page renders saved records after repository is reopened and keeps s
   assert.match(response.body, /action="\/memory\/add"/);
 });
 
-test('memory add and delete redirects return to the memory page, not the public landing page', () => {
+test('memory add and delete redirects return to the memory page, not the public landing page', async () => {
   const calls = [];
   const service = {
-    add(text, options, context) { calls.push({ operation: 'add', text, context }); return { id: 'memory-1' }; },
-    delete(id, context) { calls.push({ operation: 'delete', id, context }); return true; },
-    list() { return []; }
+    async add(text, options, context) { calls.push({ operation: 'add', text, context }); return { id: 'memory-1' }; },
+    async delete(id, context) { calls.push({ operation: 'delete', id, context }); return true; },
+    async list() { return []; }
   };
   const routes = createMemoryRoutes(service, { appName: 'ORIENT', version: 'test', defaultTenantId: 'local' });
 
   const addResponse = responseRecorder();
-  routes.add({}, addResponse, new URLSearchParams({ text: 'persist this' }).toString());
+  await routes.add({}, addResponse, new URLSearchParams({ text: 'persist this' }).toString());
   assert.equal(addResponse.statusCode, 303);
   assert.equal(addResponse.headers.Location, '/memory');
 
   const deleteResponse = responseRecorder();
-  routes.delete({}, deleteResponse, new URLSearchParams({ id: 'memory-1' }).toString());
+  await routes.delete({}, deleteResponse, new URLSearchParams({ id: 'memory-1' }).toString());
   assert.equal(deleteResponse.statusCode, 303);
   assert.equal(deleteResponse.headers.Location, '/memory');
   assert.deepEqual(calls.map(call => call.operation), ['add', 'delete']);

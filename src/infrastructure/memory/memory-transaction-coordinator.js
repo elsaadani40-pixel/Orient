@@ -320,6 +320,93 @@ class MemoryTransactionCoordinator {
     atomicWrite(this.journalFile, JSON.stringify(journal, null, 2) + '\n');
   }
 
+  async acquireLockAsync() {
+    const deadline = Date.now() + this.lockTimeoutMs;
+    while (true) {
+      try {
+        return this.acquireLock();
+      } catch (error) {
+        if (error.code !== 'MEMORY_TRANSACTION_LOCKED' || Date.now() >= deadline) {
+          throw error;
+        }
+        // Do not use Atomics.wait here: an async transaction must leave the
+        // event loop available for its own awaited work to resume.
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+  }
+
+  async readAsync(operation) {
+    if (typeof operation !== 'function') throw new TypeError('operation must be a function');
+    const owner = await this.acquireLockAsync();
+    try {
+      this._recoverUnlocked();
+      return await operation();
+    } finally {
+      this.releaseLock(owner);
+    }
+  }
+
+  async tryReadAsync(operation) {
+    if (typeof operation !== 'function') throw new TypeError('operation must be a function');
+    let owner;
+    try {
+      owner = this.acquireLock();
+    } catch (error) {
+      if (error.code === 'MEMORY_TRANSACTION_LOCKED') return { acquired: false };
+      throw error;
+    }
+    try {
+      this._recoverUnlocked();
+      return { acquired: true, value: await operation() };
+    } finally {
+      this.releaseLock(owner);
+    }
+  }
+
+  async runAsync(operation) {
+    if (typeof operation !== 'function') throw new TypeError('operation must be a function');
+    const owner = await this.acquireLockAsync();
+    try {
+      this._recoverUnlocked();
+      const snapshots = this.files.map(filePath => {
+        try { return { path: filePath, exists: true, content: fs.readFileSync(filePath, 'utf8') }; }
+        catch (error) {
+          if (error.code === 'ENOENT') return { path: filePath, exists: false };
+          throw error;
+        }
+      });
+      const journal = {
+        version: 1, id: crypto.randomUUID(), phase: 'prepared',
+        createdAt: new Date().toISOString(), snapshots
+      };
+      this.writeJournal(journal);
+
+      let result;
+      try {
+        result = await operation();
+      } catch (operationError) {
+        try { this._recoverUnlocked(); }
+        catch (recoveryError) {
+          const fatal = new Error('Memory transaction failed and rollback recovery is incomplete');
+          fatal.code = 'MEMORY_TRANSACTION_RECOVERY_FAILED';
+          fatal.cause = operationError;
+          fatal.recoveryError = recoveryError;
+          throw fatal;
+        }
+        throw operationError;
+      }
+
+      journal.phase = 'committed';
+      journal.committedAt = new Date().toISOString();
+      this.writeJournal(journal);
+      this._recoverUnlocked();
+      return result;
+    } finally {
+      this.releaseLock(owner);
+    }
+  }
+
   read(operation) {
     if (typeof operation !== 'function') throw new TypeError('operation must be a function');
     const deadline = Date.now() + this.lockTimeoutMs;

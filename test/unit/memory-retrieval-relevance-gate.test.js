@@ -16,7 +16,7 @@ function createService(records) {
   return new MemoryService(repository);
 }
 
-test('search does not return unrelated memories just because they are recent or important', () => {
+test('search does not return unrelated memories just because they are recent or important', async () => {
   const relevant = createMemory({
     text: 'The owner prefers Arabic responses',
     type: 'preference',
@@ -35,7 +35,7 @@ test('search does not return unrelated memories just because they are recent or 
   });
 
   const service = createService([relevant, unrelated]);
-  const results = service.search('Arabic language', {
+  const results = await service.search('Arabic language', {
     tenantId: 'tenant-a',
     memoryScope: 'personal'
   });
@@ -44,7 +44,7 @@ test('search does not return unrelated memories just because they are recent or 
   assert.ok(results[0].relevance > 0);
 });
 
-test('search returns no results when no active memory matches any query token', () => {
+test('search returns no results when no active memory matches any query token', async () => {
   const service = createService([
     createMemory({
       text: 'Schedule a routine maintenance visit',
@@ -54,7 +54,7 @@ test('search returns no results when no active memory matches any query token', 
   ]);
 
   assert.deepEqual(
-    service.search('unrelated astronomy topic', {
+    await service.search('unrelated astronomy topic', {
       tenantId: 'tenant-a',
       memoryScope: 'personal'
     }),
@@ -62,7 +62,7 @@ test('search returns no results when no active memory matches any query token', 
   );
 });
 
-test('search remains tenant- and scope-scoped while applying the relevance gate', () => {
+test('search remains tenant- and scope-scoped while applying the relevance gate', async () => {
   const own = createMemory({
     text: 'Project ORIENT uses a local runtime',
     tenantId: 'tenant-a',
@@ -80,7 +80,7 @@ test('search remains tenant- and scope-scoped while applying the relevance gate'
   });
 
   const service = createService([own, otherTenant, otherScope]);
-  const results = service.search('ORIENT runtime', {
+  const results = await service.search('ORIENT runtime', {
     tenantId: 'tenant-a',
     memoryScope: 'personal'
   });

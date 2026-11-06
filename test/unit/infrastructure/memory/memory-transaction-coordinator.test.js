@@ -289,7 +289,7 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
       `const c = new Coordinator({memoryFile: process.env.MEMORY_FILE, auditFile: process.env.AUDIT_FILE, journalFile: process.env.JOURNAL_FILE});`,
       `const owner = c.acquireLock();`,
       `const staleOwner = {...owner, pid: 2147483647, hostname: os.hostname()};`,
-      `fs.writeFileSync(process.env.LOCK_FILE, JSON.stringify(staleOwner) + '\\n');`,
+      `fs.writeFileSync(process.env.LOCK_FILE, JSON.stringify(staleOwner) + String.fromCharCode(10));`,
       `const stale = new Date(Date.now() - c.lockTimeoutMs - 5000);`,
       `fs.utimesSync(process.env.LOCK_FILE, stale, stale);`,
       `fs.writeFileSync(process.env.HOLDER_READY, 'ready');`,
@@ -362,22 +362,37 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
       HOLDER_RESULT: holderResult,
       RECLAIMER_RESULT: reclaimerResult
     };
-    const launch = script => spawn(process.execPath, ['-e', script], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-      env
-    });
+    const launch = script => {
+      const child = spawn(process.execPath, ['-e', script], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        env
+      });
+      child.diagnosticStderr = '';
+      child.stderr.on('data', chunk => { child.diagnosticStderr += chunk.toString(); });
+      return child;
+    };
     const waitFor = async (signal, child, description) => {
       const deadline = Date.now() + 10000;
       while (!fs.existsSync(signal)) {
-        if (child.exitCode !== null) throw new Error(`${description}: child exited early`);
-        if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}`);
+        if (child.exitCode !== null) {
+          throw new Error(`${description}: child exited early (code=${child.exitCode}, signal=${child.signalCode}): ${child.diagnosticStderr}`);
+        }
+        if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}: ${child.diagnosticStderr}`);
         await new Promise(resolve => setTimeout(resolve, 5));
       }
     };
-    const waitExit = child => new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => resolve({ code, signal }));
-    });
+    const waitExit = child => {
+      // A child can exit while we await the other process. Check the terminal
+      // state before subscribing so an already-emitted exit event cannot leave
+      // this test waiting forever.
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+      }
+      return new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code, signal) => resolve({ code, signal }));
+      });
+    };
 
     holder = launch(holderScript);
     let holderStderr = '';
@@ -428,6 +443,66 @@ test('stale malformed transaction lock fails closed instead of reclaiming a poss
     );
     assert.equal(fs.readFileSync(f.coordinator.lockFile, 'utf8'), '');
     assert.equal(fs.existsSync(`${f.coordinator.lockFile}.recovery`), false);
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
+
+test('async transactions hold the inter-process lock until awaited work commits', async () => {
+  const f = fixture();
+  try {
+    let releaseFirst;
+    const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+    let firstStarted = false;
+    let secondStarted = false;
+    const first = f.coordinator.runAsync(async () => {
+      firstStarted = true;
+      fs.writeFileSync(f.memoryFile, '[{"id":"async-first"}]\n');
+      await firstGate;
+      fs.writeFileSync(f.auditFile, '[{"action":"async-first"}]\n');
+      return 'first';
+    });
+    while (!firstStarted) await new Promise(resolve => setTimeout(resolve, 1));
+
+    const second = f.coordinator.runAsync(async () => {
+      secondStarted = true;
+      fs.writeFileSync(f.memoryFile, '[{"id":"async-second"}]\n');
+      fs.writeFileSync(f.auditFile, '[{"action":"async-second"}]\n');
+      return 'second';
+    });
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(secondStarted, false, 'a second transaction must not enter while the first awaits');
+    assert.equal(fs.existsSync(f.journalFile), true, 'prepared journal remains durable while async work is pending');
+
+    releaseFirst();
+    assert.equal(await first, 'first');
+    assert.equal(await second, 'second');
+    assert.equal(JSON.parse(fs.readFileSync(f.memoryFile, 'utf8'))[0].id, 'async-second');
+    assert.equal(JSON.parse(fs.readFileSync(f.auditFile, 'utf8'))[0].action, 'async-second');
+    assert.equal(fs.existsSync(f.journalFile), false);
+    assert.equal(fs.existsSync(f.coordinator.lockFile), false);
+  } finally {
+    fs.rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
+test('failed async transaction restores both before-images after awaited failure', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(
+      f.coordinator.runAsync(async () => {
+        fs.writeFileSync(f.memoryFile, '[{"id":"async-partial"}]\n');
+        await Promise.resolve();
+        fs.writeFileSync(f.auditFile, '[{"action":"async-partial"}]\n');
+        throw new Error('simulated async transaction failure');
+      }),
+      /simulated async transaction failure/
+    );
+    assert.equal(fs.readFileSync(f.memoryFile, 'utf8'), '[{"id":"before"}]\n');
+    assert.equal(fs.readFileSync(f.auditFile, 'utf8'), '[{"action":"before"}]\n');
+    assert.equal(fs.existsSync(f.journalFile), false);
+    assert.equal(fs.existsSync(f.coordinator.lockFile), false);
   } finally {
     fs.rmSync(f.directory, { recursive: true, force: true });
   }

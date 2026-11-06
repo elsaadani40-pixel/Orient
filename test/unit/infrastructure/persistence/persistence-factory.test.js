@@ -3,9 +3,6 @@ const assert = require('node:assert/strict');
 
 const createPersistence = require('../../../../src/infrastructure/persistence/persistence-factory');
 const JsonPersistence = require('../../../../src/infrastructure/persistence/json-persistence');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 
 const baseConfig = {
   persistenceMode: 'json',
@@ -48,16 +45,48 @@ test('persistence factory requires a database URL for PostgreSQL mode', () => {
 });
 
 
-test('persistence factory selects SQLite with durable memory repositories', async () => {
+test('persistence factory selects SQLite and exposes memory repositories', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-factory-sqlite-'));
   const filePath = path.join(directory, 'memory.db');
-  const result = createPersistence({ ...baseConfig, persistenceMode: 'sqlite', databaseFile: filePath });
+  const result = createPersistence({
+    ...baseConfig,
+    persistenceMode: 'sqlite',
+    databaseFile: filePath
+  });
+  let closePromise;
   try {
     assert.equal(result.adapter.health().adapter, 'sqlite');
     assert.equal(result.adapter.health().repositories.memory, true);
     assert.equal(typeof result.adapter.memory.findAll, 'function');
     assert.equal(typeof result.adapter.memoryAudit.append, 'function');
-    assert.equal(typeof result.adapter.memoryTransactionCoordinator.run, 'function');
+    closePromise = result.close();
+    const closeResult = closePromise;
+    assert.equal(typeof closeResult?.then, 'function', 'persistence close must always return a Promise');
+    await closeResult;
+  } finally {
+    if (closePromise) await closePromise;
+    else await result.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite factory preserves the existing orient.db location when no override is supplied', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-factory-default-sqlite-'));
+  const result = createPersistence({
+    ...baseConfig,
+    agentDataDirectory: directory,
+    persistenceMode: 'sqlite',
+    databaseFile: undefined
+  });
+  try {
+    assert.equal(result.adapter.db.filePath, path.join(directory, 'orient.db'));
   } finally {
     await result.close();
     fs.rmSync(directory, { recursive: true, force: true });

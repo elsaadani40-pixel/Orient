@@ -40,6 +40,10 @@ class PostgresTenantQuotaRepository {
       await client.query(
         `DELETE FROM tenant_quota_reservations r
          WHERE r.tenant_id=$1
+           -- Admission reserves quota before the workflow payload is persisted.
+           -- Keep recent reservations visible so concurrent admission cannot
+           -- mistake an in-flight enqueue for an orphan.
+           AND r.reserved_at <= NOW() - INTERVAL '5 minutes'
            AND NOT EXISTS (SELECT 1 FROM workflows w WHERE w.workflow_id=r.workflow_id AND w.tenant_id=r.tenant_id)`,
         [tenantId]
       );
@@ -47,7 +51,7 @@ class PostgresTenantQuotaRepository {
         'SELECT tenant_id,workflow_id,state,reserved_at,expires_at FROM tenant_quota_reservations WHERE tenant_id=$1 AND workflow_id=$2 LIMIT 1',
         [tenantId,workflowId]
       );
-      if (existing.rowCount === 1) return existing.rows[0];
+      if (existing.rowCount === 1) return { ...existing.rows[0], created: false };
       const counts = (await client.query(
         `SELECT
            COUNT(*) FILTER (WHERE state='RUNNING')::int AS active,
@@ -71,13 +75,26 @@ class PostgresTenantQuotaRepository {
         [tenantId,workflowId,expiresAt]
       );
       if (inserted.rowCount !== 1) {
-        const error = new Error('Workflow quota reservation already exists');
-        error.code = 'TENANT_QUOTA_RESERVATION_EXISTS';
+        const conflict = await client.query(
+          'SELECT tenant_id,workflow_id,state,reserved_at,expires_at FROM tenant_quota_reservations WHERE workflow_id=$1 LIMIT 1',
+          [workflowId]
+        );
+        if (conflict.rowCount === 1 && conflict.rows[0].tenant_id !== tenantId) {
+          const error = new Error('Workflow quota reservation belongs to another tenant');
+          error.code = 'TENANT_QUOTA_RESERVATION_TENANT_MISMATCH';
+          throw error;
+        }
+        if (conflict.rowCount === 1) return { ...conflict.rows[0], created: false };
+        // The conflicting row disappeared before it could be observed. Do not
+        // report this as an existing reservation: callers may safely tolerate
+        // TENANT_QUOTA_RESERVATION_EXISTS only when that reservation is real.
+        const error = new Error('Workflow quota reservation conflict could not be resolved');
+        error.code = 'TENANT_QUOTA_RESERVATION_RACE';
         throw error;
       }
-      return inserted.rows[0];
+      return { ...inserted.rows[0], created: true };
     });
-    return this.toModel(result);
+    return { ...this.toModel(result), created: Boolean(result.created) };
   }
 
   async promoteWorkflow({tenantId,workflowId,expiresAt=null,fencingToken=null}) {
@@ -149,10 +166,11 @@ class PostgresTenantQuotaRepository {
     return result.rowCount === 1;
   }
 
-  async releaseWorkflow({tenantId,workflowId,fencingToken=null}) {
+  async releaseWorkflow({tenantId,workflowId,fencingToken=null,reservedAt=null}) {
     const params=[tenantId,workflowId];
     let predicate='tenant_id=$1 AND workflow_id=$2';
-    if(fencingToken!=null){params.push(Number(fencingToken));predicate+=' AND fencing_token=$3';}
+    if(fencingToken!=null){params.push(Number(fencingToken));predicate+=` AND fencing_token=$${params.length}`;}
+    if(reservedAt!=null){params.push(reservedAt);predicate+=` AND reserved_at=$${params.length}`;}
     const result = await this.db.query(
       `DELETE FROM tenant_quota_reservations WHERE ${predicate}`,
       params

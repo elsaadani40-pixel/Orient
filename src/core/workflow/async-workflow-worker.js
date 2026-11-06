@@ -23,7 +23,7 @@ class AsyncWorkflowWorker{
     if(workerHeartbeatError){leaseLost=true;break;}
     if(lease.cancelled||instance.cancelRequested){const from=instance.state;if(instance.state!=='CANCELLED')instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
     if(lease.deadlineAt&&new Date(lease.deadlineAt).getTime()<=this.now()){instance.metadata.deadlineExceeded=true;instance.metadata.failureCode='WORKFLOW_DEADLINE_EXCEEDED';const from=instance.state;if(instance.state!=='FAILED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);break;}
-    await this.scheduler.renewAsync(instance.workflowId,lease.leaseId);if(workerHeartbeatError){leaseLost=true;break;}
+    try{await this.scheduler.renewAsync(instance.workflowId,lease.leaseId);}catch(error){if(['WORKFLOW_LEASE_NOT_OWNER','WORKFLOW_LEASE_EXPIRED','WORKFLOW_FENCING_REJECTED'].includes(error?.code)){leaseLost=true;break;}throw error;}if(workerHeartbeatError){leaseLost=true;break;}
     const ready=instance.readySteps();if(!ready.length){const done=instance.definition.steps.every(s=>instance.steps[s.id].state===WorkflowDefinition.STEP_STATES.COMPLETED);const from=instance.state;if(done)instance.transition('COMPLETED');else if(instance.state!=='FAILED'&&instance.state!=='CANCELLED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);break;}
     const step=ready[0];if(lease.fencingToken!==undefined&&typeof this.scheduler.assertCurrentAsync==='function')await this.scheduler.assertCurrentAsync(instance.workflowId,lease.leaseId,lease.fencingToken);instance.markStepRunning(step.id);
     try{
@@ -47,7 +47,7 @@ class AsyncWorkflowWorker{
       this.emitState(instance,from,instance.state,lease);
       break;
      }
-     instance.markStepFailed(step.id,error);instance.metadata.failedStepId=step.id;const retried=this.retryClassifier(error,{instance,step,lease})&&await this.scheduler.retryAsync(instance,{error,priority:instance.metadata.priority||0});if(!retried){const from=instance.state;if(instance.state!=='FAILED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);instance.metadata.failureCode=error?.code||'WORKFLOW_STEP_FAILED';}else if(instance.state!=='RUNNING'){this.emitState(instance,'RUNNING',instance.state,lease);if(instance.state==='QUEUED')this.emitState(instance,'WAITING','QUEUED',lease);}break;
+     instance.markStepFailed(step.id,error);instance.metadata.failedStepId=step.id;let retried=false;try{retried=this.retryClassifier(error,{instance,step,lease})&&await this.scheduler.retryAsync(instance,{error,priority:instance.metadata.priority||0});}catch(retryError){if(['WORKFLOW_LEASE_NOT_OWNER','WORKFLOW_LEASE_EXPIRED','WORKFLOW_FENCING_REJECTED'].includes(retryError?.code)){leaseLost=true;break;}throw retryError;}if(!retried){const from=instance.state;if(instance.state!=='FAILED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);instance.metadata.failureCode=error?.code||'WORKFLOW_STEP_FAILED';}else if(instance.state!=='RUNNING'){this.emitState(instance,'RUNNING',instance.state,lease);if(instance.state==='QUEUED')this.emitState(instance,'WAITING','QUEUED',lease);}break;
     }
    }
    if(leaseLost)return null;await this.scheduler.persistAsync(instance);return instance;

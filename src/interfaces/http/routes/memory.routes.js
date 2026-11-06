@@ -264,9 +264,9 @@ function createMemoryRoutes(memoryService, config) {
   };
 
   return {
-    home(req, res, url) {
+    async home(req, res, url) {
       const query = (url.searchParams.get('q') || '').trim();
-      const memories = memoryService.list(query, memoryContext);
+      const memories = await memoryService.list(query, memoryContext);
 
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
@@ -276,10 +276,10 @@ function createMemoryRoutes(memoryService, config) {
       res.end(renderPage(memories, query, config));
     },
 
-    add(req, res, body) {
+    async add(req, res, body) {
       const text = new URLSearchParams(body).get('text') || '';
 
-      memoryService.add(text, {}, memoryContext);
+      await memoryService.add(text, {}, memoryContext);
 
       res.writeHead(303, {
         Location: '/memory'
@@ -288,10 +288,10 @@ function createMemoryRoutes(memoryService, config) {
       res.end();
     },
 
-    delete(req, res, body) {
+    async delete(req, res, body) {
       const id = new URLSearchParams(body).get('id') || '';
 
-      memoryService.delete(id, memoryContext);
+      await memoryService.delete(id, memoryContext);
 
       res.writeHead(303, {
         Location: '/memory'

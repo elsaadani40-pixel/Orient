@@ -57,7 +57,7 @@ async function runInFlightMutation(mode) {
 
   try {
     if (mode === 'delete') {
-      const seeded = fixture.service.add('target memory for in-flight delete', {}, {
+      const seeded = await fixture.service.add('target memory for in-flight delete', {}, {
         tenantId,
         memoryScope: 'personal',
         operationId: 'operation-seed-delete-target'
@@ -100,8 +100,10 @@ async function runInFlightMutation(mode) {
       '};',
       'const service = new Service(new Repository(memoryFile), { auditRepository, transactionCoordinator: coordinator });',
       'const context = { tenantId, memoryScope: "personal", operationId };',
-      'if (mode === "add") service.add(text, { scope: "personal" }, context);',
-      'else service.delete(memoryId, context);'
+      '(async () => {',
+      '  if (mode === "add") await service.add(text, { scope: "personal" }, context);',
+      '  else await service.delete(memoryId, context);',
+      '})();'
     ].join(String.fromCharCode(10));
 
     child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -118,7 +120,7 @@ async function runInFlightMutation(mode) {
         ? { text, scope: 'personal' }
         : { id: memoryId, scope: 'personal' };
       const context = { tenantId, memoryScope: 'personal', operationId };
-      const duringMutation = fixture.service.reconcileToolOperation(
+      const duringMutation = await fixture.service.reconcileToolOperation(
         mode === 'add' ? 'memory.add' : 'memory.delete',
         input,
         context
@@ -139,7 +141,7 @@ async function runInFlightMutation(mode) {
       ? { text, scope: 'personal' }
       : { id: memoryId, scope: 'personal' };
     const context = { tenantId, memoryScope: 'personal', operationId };
-    const afterCommit = fixture.service.reconcileToolOperation(
+    const afterCommit = await fixture.service.reconcileToolOperation(
       mode === 'add' ? 'memory.add' : 'memory.delete',
       input,
       context

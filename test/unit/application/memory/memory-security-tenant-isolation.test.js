@@ -37,11 +37,11 @@ function createService() {
   };
 }
 
-test('memory access requires canonical tenant identity', () => {
+test('memory access requires canonical tenant identity', async () => {
   const fixture = createService();
   try {
-    assert.throws(
-      () => fixture.service.list('', { agentId: 'MEMORY_AGENT' }),
+    await assert.rejects(
+      async () => fixture.service.list('', { agentId: 'MEMORY_AGENT' }),
       error => error.code === 'MEMORY_TENANT_REQUIRED'
     );
   } finally {
@@ -49,63 +49,63 @@ test('memory access requires canonical tenant identity', () => {
   }
 });
 
-test('tenant identity cannot be overridden by memory tool input', () => {
+test('tenant identity cannot be overridden by memory tool input', async () => {
   const fixture = createService();
   try {
-    const stored = fixture.service.add(
+    const stored = await fixture.service.add(
       'Tenant A secret',
       { type: 'note', tenantId: 'tenant-b' },
       { agentId: 'MEMORY_AGENT', tenantId: 'tenant-a' }
     );
 
     assert.equal(stored.tenantId, 'tenant-a');
-    assert.equal(fixture.service.list('', {
+    assert.equal((await fixture.service.list('', {
       agentId: 'MEMORY_AGENT', tenantId: 'tenant-a'
-    }).length, 1);
-    assert.equal(fixture.service.list('', {
+    })).length, 1);
+    assert.equal((await fixture.service.list('', {
       agentId: 'MEMORY_AGENT', tenantId: 'tenant-b'
-    }).length, 0);
+    })).length, 0);
   } finally {
     fixture.cleanup();
   }
 });
 
-test('cross-tenant reads and deletes are isolated', () => {
+test('cross-tenant reads and deletes are isolated', async () => {
   const fixture = createService();
   try {
-    const stored = fixture.service.add(
+    const stored = await fixture.service.add(
       'Tenant A memory',
       {},
       { agentId: 'MEMORY_AGENT', tenantId: 'tenant-a' }
     );
 
-    assert.throws(
-      () => fixture.service.get(stored.id, {
+    await assert.rejects(
+      async () => fixture.service.get(stored.id, {
         agentId: 'MEMORY_AGENT', tenantId: 'tenant-b'
       }),
       error => error.code === 'MEMORY_NOT_FOUND'
     );
 
-    assert.throws(
-      () => fixture.service.delete(stored.id, {
+    await assert.rejects(
+      async () => fixture.service.delete(stored.id, {
         agentId: 'MEMORY_AGENT', tenantId: 'tenant-b'
       }),
       error => error.code === 'MEMORY_NOT_FOUND'
     );
 
-    assert.equal(fixture.service.get(stored.id, {
+    assert.equal((await fixture.service.get(stored.id, {
       agentId: 'MEMORY_AGENT', tenantId: 'tenant-a'
-    }).text, 'Tenant A memory');
+    })).text, 'Tenant A memory');
   } finally {
     fixture.cleanup();
   }
 });
 
-test('agent scope boundary is enforced before repository access', () => {
+test('agent scope boundary is enforced before repository access', async () => {
   const fixture = createService();
   try {
-    assert.throws(
-      () => fixture.service.list('', {
+    await assert.rejects(
+      async () => fixture.service.list('', {
         agentId: 'RESEARCH_AGENT',
         tenantId: 'tenant-a',
         memoryScope: 'shared.memory'
@@ -117,26 +117,26 @@ test('agent scope boundary is enforced before repository access', () => {
   }
 });
 
-test('allowed shared scopes are isolated from other scopes', () => {
+test('allowed shared scopes are isolated from other scopes', async () => {
   const fixture = createService();
   try {
-    const stored = fixture.service.add(
+    const stored = await fixture.service.add(
       'Research-only memory',
       { scope: 'shared.research' },
       { agentId: 'RESEARCH_AGENT', tenantId: 'tenant-a' }
     );
 
     assert.equal(stored.scope, 'shared.research');
-    assert.equal(fixture.service.list('', {
+    assert.equal((await fixture.service.list('', {
       agentId: 'RESEARCH_AGENT',
       tenantId: 'tenant-a',
       memoryScope: 'personal'
-    }).length, 0);
-    assert.equal(fixture.service.list('', {
+    })).length, 0);
+    assert.equal((await fixture.service.list('', {
       agentId: 'RESEARCH_AGENT',
       tenantId: 'tenant-a',
       memoryScope: 'shared.research'
-    }).length, 1);
+    })).length, 1);
   } finally {
     fixture.cleanup();
   }

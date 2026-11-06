@@ -105,6 +105,26 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
   assert.match(insertCall.text, /RETURNING fencing_token/);
 });
 
+test('Postgres workflow upserts cannot transfer a workflow ID across tenants', async () => {
+  const db = fakeDb([{ rows: [], rowCount: 0 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  const instance = {
+    workflowId: 'shared-workflow-id',
+    tenantId: 'tenant-b',
+    state: 'QUEUED',
+    updatedAt: new Date().toISOString(),
+    metadata: {},
+    toJSON() { return this; }
+  };
+
+  await assert.rejects(
+    () => repo.save(instance, 'tenant-b'),
+    error => error.code === 'WORKFLOW_TENANT_MISMATCH'
+  );
+  assert.match(db.calls[0].text, /WHERE workflows\.tenant_id=EXCLUDED\.tenant_id/);
+  assert.match(db.calls[0].text, /RETURNING workflow_id/);
+});
+
 test('Postgres workflow writes reject stale fencing tokens', async () => {
   const db = fakeDb([{ rows: [], rowCount: 0 }]);
   const repo = new PostgresWorkflowRepository(db);
@@ -234,4 +254,121 @@ test('Postgres approval repository supports durable tenant-scoped execution and 
   assert.equal(pending[0].approvalId, 'approval-1');
   assert.match(db.calls[1].text, /tenant_id=\$1 AND used=FALSE AND expires_at>\$2.*LIMIT \$3/);
   assert.deepEqual(db.calls[1].values, ['tenant-a', '2026-10-10T10:00:00.000Z', 10]);
+});
+
+
+test('Postgres database routes concurrent transaction queries to isolated pinned clients', async () => {
+  const { PostgresDatabase } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
+  const calls = [];
+  let nextClient = 0;
+  const pool = {
+    async connect() {
+      const clientId = ++nextClient;
+      return {
+        async query(text) {
+          calls.push({ clientId, text });
+          return { rows: [], rowCount: 0 };
+        },
+        release() { calls.push({ clientId, text: 'RELEASE' }); }
+      };
+    },
+    async query(text) {
+      calls.push({ clientId: 'pool', text });
+      return { rows: [], rowCount: 0 };
+    }
+  };
+  const db = new PostgresDatabase({ pool });
+  let releaseFirst;
+  const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+  let firstEntered;
+  const enteredFirst = new Promise(resolve => { firstEntered = resolve; });
+
+  const first = db.transaction(async () => {
+    await db.query('FIRST_BEFORE_WAIT');
+    firstEntered();
+    await firstGate;
+    await db.query('FIRST_AFTER_WAIT');
+  });
+  await enteredFirst;
+  const second = db.transaction(async () => {
+    await db.query('SECOND_QUERY');
+    await db.transaction(() => db.query('SECOND_NESTED_QUERY'));
+  });
+  await second;
+  releaseFirst();
+  await first;
+
+  const firstBefore = calls.find(call => call.text === 'FIRST_BEFORE_WAIT');
+  const firstAfter = calls.find(call => call.text === 'FIRST_AFTER_WAIT');
+  const secondQuery = calls.find(call => call.text === 'SECOND_QUERY');
+  const nestedQuery = calls.find(call => call.text === 'SECOND_NESTED_QUERY');
+  assert.equal(firstBefore.clientId, firstAfter.clientId);
+  assert.equal(secondQuery.clientId, nestedQuery.clientId);
+  assert.notEqual(firstBefore.clientId, secondQuery.clientId);
+  assert.equal(calls.some(call => call.clientId === 'pool'), false);
+  assert.equal(calls.filter(call => call.text === 'BEGIN').length, 2);
+  assert.equal(calls.filter(call => call.text === 'COMMIT').length, 2);
+});
+
+test('Postgres database rolls back and releases its pinned client when work fails', async () => {
+  const { PostgresDatabase } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
+  const calls = [];
+  const pool = {
+    async connect() {
+      return {
+        async query(text) { calls.push(text); return { rows: [], rowCount: 0 }; },
+        release() { calls.push('RELEASE'); }
+      };
+    },
+    async query() { throw new Error('unexpected pool query'); }
+  };
+  const db = new PostgresDatabase({ pool });
+  await assert.rejects(
+    () => db.transaction(async () => {
+      await db.query('WRITE_THEN_FAIL');
+      throw new Error('injected failure');
+    }),
+    /injected failure/
+  );
+  assert.deepEqual(calls, ['BEGIN', 'WRITE_THEN_FAIL', 'ROLLBACK', 'RELEASE']);
+});
+
+
+test('Postgres initialization upgrades an existing version-7 schema through versions 8 and 9 in order', async () => {
+  const { PostgresDatabase, MIGRATIONS } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
+  const calls = [];
+  const pool = {
+    async connect() {
+      return {
+        async query(text, values = []) {
+          calls.push({ text, values });
+          if (text.includes('COALESCE(MAX(version),0)::int AS version')) {
+            return { rows: [{ version: 7 }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 0 };
+        },
+        release() {
+          calls.push({ text: 'RELEASE', values: [] });
+        }
+      };
+    },
+    async query() {
+      throw new Error('initialization must use its pinned client');
+    }
+  };
+
+  const database = new PostgresDatabase({ pool });
+  await database.initialize();
+
+  const appliedMigrations = calls
+    .filter(call => MIGRATIONS.some(migration => migration.version > 7 && migration.sql === call.text))
+    .map(call => MIGRATIONS.find(migration => migration.version > 7 && migration.sql === call.text).version);
+  assert.deepEqual(appliedMigrations, [8, 9]);
+  assert.deepEqual(
+    calls
+      .filter(call => call.text === 'INSERT INTO schema_migrations(version) VALUES($1)')
+      .map(call => call.values[0]),
+    [8, 9]
+  );
+  assert.equal(calls.at(-1).text, 'RELEASE');
 });

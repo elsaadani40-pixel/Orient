@@ -1,161 +1,168 @@
 'use strict';
 
-const crypto = require('node:crypto');
 const { normalizeMemory } = require('../../../domain/memory/memory.entity');
 
 class SqliteMemoryRepository {
-  constructor(db) { this.db = db; }
-  normalize(memory) {
-    const item = normalizeMemory(memory);
-    if (!item.text) throw new TypeError('Memory text cannot be empty');
-    return item;
-  }
-  findAll(tenantId = 'local', scope = null) {
-    if (tenantId && typeof tenantId === 'object') {
-      scope = tenantId.scope || null;
-      tenantId = tenantId.tenantId || 'local';
+  constructor(db) {
+    if (!db || typeof db.run !== 'function' || typeof db.query !== 'function') {
+      throw new TypeError('SQLite database adapter is required');
     }
-    const rows = this.db.query(
-      'SELECT payload FROM memories WHERE tenant_id = ? ORDER BY rowid DESC',
-      [String(tenantId)]
-    );
-    return rows.map(row => JSON.parse(row.payload))
-      .filter(item => !scope || item.scope === scope);
+    this.db = db;
   }
+
+  findAll(tenantId = 'local', scope = null) {
+    const params = [tenantId || 'local'];
+    let where = 'tenant_id = ?';
+    if (scope) { where += ' AND scope = ?'; params.push(scope); }
+    return this.db.query(
+      `SELECT payload FROM memories WHERE ${where} ORDER BY created_at DESC, memory_id DESC`,
+      params
+    ).map(row => JSON.parse(row.payload));
+  }
+
   findById(id, tenantId = 'local', scope = null) {
-    const rows = this.db.query(
-      'SELECT payload FROM memories WHERE memory_id = ? AND tenant_id = ? LIMIT 1',
-      [id, String(tenantId)]
-    );
-    if (!rows.length) return null;
-    const item = JSON.parse(rows[0].payload);
-    return !scope || item.scope === scope ? item : null;
+    if (!id) return null;
+    const params = [tenantId || 'local', id];
+    let where = 'tenant_id = ? AND memory_id = ?';
+    if (scope) { where += ' AND scope = ?'; params.push(scope); }
+    const rows = this.db.query(`SELECT payload FROM memories WHERE ${where} LIMIT 1`, params);
+    return rows.length ? JSON.parse(rows[0].payload) : null;
   }
+
   findByFingerprint({ tenantId = 'local', scope = null, type, text }) {
-    const value = String(text || '').trim().toLowerCase();
-    return this.findAll(tenantId, scope).find(item =>
-      item.state === 'active' && item.type === type &&
-      item.text.trim().toLowerCase() === value
-    ) || null;
+    const params = [tenantId || 'local', type, String(text || '').trim()];
+    let scopeClause = '';
+    if (scope) { scopeClause = ' AND scope = ?'; params.push(scope); }
+    const rows = this.db.query(
+      `SELECT payload FROM memories WHERE tenant_id = ? AND json_extract(payload, '$.type') = ?
+       AND lower(trim(json_extract(payload, '$.text'))) = lower(trim(?))
+       AND json_extract(payload, '$.state') != 'archived'${scopeClause}
+       ORDER BY created_at DESC LIMIT 1`,
+      params
+    );
+    return rows.length ? JSON.parse(rows[0].payload) : null;
   }
-  findActiveBySemanticKey(semanticKey, tenantId = 'local', scope = null) {
-    const key = String(semanticKey || '').trim();
+
+  findActiveBySemanticKey(key, tenantId = 'local', scope = null) {
     if (!key) return null;
-    return this.findAll(tenantId, scope).find(item =>
-      item.state === 'active' && item.semanticKey === key
-    ) || null;
+    const params = [tenantId || 'local', key];
+    let scopeClause = '';
+    if (scope) { scopeClause = ' AND scope = ?'; params.push(scope); }
+    const rows = this.db.query(
+      `SELECT payload FROM memories WHERE tenant_id = ?
+       AND json_extract(payload, '$.semanticKey') = ?
+       AND json_extract(payload, '$.state') = 'active'${scopeClause}
+       ORDER BY updated_at DESC LIMIT 1`,
+      params
+    );
+    return rows.length ? JSON.parse(rows[0].payload) : null;
   }
+
   insert(memory) {
-    const item = this.normalize(memory);
+    const item = normalizeMemory(memory);
     this.db.run(
-      'INSERT INTO memories(memory_id, tenant_id, scope, state, type, semantic_key, text, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [item.id, item.tenantId, item.scope, item.state, item.type, item.semanticKey, item.text, JSON.stringify(item)]
+      'INSERT INTO memories(memory_id, tenant_id, scope, created_at, updated_at, payload) VALUES(?,?,?,?,?,?)',
+      [item.id, item.tenantId, item.scope, item.createdAt, item.updatedAt, JSON.stringify(item)]
     );
     return item;
   }
+
   update(id, patch, tenantId = 'local', scope = null) {
-    if (!patch || typeof patch !== 'object') throw new TypeError('patch must be an object');
     const current = this.findById(id, tenantId, scope);
     if (!current) return null;
-    if (patch.tenantId !== undefined && String(patch.tenantId) !== current.tenantId) {
-      throw Object.assign(new Error('Memory tenant is immutable'), { code: 'MEMORY_TENANT_IMMUTABLE' });
-    }
-    if (patch.scope !== undefined && String(patch.scope) !== current.scope) {
-      throw Object.assign(new Error('Memory scope is immutable'), { code: 'MEMORY_SCOPE_IMMUTABLE' });
-    }
-    const item = this.normalize({
-      ...current, ...patch, id: current.id, tenantId: current.tenantId,
-      scope: current.scope, updatedAt: patch.updatedAt || new Date().toISOString()
+    const updated = normalizeMemory({
+      ...current, ...patch, id: current.id,
+      tenantId: current.tenantId, scope: current.scope
     });
+    const effectiveTenantId = current.tenantId || tenantId || 'local';
     const result = this.db.run(
-      'UPDATE memories SET state = ?, type = ?, semantic_key = ?, text = ?, payload = ? WHERE memory_id = ? AND tenant_id = ? AND scope = ?',
-      [item.state, item.type, item.semanticKey, item.text, JSON.stringify(item), id, current.tenantId, current.scope]
+      'UPDATE memories SET updated_at = ?, payload = ? WHERE tenant_id = ? AND memory_id = ? AND scope = ?',
+      [updated.updatedAt, JSON.stringify(updated), effectiveTenantId, id, current.scope]
     );
-    return Number(result.changes) === 1 ? item : null;
+    return result.changes === 1 ? updated : null;
   }
+
   deleteById(id, tenantId = 'local', scope = null) {
-    const current = this.findById(id, tenantId, scope);
-    if (!current) return false;
-    const result = this.db.run(
-      'DELETE FROM memories WHERE memory_id = ? AND tenant_id = ? AND scope = ?',
-      [id, current.tenantId, current.scope]
-    );
-    return Number(result.changes) === 1;
+    const params = [tenantId || 'local', id];
+    let where = 'tenant_id = ? AND memory_id = ?';
+    if (scope) { where += ' AND scope = ?'; params.push(scope); }
+    return this.db.run(`DELETE FROM memories WHERE ${where}`, params).changes === 1;
   }
 }
 
 class SqliteMemoryAuditRepository {
-  constructor(db, transactionCoordinator = null) {
+  constructor(db) {
+    if (!db || typeof db.run !== 'function' || typeof db.query !== 'function') {
+      throw new TypeError('SQLite database adapter is required');
+    }
     this.db = db;
-    this.transactionCoordinator = transactionCoordinator;
     this.eventSink = null;
+    this.lastEventSinkError = null;
   }
 
-  setEventSink(eventSink) {
-    this.eventSink = typeof eventSink === 'function' ? eventSink : null;
-    return this;
+  setEventSink(sink) {
+    this.eventSink = typeof sink === 'function' ? sink : null;
   }
 
   append(event) {
     const record = {
       ...event,
-      id: event.id || crypto.randomUUID(),
+      id: event.id || require('node:crypto').randomUUID(),
       occurredAt: event.occurredAt || new Date().toISOString()
     };
     this.db.run(
-      'INSERT INTO memory_audit(event_id, tenant_id, scope, memory_id, operation_id, occurred_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [record.id, String(record.tenantId || 'local'), record.scope || null,
-        record.memoryId || null, record.operationId || null, record.occurredAt, JSON.stringify(record)]
+      'INSERT INTO memory_audit(event_id, tenant_id, scope, memory_id, operation_id, occurred_at, payload) VALUES(?,?,?,?,?,?,?)',
+      [record.id, record.tenantId || 'local', record.scope || 'personal',
+        record.memoryId || null, record.operationId || null,
+        record.occurredAt, JSON.stringify(record)]
     );
     if (this.eventSink) {
-      const eventTypeByAction = {
-        'memory.created': 'memory.created',
-        'memory.reinforced': 'memory.reinforced',
-        'memory.conflict.resolved': 'memory.conflict.resolved',
-        'memory.accessed': 'memory.accessed',
-        'memory.consolidated': 'memory.consolidated',
-        'memory.archived': 'memory.archived'
-      };
       const publish = () => {
+        let delivery;
         try {
-          this.eventSink({
-            ...record,
-            type: record.type || eventTypeByAction[record.action] || 'memory.updated'
-          });
-          this.lastEventSinkError = null;
+          delivery = this.eventSink(record);
         } catch (error) {
+          // The durable database audit record is authoritative; the in-memory
+          // observation stream is best-effort and must not undo the transaction.
           this.lastEventSinkError = error;
+          return;
         }
+
+        // Match PostgreSQL behavior: async observation sinks must never leak an
+        // unhandled rejection after the SQLite audit row has committed.
+        Promise.resolve(delivery).then(() => {
+          this.lastEventSinkError = null;
+        }).catch(error => {
+          this.lastEventSinkError = error;
+        });
       };
-      if (this.transactionCoordinator &&
-          typeof this.transactionCoordinator.afterCommit === 'function') {
-        this.transactionCoordinator.afterCommit(publish);
+      if (typeof this.db.afterCommit === 'function') {
+        this.db.afterCommit(publish);
       } else {
         publish();
       }
     }
     return record;
   }
-  findByMemoryId(memoryId, tenantId = 'local', scope = null) {
-    const rows = this.db.query(
-      'SELECT payload FROM memory_audit WHERE memory_id = ? AND tenant_id = ? ORDER BY occurred_at, event_id',
-      [memoryId, String(tenantId)]
-    );
-    return rows.map(row => JSON.parse(row.payload)).filter(event =>
-      !scope || event.scope === scope || (!event.scope && scope === 'personal')
-    );
+
+  findByMemoryId(id, tenantId = 'local', scope = null) {
+    const params = [tenantId, id];
+    let where = 'tenant_id = ? AND memory_id = ?';
+    if (scope) { where += ' AND scope = ?'; params.push(scope); }
+    return this.db.query(
+      `SELECT payload FROM memory_audit WHERE ${where} ORDER BY occurred_at, event_id`,
+      params
+    ).map(row => JSON.parse(row.payload));
   }
-  findByOperationId(operationId, tenantId = 'local', scope = null) {
-    if (typeof operationId !== 'string' || !operationId.trim()) {
-      throw new TypeError('operationId is required');
-    }
-    const rows = this.db.query(
-      'SELECT payload FROM memory_audit WHERE operation_id = ? AND tenant_id = ? ORDER BY occurred_at, event_id',
-      [operationId, String(tenantId)]
-    );
-    return rows.map(row => JSON.parse(row.payload)).filter(event =>
-      !scope || event.scope === scope || (!event.scope && scope === 'personal')
-    );
+
+  findByOperationId(id, tenantId = 'local', scope = null) {
+    const params = [tenantId, id];
+    let where = 'tenant_id = ? AND operation_id = ?';
+    if (scope) { where += ' AND scope = ?'; params.push(scope); }
+    return this.db.query(
+      `SELECT payload FROM memory_audit WHERE ${where} ORDER BY occurred_at, event_id`,
+      params
+    ).map(row => JSON.parse(row.payload));
   }
 }
 

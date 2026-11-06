@@ -92,14 +92,33 @@ class RuntimeInfrastructureCoordinator {
       this.tenantQuotaService.scheduler = this.workflowScheduler;
     }
 
-    this.quotaReady = this.tenantQuotaRepository?.ensureTenant
-      ? this.tenantQuotaRepository.ensureTenant(this.tenantId, this.tenantQuotaPolicy)
-      : Promise.resolve();
+    // Database-backed startup work must not begin in the constructor: the
+    // composition root initializes migrations before calling initialize().
+    this.quotaReady = Promise.resolve();
+    this.recoveryReady = Promise.resolve(0);
+    this.initialization = null;
+  }
 
-    this.recoveryReady =
-      !workflowScheduler && this.workflowRepository?.findAll
-        ? Promise.resolve(this.workflowScheduler.recoverPersisted())
-        : Promise.resolve(0);
+  initialize() {
+    if (!this.initialization) {
+      this.initialization = (async () => {
+        if (this.tenantQuotaRepository?.ensureTenant) {
+          await this.tenantQuotaRepository.ensureTenant(this.tenantId, this.tenantQuotaPolicy);
+        }
+        this.quotaReady = Promise.resolve();
+        if (this.workflowRepository?.findAll || this.workflowRepository?.claimQueued) {
+          const recovered = await this.workflowScheduler.recoverPersisted();
+          this.recoveryReady = Promise.resolve(recovered);
+          return recovered;
+        }
+        this.recoveryReady = Promise.resolve(0);
+        return 0;
+      })().catch(error => {
+        this.initialization = null;
+        throw error;
+      });
+    }
+    return this.initialization;
   }
 
   shutdown(options = {}) {

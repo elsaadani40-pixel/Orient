@@ -8,6 +8,9 @@ const JsonMemoryRepository =
 
 const MemoryService =
   require('./src/application/memory/memory.service');
+
+const assertMemoryPersistenceMode =
+  require('./src/application/memory/assert-memory-persistence-mode');
 const MemoryAuditRepository =
   require('./src/infrastructure/memory/memory-audit.repository');
 const MemoryTransactionCoordinator =
@@ -88,6 +91,12 @@ const CapabilityGovernance =
 const createPersistence =
   require('./src/infrastructure/persistence/persistence-factory');
 
+// Validate memory backend compatibility before constructing database resources.
+assertMemoryPersistenceMode(config.persistenceMode || 'json');
+
+const persistenceRuntime = createPersistence(config);
+const persistence = persistenceRuntime.adapter;
+
 const { OwnerWorkProfileStore } =
   require('./src/infrastructure/persistence/owner-work-profile-store');
 
@@ -125,33 +134,46 @@ const createAgentRoutes =
 const createServer =
   require('./src/interfaces/http/server');
 
-// Select the persistence adapter before constructing memory services so the
-// configured SQLite mode is the actual source of memory and audit data.
-// Persistence adapter was initialized before memory service composition.
-// Initialize the configured adapter before composing memory services.
-const persistenceRuntime = createPersistence(config);
-const persistence = persistenceRuntime.adapter;
-
-const sqliteMemoryEnabled = config.persistenceMode === 'sqlite' &&
-  persistence.memory && persistence.memoryAudit &&
-  persistence.memoryTransactionCoordinator;
-
 const memoryAuditFile = path.join(config.agentDataDirectory, 'memory-audit.json');
-const memoryTransactionCoordinator = sqliteMemoryEnabled
-  ? persistence.memoryTransactionCoordinator
-  : new MemoryTransactionCoordinator({
-      memoryFile: config.dataFile,
-      auditFile: memoryAuditFile,
-      journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
-    });
+let repository;
+let memoryAuditRepository;
+let memoryTransactionCoordinator = null;
 
-// SQLite uses database transactions and performs crash recovery through SQLite/WAL.
-// JSON keeps the explicit before-image journal and recovers before repository reads.
-memoryTransactionCoordinator.recover();
-
-const repository = sqliteMemoryEnabled
-  ? persistence.memory
-  : new JsonMemoryRepository(config.dataFile);
+if (config.persistenceMode === 'sqlite' && persistence.memory && persistence.memoryAudit) {
+  // SQLite operations are asynchronous at the service boundary but serialized
+  // on its single DatabaseSync connection and committed atomically.
+  repository = persistence.memory;
+  memoryAuditRepository = persistence.memoryAudit;
+  const database = persistence.db;
+  memoryTransactionCoordinator = {
+    runAsync: operation => database.transactionAsync(operation),
+    readAsync: operation => database.readAsync(operation),
+    tryReadAsync: operation => database.tryReadAsync(operation)
+  };
+} else if (config.persistenceMode === 'postgres' && persistence.memory && persistence.memoryAudit) {
+  // PostgreSQL memory and audit mutations share one database transaction.
+  repository = persistence.memory;
+  memoryAuditRepository = persistence.memoryAudit;
+  const database = persistence.db;
+  memoryTransactionCoordinator = {
+    runAsync: operation => database.transaction(operation),
+    readAsync: operation => database.transaction(operation),
+    tryReadAsync: async operation => ({
+      acquired: true,
+      value: await database.transaction(operation)
+    })
+  };
+} else {
+  memoryTransactionCoordinator = new MemoryTransactionCoordinator({
+    memoryFile: config.dataFile,
+    auditFile: memoryAuditFile,
+    journalFile: path.join(config.agentDataDirectory, 'memory-transaction-journal.json')
+  });
+  // Recover interrupted JSON transactions before repository reads or HTTP startup.
+  memoryTransactionCoordinator.recover();
+  repository = new JsonMemoryRepository(config.dataFile);
+  memoryAuditRepository = new MemoryAuditRepository(memoryAuditFile);
+}
 
 const agentRegistry =
   new AgentRegistry();
@@ -167,10 +189,6 @@ const agentInvocationService =
   new AgentInvocationService({
     agentRegistry
   });
-
-const memoryAuditRepository = sqliteMemoryEnabled
-  ? persistence.memoryAudit
-  : new MemoryAuditRepository(memoryAuditFile);
 
 const accessAuditRepository =
   new JsonAccessAuditRepository(
@@ -361,9 +379,7 @@ const agentOrchestrator =
     modelRouter
   });
 
-// The configured persistence adapter was initialized before memory composition.
-
-// PostgreSQL mode stores the owner work profile in the same durable database;
+ // PostgreSQL mode stores the owner work profile in the same durable database;
 // JSON mode retains the restrictive local file-backed implementation.
 ownerWorkProfileStore = persistence.ownerProfile || new OwnerWorkProfileStore({
   filePath: path.join(websiteDataDir, 'owner-work-profile.json')
@@ -485,6 +501,7 @@ async function start() {
     await persistenceRuntime.initialize();
   }
   await accessAuditRepository.initialize();
+  await runtime.initialize();
 
   server.listen(
     config.port,
@@ -542,10 +559,14 @@ async function start() {
 }
 
 start().catch((error) => {
-  logger.error('ORIENT ONE startup failed', {
+  const startupFailure = {
     code: error?.code || 'STARTUP_FAILED',
     message: error?.message || String(error)
-  });
+  };
+  logger.error('ORIENT ONE startup failed', startupFailure);
+  // Keep the fatal cause visible to service managers and integration-test logs;
+  // the structured file logger also records the same bounded diagnostic.
+  console.error(JSON.stringify({ event: 'ORIENT_STARTUP_FAILURE', ...startupFailure }));
   if (typeof persistenceRuntime.close === 'function') {
     persistenceRuntime.close().catch(() => {});
   }

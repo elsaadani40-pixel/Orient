@@ -1,8 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const net = require('node:net');
+const { spawn } = require('node:child_process');
+const { once } = require('node:events');
+const { setTimeout: delay } = require('node:timers/promises');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
+const MemoryService = require('../../src/application/memory/memory.service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
@@ -14,7 +22,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -574,6 +582,62 @@ test('PostgreSQL approval authorization is durable, tenant-scoped and replay-saf
   );
 });
 
+test('PostgreSQL workflow IDs cannot be reassigned across tenants', async () => {
+  const workflowId = 'workflow-tenant-owner-' + Date.now();
+  const ownerTenant = 'tenant-workflow-owner';
+  const otherTenant = 'tenant-workflow-other';
+  const original = {
+    workflowId,
+    tenantId: ownerTenant,
+    state: 'QUEUED',
+    updatedAt: new Date().toISOString(),
+    metadata: {},
+    toJSON() { return this; }
+  };
+  const attemptedTransfer = {
+    ...original,
+    tenantId: otherTenant,
+    updatedAt: new Date(Date.now() + 1).toISOString(),
+    toJSON() { return this; }
+  };
+
+  try {
+    await persistence.workflows.save(original, ownerTenant);
+    await assert.rejects(
+      () => persistence.workflows.save(attemptedTransfer, otherTenant),
+      error => error.code === 'WORKFLOW_TENANT_MISMATCH'
+    );
+
+    const ownerRecord = await persistence.workflows.findById(workflowId, ownerTenant);
+    const otherRecord = await persistence.workflows.findById(workflowId, otherTenant);
+    assert.equal(ownerRecord.tenantId, ownerTenant);
+    assert.equal(otherRecord, null);
+  } finally {
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, ownerTenant]);
+  }
+});
+
+test('PostgreSQL quota admission preserves a recent reservation while its workflow row is being persisted', async () => {
+  const suffix = Date.now();
+  const tenantId = 'tenant-quota-inflight-' + suffix;
+  const firstWorkflowId = 'quota-inflight-a-' + suffix;
+  const secondWorkflowId = 'quota-inflight-b-' + suffix;
+  const policy = { maxConcurrent: 1, maxQueued: 2, maxInputChars: 1000, maxToolInputChars: 1000, maxRetries: 2 };
+
+  await persistence.tenantQuotas.ensureTenant(tenantId, policy);
+  try {
+    await persistence.tenantQuotas.reserveWorkflow({ tenantId, workflowId: firstWorkflowId, policy });
+    await persistence.tenantQuotas.reserveWorkflow({ tenantId, workflowId: secondWorkflowId, policy });
+
+    const snapshot = await persistence.tenantQuotas.snapshot({ tenantId });
+    assert.deepEqual(snapshot, { tenantId, active: 0, queued: 2 });
+  } finally {
+    await persistence.tenantQuotas.releaseWorkflow({ tenantId, workflowId: firstWorkflowId });
+    await persistence.tenantQuotas.releaseWorkflow({ tenantId, workflowId: secondWorkflowId });
+    await pool.query('DELETE FROM tenant_quota_limits WHERE tenant_id=$1', [tenantId]);
+  }
+});
+
 test('PostgreSQL quota admission is atomic across concurrent reservations', async () => {
   await pool.query("INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ('quota-wf-a','tenant-quota','QUEUED',NOW(),'{}'), ('quota-wf-b','tenant-quota','QUEUED',NOW(),'{}')");
   const policy = { maxConcurrent: 1, maxQueued: 1, maxInputChars: 1000, maxToolInputChars: 1000, maxRetries: 2 };
@@ -906,4 +970,336 @@ test('PostgreSQL owner work profile persists validated partial updates and isola
   } finally {
     await pool.query('DELETE FROM owner_work_profiles WHERE owner_id = ANY($1::text[])', [[ownerId, otherOwnerId]]);
   }
+});
+
+
+test('PostgreSQL memory and audit repositories commit atomically and remain tenant-scoped', async () => {
+  const memory = {
+    id: 'memory-pg-atomic',
+    tenantId: 'tenant-memory-a',
+    scope: 'personal',
+    type: 'fact',
+    text: 'PostgreSQL memory transaction',
+    state: 'active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  await assert.rejects(() => persistence.db.transaction(async () => {
+    await persistence.memory.insert(memory);
+    await persistence.memoryAudit.append({
+      id: 'audit-pg-rollback',
+      tenantId: memory.tenantId,
+      scope: memory.scope,
+      memoryId: memory.id,
+      operationId: 'operation-pg-rollback',
+      action: 'memory.created'
+    });
+    throw new Error('injected PostgreSQL memory transaction failure');
+  }), /injected PostgreSQL memory transaction failure/);
+
+  assert.equal(await persistence.memory.findById(memory.id, memory.tenantId, memory.scope), null);
+  assert.deepEqual(
+    await persistence.memoryAudit.findByOperationId('operation-pg-rollback', memory.tenantId, memory.scope),
+    []
+  );
+
+  await persistence.db.transaction(async () => {
+    await persistence.memory.insert(memory);
+    await persistence.memoryAudit.append({
+      id: 'audit-pg-commit',
+      tenantId: memory.tenantId,
+      scope: memory.scope,
+      memoryId: memory.id,
+      operationId: 'operation-pg-commit',
+      action: 'memory.created'
+    });
+  });
+
+  assert.equal((await persistence.memory.findById(memory.id, memory.tenantId, memory.scope)).text, memory.text);
+  assert.equal((await persistence.memoryAudit.findByOperationId('operation-pg-commit', memory.tenantId, memory.scope)).length, 1);
+  assert.equal(await persistence.memory.findById(memory.id, 'tenant-memory-b', memory.scope), null);
+});
+
+
+test('PostgreSQL-backed MemoryService awaits the full service lifecycle and isolates tenants', async () => {
+  const tenantId = 'tenant-memory-service-' + Date.now();
+  const otherTenantId = tenantId + '-other';
+  const database = persistence.db;
+  const transactionCoordinator = {
+    runAsync: operation => database.transaction(operation),
+    readAsync: operation => database.transaction(operation),
+    tryReadAsync: async operation => ({
+      acquired: true,
+      value: await database.transaction(operation)
+    })
+  };
+  const service = new MemoryService(persistence.memory, {
+    auditRepository: persistence.memoryAudit,
+    transactionCoordinator
+  });
+  const context = {
+    agentId: 'ORIENT_RUNTIME',
+    tenantId,
+    operationId: 'operation-memory-service-' + Date.now()
+  };
+
+  const created = await service.add('async PostgreSQL memory lifecycle proof', {
+    type: 'fact',
+    confidence: 0.91
+  }, context);
+  assert.ok(created.id);
+
+  const concurrentOperationBase = 'operation-memory-concurrent-' + Date.now();
+  const [concurrentA, concurrentB] = await Promise.all([
+    service.add('concurrent PostgreSQL memory fact', { type: 'fact' }, {
+      ...context,
+      operationId: concurrentOperationBase + '-a'
+    }),
+    service.add('concurrent PostgreSQL memory fact', { type: 'fact' }, {
+      ...context,
+      operationId: concurrentOperationBase + '-b'
+    })
+  ]);
+  assert.equal(concurrentA.id, concurrentB.id, 'same-scope concurrent inserts must reinforce one record');
+
+  const listed = await service.list('lifecycle proof', context);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, created.id);
+
+  const history = await service.history(created.id, context);
+  assert.ok(history.some(event => event.action === 'memory.created'));
+
+  const fetched = await service.get(created.id, context);
+  assert.equal(fetched.text, created.text);
+
+  assert.equal(await service.count(context), 2);
+  assert.equal((await service.list('', { ...context, tenantId: otherTenantId })).length, 0);
+
+  const reconciliation = await service.reconcileToolOperation('memory.add', {
+    text: 'async PostgreSQL memory lifecycle proof',
+    type: 'fact'
+  }, context);
+  assert.equal(reconciliation.status, 'completed');
+  assert.equal(reconciliation.result.id, created.id);
+
+  assert.equal(await service.delete(created.id, context), true);
+  assert.equal(await service.delete(concurrentA.id, {
+    ...context,
+    operationId: 'operation-memory-concurrent-delete-' + Date.now()
+  }), true);
+  const deleteRecovery = await service.reconcileToolOperation('memory.delete', created.id, {
+    ...context,
+    operationId: context.operationId
+  });
+  assert.equal(deleteRecovery.status, 'completed');
+
+  const restartedService = new MemoryService(persistence.memory, {
+    auditRepository: persistence.memoryAudit,
+    transactionCoordinator
+  });
+  assert.equal((await restartedService.list('', context)).length, 0);
+
+  await database.query('DELETE FROM memory_audit WHERE tenant_id=$1', [tenantId]);
+  await database.query('DELETE FROM memories WHERE tenant_id=$1', [tenantId]);
+});
+
+
+test('PostgreSQL memory audit observations are emitted only after transaction commit', async () => {
+  const tenantId = 'tenant-memory-after-commit-' + Date.now();
+  const delivered = [];
+  persistence.memoryAudit.setEventSink(event => delivered.push(event));
+
+  try {
+    await assert.rejects(
+      () => persistence.db.transaction(async () => {
+        await persistence.memoryAudit.append({
+          id: 'audit-rollback-' + Date.now(),
+          tenantId,
+          scope: 'personal',
+          memoryId: 'memory-rollback',
+          action: 'memory.created'
+        });
+        assert.equal(delivered.length, 0);
+        throw new Error('rollback audit transaction');
+      }),
+      /rollback audit transaction/
+    );
+    assert.equal(delivered.length, 0, 'rolled-back audit records must not publish observations');
+
+    await persistence.db.transaction(async () => {
+      await persistence.memoryAudit.append({
+        id: 'audit-commit-' + Date.now(),
+        tenantId,
+        scope: 'personal',
+        memoryId: 'memory-commit',
+        action: 'memory.created'
+      });
+      assert.equal(delivered.length, 0, 'observation must wait until COMMIT');
+    });
+
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0].type, 'memory.created');
+  } finally {
+    persistence.memoryAudit.setEventSink(null);
+    await pool.query('DELETE FROM memory_audit WHERE tenant_id=$1', [tenantId]);
+  }
+});
+
+
+test('PostgreSQL app composition serves authenticated memory HTTP routes from PostgreSQL', async t => {
+  const tenantId = 'tenant-postgres-app-' + Date.now();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-postgres-app-'));
+  const probe = net.createServer();
+  probe.listen(0, '127.0.0.1');
+  await once(probe, 'listening');
+  const port = probe.address().port;
+  await new Promise((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
+
+  const appPath = path.resolve(__dirname, '../../app.js');
+  const child = spawn(process.execPath, [appPath], {
+    cwd: path.resolve(__dirname, '../..'),
+    env: {
+      ...process.env,
+      ORIENT_PERSISTENCE: 'postgres',
+      ORIENT_DATABASE_URL: process.env.DATABASE_URL,
+      ORIENT_TENANT_ID: tenantId,
+      ORIENT_OWNER_BOOTSTRAP_PASSWORD: 'orient-postgres-app-test-password-2026',
+      ORIENT_DATA_DIR: directory,
+      HOST: '127.0.0.1',
+      PORT: String(port),
+      NODE_ENV: 'test',
+      ORIENT_MODEL_PROVIDER: 'none',
+      ORIENT_SHUTDOWN_GRACE_MS: '5000'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk.toString(); });
+  child.stderr.on('data', chunk => { output += chunk.toString(); });
+
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGTERM');
+      await Promise.race([exited, delay(7000)]);
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
+    await pool.query('DELETE FROM memory_audit WHERE tenant_id=$1', [tenantId]);
+    await pool.query('DELETE FROM memories WHERE tenant_id=$1', [tenantId]);
+  });
+
+  const origin = `http://127.0.0.1:${port}`;
+  let ready = false;
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`PostgreSQL app exited before listening. Output: ${output}`);
+    }
+    try {
+      const response = await fetch(origin + '/memory');
+      if (response.status === 401) {
+        ready = true;
+        break;
+      }
+    } catch {}
+    await delay(100);
+  }
+  assert.equal(ready, true, `PostgreSQL app did not become ready. Output: ${output}`);
+
+  const password = 'orient-postgres-app-test-password-2026';
+  const login = await fetch(origin + '/owner/login', {
+    method: 'POST',
+    headers: {
+      Origin: origin,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ password })
+  });
+  const loginPayload = await login.json();
+  assert.equal(login.status, 200, JSON.stringify(loginPayload));
+  assert.equal(typeof loginPayload.csrfToken, 'string');
+  assert.equal(loginPayload.passwordChangeRequired, true, 'first-run owner must be forced to replace the bootstrap password');
+  const cookieHeader = login.headers.get('set-cookie') || '';
+  let cookie = cookieHeader.match(/orient_owner_session=[^;]+/)?.[0];
+  assert.ok(cookie, 'owner login must issue the authenticated session cookie');
+
+  const passwordChange = await fetch(origin + '/owner/password', {
+    method: 'POST',
+    headers: {
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': loginPayload.csrfToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      password: 'Orient-Postgres-App-Test-2026!',
+      confirmPassword: 'Orient-Postgres-App-Test-2026!'
+    })
+  });
+  const passwordChangePayload = await passwordChange.json();
+  assert.equal(passwordChange.status, 200, JSON.stringify(passwordChangePayload));
+  assert.equal(passwordChangePayload.passwordChangeRequired, false);
+  const rotatedCookie = (passwordChange.headers.get('set-cookie') || '').match(/orient_owner_session=[^;]+/)?.[0];
+  if (rotatedCookie) cookie = rotatedCookie;
+  const csrfToken = passwordChangePayload.csrfToken;
+  assert.equal(typeof csrfToken, 'string');
+
+  const memoryText = 'PostgreSQL app composition memory proof ' + Date.now();
+  const add = await fetch(origin + '/memory/add', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': csrfToken,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ text: memoryText }).toString()
+  });
+  assert.equal(add.status, 303);
+
+  const stored = await pool.query(
+    "SELECT memory_id,payload FROM memories WHERE tenant_id=$1 AND payload->>'text'=$2",
+    [tenantId, memoryText]
+  );
+  assert.equal(stored.rowCount, 1, 'the app must persist memory through the configured PostgreSQL repository');
+  const memoryId = stored.rows[0].memory_id;
+
+  const audit = await pool.query(
+    "SELECT payload FROM memory_audit WHERE tenant_id=$1 AND memory_id=$2 AND payload->>'action'='memory.created'",
+    [tenantId, memoryId]
+  );
+  assert.equal(audit.rowCount, 1, 'the memory and its audit receipt must both be durable in PostgreSQL');
+
+  const page = await fetch(origin + '/memory?q=' + encodeURIComponent(memoryText), {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), new RegExp(memoryText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+
+  const remove = await fetch(origin + '/memory/delete', {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      Origin: origin,
+      Cookie: cookie,
+      'x-orient-csrf': csrfToken,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ id: memoryId }).toString()
+  });
+  assert.equal(remove.status, 303);
+
+  const archived = await pool.query(
+    'SELECT payload FROM memories WHERE tenant_id=$1 AND memory_id=$2',
+    [tenantId, memoryId]
+  );
+  assert.equal(archived.rows[0]?.payload?.state, 'archived');
+  const archiveAudit = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM memory_audit WHERE tenant_id=$1 AND memory_id=$2 AND payload->>'action'='memory.archived'",
+    [tenantId, memoryId]
+  );
+  assert.equal(Number(archiveAudit.rows[0].count), 1);
 });

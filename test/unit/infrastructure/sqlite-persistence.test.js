@@ -159,7 +159,7 @@ test('SQLite checkpoint sequencing remains monotonic and schema migration marker
   first.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 2 });
 
   const migrationRows = first.db.query('SELECT version FROM schema_migrations ORDER BY version ASC;');
-  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1]);
+  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1, 2]);
   assert.equal(first.checkpoints.findLatest('exec-seq-1').sequence, 2);
 
   const second = new SqlitePersistence({ filePath });
@@ -184,5 +184,308 @@ test('sqlite transactions roll back all statements after an injected failure', (
   );
 
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
+  db.close();
+});
+
+
+test('SQLite callback transactions commit synchronously and roll back on failure', () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+  db.transaction(tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'callback-commit', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+  });
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['callback-commit'])[0].count), 1);
+
+  assert.throws(() => db.transaction(tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'callback-rollback', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+    throw new Error('injected failure');
+  }), /injected failure/);
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['callback-rollback'])[0].count), 0);
+  db.close();
+});
+
+test('SQLite callback transactions reject asynchronous work and roll it back', () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+  assert.throws(() => db.transaction(async tx => {
+    tx.run('INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)', [
+      'async-callback-rejected', 'test', '2026-01-01T00:00:00.000Z', '{}'
+    ]);
+  }), error => error.code === 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED');
+  assert.equal(Number(db.query('SELECT COUNT(*) AS count FROM events WHERE event_id = ?', ['async-callback-rejected'])[0].count), 0);
+  db.close();
+});
+
+
+
+test('SQLite async transaction closes its owned connection when BEGIN fails', async () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-begin-failure-'));
+  const db = new SqliteDatabase(path.join(directory, 'orient.db'));
+  const originalExec = DatabaseSync.prototype.exec;
+  let ownedConnection = null;
+
+  try {
+    DatabaseSync.prototype.exec = function patchedExec(sql) {
+      if (this !== db.baseConnection && sql === 'BEGIN IMMEDIATE;') {
+        ownedConnection = this;
+        throw Object.assign(new Error('injected SQLITE_BUSY during BEGIN'), { code: 'SQLITE_BUSY' });
+      }
+      return originalExec.call(this, sql);
+    };
+
+    await assert.rejects(
+      db.transactionAsync(async () => 'unreachable'),
+      error => error.code === 'SQLITE_BUSY'
+    );
+    assert.ok(ownedConnection, 'file-backed async transaction must create an owned connection');
+    assert.throws(() => ownedConnection.exec('SELECT 1;'));
+  } finally {
+    DatabaseSync.prototype.exec = originalExec;
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite memory mutation and audit receipt commit or roll back together', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-atomic-'));
+  const filePath = path.join(directory, 'orient.db');
+  const persistence = new SqlitePersistence({ filePath });
+  const memory = {
+    id: 'memory-atomic-1',
+    tenantId: 'tenant-a',
+    scope: 'personal',
+    type: 'fact',
+    text: 'Atomic memory transaction',
+    state: 'active',
+    createdAt: '2026-10-27T00:00:00.000Z',
+    updatedAt: '2026-10-27T00:00:00.000Z'
+  };
+
+  try {
+    assert.throws(() => persistence.db.transaction(() => {
+      persistence.memory.insert(memory);
+      persistence.memoryAudit.append({
+        id: 'audit-atomic-rollback',
+        tenantId: 'tenant-a',
+        scope: 'personal',
+        memoryId: memory.id,
+        operationId: 'operation-atomic-rollback',
+        action: 'memory.created'
+      });
+      throw new Error('injected transaction failure');
+    }), /injected transaction failure/);
+
+    assert.equal(persistence.memory.findById(memory.id, 'tenant-a', 'personal'), null);
+    assert.deepEqual(
+      persistence.memoryAudit.findByOperationId('operation-atomic-rollback', 'tenant-a', 'personal'),
+      []
+    );
+
+    persistence.db.transaction(() => {
+      persistence.memory.insert(memory);
+      persistence.memoryAudit.append({
+        id: 'audit-atomic-commit',
+        tenantId: 'tenant-a',
+        scope: 'personal',
+        memoryId: memory.id,
+        operationId: 'operation-atomic-commit',
+        action: 'memory.created'
+      });
+    });
+
+    assert.equal(persistence.memory.findById(memory.id, 'tenant-a', 'personal').text, memory.text);
+    assert.equal(persistence.memoryAudit.findByOperationId('operation-atomic-commit', 'tenant-a', 'personal').length, 1);
+    assert.equal(persistence.memory.findById(memory.id, 'tenant-b', 'personal'), null);
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite audit event sink runs only after commit and never publishes rolled-back events', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-audit-outbox-'));
+  const filePath = path.join(directory, 'orient.db');
+  const persistence = new SqlitePersistence({ filePath });
+  const published = [];
+  persistence.memoryAudit.setEventSink(event => published.push(event.id));
+
+  try {
+    assert.throws(() => persistence.db.transaction(() => {
+      persistence.memoryAudit.append({
+        id: 'audit-not-published',
+        tenantId: 'tenant-outbox',
+        scope: 'personal',
+        memoryId: 'memory-outbox',
+        action: 'memory.created'
+      });
+      throw new Error('rollback after audit append');
+    }), /rollback after audit append/);
+    assert.deepEqual(published, []);
+
+    persistence.db.transaction(() => {
+      persistence.memoryAudit.append({
+        id: 'audit-published-after-commit',
+        tenantId: 'tenant-outbox',
+        scope: 'personal',
+        memoryId: 'memory-outbox',
+        action: 'memory.created'
+      });
+    });
+    assert.deepEqual(published, ['audit-published-after-commit']);
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite migrates legacy memory and audit tables to tenant-scoped schema without losing records', () => {
+  const { DatabaseSync } = require('node:sqlite');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-memory-migration-'));
+  const filePath = path.join(directory, 'orient.db');
+  const legacyMemory = {
+    id: 'legacy-memory-1',
+    tenantId: 'tenant-legacy',
+    scope: 'personal',
+    type: 'fact',
+    text: 'Preserve this memory during schema migration',
+    state: 'active',
+    createdAt: '2026-10-20T10:00:00.000Z',
+    updatedAt: '2026-10-21T10:00:00.000Z'
+  };
+  const legacyAudit = {
+    id: 'legacy-audit-1',
+    tenantId: 'tenant-legacy',
+    scope: 'personal',
+    memoryId: legacyMemory.id,
+    operationId: 'legacy-operation-1',
+    occurredAt: '2026-10-21T10:00:00.000Z',
+    action: 'memory.created'
+  };
+
+  const legacy = new DatabaseSync(filePath);
+  legacy.exec(`
+    CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+    INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-10-20T00:00:00.000Z');
+    CREATE TABLE memories (
+      memory_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      state TEXT NOT NULL,
+      type TEXT NOT NULL,
+      semantic_key TEXT,
+      text TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+    CREATE TABLE memory_audit (
+      event_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      scope TEXT,
+      memory_id TEXT,
+      operation_id TEXT,
+      occurred_at TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+  `);
+  legacy.prepare(
+    'INSERT INTO memories(memory_id,tenant_id,scope,state,type,semantic_key,text,payload) VALUES(?,?,?,?,?,?,?,?)'
+  ).run(
+    legacyMemory.id, legacyMemory.tenantId, legacyMemory.scope, legacyMemory.state,
+    legacyMemory.type, null, legacyMemory.text, JSON.stringify(legacyMemory)
+  );
+  legacy.prepare(
+    'INSERT INTO memory_audit(event_id,tenant_id,scope,memory_id,operation_id,occurred_at,payload) VALUES(?,?,?,?,?,?,?)'
+  ).run(
+    legacyAudit.id, legacyAudit.tenantId, legacyAudit.scope, legacyAudit.memoryId,
+    legacyAudit.operationId, legacyAudit.occurredAt, JSON.stringify(legacyAudit)
+  );
+  legacy.close();
+
+  try {
+    const migrated = new SqlitePersistence({ filePath });
+    const memoryColumns = migrated.db.query('PRAGMA table_info(memories)');
+    const auditColumns = migrated.db.query('PRAGMA table_info(memory_audit)');
+    assert.deepEqual(
+      memoryColumns.filter(column => Number(column.pk) > 0).sort((a, b) => a.pk - b.pk).map(column => column.name),
+      ['tenant_id', 'memory_id']
+    );
+    assert.ok(memoryColumns.some(column => column.name === 'created_at'));
+    assert.ok(memoryColumns.some(column => column.name === 'updated_at'));
+    assert.deepEqual(
+      auditColumns.filter(column => Number(column.pk) > 0).sort((a, b) => a.pk - b.pk).map(column => column.name),
+      ['tenant_id', 'event_id']
+    );
+    assert.equal(
+      migrated.memory.findById(legacyMemory.id, legacyMemory.tenantId, legacyMemory.scope).text,
+      legacyMemory.text
+    );
+    assert.deepEqual(
+      migrated.memoryAudit.findByOperationId(legacyAudit.operationId, legacyAudit.tenantId, legacyAudit.scope),
+      [legacyAudit]
+    );
+    assert.deepEqual(
+      migrated.db.query('SELECT version FROM schema_migrations ORDER BY version').map(row => Number(row.version)),
+      [1, 2]
+    );
+    migrated.close();
+
+    const restarted = new SqlitePersistence({ filePath });
+    assert.equal(restarted.memory.findById(legacyMemory.id, legacyMemory.tenantId, legacyMemory.scope).text, legacyMemory.text);
+    assert.equal(restarted.memoryAudit.findByOperationId(legacyAudit.operationId, legacyAudit.tenantId, legacyAudit.scope).length, 1);
+    restarted.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite synchronous transactions poison thenable callbacks and block deferred writes', async () => {
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(':memory:');
+  const insert = id => db.run(
+    'INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)',
+    [id, 'test', '2026-01-01T00:00:00.000Z', '{}']
+  );
+
+  assert.throws(
+    () => db.transaction(tx => {
+      tx.run(
+        'INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)',
+        ['thenable-before-await', 'test', '2026-01-01T00:00:00.000Z', '{}']
+      );
+      return Promise.resolve().then(() => insert('thenable-after-await'));
+    }),
+    error => error.code === 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(Number(db.query(
+    "SELECT COUNT(*) AS count FROM events WHERE event_id IN ('thenable-before-await','thenable-after-await')"
+  )[0].count), 0);
+
+  assert.throws(
+    () => db.transaction(tx => {
+      try {
+        db.transaction(() => Promise.resolve().then(() => insert('nested-thenable-after-await')));
+      } catch (error) {
+        assert.equal(error.code, 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED');
+      }
+      tx.run(
+        'INSERT INTO events(event_id,type,timestamp,payload) VALUES(?,?,?,?)',
+        ['outer-after-nested-thenable', 'test', '2026-01-01T00:00:00.000Z', '{}']
+      );
+    }),
+    error => error.code === 'SQLITE_ASYNC_TRANSACTION_UNSUPPORTED'
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(Number(db.query(
+    "SELECT COUNT(*) AS count FROM events WHERE event_id IN ('nested-thenable-after-await','outer-after-nested-thenable')"
+  )[0].count), 0);
   db.close();
 });

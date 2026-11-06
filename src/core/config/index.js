@@ -13,6 +13,7 @@ const config = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   persistenceMode: process.env.ORIENT_PERSISTENCE || 'json',
   databaseUrl: process.env.ORIENT_DATABASE_URL || process.env.DATABASE_URL || '',
+  databaseFile: process.env.ORIENT_DATABASE_FILE || path.join(__dirname, '../../../data/orient.sqlite'),
   databasePoolMax: positiveInteger(process.env.ORIENT_DATABASE_POOL_MAX, 10),
   databaseIdleTimeoutMs: positiveInteger(process.env.ORIENT_DATABASE_IDLE_TIMEOUT_MS, 30000),
   databaseConnectionTimeoutMs: positiveInteger(process.env.ORIENT_DATABASE_CONNECTION_TIMEOUT_MS, 5000),

@@ -232,7 +232,7 @@ test('memory.add receipt and idempotency result prevent duplicate writes after w
     );
     assert.equal(receipts.length, 1, 'lease recovery must not create a second memory audit receipt');
     assert.equal(receipts[0].action, 'memory.created');
-    const reconciled = restarted.service.reconcileToolOperation('memory.add', {
+    const reconciled = await restarted.service.reconcileToolOperation('memory.add', {
       text: 'memory lease loss must not duplicate',
       scope: 'personal'
     }, {
@@ -274,7 +274,7 @@ test('memory.delete archive receipt prevents duplicate deletion after workflow l
 
   try {
     const initial = createMemoryService(root);
-    const seeded = initial.service.add('memory target for lease-loss delete', {}, {
+    const seeded = await initial.service.add('memory target for lease-loss delete', {}, {
       tenantId,
       memoryScope: 'personal',
       operationId: 'seed-delete-target'
@@ -382,7 +382,7 @@ test('memory.delete archive receipt prevents duplicate deletion after workflow l
     assert.equal(finalReceipts.length, 1, 'recovery must not append a second archive receipt');
     assert.equal(finalReceipts[0].action, 'memory.archived');
     assert.deepEqual(
-      restarted.service.reconcileToolOperation('memory.delete', { id: seeded.id, scope: 'personal' }, {
+      await restarted.service.reconcileToolOperation('memory.delete', { id: seeded.id, scope: 'personal' }, {
         tenantId,
         memoryScope: 'personal',
         operationId: operationRecord.operationId

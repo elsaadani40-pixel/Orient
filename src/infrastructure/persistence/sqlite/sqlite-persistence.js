@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const SqliteDatabase = require('./sqlite-database');
 const { SqliteWorkflowRepository, SqliteWorkflowLeaseRepository } = require('./workflow.repository');
 const { SqliteMemoryRepository, SqliteMemoryAuditRepository } = require('./memory.repository');
-const SqliteMemoryTransactionCoordinator = require('./memory-transaction-coordinator');
 
 class SqliteExecutionRepository {
   constructor(db) { this.db = db; }
@@ -370,9 +369,6 @@ class SqliteApprovalRepository {
 class SqlitePersistence {
   constructor({ filePath } = {}) {
     this.db = new SqliteDatabase(filePath);
-    this.memoryTransactionCoordinator = new SqliteMemoryTransactionCoordinator(this.db);
-    this.memory = new SqliteMemoryRepository(this.db);
-    this.memoryAudit = new SqliteMemoryAuditRepository(this.db, this.memoryTransactionCoordinator);
     this.executions = new SqliteExecutionRepository(this.db);
     this.events = new SqliteEventRepository(this.db);
     this.idempotency = new SqliteIdempotencyRepository(this.db);
@@ -380,10 +376,27 @@ class SqlitePersistence {
     this.approvals = new SqliteApprovalRepository(this.db);
     this.workflows = new SqliteWorkflowRepository(this.db);
     this.workflowLeases = new SqliteWorkflowLeaseRepository(this.db);
+    this.memory = new SqliteMemoryRepository(this.db);
+    this.memoryAudit = new SqliteMemoryAuditRepository(this.db);
   }
 
   health() {
-    return { adapter: 'sqlite', repositories: { memory: true, memoryAudit: true, executions: true, events: true, idempotency: true, checkpoints: true, approvals: true, workflows: true, workflowLeases: true } };
+    return {
+      adapter: 'sqlite',
+      ready: true,
+      filePath: this.db.filePath,
+      repositories: {
+        executions: true,
+        events: true,
+        idempotency: true,
+        checkpoints: true,
+        approvals: true,
+        workflows: true,
+        workflowLeases: true,
+        memory: true,
+        memoryAudit: true
+      }
+    };
   }
 
   close() {
