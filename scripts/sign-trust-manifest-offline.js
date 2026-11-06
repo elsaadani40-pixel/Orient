@@ -64,10 +64,33 @@ function readPrivateKeyFile(filePath, {
         (platform !== 'win32' && (after.mode & 0o077) !== 0)) {
       fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file permissions or size changed while opening');
     }
-    keyBytes = fs.readFileSync(descriptor);
-    if (keyBytes.length < 1 || keyBytes.length > MAX_PRIVATE_KEY_BYTES) {
-      fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file has an invalid size');
+    // Never use readFileSync(fd) for secret material: a file can grow after
+    // the metadata check and cause an unbounded allocation. Read at most
+    // MAX_PRIVATE_KEY_BYTES + 1 bytes, then re-check the opened inode.
+    const bounded = Buffer.alloc(MAX_PRIVATE_KEY_BYTES + 1);
+    let total = 0;
+    while (total < bounded.length) {
+      const read = fs.readSync(
+        descriptor,
+        bounded,
+        total,
+        Math.min(16 * 1024, bounded.length - total),
+        null
+      );
+      if (read === 0) break;
+      total += read;
     }
+    const afterRead = fs.fstatSync(descriptor);
+    if (total < 1 || total > MAX_PRIVATE_KEY_BYTES || afterRead.size !== total ||
+        afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
+        afterRead.nlink !== 1 ||
+        (platform !== 'win32' && typeof process.getuid === 'function' && afterRead.uid !== process.getuid()) ||
+        (platform !== 'win32' && (afterRead.mode & 0o077) !== 0)) {
+      bounded.fill(0);
+      fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file changed or exceeded its size limit while reading');
+    }
+    keyBytes = Buffer.from(bounded.subarray(0, total));
+    bounded.fill(0);
     return keyBytes;
   } catch (error) {
     if (error && error.code && error.code.startsWith('TRUST_SIGNER_')) throw error;
