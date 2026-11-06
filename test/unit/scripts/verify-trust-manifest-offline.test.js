@@ -46,6 +46,7 @@ test('offline verifier validates a current manifest against an independently pin
   });
   assert.equal(result.version, 1);
   assert.equal(result.rootKeyId, 'offline-root-2026');
+  assert.equal(result.rootPublicKeySha256, crypto.createHash('sha256').update(crypto.createPublicKey(f.rootPublicKey).export({ type: 'spki', format: 'der' })).digest('hex'));
   assert.equal(result.verificationMode, 'current-signature-time-verification');
   assert.equal(result.rootValidityMetadataProvided, false);
   assert.equal(result.verifiedAt, '2026-11-06T19:00:00.000Z');
