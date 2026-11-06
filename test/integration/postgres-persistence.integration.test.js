@@ -39,7 +39,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
     await persistence.migrate({ role: 'orient_owner' });
   } else {
     const current = await pool.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
-    if (Number(current.rows[0].version) < 13) {
+    if (Number(current.rows[0].version) < 14) {
       await provisionPostgresRoles({
         pool,
         migratorPassword: crypto.randomBytes(24).toString('hex'),
@@ -51,7 +51,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
 });
 
 test('PostgreSQL runtime login preflight validates a real least-privilege connection and pooled role reset', async () => {
@@ -80,7 +80,7 @@ test('PostgreSQL runtime login preflight validates a real least-privilege connec
 
     const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
     const readiness = await runtimePersistence.initialize();
-    assert.equal(readiness.schemaVersion, 13);
+    assert.equal(readiness.schemaVersion, 14);
 
     const client = await runtimePool.connect();
     try {
@@ -135,7 +135,7 @@ test('PostgreSQL migration uses the restricted migrator login and resets owner r
 
     const migrationPersistence = new PostgresPersistence({ pool: migrationPool });
     const result = await migrationPersistence.migrate({ role: 'orient_owner' });
-    assert.equal(result.schemaVersion, 13);
+    assert.equal(result.schemaVersion, 14);
 
     const identityAfterMigration = await migrationPool.query(
       'SELECT session_user::text AS session_user, current_user::text AS current_user'
@@ -1775,6 +1775,68 @@ test('PostgreSQL gateway challenge consumption and idempotent mutation are atomi
     });
     assert.equal(stored, 1);
   } finally {
+    await runtimePool.end();
+  }
+});
+
+
+test('PostgreSQL Gateway execution lookup cannot read another owner execution in the same tenant', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 2 });
+  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+  const tenantId = 'gateway-owner-isolation-tenant';
+  const workspaceId = 'gateway-owner-isolation-workspace';
+  const ownerA = {
+    principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ownerId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    tenantId, workspaceId, authSource: 'orient-owner-session'
+  };
+  const ownerB = {
+    principalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ownerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    tenantId, workspaceId, authSource: 'orient-owner-session'
+  };
+  const executionId = 'gateway-owner-' + crypto.randomUUID();
+  const handler = createGatewayOperationHandlers().get('execution.get');
+  const client = { query: (sql, values) => runtimePersistence.db.query(sql, values) };
+
+  try {
+    await runtimePersistence.initialize();
+    await runtimePersistence.withPrincipal(ownerA, () => runtimePersistence.db.query(
+      'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+      [executionId, tenantId, { id: executionId, tenantId, status: 'completed' }]
+    ));
+
+    const ownResult = await runtimePersistence.withPrincipal(ownerA, () =>
+      handler(client, { request: { executionId }, principal: ownerA })
+    );
+    assert.equal(ownResult.found, true);
+
+    const crossOwnerResult = await runtimePersistence.withPrincipal(ownerB, () =>
+      handler(client, { request: { executionId }, principal: ownerB })
+    );
+    assert.deepEqual(crossOwnerResult, { found: false, task: null });
+
+    const attribution = await runtimePersistence.withPrincipal(ownerA, async () => {
+      const result = await runtimePersistence.db.query(
+        'SELECT owner_id::text AS owner_id FROM executions WHERE execution_id=$1 AND tenant_id=$2',
+        [executionId, tenantId]
+      );
+      return result.rows[0]?.owner_id;
+    });
+    assert.equal(attribution, ownerA.ownerId);
+  } finally {
+    await pool.query('DELETE FROM executions WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
     await runtimePool.end();
   }
 });
