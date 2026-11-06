@@ -4,9 +4,10 @@
 
 This document defines the operator procedure for bootstrapping and rotating trust roots. The current implementation has a root-signed v2 trust manifest, pinned root public keys, expiry and revocation checks, a monotonic PostgreSQL cache, and an independently anchored manifest history.
 
-The offline signing utility is:
+The offline signing and independent verification utilities are:
 
-`scripts/sign-trust-manifest-offline.js`
+- `scripts/sign-trust-manifest-offline.js`
+- `scripts/verify-trust-manifest-offline.js`
 
 It signs a manifest payload and verifies the resulting signature locally. It does not generate root keys, contact a server, deploy trust state, write to PostgreSQL, or append to the external immutable history. Root-key distribution and root rotation remain explicit out-of-band operator procedures; they are not automatically negotiated by the Runtime.
 
@@ -69,7 +70,16 @@ The signer requires the private-key file to be outside the repository, rejects s
 
 ### 4. Independently verify and anchor
 
-On a separate clean machine, verify the signed manifest using the independently pinned root public key. Confirm the version, root key ID, signature, digest, issuance and expiry times, and evidence-key set against the approval record.
+On a separate clean machine, verify the signed manifest using the independently pinned root public key. Confirm the version, root key ID, signature, digest, issuance and expiry times, and evidence-key set against the approval record. The verifier reads bounded manifest and public-key files, rejects symlink inputs, and reports only verified metadata:
+
+```sh
+node scripts/verify-trust-manifest-offline.js \
+  --manifest signed-manifest-v1.json \
+  --root-key-id offline-root-2026 \
+  --root-public-key /secure/trust/offline-root-public.pem
+```
+
+The default mode verifies current acceptance validity. For a forensic check of an expired or later-revoked manifest, use the explicit `--historical` flag; the output labels this mode `historical-audit-only`. Historical verification is never evidence that a manifest is currently acceptable. An optional `--at <canonical-utc-time>` verifies validity at a specified instant and is labelled separately.
 
 Only then submit it to the separately operated TrustManifestAcceptanceService. Acceptance must verify authorization, signature, current root validity, expiry, monotonic version state, and the complete external immutable history. The external history append happens before the PostgreSQL cache update. Preserve the external anchor receipt and accepted digest with the audit record.
 
