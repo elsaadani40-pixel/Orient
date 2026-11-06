@@ -375,6 +375,10 @@ test('release waits for stale recovery and cannot remove a replacement owner loc
       }
     };
     const waitExit = child => new Promise((resolve, reject) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve({ code: child.exitCode, signal: child.signalCode });
+        return;
+      }
       child.once('error', reject);
       child.once('exit', (code, signal) => resolve({ code, signal }));
     });
