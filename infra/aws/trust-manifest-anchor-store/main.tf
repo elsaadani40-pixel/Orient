@@ -75,7 +75,26 @@ resource "aws_s3_bucket_ownership_controls" "trust_manifest" {
 
 data "aws_iam_policy_document" "trust_manifest_bucket" {
   statement {
-    sid    = "AllowTrustStoreServiceBucketInspection"
+    sid    = "AllowTrustStoreServiceListManifestPrefix"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = [var.trust_store_service_role_arn]
+    }
+
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.trust_manifest.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["orient/trust-manifests/v1/*"]
+    }
+  }
+
+  statement {
+    sid    = "AllowTrustStoreServiceBucketConfigurationRead"
     effect = "Allow"
 
     principals {
@@ -84,18 +103,11 @@ data "aws_iam_policy_document" "trust_manifest_bucket" {
     }
 
     actions = [
-      "s3:ListBucket",
       "s3:GetBucketObjectLockConfiguration",
       "s3:GetBucketVersioning"
     ]
 
     resources = [aws_s3_bucket.trust_manifest.arn]
-
-    condition {
-      test     = "StringLike"
-      variable = "s3:prefix"
-      values   = ["orient/trust-manifests/v1/*"]
-    }
   }
 
   statement {
@@ -114,6 +126,25 @@ data "aws_iam_policy_document" "trust_manifest_bucket" {
 
     resources = ["${aws_s3_bucket.trust_manifest.arn}/orient/trust-manifests/v1/*"]
   }
+  statement {
+    sid    = "DenyNonConditionalTrustManifestWrites"
+    effect = "Deny"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.trust_manifest.arn}/orient/trust-manifests/v1/*"]
+
+    condition {
+      test     = "Null"
+      variable = "s3:if-none-match"
+      values   = ["true"]
+    }
+  }
+
   statement {
     sid    = "DenyInsecureTransport"
     effect = "Deny"
