@@ -136,9 +136,11 @@ export ORIENT_GATEWAY_SIGNING_KID='orient-gateway-2026-01'
 export ORIENT_GATEWAY_SIGNING_PRIVATE_KEY="$(cat orient-gateway-ed25519-private.pem)"
 ```
 
-Keep the private key in a protected secret store or file with restrictive permissions; do not commit it, print it, or generate a replacement on every restart. On rotation, deploy the new key with a new `kid` and retain the corresponding public key for verifiers during the planned overlap window. The HTTP routes `POST /owner/gateway/challenges` and `POST /owner/gateway/identity-token` require an active owner session, same-origin request, and CSRF token.
+Keep the private key in a protected secret store or file with restrictive permissions; do not commit it, print it, or generate a replacement on every restart. The verifier derives the active public key from the configured private key. During rotation, set `ORIENT_GATEWAY_VERIFY_PUBLIC_KEYS` to a JSON object mapping previous `kid` values to their public PEM strings, so already-issued short-lived tokens can be verified during the overlap window.
 
-**Boundary:** these routes issue a persisted challenge and a short-lived identity token. They do not expose a generic SQL endpoint or execute protected operations. A concrete operation still requires a server-owned handler, verified token claims, and the atomic challenge/idempotency transaction.
+The routes `POST /owner/gateway/challenges`, `POST /owner/gateway/identity-token`, and `POST /owner/gateway/execute` require an active owner session, same-origin request, and CSRF token. Execution additionally requires a Bearer identity token and an `Idempotency-Key` header.
+
+**Boundary:** the only currently enabled operation is `execution.get`, which returns a bounded task summary scoped to the verified tenant. There is no generic SQL endpoint, arbitrary callback, or client-selected database operation. Additional read or mutation operations must be added as fixed server-owned handlers with their own validation, authorization scope, and atomicity tests.
 
 A sample environment file is provided in [`.env.example`](.env.example). Copy it to `.env` locally; `.env` is ignored by Git.
 
