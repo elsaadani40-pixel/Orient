@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const OwnerIdentityService = require('../../src/core/security/owner-identity-service');
 const { provisionPostgresRoles } = require('../../scripts/provision-postgres-roles');
+const { BASE_SCHEMA, MIGRATIONS } = require('../../src/infrastructure/persistence/postgres/postgres-database');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const ExecutionContext = require('../../src/core/execution/execution-context');
@@ -2109,5 +2110,153 @@ test('Gateway HTTP challenge, token, execution and replay complete against Postg
       }).catch(() => {});
     }
     await runtimePool.end();
+  }
+});
+
+
+test('PostgreSQL migration 14 preserves a schema-v13 database on failed legacy attribution, then isolates mapped owners', {
+  skip: process.env.ORIENT_TEST_ALLOW_DATABASE_CREATE !== '1'
+}, async () => {
+  const adminPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+  const databaseName = 'orient_migration14_' + crypto.randomBytes(8).toString('hex');
+  let isolatedPool = null;
+  let databaseCreated = false;
+
+  try {
+    const admin = await adminPool.query(`
+      SELECT current_database() AS database_name,
+             current_user AS user_name,
+             role.rolsuper AS is_superuser
+      FROM pg_roles role
+      WHERE role.rolname = current_user
+    `);
+    assert.equal(admin.rows[0]?.database_name, 'orient_test',
+      'isolated migration fixture may only run from the disposable orient_test database');
+    assert.equal(admin.rows[0]?.is_superuser, true,
+      'isolated migration fixture requires the disposable PostgreSQL CI superuser');
+
+    await adminPool.query('CREATE DATABASE ' + databaseName);
+    databaseCreated = true;
+
+    const isolatedUrl = new URL(process.env.DATABASE_URL);
+    isolatedUrl.pathname = '/' + databaseName;
+    isolatedPool = new Pool({ connectionString: isolatedUrl.toString(), max: 2 });
+
+    // Build the real schema through migration 13 in a separate database. All
+    // migration SQL is the production SQL; no shared CI schema is modified.
+    await isolatedPool.query(BASE_SCHEMA);
+    await isolatedPool.query('INSERT INTO schema_migrations(version) VALUES(1)');
+    for (const migration of MIGRATIONS.filter(item => item.version >= 2 && item.version <= 13)) {
+      await isolatedPool.query(migration.sql);
+      await isolatedPool.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
+    }
+
+    const legacyExecutionId = 'legacy-v13-' + crypto.randomUUID();
+    const tenantId = 'legacy-owner-migration-tenant';
+    await isolatedPool.query(
+      'INSERT INTO public.executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+      [legacyExecutionId, tenantId, { legacy: true }]
+    );
+
+    const policyBefore = await isolatedPool.query(`
+      SELECT policyname, roles::text, qual, with_check
+      FROM pg_policies
+      WHERE schemaname='public' AND tablename='executions'
+      ORDER BY policyname
+    `);
+    assert.ok(policyBefore.rows.some(policy => policy.policyname === 'orient_tenant_scope'));
+
+    const migrationPersistence = new PostgresPersistence({ pool: isolatedPool });
+    await assert.rejects(
+      () => migrationPersistence.migrate(),
+      error => error.code === '55000' && /migration 14 blocked/.test(error.message)
+    );
+
+    const afterRejectedMigration = await isolatedPool.query(`
+      SELECT
+        (SELECT COALESCE(MAX(version),0)::int FROM public.schema_migrations) AS version,
+        (SELECT COUNT(*)::int FROM public.executions WHERE execution_id=$1) AS row_count,
+        (SELECT COUNT(*)::int FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='executions' AND column_name='owner_id') AS owner_column_count
+    `, [legacyExecutionId]);
+    assert.deepEqual(afterRejectedMigration.rows[0], {
+      version: 13,
+      row_count: 1,
+      owner_column_count: 0
+    }, 'failed migration must roll back the added column and preserve schema version and legacy row');
+
+    const policyAfter = await isolatedPool.query(`
+      SELECT policyname, roles::text, qual, with_check
+      FROM pg_policies
+      WHERE schemaname='public' AND tablename='executions'
+      ORDER BY policyname
+    `);
+    assert.deepEqual(policyAfter.rows, policyBefore.rows,
+      'failed migration must leave the prior tenant RLS policy unchanged');
+
+    // The operator-supplied mapping is explicit and applied only after review.
+    const ownerA = '11111111-1111-4111-8111-111111111111';
+    const ownerB = '22222222-2222-4222-8222-222222222222';
+    await isolatedPool.query('ALTER TABLE public.executions ADD COLUMN owner_id UUID');
+    await isolatedPool.query(
+      'UPDATE public.executions SET owner_id=$1 WHERE execution_id=$2',
+      [ownerA, legacyExecutionId]
+    );
+    const mappingCheck = await isolatedPool.query(
+      'SELECT COUNT(*)::int AS unmapped FROM public.executions WHERE owner_id IS NULL'
+    );
+    assert.equal(mappingCheck.rows[0].unmapped, 0);
+
+    const migrated = await migrationPersistence.migrate();
+    assert.equal(migrated.schemaVersion, 14);
+
+    const secondExecutionId = 'mapped-v13-' + crypto.randomUUID();
+    await isolatedPool.query(
+      'INSERT INTO public.executions(execution_id,tenant_id,owner_id,payload,updated_at) VALUES($1,$2,$3,$4,NOW())',
+      [secondExecutionId, tenantId, ownerB, { legacy: true }]
+    );
+
+    const ownerScopedRead = async ownerId => {
+      const client = await isolatedPool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SET LOCAL ROLE orient_runtime');
+        await client.query(
+          "SELECT set_config('app.orient_tenant_id',$1,true), set_config('app.orient_owner_id',$2,true)",
+          [tenantId, ownerId]
+        );
+        const result = await client.query(
+          'SELECT execution_id FROM public.executions WHERE tenant_id=$1 ORDER BY execution_id',
+          [tenantId]
+        );
+        await client.query('COMMIT');
+        return result.rows.map(row => row.execution_id);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
+
+    assert.deepEqual(await ownerScopedRead(ownerA), [legacyExecutionId]);
+    assert.deepEqual(await ownerScopedRead(ownerB), [secondExecutionId]);
+    assert.deepEqual(await ownerScopedRead('33333333-3333-4333-8333-333333333333'), []);
+
+    const finalPolicy = await isolatedPool.query(`
+      SELECT policyname, qual, with_check
+      FROM pg_policies
+      WHERE schemaname='public' AND tablename='executions'
+    `);
+    assert.equal(finalPolicy.rows.length, 1);
+    assert.equal(finalPolicy.rows[0].policyname, 'orient_execution_owner_scope');
+    assert.match(finalPolicy.rows[0].qual, /owner_id/);
+    assert.match(finalPolicy.rows[0].with_check, /owner_id/);
+  } finally {
+    if (isolatedPool) await isolatedPool.end();
+    if (databaseCreated) {
+      await adminPool.query('DROP DATABASE ' + databaseName + ' WITH (FORCE)');
+    }
+    await adminPool.end();
   }
 });
