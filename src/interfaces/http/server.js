@@ -75,6 +75,10 @@ function isSameOrigin(req) {
 }
 
 function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, gatewayIdentityRoutes = null, gatewayIdentityExecutionService = null, gatewayOperationHandlers = null, websiteHandler = null }) {
+  const gatewayExecutionGetHandler = gatewayOperationHandlers instanceof Map
+    ? gatewayOperationHandlers.get('execution.get')
+    : null;
+
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -355,9 +359,9 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
               const authorization = String(req.headers.authorization || '');
               const tokenMatch = authorization.match(/^Bearer ([A-Za-z0-9_.-]{1,8192})$/);
               const idempotencyKey = req.headers['idempotency-key'];
-              const handler = gatewayOperationHandlers.get(payload.operation);
               if (!tokenMatch || typeof idempotencyKey !== 'string' || !idempotencyKey.trim() ||
-                  idempotencyKey.length > 200 || typeof handler !== 'function') {
+                  idempotencyKey.length > 200 || payload.operation !== 'execution.get' ||
+                  typeof gatewayExecutionGetHandler !== 'function') {
                 sendJson(res, 400, { ok: false, code: 'GATEWAY_EXECUTION_INPUT_INVALID', message: 'بيانات تنفيذ Gateway غير مكتملة أو غير مدعومة.' });
                 return;
               }
@@ -370,7 +374,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
                 idempotencyKey,
                 request: payload.request,
                 ownerSessionId: ownerSession.sessionId,
-                execute: (client, context) => handler(client, {
+                execute: (client, context) => gatewayExecutionGetHandler(client, {
                   request: payload.request,
                   principal: context.principal
                 })
