@@ -7,7 +7,7 @@ function reject(code) {
 }
 
 class GatewayIdentityExecutionService {
-  constructor({ tokenVerifier, gatewayIdentityRepository, operationScopes = DEFAULT_OPERATION_SCOPES } = {}) {
+  constructor({ tokenVerifier, gatewayIdentityRepository, operationScopes = DEFAULT_OPERATION_SCOPES, sessionAuthorizer = null } = {}) {
     if (!tokenVerifier || typeof tokenVerifier.verify !== 'function') {
       throw new TypeError('A configured identity token verifier is required');
     }
@@ -22,9 +22,13 @@ class GatewayIdentityExecutionService {
       typeof scope !== 'string' || !scope.trim()
     )) throw new TypeError('Gateway operation scope policy is invalid');
 
+    if (sessionAuthorizer !== null && typeof sessionAuthorizer !== 'function') {
+      throw new TypeError('A session authorization callback is required when configured');
+    }
     this.tokenVerifier = tokenVerifier;
     this.gatewayIdentityRepository = gatewayIdentityRepository;
     this.operationScopes = new Map(entries);
+    this.sessionAuthorizer = sessionAuthorizer;
   }
 
   async execute({
@@ -35,7 +39,8 @@ class GatewayIdentityExecutionService {
     requestId,
     idempotencyKey,
     request,
-    execute
+    execute,
+    ownerSessionId
   } = {}) {
     const requiredScope = this.operationScopes.get(operation);
     if (!requiredScope) reject('GATEWAY_OPERATION_DENIED');
@@ -56,6 +61,12 @@ class GatewayIdentityExecutionService {
     });
     if (!verified || verified.scope.length !== 1 || verified.scope[0] !== requiredScope) {
       reject('GATEWAY_SCOPE_POLICY_REJECTED');
+    }
+    if (this.sessionAuthorizer) {
+      if (typeof ownerSessionId !== 'string' || ownerSessionId !== verified.session_id ||
+          !await this.sessionAuthorizer({ ownerId: verified.owner_id, sessionId: verified.session_id })) {
+        reject('GATEWAY_SESSION_REJECTED');
+      }
     }
 
     const principal = Object.freeze({
@@ -82,7 +93,7 @@ class GatewayIdentityExecutionService {
       binding,
       idempotencyKey,
       request,
-      execute
+      execute: client => execute(client, { principal, binding, request })
     });
   }
 }
