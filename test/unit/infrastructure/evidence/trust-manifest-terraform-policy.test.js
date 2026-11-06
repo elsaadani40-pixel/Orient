@@ -10,6 +10,10 @@ const terraformPath = path.join(moduleRoot, 'infra/aws/trust-manifest-anchor-sto
 const readmePath = path.join(moduleRoot, 'infra/aws/trust-manifest-anchor-store/README.md');
 const terraform = fs.readFileSync(terraformPath, 'utf8');
 const readme = fs.readFileSync(readmePath, 'utf8');
+const adapter = fs.readFileSync(
+  path.join(moduleRoot, 'src/infrastructure/evidence/s3-object-lock-evidence-anchor-backend.js'),
+  'utf8'
+);
 
 function policyStatement(sid) {
   const marker = `sid    = "${sid}"`;
