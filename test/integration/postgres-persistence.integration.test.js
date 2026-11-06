@@ -11,6 +11,7 @@ const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOw
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const ExecutionContext = require('../../src/core/execution/execution-context');
 const { createEvidenceRecord } = require('../../src/core/execution/evidence-record');
+const { createEvidenceAnchor } = require('../../src/infrastructure/evidence/trusted-evidence-cryptography');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
@@ -181,7 +182,6 @@ test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RL
       keyId: 'integration-key-1',
       privateKey,
       trustedKeys: { 'integration-key-1': { publicKey } },
-      anchorSigning: { keyId: 'owner-anchor-key-1', privateKey: anchorPrivateKey },
       trustedAnchorKeys: { 'owner-anchor-key-1': { publicKey: anchorPublicKey } }
     }
   });
@@ -247,8 +247,13 @@ test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RL
     assert.equal(verified.records, 3);
     assert.equal(verified.verifiedThrough, 3);
 
-    const externalAnchor = await runtimePersistence.executionEvidence.createAnchor(executionId, {
+    const anchorPayload = await runtimePersistence.executionEvidence.createAnchorPayload(executionId, {
       principal: principal('tenant-evidence-a')
+    });
+    // The owner-controlled signer runs outside the runtime process and exports the signed anchor.
+    const externalAnchor = createEvidenceAnchor(anchorPayload, {
+      keyId: 'owner-anchor-key-1',
+      privateKey: anchorPrivateKey
     });
     const anchored = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
       principal: principal('tenant-evidence-a'),
