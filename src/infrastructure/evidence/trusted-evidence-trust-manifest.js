@@ -142,6 +142,17 @@ function verifyTrustManifest(manifest, trustedRootKeys) {
     assertAllowedDataProperties(rootEntry, ['publicKey', 'validFrom', 'revokedAt'], 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
     const rootPublicKeyText = ownDataProperty(rootEntry, 'publicKey', 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
     if (typeof rootPublicKeyText !== 'string' || !rootPublicKeyText.trim()) return null;
+    const rootValidFromValue = ownDataProperty(rootEntry, 'validFrom', 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
+    const rootRevokedAtValue = ownDataProperty(rootEntry, 'revokedAt', 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
+    const rootValidFrom = rootValidFromValue === undefined ? null
+      : isoTimestamp(rootValidFromValue, 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_METADATA_INVALID');
+    const rootRevokedAt = rootRevokedAtValue === undefined ? null
+      : isoTimestamp(rootRevokedAtValue, 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_METADATA_INVALID');
+    if (rootValidFrom && rootRevokedAt && rootRevokedAt < rootValidFrom) return null;
+    if (rootValidFrom && payload.issuedAt < rootValidFrom) return null;
+    // Revocation is effective from revokedAt onward; manifests issued before
+    // that instant remain verifiable for historical audit.
+    if (rootRevokedAt && payload.issuedAt >= rootRevokedAt) return null;
     const rootPublicKey = crypto.createPublicKey(rootPublicKeyText);
     if (rootPublicKey.asymmetricKeyType !== 'ed25519') return null;
     const signatureBytes = Buffer.from(signature, 'base64');
