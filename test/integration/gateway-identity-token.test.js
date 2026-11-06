@@ -45,6 +45,7 @@ function fixture() {
   return {
     issuer,
     verifier,
+    privateKey: pair.privateKey,
     input,
     advance: milliseconds => { now += milliseconds; }
   };
@@ -105,6 +106,21 @@ test('rejects unknown signing keys', () => {
   const unknownToken = unknownKeyIssuer.issue(input);
   assert.throws(() => verifier.verify(unknownToken), { code: 'IDENTITY_TOKEN_KEY_UNKNOWN' });
   assert.equal(typeof token, 'string');
+});
+
+test('rejects signed tokens containing claims outside the fixed identity contract', () => {
+  const { issuer, verifier, privateKey, input } = fixture();
+  const original = issuer.issue(input);
+  const [header, payload] = original.split('.');
+  const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  claims.privileged = true;
+  const encodedClaims = Buffer.from(JSON.stringify(claims)).toString('base64url');
+  const signingInput = header + '.' + encodedClaims;
+  const signature = crypto.sign(null, Buffer.from(signingInput), privateKey).toString('base64url');
+  assert.throws(
+    () => verifier.verify(signingInput + '.' + signature),
+    { code: 'IDENTITY_TOKEN_CLAIMS_REJECTED' }
+  );
 });
 
 test('rejects expired tokens', () => {
