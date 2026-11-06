@@ -142,6 +142,55 @@ test('trusted evidence envelope enforces key validity and revocation timestamps'
 });
 
 
+test('trusted evidence key rotation preserves historical verification and rejects post-revocation signatures', () => {
+  const fixture = setup();
+  const nextPair = crypto.generateKeyPairSync('ed25519');
+  const nextPrivateKey = nextPair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const nextPublicKey = nextPair.publicKey.export({ type: 'spki', format: 'pem' });
+  const input = {
+    tenantId: 'tenant-a',
+    executionId: fixture.evidence.executionId,
+    sequence: 1,
+    evidence: fixture.evidence,
+    previousHash: null
+  };
+  const oldEnvelope = signEvidenceEnvelope(input, {
+    keyId: 'test-key-1',
+    privateKey: fixture.privateKey,
+    recordedAt: '2026-11-06T10:01:00.000Z'
+  });
+  const newEnvelope = signEvidenceEnvelope(input, {
+    keyId: 'test-key-2',
+    privateKey: nextPrivateKey,
+    recordedAt: '2026-11-06T10:03:00.000Z'
+  });
+  const trustManifest = {
+    'test-key-1': {
+      publicKey: fixture.publicKey,
+      validFrom: '2026-11-06T09:00:00.000Z',
+      revokedAt: '2026-11-06T10:02:00.000Z'
+    },
+    'test-key-2': {
+      publicKey: nextPublicKey,
+      validFrom: '2026-11-06T10:02:00.000Z'
+    }
+  };
+
+  assert.equal(verifyEvidenceEnvelope(oldEnvelope, trustManifest), true);
+  assert.equal(verifyEvidenceEnvelope(newEnvelope, trustManifest), true);
+
+  const postRevocationEnvelope = signEvidenceEnvelope({
+    ...input,
+    sequence: 2,
+    previousHash: oldEnvelope.recordHash
+  }, {
+    keyId: 'test-key-1',
+    privateKey: fixture.privateKey,
+    recordedAt: '2026-11-06T10:03:00.000Z'
+  });
+  assert.equal(verifyEvidenceEnvelope(postRevocationEnvelope, trustManifest), false);
+});
+
 test('external evidence anchors require a separate trusted Ed25519 key and detect tampering', () => {
   const pair = crypto.generateKeyPairSync('ed25519');
   const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
