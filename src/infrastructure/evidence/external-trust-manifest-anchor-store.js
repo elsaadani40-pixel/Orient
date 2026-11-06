@@ -77,10 +77,48 @@ class ExternalTrustManifestAnchorStore {
     return Object.freeze({ manifest, version: verified.version, digest: verified.digest });
   }
 
-  async hasAnchor({ version, digest, expectedRootKeyId, trustedRootKeys } = {}) {
-    const stored = await this.getManifest(version, { trustedRootKeys });
-    return Boolean(stored && stored.digest === digest &&
-      (expectedRootKeyId === undefined || stored.manifest.rootKeyId === expectedRootKeyId));
+  async hasAnchor({
+    version,
+    digest,
+    expectedRootKeyId,
+    activeFromVersion,
+    trustedRootKeys
+  } = {}) {
+    if (!Number.isSafeInteger(version) || version < 1 ||
+        !/^[a-f0-9]{64}$/.test(digest || '') ||
+        typeof expectedRootKeyId !== 'string' || !expectedRootKeyId.trim() ||
+        !Number.isSafeInteger(activeFromVersion) || activeFromVersion < 0 ||
+        activeFromVersion >= version) return false;
+    const keys = await this.resolveTrustedRootKeys(trustedRootKeys);
+    const entries = await this.backend.list('orient/trust-manifests/v1/');
+    if (!Array.isArray(entries)) {
+      fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CONTRACT_INVALID', 'Backend list must return an array');
+    }
+    const manifests = entries.map(entry => {
+      if (!entry || typeof entry.key !== 'string' ||
+          !entry.key.startsWith('orient/trust-manifests/v1/')) {
+        fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CORRUPT', 'Backend returned an entry outside the trust-manifest namespace');
+      }
+      const manifest = parseManifest(entry.value);
+      if (manifest.version <= version && (manifestKey(manifest.version) !== entry.key ||
+          !verifyTrustManifest(manifest, keys))) {
+        fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CORRUPT', 'Historical manifest failed key or signature verification');
+      }
+      return manifest;
+    }).filter(manifest => manifest.version <= version)
+      .sort((a, b) => a.version - b.version);
+    if (manifests.length !== version) return false;
+    for (let index = 0; index < manifests.length; index += 1) {
+      const manifest = manifests[index];
+      if (manifest.version !== index + 1 ||
+          (index > 0 && manifest.issuedAt < manifests[index - 1].issuedAt)) return false;
+      if (manifest.version > activeFromVersion &&
+          manifest.rootKeyId !== expectedRootKeyId) return false;
+    }
+    const head = manifests.at(-1);
+    const verified = verifyTrustManifest(head, keys);
+    return Boolean(verified && verified.digest === digest &&
+      head.rootKeyId === expectedRootKeyId);
   }
 
   async readHead({
