@@ -90,7 +90,15 @@ class OwnerSessionIdentityAuthority {
       reject('IDENTITY_AUTH_SESSION_REJECTED');
     }
 
-    const challenge = await this.challengeStore.getForIssuance(challengeId);
+    const principal = Object.freeze({
+      principalId: session.ownerId,
+      ownerId: session.ownerId,
+      tenantId: this.tenantId,
+      workspaceId: this.workspaceId,
+      authSource: 'orient-owner-session',
+      sessionId: session.sessionId
+    });
+    const challenge = await this.challengeStore.getForIssuance(challengeId, { principal });
     const now = this.now();
     if (!challenge || challenge.challengeId !== challengeId ||
         challenge.status !== 'ISSUED' ||
@@ -106,14 +114,6 @@ class OwnerSessionIdentityAuthority {
         challenge.requestId !== requestId) {
       reject('IDENTITY_AUTH_CHALLENGE_BINDING_MISMATCH');
     }
-
-    const principal = Object.freeze({
-      principalId: session.ownerId,
-      ownerId: session.ownerId,
-      tenantId: this.tenantId,
-      workspaceId: this.workspaceId,
-      sessionId: session.sessionId
-    });
 
     return Object.freeze({
       token: this.tokenIssuer.issue({
