@@ -193,12 +193,29 @@ test('ledger supports sequential rotations and exact idempotent append retry', a
     issuedAt: '2026-11-06T10:02:00.000Z',
     effectiveAt: '2026-11-06T10:03:00.000Z'
   });
+  const head = { transitionSequence: 1, transitionDigest: first.transitionDigest };
+  const notYetActivePayload = f.payload({
+    sequence: 2, previousDigest: first.transitionDigest, previousEpoch: 2,
+    previousRootKeyId: 'root-2',
+    previousRootFingerprint: publicKeyFingerprint(f.next.publicKey),
+    nextRoot: f.third, nextRootKeyId: 'root-3',
+    issuedAt: '2026-11-06T10:00:30.000Z',
+    effectiveAt: '2026-11-06T10:02:00.000Z'
+  });
+  const tooEarly = signRootTransition(notYetActivePayload, {
+    currentRootKeyId: 'root-2',
+    currentRootPrivateKey: f.next.privateKey,
+    nextRootPrivateKey: f.third.privateKey
+  });
+  await assert.rejects(
+    () => f.ledger.appendIfNext(tooEarly, head),
+    error => error.code === 'EVIDENCE_ROOT_TRANSITION_INVALID'
+  );
   const second = signRootTransition(secondPayload, {
     currentRootKeyId: 'root-2',
     currentRootPrivateKey: f.next.privateKey,
     nextRootPrivateKey: f.third.privateKey
   });
-  const head = { transitionSequence: 1, transitionDigest: first.transitionDigest };
   const result = await f.ledger.appendIfNext(second, head);
   assert.equal(result.created, true);
   assert.equal(result.transitionSequence, 2);
