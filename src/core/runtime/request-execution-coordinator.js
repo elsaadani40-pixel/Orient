@@ -232,8 +232,19 @@ class RequestExecutionCoordinator {
         requestId,
         input: text,
         tenantId: this.tenantId,
-        isCancellationRequested: () => this.isCancellationRequested(context.executionId),
-        cancellationReason: 'Execution cancellation requested'
+        isCancellationRequested: async () => {
+          if (ownerSessionContext !== null) {
+            try {
+              await this.assertOwnerSessionContext(ownerSessionContext);
+            } catch (_) {
+              return true;
+            }
+          }
+          return this.isCancellationRequested(context.executionId);
+        },
+        cancellationReason: ownerSessionContext !== null
+          ? 'Owner session is no longer active'
+          : 'Execution cancellation requested'
       });
 
       const { plan, loopResult, replanningDecision } = executionResult;
