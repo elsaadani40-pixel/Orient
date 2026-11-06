@@ -64,7 +64,7 @@ A transition payload has exactly these fields:
 
 The signed envelope contains the payload, the authorization signatures, and its canonical transition digest. Unknown fields, accessors, symbols, noncanonical encodings, invalid key types, and inconsistent derived fingerprints are rejected.
 
-The transition digest is SHA-256 over the canonical payload and authorization-signature set, prefixed by the transition-envelope domain separator. The transition digest is not itself a signature.
+The recovery-policy digest includes each authority's ID, public-key fingerprint, `validFrom` and `revokedAt` metadata, plus the threshold. The transition digest is SHA-256 over the canonical payload and authorization-signature set, prefixed by the transition-envelope domain separator. The transition digest is not itself a signature.
 
 ## Signature domains and authorization rules
 
@@ -124,7 +124,7 @@ The independent transition ledger exposes only:
 
 The backend must provide strongly consistent conditional creation and deny overwrite/delete to the transition-writer identity. Runtime has no write credential.
 
-A valid ledger is contiguous from sequence 1. Each entry's previous digest must equal the prior entry's digest. Duplicate sequence with different content, gaps, reordered history, unknown objects in the namespace, or a head that conflicts with the pinned bootstrap state are fatal.
+The expected bootstrap state must carry the complete historical set of used root IDs and fingerprints; the verifier rejects missing history and any reused ID or public-key fingerprint. A valid ledger is contiguous from sequence 1. Each entry's previous digest must equal the prior entry's digest. Duplicate sequence with different content, gaps, reordered history, unknown objects in the namespace, or a head that conflicts with the pinned bootstrap state are fatal.
 
 The ledger is independent from the trust-manifest anchor ledger. A manifest version does not substitute for a root-transition sequence, and a transition does not silently rewrite an already anchored manifest.
 
