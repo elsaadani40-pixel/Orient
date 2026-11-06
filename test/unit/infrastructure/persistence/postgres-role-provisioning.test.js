@@ -37,6 +37,8 @@ test('PostgreSQL role provisioning revokes broad default privileges for future o
   });
 
   const sql = statements.map(item => item.sql);
+  const tableInventoryQuery = statements.find(item => item.sql.includes('FROM pg_tables'));
+  assert.ok(tableInventoryQuery.values[1].includes('execution_evidence'));
   assert.ok(sql.includes(
     'ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public REVOKE ALL ON TABLES FROM orient_runtime'
   ));
