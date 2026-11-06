@@ -122,6 +122,37 @@ test('S3 Object Lock backend paginates listings and reads object bytes', async (
   assert.equal(client.listCalls.length, 2);
 });
 
+test('S3 Object Lock backend rejects malformed and duplicate listing entries', async () => {
+  const { backend, client, commands } = fixture();
+  client.send = async command => {
+    if (command instanceof commands.ListObjectsV2Command) {
+      return { Contents: { Key: 'orient/evidence-anchors/v1/a/1' }, IsTruncated: false };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.list('orient/evidence-anchors/v1/a/'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_RESPONSE_INVALID'
+  );
+
+  let page = 0;
+  client.send = async command => {
+    if (command instanceof commands.ListObjectsV2Command) {
+      page += 1;
+      return {
+        Contents: [{ Key: 'orient/evidence-anchors/v1/a/1' }],
+        IsTruncated: page === 1,
+        ...(page === 1 ? { NextContinuationToken: 'next' } : {})
+      };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.list('orient/evidence-anchors/v1/a/'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_DUPLICATE_KEY'
+  );
+});
+
 test('S3 Object Lock backend rejects invalid configuration and unnamespaced keys', async () => {
   const { client } = fixture();
   assert.throws(() => new S3ObjectLockEvidenceAnchorBackend({
