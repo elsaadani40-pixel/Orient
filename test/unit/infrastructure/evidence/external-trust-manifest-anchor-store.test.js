@@ -105,6 +105,55 @@ test('external trust anchor store rejects conflicting same-version immutable con
   );
 });
 
+test('external manifest anchor store resolves keys from reconstructed root state', async () => {
+  const f = fixture();
+  let currentKeys = f.trustedRootKeys;
+  const dynamicStore = new ExternalTrustManifestAnchorStore({
+    backend: f.backend,
+    trustedRootKeysProvider: async () => currentKeys
+  });
+  const first = f.create(1);
+  await dynamicStore.append(first, { verificationTime: '2026-11-06T10:03:00.000Z' });
+  const secondRoot = crypto.generateKeyPairSync('ed25519');
+  const secondPrivate = secondRoot.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const secondPublic = secondRoot.publicKey.export({ type: 'spki', format: 'pem' });
+  const evidence = crypto.generateKeyPairSync('ed25519');
+  const second = signTrustManifest({
+    version: 2,
+    issuedAt: '2026-11-06T10:04:00.000Z',
+    expiresAt: '2026-12-06T10:04:00.000Z',
+    keys: { 'evidence-key-1': { publicKey: evidence.publicKey.export({ type: 'spki', format: 'pem' }) } }
+  }, { rootKeyId: 'offline-root-2', rootPrivateKey: secondPrivate });
+  currentKeys = {
+    'offline-root-1': {
+      publicKey: f.trustedRootKeys['offline-root-1'].publicKey,
+      revokedAt: '2026-11-06T10:03:30.000Z'
+    },
+    'offline-root-2': {
+      publicKey: secondPublic,
+      validFrom: '2026-11-06T10:03:30.000Z'
+    }
+  };
+  await dynamicStore.append(second, { verificationTime: '2026-11-06T10:05:00.000Z' });
+  assert.deepEqual(await dynamicStore.readHead(), {
+    version: 2,
+    digest: require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest')
+      .verifyTrustManifest(second, currentKeys).digest
+  });
+  assert.equal(await dynamicStore.hasAnchor({
+    version: 2,
+    digest: require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest')
+      .verifyTrustManifest(second, currentKeys).digest,
+    expectedRootKeyId: 'offline-root-2'
+  }), true);
+  assert.equal(await dynamicStore.hasAnchor({
+    version: 2,
+    digest: require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest')
+      .verifyTrustManifest(second, currentKeys).digest,
+    expectedRootKeyId: 'offline-root-1'
+  }), false);
+});
+
 test('external trust anchor store fails closed on incomplete backend contracts', async () => {
   assert.throws(
     () => new ExternalTrustManifestAnchorStore({ backend: { get() {} }, trustedRootKeys: {} }),
