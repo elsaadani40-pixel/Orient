@@ -3,7 +3,7 @@ const { createRuntimeResponseV1, MAX_ASSISTANT_TEXT_CHARS } = require('../contra
 
 function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated = null } = {}) {
   return {
-    async createTask(req, res, body) {
+    async createTask(req, res, body, ownerSessionContext = null) {
       let payload;
       try {
         payload = typeof body === 'string' ? JSON.parse(body || '{}') : body;
@@ -17,7 +17,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       const idempotencyKey = req.headers?.['idempotency-key'] || payload.idempotencyKey;
       const result = await agentService.createTask({
         goal: payload.goal,
-        idempotencyKey
+        idempotencyKey,
+        ownerSessionContext
       });
       if (typeof onTaskCreated === 'function' && typeof result.task?.id === 'string' &&
           typeof req?.ownerChatMessageId === 'string') {
