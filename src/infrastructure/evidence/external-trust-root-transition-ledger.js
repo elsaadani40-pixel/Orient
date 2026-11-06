@@ -1,0 +1,211 @@
+'use strict';
+
+const { canonicalJson } = require('../../core/execution/evidence-record');
+const { verifyRootTransition } = require('./trusted-evidence-root-transition');
+
+const PREFIX = 'orient/trust-root-transitions/v1/';
+
+function fail(code, message) {
+  throw Object.assign(new Error(message), { code });
+}
+
+function keyForSequence(sequence) {
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    fail('EVIDENCE_ROOT_TRANSITION_LEDGER_INVALID', 'Transition sequence must be a positive safe integer');
+  }
+  return `${PREFIX}${String(sequence).padStart(16, '0')}.json`;
+}
+
+function parseEnvelope(value) {
+  if (typeof value !== 'string') {
+    fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CORRUPT', 'Stored transition must be UTF-8 JSON text');
+  }
+  let envelope;
+  try {
+    envelope = JSON.parse(value);
+    if (canonicalJson(envelope) !== value) throw new Error('non-canonical');
+  } catch {
+    fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CORRUPT', 'Stored transition is malformed or non-canonical');
+  }
+  return envelope;
+}
+
+function cloneState(state) {
+  return {
+    rootEpoch: state.rootEpoch,
+    rootKeyId: state.rootKeyId,
+    rootFingerprint: state.rootFingerprint,
+    manifestHeadVersion: state.manifestHeadVersion,
+    manifestHeadDigest: state.manifestHeadDigest,
+    transitionSequence: state.transitionSequence,
+    transitionDigest: state.transitionDigest,
+    usedRootKeyIds: [...state.usedRootKeyIds],
+    usedRootFingerprints: [...state.usedRootFingerprints]
+  };
+}
+
+/**
+ * Full-history immutable root-transition ledger.
+ *
+ * The backend must implement strongly consistent putIfAbsent/get/list and
+ * deny overwrite/delete to its writer identity. Runtime must not possess that
+ * writer credential. The initial root and recovery policy are independently
+ * pinned bootstrap inputs, never read from this ledger.
+ */
+class ExternalTrustRootTransitionLedger {
+  constructor({
+    backend,
+    initialState,
+    trustedRootKeys,
+    recoveryPolicy,
+    clockSkewMs,
+    maxValidityMs,
+    now = () => new Date().toISOString()
+  } = {}) {
+    if (!backend || typeof backend.putIfAbsent !== 'function' ||
+        typeof backend.get !== 'function' || typeof backend.list !== 'function') {
+      throw new TypeError('An immutable external root-transition backend is required');
+    }
+    if (!initialState || !Number.isSafeInteger(initialState.rootEpoch) ||
+        initialState.rootEpoch < 1 || !Number.isSafeInteger(initialState.manifestHeadVersion) ||
+        initialState.manifestHeadVersion < 1 ||
+        !Number.isSafeInteger(initialState.transitionSequence) ||
+        initialState.transitionSequence !== 0 || initialState.transitionDigest !== null ||
+        typeof initialState.rootKeyId !== 'string' ||
+        !Array.isArray(initialState.usedRootKeyIds) ||
+        !Array.isArray(initialState.usedRootFingerprints)) {
+      throw new TypeError('A complete pinned root-transition bootstrap state is required');
+    }
+    if (!trustedRootKeys || typeof trustedRootKeys !== 'object' ||
+        !recoveryPolicy || typeof recoveryPolicy !== 'object') {
+      throw new TypeError('Pinned root keys and recovery policy are required');
+    }
+    if (typeof now !== 'function') throw new TypeError('A clock function is required');
+    this.backend = backend;
+    this.initialState = cloneState(initialState);
+    this.initialTrustedRootKeys = structuredClone(trustedRootKeys);
+    this.recoveryPolicy = structuredClone(recoveryPolicy);
+    this.clockSkewMs = clockSkewMs;
+    this.maxValidityMs = maxValidityMs;
+    this.now = now;
+  }
+
+  async readHistory() {
+    const entries = await this.backend.list(PREFIX);
+    if (!Array.isArray(entries)) {
+      fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CONTRACT_INVALID', 'Backend list must return an array');
+    }
+    const parsed = entries.map(entry => {
+      if (!entry || typeof entry.key !== 'string' || !entry.key.startsWith(PREFIX)) {
+        fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CORRUPT', 'Backend returned an entry outside the root-transition namespace');
+      }
+      const envelope = parseEnvelope(entry.value);
+      if (keyForSequence(envelope?.payload?.transitionSequence) !== entry.key) {
+        fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CORRUPT', 'Transition key does not match its signed sequence');
+      }
+      return { key: entry.key, envelope };
+    }).sort((a, b) => a.envelope.payload.transitionSequence - b.envelope.payload.transitionSequence);
+
+    const state = cloneState(this.initialState);
+    const trustedRootKeys = structuredClone(this.initialTrustedRootKeys);
+    const verifiedTransitions = [];
+    for (let index = 0; index < parsed.length; index += 1) {
+      const { envelope } = parsed[index];
+      if (envelope.payload.transitionSequence !== index + 1) {
+        fail('EVIDENCE_ROOT_TRANSITION_LEDGER_GAP', 'Root-transition history must be contiguous from sequence 1');
+      }
+      const verified = verifyRootTransition(envelope, {
+        trustedRootKeys,
+        recoveryPolicy: this.recoveryPolicy,
+        expectedState: state,
+        verificationTime: envelope.payload.effectiveAt,
+        clockSkewMs: this.clockSkewMs,
+        maxValidityMs: this.maxValidityMs,
+        historicalReplay: true
+      });
+      if (!verified) {
+        fail('EVIDENCE_ROOT_TRANSITION_LEDGER_INVALID', `Root-transition ${index + 1} failed full-history verification`);
+      }
+      const previous = trustedRootKeys[state.rootKeyId];
+      trustedRootKeys[state.rootKeyId] = {
+        ...previous,
+        revokedAt: envelope.payload.effectiveAt
+      };
+      trustedRootKeys[verified.nextRoot.keyId] = { publicKey: verified.nextRoot.publicKey };
+      state.rootEpoch = envelope.payload.nextRootEpoch;
+      state.rootKeyId = verified.nextRoot.keyId;
+      state.rootFingerprint = verified.nextRoot.fingerprint;
+      state.transitionSequence = envelope.payload.transitionSequence;
+      state.transitionDigest = verified.transitionDigest;
+      state.usedRootKeyIds.push(verified.nextRoot.keyId);
+      state.usedRootFingerprints.push(verified.nextRoot.fingerprint);
+      verifiedTransitions.push(verified);
+    }
+
+    return Object.freeze({
+      state: Object.freeze(cloneState(state)),
+      trustedRootKeys: Object.freeze(trustedRootKeys),
+      transitions: Object.freeze(verifiedTransitions),
+      head: state.transitionSequence === 0 ? null : Object.freeze({
+        transitionSequence: state.transitionSequence,
+        transitionDigest: state.transitionDigest
+      })
+    });
+  }
+
+  async appendIfNext(envelope, expectedHead = null) {
+    const current = await this.readHistory();
+    const actualHead = current.head;
+    if (canonicalJson(actualHead) !== canonicalJson(expectedHead)) {
+      fail('EVIDENCE_ROOT_TRANSITION_LEDGER_HEAD_CONFLICT', 'Expected transition head is stale; reload and prepare a new signed transition');
+    }
+    const verificationTime = this.now();
+    const verified = verifyRootTransition(envelope, {
+      trustedRootKeys: current.trustedRootKeys,
+      recoveryPolicy: this.recoveryPolicy,
+      expectedState: current.state,
+      verificationTime,
+      clockSkewMs: this.clockSkewMs,
+      maxValidityMs: this.maxValidityMs
+    });
+    if (!verified) {
+      fail('EVIDENCE_ROOT_TRANSITION_INVALID', 'Transition failed current-state signature, time, or policy verification');
+    }
+    const key = keyForSequence(verified.payload.transitionSequence);
+    const value = canonicalJson(envelope);
+    const result = await this.backend.putIfAbsent(key, value);
+    if (!result || typeof result.created !== 'boolean') {
+      fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CONTRACT_INVALID', 'Backend putIfAbsent must return a created boolean');
+    }
+    if (result.created) {
+      const replayed = await this.readHistory();
+      if (replayed.head?.transitionDigest !== verified.transitionDigest) {
+        fail('EVIDENCE_ROOT_TRANSITION_LEDGER_POST_WRITE_INVALID', 'Transition did not become the verified immutable ledger head');
+      }
+      return { created: true, ...replayed.head };
+    }
+    const existingValue = typeof result.existingValue === 'string'
+      ? result.existingValue
+      : await this.backend.get(key);
+    if (existingValue === null || existingValue === undefined) {
+      fail('EVIDENCE_ROOT_TRANSITION_LEDGER_RACE', 'Existing transition could not be read back');
+    }
+    const existing = parseEnvelope(existingValue);
+    if (canonicalJson(existing) !== value) {
+      fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CONFLICT', 'An immutable transition already exists at this sequence with different content');
+    }
+    return { created: false, transitionSequence: verified.payload.transitionSequence,
+      transitionDigest: verified.transitionDigest };
+  }
+
+  async readState() {
+    const history = await this.readHistory();
+    return Object.freeze({
+      ...history.state,
+      activeRoot: history.trustedRootKeys[history.state.rootKeyId],
+      verifiedTransitionCount: history.transitions.length
+    });
+  }
+}
+
+module.exports = { ExternalTrustRootTransitionLedger, keyForSequence, PREFIX };
