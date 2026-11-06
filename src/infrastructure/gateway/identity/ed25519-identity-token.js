@@ -157,8 +157,12 @@ class Ed25519IdentityTokenVerifier {
     this.publicKeys = new Map();
     for (const [kid, key] of publicKeys) {
       if (!nonEmpty(kid, 128)) throw new TypeError('Invalid identity key id');
-      const publicKey = crypto.createPublicKey(key);
-      if (publicKey.asymmetricKeyType !== 'ed25519') throw new TypeError('Identity verification key must be Ed25519');
+      const publicKey = key instanceof crypto.KeyObject && key.type === 'public'
+        ? key
+        : crypto.createPublicKey(key);
+      if (publicKey.type !== 'public' || publicKey.asymmetricKeyType !== 'ed25519') {
+        throw new TypeError('Identity verification key must be an Ed25519 public key');
+      }
       this.publicKeys.set(kid, publicKey);
     }
     this.issuer = issuer;
