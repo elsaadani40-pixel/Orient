@@ -241,6 +241,7 @@ class ExternalTrustRootTransitionLedger {
       if (!manifestHead || !Number.isSafeInteger(manifestHead.version) ||
           manifestHead.version < expectedState.manifestHeadVersion ||
           !/^[a-f0-9]{64}$/.test(manifestHead.digest || '') ||
+          manifestHead.rootKeyId !== current.state.rootKeyId ||
           (manifestHead.version === expectedState.manifestHeadVersion &&
             manifestHead.digest !== expectedState.manifestHeadDigest) ||
           envelope?.payload?.manifestHeadVersion !== manifestHead.version ||
