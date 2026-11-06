@@ -123,8 +123,28 @@ function verifyEvidenceEnvelope(record, trustedKeys) {
 }
 
 
-function createEvidenceAnchor({ tenantId, executionId, sequence, recordHash, anchoredAt = new Date().toISOString() } = {}, { keyId, privateKey } = {}) {
-  if (!privateKey) fail('EVIDENCE_ANCHOR_SIGNING_KEY_REQUIRED', 'A persistent external anchor signing key is required');
+function buildEvidenceAnchorPayload({ tenantId, executionId, sequence, recordHash, anchoredAt = new Date().toISOString() } = {}) {
+  if (typeof tenantId !== 'string' || !tenantId.trim() || tenantId.length > 128 ||
+      typeof executionId !== 'string' || !executionId.trim() || executionId.length > 256 ||
+      !Number.isSafeInteger(sequence) || sequence < 1 || !HASH_PATTERN.test(recordHash || '')) {
+    fail('EVIDENCE_ANCHOR_INVALID', 'External anchor scope, sequence, and record hash are required');
+  }
+  const timestamp = new Date(anchoredAt);
+  if (!Number.isFinite(timestamp.getTime())) {
+    fail('EVIDENCE_ANCHOR_TIMESTAMP_INVALID', 'External anchor timestamp is invalid');
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    tenantId,
+    executionId,
+    sequence,
+    recordHash,
+    anchoredAt: timestamp.toISOString()
+  });
+}
+
+function createEvidenceAnchor(payload, { keyId, privateKey } = {}) {
+  if (!privateKey) fail('EVIDENCE_ANCHOR_SIGNING_KEY_REQUIRED', 'An independently managed external anchor signing key is required');
   let key;
   try {
     key = crypto.createPrivateKey(privateKey);
@@ -134,25 +154,10 @@ function createEvidenceAnchor({ tenantId, executionId, sequence, recordHash, anc
   if (key.asymmetricKeyType !== 'ed25519') {
     fail('EVIDENCE_ANCHOR_SIGNING_KEY_INVALID', 'External anchor signing key must use Ed25519');
   }
-  if (typeof tenantId !== 'string' || !tenantId.trim() || tenantId.length > 128 ||
-      typeof executionId !== 'string' || !executionId.trim() || executionId.length > 256 ||
-      !Number.isSafeInteger(sequence) || sequence < 1 || !HASH_PATTERN.test(recordHash || '') ||
-      typeof keyId !== 'string' || !KEY_ID_PATTERN.test(keyId)) {
-    fail('EVIDENCE_ANCHOR_INVALID', 'External anchor scope, sequence, hash, and key identifier are required');
+  if (typeof keyId !== 'string' || !KEY_ID_PATTERN.test(keyId)) {
+    fail('EVIDENCE_ANCHOR_INVALID', 'A valid external anchor signing key identifier is required');
   }
-  const timestamp = new Date(anchoredAt);
-  if (!Number.isFinite(timestamp.getTime())) {
-    fail('EVIDENCE_ANCHOR_TIMESTAMP_INVALID', 'External anchor timestamp is invalid');
-  }
-  const unsigned = {
-    schemaVersion: 1,
-    tenantId,
-    executionId,
-    sequence,
-    recordHash,
-    keyId,
-    anchoredAt: timestamp.toISOString()
-  };
+  const unsigned = { ...buildEvidenceAnchorPayload(payload), keyId };
   const signature = crypto.sign(
     null,
     Buffer.concat([ANCHOR_DOMAIN, Buffer.from(canonicalJson(unsigned), 'utf8')]),
@@ -194,6 +199,7 @@ module.exports = {
   ANCHOR_DOMAIN: ANCHOR_DOMAIN.toString('utf8'),
   signEvidenceEnvelope,
   verifyEvidenceEnvelope,
+  buildEvidenceAnchorPayload,
   createEvidenceAnchor,
   verifyEvidenceAnchor
 };
