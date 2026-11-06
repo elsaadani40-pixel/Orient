@@ -792,6 +792,11 @@ class ExecutionContext {
         : [];
 
     const evidenceSchemaVersion = snapshot.evidenceSchemaVersion;
+    if (evidenceSchemaVersion === 1 && !Array.isArray(snapshot.observations)) {
+      const error = new Error('Versioned snapshot is missing execution observations');
+      error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+      throw error;
+    }
     if (evidenceSchemaVersion !== undefined && evidenceSchemaVersion !== 1) {
       const error = new Error('Unsupported execution evidence schema version');
       error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
