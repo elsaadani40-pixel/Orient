@@ -6,6 +6,8 @@ const { canonicalJson } = require('../../core/execution/evidence-record');
 const MANIFEST_DOMAIN = Buffer.from('ORIENT-TRUSTED-EVIDENCE-MANIFEST-V1\0', 'utf8');
 const KEY_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
+const DEFAULT_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const MAX_MANIFEST_VALIDITY_MS = 90 * 24 * 60 * 60 * 1000;
 
 function fail(code, message) {
   throw Object.assign(new Error(message), { code });
@@ -49,10 +51,12 @@ function assertAllowedDataProperties(object, allowed, code) {
 
 function normalizeManifestPayload(input) {
   if (!isPlainRecord(input)) fail('EVIDENCE_TRUST_MANIFEST_INVALID', 'Trust manifest payload must be a plain record');
-  assertAllowedDataProperties(input, ['schemaVersion', 'version', 'issuedAt', 'keys'], 'EVIDENCE_TRUST_MANIFEST_INVALID');
+  assertAllowedDataProperties(input, ['schemaVersion', 'version', 'issuedAt', 'expiresAt', 'keys'], 'EVIDENCE_TRUST_MANIFEST_INVALID');
   const schemaVersion = ownDataProperty(input, 'schemaVersion', 'EVIDENCE_TRUST_MANIFEST_INVALID');
   const version = ownDataProperty(input, 'version', 'EVIDENCE_TRUST_MANIFEST_INVALID');
   const issuedAt = ownDataProperty(input, 'issuedAt', 'EVIDENCE_TRUST_MANIFEST_INVALID');
+  const expiresAtValue = ownDataProperty(input, 'expiresAt', 'EVIDENCE_TRUST_MANIFEST_EXPIRY_INVALID');
+  const expiresAt = expiresAtValue === undefined ? null : isoTimestamp(expiresAtValue, 'EVIDENCE_TRUST_MANIFEST_EXPIRY_INVALID');
   const keys = ownDataProperty(input, 'keys', 'EVIDENCE_TRUST_MANIFEST_KEYS_INVALID');
   if (schemaVersion !== undefined && schemaVersion !== 1) {
     fail('EVIDENCE_TRUST_MANIFEST_VERSION_INVALID', 'Unsupported trust manifest schema version');
@@ -61,6 +65,9 @@ function normalizeManifestPayload(input) {
     fail('EVIDENCE_TRUST_MANIFEST_VERSION_INVALID', 'Trust manifest version must be a positive safe integer');
   }
   isoTimestamp(issuedAt, 'EVIDENCE_TRUST_MANIFEST_TIMESTAMP_INVALID');
+  if (!expiresAt || expiresAt <= issuedAt || Date.parse(expiresAt) - Date.parse(issuedAt) > MAX_MANIFEST_VALIDITY_MS) {
+    fail('EVIDENCE_TRUST_MANIFEST_EXPIRY_INVALID', 'Trust manifest expiry must be after issuance and within 90 days');
+  }
   if (!isPlainRecord(keys)) fail('EVIDENCE_TRUST_MANIFEST_KEYS_INVALID', 'Trust manifest keys must be a plain record');
   const normalizedKeys = {};
   for (const keyId of Reflect.ownKeys(keys).sort()) {
@@ -90,7 +97,7 @@ function normalizeManifestPayload(input) {
   if (Object.keys(normalizedKeys).length === 0) {
     fail('EVIDENCE_TRUST_MANIFEST_KEYS_INVALID', 'Trust manifest must contain at least one verification key');
   }
-  return { schemaVersion: 1, version, issuedAt, keys: normalizedKeys };
+  return { schemaVersion: 1, version, issuedAt, expiresAt, keys: normalizedKeys };
 }
 
 function signTrustManifest(input, { rootKeyId, rootPrivateKey } = {}) {
@@ -120,7 +127,7 @@ function signTrustManifest(input, { rootKeyId, rootPrivateKey } = {}) {
 function verifyTrustManifest(manifest, trustedRootKeys, { verificationTime } = {}) {
   try {
     if (!isPlainRecord(manifest)) return null;
-    assertAllowedDataProperties(manifest, ['schemaVersion', 'version', 'issuedAt', 'keys', 'rootKeyId', 'signature'],
+    assertAllowedDataProperties(manifest, ['schemaVersion', 'version', 'issuedAt', 'expiresAt', 'keys', 'rootKeyId', 'signature'],
       'EVIDENCE_TRUST_MANIFEST_INVALID');
     const schemaVersion = ownDataProperty(manifest, 'schemaVersion', 'EVIDENCE_TRUST_MANIFEST_INVALID');
     const rootKeyId = ownDataProperty(manifest, 'rootKeyId', 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_INVALID');
@@ -131,6 +138,7 @@ function verifyTrustManifest(manifest, trustedRootKeys, { verificationTime } = {
       schemaVersion,
       version: ownDataProperty(manifest, 'version', 'EVIDENCE_TRUST_MANIFEST_INVALID'),
       issuedAt: ownDataProperty(manifest, 'issuedAt', 'EVIDENCE_TRUST_MANIFEST_INVALID'),
+      expiresAt: ownDataProperty(manifest, 'expiresAt', 'EVIDENCE_TRUST_MANIFEST_EXPIRY_INVALID'),
       keys: ownDataProperty(manifest, 'keys', 'EVIDENCE_TRUST_MANIFEST_INVALID')
     };
     const payload = normalizeManifestPayload(unsigned);
@@ -159,6 +167,7 @@ function verifyTrustManifest(manifest, trustedRootKeys, { verificationTime } = {
       : isoTimestamp(verificationTime, 'EVIDENCE_TRUST_MANIFEST_VERIFICATION_TIME_INVALID');
     if (rootValidFrom && verificationTimestamp < rootValidFrom) return null;
     if (rootRevokedAt && verificationTimestamp >= rootRevokedAt) return null;
+    if (verificationTime !== undefined && (Date.parse(payload.issuedAt) > Date.parse(verificationTimestamp) + DEFAULT_CLOCK_SKEW_MS || Date.parse(payload.expiresAt) <= Date.parse(verificationTimestamp))) return null;
     const rootPublicKey = crypto.createPublicKey(rootPublicKeyText);
     if (rootPublicKey.asymmetricKeyType !== 'ed25519') return null;
     const signatureBytes = Buffer.from(signature, 'base64');
