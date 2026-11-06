@@ -225,8 +225,8 @@ Negative cases:
 2. Implement the transition-ledger adapter contract and immutable backend interface. **Implemented against fake backends; no real provider is configured.**
 3. Implement full-history trust-state reconstruction from pinned bootstrap policy. **Implemented with strict contiguous replay and effective-time validation.**
 4. Integrate the loader with manifest acceptance so new roots become effective only through verified transitions. **Implemented through injected manifest-head provider/verifier callbacks and active-root-only manifest acceptance.**
-5. Complete the positive/negative matrix, concurrency/race tests, restart/replay tests, and production adapter review. **Partially implemented; further adversarial and provider-level testing remains.**
-6. Update offline tooling and operator documentation only after the API and test behavior are stable. **Documentation updated; offline transition CLI and operator ceremony automation remain pending.**
+5. Complete the positive/negative matrix, concurrency/race tests, restart/replay tests, and production adapter review. **Partially implemented; further adversarial, concurrency, and provider-level testing remains.**
+6. Update offline tooling and operator documentation only after the API and test behavior are stable. **Offline sign/verify CLI and operator ceremony documentation are implemented. The CLI does not fetch ledger state, upload, or activate transitions; context provenance and operator approval remain external controls.**
 7. Run focused tests, full repository CI, CodeQL, and static security checks on the exact same branch SHA. **Latest completed CI applies to an earlier implementation SHA; rerun is required after the integration changes.**
 
 Do not declare root lifecycle complete until all seven gates pass. Do not begin ToolSpec or Unified Tool Gateway work before this milestone is closed.
