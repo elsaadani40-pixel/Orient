@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, gatewayIdentityRoutes = null, websiteHandler = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, gatewayIdentityRoutes = null, gatewayIdentityExecutionService = null, gatewayOperationHandlers = null, websiteHandler = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -312,7 +312,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         }
 
         if (req.method === 'POST' &&
-            ['/owner/gateway/challenges', '/owner/gateway/identity-token'].includes(requestUrl.pathname)) {
+            ['/owner/gateway/challenges', '/owner/gateway/identity-token', '/owner/gateway/execute'].includes(requestUrl.pathname)) {
           if (!gatewayIdentityRoutes) {
             sendJson(res, 503, { ok: false, code: 'GATEWAY_IDENTITY_UNAVAILABLE', message: 'خدمة هوية Gateway غير مهيأة.' });
             return;
@@ -338,7 +338,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             if (requestUrl.pathname === '/owner/gateway/challenges') {
               const challenge = await gatewayIdentityRoutes.createChallenge({ ownerSession, operation: payload.operation, request: payload.request });
               sendJson(res, 201, { ok: true, challenge });
-            } else {
+            } else if (requestUrl.pathname === '/owner/gateway/identity-token') {
               const identity = await gatewayIdentityRoutes.issueToken({
                 ownerSessionToken: ownerCookie,
                 challengeId: payload.challengeId,
@@ -347,12 +347,44 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
                 requestId: payload.requestId
               });
               sendJson(res, 200, { ok: true, identity });
+            } else {
+              if (!gatewayIdentityExecutionService || !(gatewayOperationHandlers instanceof Map)) {
+                sendJson(res, 503, { ok: false, code: 'GATEWAY_EXECUTION_UNAVAILABLE', message: 'تنفيذ Gateway غير مهيأ.' });
+                return;
+              }
+              const authorization = String(req.headers.authorization || '');
+              const tokenMatch = authorization.match(/^Bearer ([A-Za-z0-9_.-]{1,8192})$/);
+              const idempotencyKey = req.headers['idempotency-key'];
+              const handler = gatewayOperationHandlers.get(payload.operation);
+              if (!tokenMatch || typeof idempotencyKey !== 'string' || !idempotencyKey.trim() ||
+                  idempotencyKey.length > 200 || typeof handler !== 'function') {
+                sendJson(res, 400, { ok: false, code: 'GATEWAY_EXECUTION_INPUT_INVALID', message: 'بيانات تنفيذ Gateway غير مكتملة أو غير مدعومة.' });
+                return;
+              }
+              const result = await gatewayIdentityExecutionService.execute({
+                token: tokenMatch[1],
+                challengeId: payload.challengeId,
+                operation: payload.operation,
+                operationId: payload.operationId,
+                requestId: payload.requestId,
+                idempotencyKey,
+                request: payload.request,
+                ownerSessionId: ownerSession.sessionId,
+                execute: (client, context) => handler(client, {
+                  request: payload.request,
+                  principal: context.principal
+                })
+              });
+              sendJson(res, 200, { ok: true, replayed: result.replayed, response: result.response });
             }
           } catch (error) {
+            const code = error.code || 'GATEWAY_IDENTITY_REJECTED';
             const status = Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500
               ? error.statusCode
-              : (String(error.code || '').startsWith('IDENTITY_AUTH_') ? 403 : 400);
-            sendJson(res, status, { ok: false, code: error.code || 'GATEWAY_IDENTITY_REJECTED', message: 'تم رفض طلب هوية Gateway.' });
+              : (/^(IDENTITY_TOKEN_|IDENTITY_AUTH_SESSION_REJECTED|GATEWAY_SESSION_REJECTED)$/.test(code) ? 401
+                : (/^(GATEWAY_IDEMPOTENCY_CONFLICT|GATEWAY_IDEMPOTENCY_IN_PROGRESS|GATEWAY_CHALLENGE_REPLAY_REJECTED|GATEWAY_REQUEST_BINDING_MISMATCH)$/.test(code) ? 409
+                  : (/^(IDENTITY_AUTH_|GATEWAY_OPERATION_DENIED|GATEWAY_SCOPE_POLICY_REJECTED)/.test(code) ? 403 : 400));
+            sendJson(res, status, { ok: false, code, message: 'تم رفض طلب Gateway.' });
           }
           return;
         }
