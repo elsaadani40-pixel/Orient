@@ -35,7 +35,7 @@ jobs:
           terraform_wrapper: false
 
       - name: Check Terraform formatting
-        run: terraform fmt -check -recursive
+        run: terraform fmt -check -diff -recursive
 
       - name: Initialize without a backend
         run: terraform init -backend=false -input=false
