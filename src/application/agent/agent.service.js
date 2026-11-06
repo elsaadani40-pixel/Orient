@@ -5,7 +5,7 @@ class AgentService {
     this.runtime = runtime;
   }
 
-  async createTask({ goal, idempotencyKey } = {}) {
+  async createTask({ goal, idempotencyKey, ownerSessionContext = null } = {}) {
     const clean = typeof goal === 'string' ? goal.trim() : '';
     if (!clean) {
       throw new AppError('الهدف مطلوب', 400, 'TASK_GOAL_REQUIRED');
@@ -55,7 +55,7 @@ class AgentService {
     try {
       let result;
       try {
-        result = await this.execute(clean);
+        result = await this.execute(clean, { ownerSessionContext });
       } catch (error) {
         // Approval-required executions have a durable ID and are paused, not failed.
         // Accept the task without retrying the high-risk side effect.
@@ -180,7 +180,7 @@ class AgentService {
     return { text: null, status: 'pending' };
   }
 
-  execute(input) {
+  execute(input, options = {}) {
     const clean = String(input || '').trim();
 
     if (!clean) {
@@ -199,7 +199,7 @@ class AgentService {
       );
     }
 
-    return this.runtime.execute(clean);
+    return this.runtime.execute(clean, options);
   }
 
   listExecutionSummaries(options = {}) {
