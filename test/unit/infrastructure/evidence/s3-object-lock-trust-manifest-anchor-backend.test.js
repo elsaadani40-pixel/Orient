@@ -206,3 +206,28 @@ test('trust manifest S3 backend detects retention drift during a long-lived proc
   );
   assert.equal(client.objects.size, 0, 'no trust object may be written after retention drift');
 });
+
+
+test('trust manifest S3 backend fails closed for every required bucket control', async () => {
+  const invalidConfigurations = [
+    { objectLockEnabled: 'Disabled' },
+    { retentionMode: 'GOVERNANCE' },
+    { defaultRetentionDays: 30 },
+    { versioningStatus: 'Suspended' }
+  ];
+  for (const [index, configuration] of invalidConfigurations.entries()) {
+    const client = new FakeS3();
+    Object.assign(client, configuration);
+    const backend = new S3ObjectLockTrustManifestAnchorBackend({
+      client,
+      commands,
+      bucket: 'orient-trust-manifests',
+      expectedRetentionDays: 365
+    });
+    await assert.rejects(
+      backend.putIfAbsent('orient/trust-manifests/v1/' + String(index + 10).padStart(16, '0') + '.json', '{}'),
+      error => error.code === 'EVIDENCE_TRUST_MANIFEST_S3_CONFIGURATION_INVALID'
+    );
+    assert.equal(client.objects.size, 0);
+  }
+});
