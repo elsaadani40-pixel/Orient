@@ -169,21 +169,24 @@ class RequestExecutionCoordinator {
     };
   }
 
-  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
-    if (ownerSessionContext !== null) {
-      const sessionId = ownerSessionContext && typeof ownerSessionContext.sessionId === 'string'
-        ? ownerSessionContext.sessionId
-        : '';
-      const authorized = sessionId && typeof this.ownerSessionAuthorizer === 'function'
-        ? await this.ownerSessionAuthorizer(sessionId) === true
-        : false;
-      if (!authorized) {
-        throw Object.assign(new Error('An active authenticated owner session is required'), {
-          code: 'OWNER_SESSION_REJECTED'
-        });
-      }
+  async assertOwnerSessionContext(ownerSessionContext) {
+    if (ownerSessionContext === null || ownerSessionContext === undefined) return true;
+    const sessionId = ownerSessionContext && typeof ownerSessionContext.sessionId === 'string'
+      ? ownerSessionContext.sessionId
+      : '';
+    const authorized = sessionId && typeof this.ownerSessionAuthorizer === 'function'
+      ? await this.ownerSessionAuthorizer(sessionId) === true
+      : false;
+    if (!authorized) {
+      throw Object.assign(new Error('An active authenticated owner session is required'), {
+        code: 'OWNER_SESSION_REJECTED'
+      });
     }
+    return true;
+  }
 
+  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+    await this.assertOwnerSessionContext(ownerSessionContext);
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
 
