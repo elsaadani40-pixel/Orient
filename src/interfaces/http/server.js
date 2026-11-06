@@ -462,7 +462,9 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
               return;
             }
           }
-          await agentRoutes.createTask(req, res, JSON.stringify({ goal: message }));
+          await agentRoutes.createTask(req, res, JSON.stringify({ goal: message }), {
+            sessionId: ownerSession.sessionId
+          });
           return;
         }
 
@@ -609,7 +611,9 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
 
       if (req.method === 'POST' && requestUrl.pathname === '/api/v1/tasks') {
         const rawBody = await readBody(req, 8192);
-        await agentRoutes.createTask(req, res, rawBody);
+        await agentRoutes.createTask(req, res, rawBody, {
+          sessionId: ownerSession.sessionId
+        });
         return;
       }
 
