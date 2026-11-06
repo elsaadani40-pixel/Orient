@@ -79,7 +79,7 @@ node scripts/verify-trust-manifest-offline.js \
   --root-public-key /secure/trust/offline-root-public.pem
 ```
 
-The default mode verifies current acceptance validity. For a forensic check of an expired or later-revoked manifest, use the explicit `--historical` flag; the output labels this mode `historical-audit-only`. Historical verification is never evidence that a manifest is currently acceptable. An optional `--at <canonical-utc-time>` verifies validity at a specified instant and is labelled separately.
+The default mode verifies the manifest signature and expiry at the current time. Supply `--root-valid-from` and/or `--root-revoked-at` when those validity bounds exist in the independently pinned root configuration; the verifier then enforces them too. If root metadata is omitted, this command is **not** a complete trust-acceptance decision. For a forensic check of an expired or later-revoked manifest, use the explicit `--historical` flag; the output labels this mode `historical-audit-only`. Historical verification is never evidence that a manifest is currently acceptable. An optional `--at <canonical-utc-time>` verifies validity at a specified instant and is labelled separately.
 
 Only then submit it to the separately operated TrustManifestAcceptanceService. Acceptance must verify authorization, signature, current root validity, expiry, monotonic version state, and the complete external immutable history. The external history append happens before the PostgreSQL cache update. Preserve the external anchor receipt and accepted digest with the audit record.
 
