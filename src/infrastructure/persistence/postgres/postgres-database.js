@@ -1080,6 +1080,7 @@ module.exports={PostgresDatabase,BASE_SCHEMA,MIGRATIONS,SCHEMA:BASE_SCHEMA};
       END IF;
     END
     $evidence_grants$;
+    REVOKE ALL ON TABLE execution_evidence FROM orient_runtime;
     GRANT SELECT, INSERT ON TABLE execution_evidence TO orient_runtime;
     REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE execution_evidence FROM orient_runtime;
 
