@@ -9,6 +9,9 @@ const Goal =
 const AgentStateMachine =
   require('../agent/state/agent-state-machine');
 
+const { createEvidenceRecord, verifyEvidenceRecord, canonicalJson } =
+  require('./evidence-record');
+
 const EXECUTION_STATUS = Object.freeze({
   CREATED: 'created',
   RUNNING: 'running',
@@ -22,6 +25,20 @@ const TERMINAL_STATUSES = new Set([
   EXECUTION_STATUS.FAILED,
   EXECUTION_STATUS.CANCELLED
 ]);
+
+function observationResultMatchesEvidence(observation, evidence) {
+  if (evidence.resultSha256 === null) {
+    return true;
+  }
+  try {
+    const digest = crypto.createHash('sha256')
+      .update(canonicalJson(observation.result), 'utf8')
+      .digest('hex');
+    return digest === evidence.resultSha256;
+  } catch {
+    return false;
+  }
+}
 
 class ExecutionContext {
   constructor({
@@ -482,6 +499,18 @@ class ExecutionContext {
     result = null,
     error = null
   }) {
+    const timestamp = new Date().toISOString();
+    const normalizedSuccess = Boolean(success);
+    const evidence = createEvidenceRecord({
+      executionId: this.executionId,
+      step,
+      tool,
+      success: normalizedSuccess,
+      result,
+      error,
+      observedAt: timestamp
+    });
+
     const observation = {
       id:
         crypto.randomUUID(),
@@ -493,13 +522,13 @@ class ExecutionContext {
       tool,
 
       success:
-        Boolean(success),
+        normalizedSuccess,
 
-      timestamp:
-        new Date().toISOString(),
+      timestamp,
 
       result,
-      error
+      error,
+      evidence
     };
 
     this.observations.push(
@@ -776,6 +805,49 @@ class ExecutionContext {
         ? snapshot.observations.map(observation => ({ ...observation }))
         : [];
 
+    const evidenceSchemaVersion = snapshot.evidenceSchemaVersion;
+    if (evidenceSchemaVersion === 1 && !Array.isArray(snapshot.observations)) {
+      const error = new Error('Versioned snapshot is missing execution observations');
+      error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+      throw error;
+    }
+    if (evidenceSchemaVersion !== undefined && evidenceSchemaVersion !== 1) {
+      const error = new Error('Unsupported execution evidence schema version');
+      error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+      throw error;
+    }
+
+    for (const observation of context.observations) {
+      if (!observation || typeof observation !== 'object') {
+        throw new TypeError('snapshot contains an invalid observation');
+      }
+      if (evidenceSchemaVersion === 1 && !observation.evidence) {
+        const error = new Error('Versioned execution observation is missing evidence');
+        error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+        throw error;
+      }
+      if (observation.evidence !== undefined) {
+        const evidence = observation.evidence;
+        if (
+          !verifyEvidenceRecord(evidence) ||
+          evidence.executionId !== context.executionId ||
+          evidence.step !== observation.step ||
+          evidence.operation !== observation.tool ||
+          evidence.outcome !== (observation.success ? 'success' : 'failure') ||
+          evidence.observedAt !== observation.timestamp
+        ) {
+          const error = new Error('Persisted execution evidence failed integrity validation');
+          error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+          throw error;
+        }
+        if (!observationResultMatchesEvidence(observation, evidence)) {
+          const error = new Error('Persisted execution result does not match its evidence digest');
+          error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+          throw error;
+        }
+      }
+    }
+
     context.events =
       Array.isArray(snapshot.events)
         ? snapshot.events.map(event => ({ ...event }))
@@ -786,6 +858,16 @@ class ExecutionContext {
       typeof snapshot.agentState === 'object'
         ? snapshot.agentState
         : {};
+
+    if (
+      evidenceSchemaVersion === 1 &&
+      (!snapshot.agentState ||
+        !Array.isArray(snapshot.agentState.observations))
+    ) {
+      const error = new Error('Versioned snapshot is missing AgentState observations');
+      error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+      throw error;
+    }
 
     const agentState =
       new AgentState({
@@ -815,6 +897,72 @@ class ExecutionContext {
       Array.isArray(persistedAgentState.observations)
         ? persistedAgentState.observations.map(observation => ({ ...observation }))
         : context.observations.map(observation => ({ ...observation }));
+
+    for (let index = 0; index < agentState.observations.length; index += 1) {
+      const observation = agentState.observations[index];
+      if (!observation || typeof observation !== 'object') {
+        throw new TypeError('snapshot contains an invalid agent observation');
+      }
+      if (evidenceSchemaVersion === 1 && !observation.evidence) {
+        const error = new Error('Versioned agent observation is missing evidence');
+        error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+        throw error;
+      }
+      if (observation.evidence !== undefined) {
+        const evidence = observation.evidence;
+        if (
+          !verifyEvidenceRecord(evidence) ||
+          evidence.executionId !== context.executionId ||
+          evidence.step !== observation.step ||
+          evidence.operation !== observation.tool ||
+          evidence.outcome !== (observation.success ? 'success' : 'failure') ||
+          evidence.observedAt !== observation.timestamp
+        ) {
+          const error = new Error('Persisted agent evidence failed integrity validation');
+          error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+          throw error;
+        }
+        if (!observationResultMatchesEvidence(observation, evidence)) {
+          const error = new Error('Persisted agent result does not match its evidence digest');
+          error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+          throw error;
+        }
+      }
+      const canonicalObservation = context.observations[index];
+      const canonicalEvidenceId = canonicalObservation?.evidence?.id;
+      if (
+        observation.evidence &&
+        observation.evidence.id !== canonicalEvidenceId
+      ) {
+        const error = new Error('Execution and agent evidence records do not match');
+        error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+        throw error;
+      }
+      if (
+        evidenceSchemaVersion === 1 &&
+        (!canonicalObservation ||
+          typeof observation.id !== 'string' ||
+          observation.id.length === 0 ||
+          observation.id !== canonicalObservation.id ||
+          observation.step !== canonicalObservation.step ||
+          observation.tool !== canonicalObservation.tool ||
+          observation.success !== canonicalObservation.success ||
+          observation.timestamp !== canonicalObservation.timestamp)
+      ) {
+        const error = new Error('Execution and agent observations do not match');
+        error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+        throw error;
+      }
+    }
+
+    if (
+      evidenceSchemaVersion === 1 &&
+      agentState.observations.length !== context.observations.length
+    ) {
+      const error = new Error('Execution and agent observation counts do not match');
+      error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+      throw error;
+    }
 
     agentState.decisions =
       Array.isArray(persistedAgentState.decisions)
@@ -869,6 +1017,8 @@ class ExecutionContext {
 
       executionVersion:
         this.executionVersion,
+
+      evidenceSchemaVersion: 1,
 
       status:
         this.status,

@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -123,16 +124,310 @@ const MIGRATIONS = [
     );
   `},
 
+  {version:9,sql:`
+    DO $roles$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orient_owner') OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orient_runtime') THEN
+        RAISE EXCEPTION 'ORIENT roles missing; run scripts/provision-postgres-roles.js first';
+      END IF;
+    END $roles$;
+    DO $policies$ DECLARE t TEXT; BEGIN
+      FOREACH t IN ARRAY ARRAY['executions','events','idempotency','checkpoints','execution_resume_leases','workflows','workflow_leases','workflow_dispatch_claims','approvals','worker_nodes','tenant_quota_limits','tenant_quota_reservations'] LOOP
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+        EXECUTE format('CREATE POLICY orient_tenant_scope ON public.%I TO orient_runtime USING (tenant_id = current_setting(''app.orient_tenant_id'', true)) WITH CHECK (tenant_id = current_setting(''app.orient_tenant_id'', true))', t);
+        EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC', t);
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon', t); END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN EXECUTE format('REVOKE ALL ON TABLE public.%I FROM authenticated', t); END IF;
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO orient_runtime', t);
+      END LOOP;
+      FOREACH t IN ARRAY ARRAY['owner_chat_messages','owner_work_profiles'] LOOP
+        EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+        EXECUTE format('CREATE POLICY orient_owner_scope ON public.%I TO orient_runtime USING (owner_id = current_setting(''app.orient_owner_id'', true)) WITH CHECK (owner_id = current_setting(''app.orient_owner_id'', true))', t);
+        EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC', t);
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon', t); END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN EXECUTE format('REVOKE ALL ON TABLE public.%I FROM authenticated', t); END IF;
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO orient_runtime', t);
+      END LOOP;
+    END $policies$;
+    GRANT USAGE ON SCHEMA public TO orient_runtime;
+    DO $metadata$
+    BEGIN
+      EXECUTE 'REVOKE ALL ON TABLE public.schema_migrations FROM PUBLIC';
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN EXECUTE 'REVOKE ALL ON TABLE public.schema_migrations FROM anon'; END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN EXECUTE 'REVOKE ALL ON TABLE public.schema_migrations FROM authenticated'; END IF;
+    END
+    $metadata$;
+    GRANT SELECT ON TABLE public.schema_migrations TO orient_runtime;
+    REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.schema_migrations FROM orient_runtime;
+    GRANT USAGE, SELECT ON SEQUENCE public.workflow_lease_fencing_seq TO orient_runtime;
+  `},
+  {version:10,sql:`
+    CREATE TABLE IF NOT EXISTS gateway_challenges (
+      challenge_id UUID PRIMARY KEY,
+      owner_id UUID NOT NULL,
+      session_id UUID NOT NULL,
+      tenant_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      operation_id UUID NOT NULL,
+      request_id UUID NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('ISSUED','CONSUMED')),
+      issued_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      CHECK ((status = 'ISSUED' AND consumed_at IS NULL) OR (status = 'CONSUMED' AND consumed_at IS NOT NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_gateway_challenges_scope_expiry
+      ON gateway_challenges(tenant_id, owner_id, session_id, expires_at);
+    CREATE TABLE IF NOT EXISTS gateway_idempotency (
+      tenant_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_fingerprint CHAR(64) NOT NULL,
+      owner_id UUID NOT NULL,
+      session_id UUID NOT NULL,
+      challenge_id UUID NOT NULL REFERENCES gateway_challenges(challenge_id),
+      operation TEXT NOT NULL,
+      operation_id UUID NOT NULL,
+      request_id UUID NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('RUNNING','COMPLETED')),
+      response JSONB,
+      created_at TIMESTAMPTZ NOT NULL,
+      completed_at TIMESTAMPTZ,
+      PRIMARY KEY (tenant_id, idempotency_key),
+      UNIQUE (tenant_id, challenge_id),
+      CHECK ((status = 'RUNNING' AND response IS NULL AND completed_at IS NULL) OR
+             (status = 'COMPLETED' AND response IS NOT NULL AND completed_at IS NOT NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_gateway_idempotency_owner_created
+      ON gateway_idempotency(tenant_id, owner_id, created_at DESC);
+    ALTER TABLE gateway_challenges ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY orient_gateway_challenge_scope ON gateway_challenges TO orient_runtime
+      USING (tenant_id = current_setting('app.orient_tenant_id', true))
+      WITH CHECK (tenant_id = current_setting('app.orient_tenant_id', true));
+    ALTER TABLE gateway_idempotency ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY orient_gateway_idempotency_scope ON gateway_idempotency TO orient_runtime
+      USING (tenant_id = current_setting('app.orient_tenant_id', true))
+      WITH CHECK (tenant_id = current_setting('app.orient_tenant_id', true));
+    REVOKE ALL ON TABLE gateway_challenges, gateway_idempotency FROM PUBLIC;
+    DO $gateway_grants$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.gateway_challenges, public.gateway_idempotency FROM anon';
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.gateway_challenges, public.gateway_idempotency FROM authenticated';
+      END IF;
+    END
+    $gateway_grants$;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE gateway_challenges, gateway_idempotency TO orient_runtime;
+  `},
+  {version:11,sql:`
+    ALTER TABLE gateway_challenges ADD COLUMN request_fingerprint CHAR(64);
+    UPDATE gateway_challenges
+      SET request_fingerprint=repeat('0',64), expires_at=LEAST(expires_at,NOW())
+      WHERE request_fingerprint IS NULL;
+    ALTER TABLE gateway_challenges ALTER COLUMN request_fingerprint SET NOT NULL;
+    ALTER TABLE gateway_challenges ADD CONSTRAINT gateway_challenges_request_fingerprint_format
+      CHECK (length(request_fingerprint) = 64 AND request_fingerprint ~ '^[a-f0-9]{64}');
+  `},
+  {version:12,sql:`
+    DROP POLICY IF EXISTS orient_gateway_challenge_scope ON public.gateway_challenges;
+    CREATE POLICY orient_gateway_challenge_scope ON public.gateway_challenges TO orient_runtime
+      USING (
+        tenant_id = current_setting('app.orient_tenant_id', true)
+        AND owner_id::text = current_setting('app.orient_owner_id', true)
+        AND session_id::text = current_setting('app.orient_session_id', true)
+      )
+      WITH CHECK (
+        tenant_id = current_setting('app.orient_tenant_id', true)
+        AND owner_id::text = current_setting('app.orient_owner_id', true)
+        AND session_id::text = current_setting('app.orient_session_id', true)
+      );
+    DROP POLICY IF EXISTS orient_gateway_idempotency_scope ON public.gateway_idempotency;
+    CREATE POLICY orient_gateway_idempotency_scope ON public.gateway_idempotency TO orient_runtime
+      USING (
+        tenant_id = current_setting('app.orient_tenant_id', true)
+        AND owner_id::text = current_setting('app.orient_owner_id', true)
+        AND session_id::text = current_setting('app.orient_session_id', true)
+      )
+      WITH CHECK (
+        tenant_id = current_setting('app.orient_tenant_id', true)
+        AND owner_id::text = current_setting('app.orient_owner_id', true)
+        AND session_id::text = current_setting('app.orient_session_id', true)
+      );
+  `},
+  {version:13,sql:`
+    CREATE TABLE IF NOT EXISTS execution_evidence (
+      tenant_id TEXT NOT NULL CHECK (length(tenant_id) BETWEEN 1 AND 128),
+      execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
+      sequence BIGINT NOT NULL CHECK (sequence > 0),
+      evidence_id TEXT NOT NULL CHECK (evidence_id ~ '^ev_[a-f0-9]{64}$'),
+      previous_hash CHAR(64),
+      record_hash CHAR(64) NOT NULL CHECK (record_hash ~ '^[a-f0-9]{64}$'),
+      key_id TEXT NOT NULL CHECK (key_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'),
+      signature TEXT NOT NULL CHECK (signature ~ '^[A-Za-z0-9+/]{86}==$'),
+      recorded_at TIMESTAMPTZ NOT NULL,
+      record_payload JSONB NOT NULL CHECK (jsonb_typeof(record_payload) = 'object'),
+      PRIMARY KEY (tenant_id, execution_id, sequence),
+      UNIQUE (tenant_id, execution_id, evidence_id),
+      CHECK (previous_hash IS NULL OR previous_hash ~ '^[a-f0-9]{64}$'),
+      CHECK ((sequence = 1 AND previous_hash IS NULL) OR (sequence > 1 AND previous_hash IS NOT NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_execution_evidence_execution_time
+      ON execution_evidence(tenant_id, execution_id, recorded_at, sequence);
+    ALTER TABLE execution_evidence ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY orient_execution_evidence_tenant_scope ON execution_evidence
+      TO orient_runtime
+      USING (tenant_id = current_setting('app.orient_tenant_id', true))
+      WITH CHECK (tenant_id = current_setting('app.orient_tenant_id', true));
+    REVOKE ALL ON TABLE execution_evidence FROM PUBLIC;
+    DO $evidence_grants$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.execution_evidence FROM anon';
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.execution_evidence FROM authenticated';
+      END IF;
+    END
+    $evidence_grants$;
+    REVOKE ALL ON TABLE execution_evidence FROM orient_runtime;
+    GRANT SELECT, INSERT ON TABLE execution_evidence TO orient_runtime;
+    REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE execution_evidence FROM orient_runtime;
+
+    CREATE OR REPLACE FUNCTION public.orient_reject_execution_evidence_mutation()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $function$
+      BEGIN
+        RAISE EXCEPTION 'ORIENT execution evidence is append-only'
+          USING ERRCODE = '55000';
+      END;
+      $function$;
+    REVOKE ALL ON FUNCTION public.orient_reject_execution_evidence_mutation() FROM PUBLIC;
+    CREATE TRIGGER execution_evidence_reject_row_mutation
+      BEFORE UPDATE OR DELETE ON public.execution_evidence
+      FOR EACH ROW EXECUTE FUNCTION public.orient_reject_execution_evidence_mutation();
+    CREATE TRIGGER execution_evidence_reject_truncate
+      BEFORE TRUNCATE ON public.execution_evidence
+      FOR EACH STATEMENT EXECUTE FUNCTION public.orient_reject_execution_evidence_mutation();
+  `},
+
+  {version:14,sql:`
+    ALTER TABLE public.executions ADD COLUMN IF NOT EXISTS owner_id UUID;
+
+    -- Migration 14 tightens execution access from tenant scope to owner scope.
+    -- Never silently strand pre-existing rows whose owner cannot be inferred.
+    -- Operators must backfill an explicit, reviewed owner mapping before retrying.
+    DO $owner_migration$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM public.executions WHERE owner_id IS NULL
+      ) THEN
+        RAISE EXCEPTION
+          'ORIENT migration 14 blocked: executions.owner_id contains NULL rows. Apply an explicit owner mapping before retrying; no owner can be inferred safely.'
+          USING ERRCODE = '55000';
+      END IF;
+    END
+    $owner_migration$;
+
+    CREATE INDEX IF NOT EXISTS idx_executions_tenant_owner_updated
+      ON public.executions(tenant_id, owner_id, updated_at DESC);
+
+    DROP POLICY IF EXISTS orient_tenant_scope ON public.executions;
+    CREATE POLICY orient_execution_owner_scope ON public.executions TO orient_runtime
+      USING (
+        tenant_id = current_setting('app.orient_tenant_id', true)
+        AND owner_id::text = current_setting('app.orient_owner_id', true)
+      )
+      WITH CHECK (
+        tenant_id = current_setting('app.orient_tenant_id', true)
+        AND owner_id::text = current_setting('app.orient_owner_id', true)
+      );
+
+    CREATE OR REPLACE FUNCTION public.orient_bind_execution_owner()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $function$
+      DECLARE configured_owner TEXT;
+      BEGIN
+        IF session_user <> 'orient_runtime_login' AND current_user <> 'orient_runtime' THEN
+          RETURN NEW;
+        END IF;
+
+        configured_owner := current_setting('app.orient_owner_id', true);
+        IF configured_owner IS NULL OR
+           configured_owner !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN
+          RAISE EXCEPTION 'ORIENT runtime owner context is required for execution persistence'
+            USING ERRCODE = '42501';
+        END IF;
+
+        IF TG_OP = 'INSERT' THEN
+          NEW.owner_id := configured_owner::uuid;
+        ELSE
+          IF NEW.owner_id IS DISTINCT FROM OLD.owner_id THEN
+            RAISE EXCEPTION 'ORIENT execution ownership is immutable'
+              USING ERRCODE = '42501';
+          END IF;
+          IF OLD.owner_id IS NOT NULL AND OLD.owner_id <> configured_owner::uuid THEN
+            RAISE EXCEPTION 'ORIENT execution owner context mismatch'
+              USING ERRCODE = '42501';
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $function$;
+
+    REVOKE ALL ON FUNCTION public.orient_bind_execution_owner() FROM PUBLIC;
+    DROP TRIGGER IF EXISTS executions_bind_owner ON public.executions;
+    CREATE TRIGGER executions_bind_owner
+      BEFORE INSERT OR UPDATE ON public.executions
+      FOR EACH ROW EXECUTE FUNCTION public.orient_bind_execution_owner();
+  `},
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
     if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
     this.pool=pool; this.schema=schema;
+    this.contextStorage = new AsyncLocalStorage();
+    this.savepointCounter = 0;
   }
   async initialize() {
+    const exists = await this.pool.query(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ready"
+    );
+    if (!exists.rows[0]?.ready) {
+      throw Object.assign(
+        new Error('PostgreSQL schema is not installed. Run the explicit database migration command before starting ORIENT.'),
+        { code: 'PERSISTENCE_SCHEMA_NOT_READY' }
+      );
+    }
+
+    const current = await this.pool.query(
+      'SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations'
+    );
+    const version = Number(current.rows[0]?.version || 0);
+    const latest = Math.max(...MIGRATIONS.map(migration => migration.version));
+    if (version < latest) {
+      throw Object.assign(
+        new Error(`PostgreSQL schema is outdated (version ${version}; expected ${latest}). Run the explicit database migration command.`),
+        { code: 'PERSISTENCE_SCHEMA_OUTDATED', currentVersion: version, expectedVersion: latest }
+      );
+    }
+
+    return { schemaVersion: version };
+  }
+
+  async migrate({ role = null } = {}) {
     const client=await this.pool.connect();
+    let releaseError = null;
     try {
       await client.query('BEGIN');
+      if (role !== null) {
+        if (typeof role !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(role)) throw new TypeError('Invalid PostgreSQL migration role name');
+        // Keep the elevated migration identity transaction-local so a pooled
+        // connection can never return to the pool still running as orient_owner.
+        await client.query('SET LOCAL ROLE ' + role);
+      }
       await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
       await client.query(BASE_SCHEMA);
       const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
@@ -141,7 +436,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8)',[1,2,3,4,5,6,7,8]);
+        for (const migration of MIGRATIONS) await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
@@ -149,10 +444,100 @@ class PostgresDatabase {
         }
       }
       await client.query('COMMIT');
-    } catch(error){try{await client.query('ROLLBACK');}catch{}throw error;} finally{client.release();}
+      return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
+    } catch(error){
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
   }
-  async query(text,values=[]){return this.pool.query(text,values);}
-  async transaction(work){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await work(client);await client.query('COMMIT');return result;}catch(error){try{await client.query('ROLLBACK');}catch{}throw error;}finally{client.release();}}
+  validatePrincipal(principal) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!principal || !['orient-owner-session', 'orient-runtime-owner'].includes(principal.authSource) ||
+        typeof principal.ownerId !== 'string' || !uuid.test(principal.ownerId) ||
+        principal.principalId !== principal.ownerId ||
+        typeof principal.sessionId !== 'string' || !uuid.test(principal.sessionId) ||
+        typeof principal.tenantId !== 'string' || !principal.tenantId.trim() || principal.tenantId.length > 128 ||
+        typeof principal.workspaceId !== 'string' || !principal.workspaceId.trim() || principal.workspaceId.length > 128) {
+      throw Object.assign(new Error('A verified ORIENT owner principal is required for a scoped PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_INVALID' });
+    }
+    return Object.freeze({ principalId: principal.principalId, ownerId: principal.ownerId, tenantId: principal.tenantId, workspaceId: principal.workspaceId, sessionId: principal.sessionId, authSource: principal.authSource });
+  }
+
+  async withPrincipal(principal, work) {
+    if (typeof work !== 'function') throw new TypeError('work callback is required');
+    const verifiedPrincipal = this.validatePrincipal(principal);
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const current = active.principal;
+      if (current.principalId !== verifiedPrincipal.principalId || current.tenantId !== verifiedPrincipal.tenantId || current.workspaceId !== verifiedPrincipal.workspaceId || current.sessionId !== verifiedPrincipal.sessionId) {
+        throw Object.assign(new Error('Cannot change ORIENT principal inside an active PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_SWITCH_REJECTED' });
+      }
+      return work();
+    }
+
+    const client = await this.pool.connect();
+    const context = { client, principal: verifiedPrincipal, poisoned: null };
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+        [verifiedPrincipal.principalId, verifiedPrincipal.ownerId, verifiedPrincipal.tenantId, verifiedPrincipal.workspaceId, verifiedPrincipal.sessionId]
+      );
+      const result = await this.contextStorage.run(context, () => work());
+      if (context.poisoned) {
+        throw Object.assign(
+          new Error('A nested PostgreSQL savepoint could not be rolled back; the outer transaction cannot commit.'),
+          { code: 'PERSISTENCE_TRANSACTION_CLEANUP_FAILED', cause: context.poisoned }
+        );
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+
+  async query(text, values = []) {
+    const active = this.contextStorage.getStore();
+    return active ? active.client.query(text, values) : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const savepoint = 'orient_nested_' + (++this.savepointCounter);
+      await active.client.query('SAVEPOINT ' + savepoint);
+      try {
+        const result = await work(active.client);
+        await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        return result;
+      } catch (error) {
+        try {
+          await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint);
+          await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        } catch (rollbackError) {
+          active.poisoned = rollbackError;
+        }
+        throw error;
+      }
+    }
+    const client = await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
   static json(value){return value===undefined?null:value;}
   static uuid(){return crypto.randomUUID();}
 }

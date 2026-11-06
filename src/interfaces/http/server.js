@@ -74,7 +74,11 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, gatewayIdentityRoutes = null, gatewayIdentityExecutionService = null, gatewayOperationHandlers = null, websiteHandler = null }) {
+  const gatewayExecutionGetHandler = gatewayOperationHandlers instanceof Map
+    ? gatewayOperationHandlers.get('execution.get')
+    : null;
+
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -308,6 +312,92 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired &&
             !['/owner/logout'].includes(requestUrl.pathname)) {
           sendJson(res, 403, { ok: false, code: 'OWNER_PASSWORD_CHANGE_REQUIRED', message: 'يجب تغيير كلمة مرور المالك قبل المتابعة.' });
+          return;
+        }
+
+        if (req.method === 'POST' &&
+            ['/owner/gateway/challenges', '/owner/gateway/identity-token', '/owner/gateway/execute'].includes(requestUrl.pathname)) {
+          if (!gatewayIdentityRoutes) {
+            sendJson(res, 503, { ok: false, code: 'GATEWAY_IDENTITY_UNAVAILABLE', message: 'خدمة هوية Gateway غير مهيأة.' });
+            return;
+          }
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          if (!String(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
+            sendJson(res, 415, { ok: false, code: 'JSON_REQUIRED', message: 'يلزم إرسال الطلب بصيغة JSON.' });
+            return;
+          }
+          let payload;
+          try {
+            payload = JSON.parse(await readBody(req, 8192) || '{}');
+          } catch (error) {
+            const tooLarge = error.code === 'REQUEST_TOO_LARGE';
+            sendJson(res, tooLarge ? 413 : 400, { ok: false, code: tooLarge ? 'REQUEST_TOO_LARGE' : 'INVALID_JSON', message: 'بيانات Gateway غير صالحة.' });
+            return;
+          }
+          try {
+            if (requestUrl.pathname === '/owner/gateway/challenges') {
+              const challenge = await gatewayIdentityRoutes.createChallenge({ ownerSession, operation: payload.operation, request: payload.request });
+              sendJson(res, 201, { ok: true, challenge });
+            } else if (requestUrl.pathname === '/owner/gateway/identity-token') {
+              const identity = await gatewayIdentityRoutes.issueToken({
+                ownerSessionToken: ownerCookie,
+                challengeId: payload.challengeId,
+                operation: payload.operation,
+                operationId: payload.operationId,
+                requestId: payload.requestId
+              });
+              sendJson(res, 200, { ok: true, identity });
+            } else {
+              if (!gatewayIdentityExecutionService || !(gatewayOperationHandlers instanceof Map)) {
+                sendJson(res, 503, { ok: false, code: 'GATEWAY_EXECUTION_UNAVAILABLE', message: 'تنفيذ Gateway غير مهيأ.' });
+                return;
+              }
+              const authorization = String(req.headers.authorization || '');
+              const tokenMatch = authorization.match(/^Bearer ([A-Za-z0-9_.-]{1,8192})$/);
+              const idempotencyKey = req.headers['idempotency-key'];
+              if (!tokenMatch || typeof idempotencyKey !== 'string' || !idempotencyKey.trim() ||
+                  idempotencyKey.length > 200 || payload.operation !== 'execution.get' ||
+                  typeof gatewayExecutionGetHandler !== 'function') {
+                sendJson(res, 400, { ok: false, code: 'GATEWAY_EXECUTION_INPUT_INVALID', message: 'بيانات تنفيذ Gateway غير مكتملة أو غير مدعومة.' });
+                return;
+              }
+              const result = await gatewayIdentityExecutionService.execute({
+                token: tokenMatch[1],
+                challengeId: payload.challengeId,
+                operation: payload.operation,
+                operationId: payload.operationId,
+                requestId: payload.requestId,
+                idempotencyKey,
+                request: payload.request,
+                ownerSessionId: ownerSession.sessionId,
+                execute: (client, context) => gatewayExecutionGetHandler(client, {
+                  request: payload.request,
+                  principal: context.principal
+                })
+              });
+              sendJson(res, 200, { ok: true, replayed: result.replayed, response: result.response });
+            }
+          } catch (error) {
+            const code = error.code || 'GATEWAY_IDENTITY_REJECTED';
+            const unauthorized = code.startsWith('IDENTITY_TOKEN_') ||
+              ['IDENTITY_AUTH_SESSION_REJECTED', 'GATEWAY_SESSION_REJECTED'].includes(code);
+            const conflict = [
+              'GATEWAY_IDEMPOTENCY_CONFLICT',
+              'GATEWAY_IDEMPOTENCY_IN_PROGRESS',
+              'GATEWAY_CHALLENGE_REPLAY_REJECTED',
+              'GATEWAY_REQUEST_BINDING_MISMATCH'
+            ].includes(code);
+            const forbidden = code.startsWith('IDENTITY_AUTH_') ||
+              code === 'GATEWAY_OPERATION_DENIED' || code === 'GATEWAY_SCOPE_POLICY_REJECTED';
+            const status = Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500
+              ? error.statusCode
+              : (unauthorized ? 401 : (conflict ? 409 : (forbidden ? 403 : 400)));
+            sendJson(res, status, { ok: false, code, message: 'تم رفض طلب Gateway.' });
+          }
           return;
         }
 

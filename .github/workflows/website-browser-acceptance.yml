@@ -30,12 +30,24 @@ jobs:
       - name: Install project dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
+      - name: Cache pinned Playwright browser runtime
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-1.55.0-chromium
+
       - name: Install pinned browser-test runtime
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
           npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright@1.55.0
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
+
+      - name: Ensure pinned Playwright package is available
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright@1.55.0
 
       - name: Run isolated owner website with temporary credentials
         shell: bash

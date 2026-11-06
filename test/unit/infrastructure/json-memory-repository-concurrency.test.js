@@ -25,9 +25,12 @@ test('serializes concurrent memory inserts without losing tenant records', async
   `);
 
   await Promise.all(Array.from({ length: 6 }, (_, index) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [worker, file, `memory-${index}`], { stdio: 'ignore' });
+    const child = spawn(process.execPath, [worker, file, `memory-${index}`], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
     child.once('error', reject);
-    child.once('exit', code => code === 0 ? resolve() : reject(new Error(`worker exited with ${code}`)));
+    child.once('exit', code => code === 0 ? resolve() : reject(new Error(`worker exited with ${code}: ${stderr.trim()}`)));
   })));
 
   const memories = new JsonMemoryRepository(file).findAll('tenant-a', 'personal');

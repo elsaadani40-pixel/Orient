@@ -4,6 +4,8 @@ const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repositor
 const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-repository');
 const PostgresOwnerChatConversationRepository = require('./postgres-owner-chat-conversation-repository');
 const PostgresOwnerWorkProfileRepository = require('./postgres-owner-work-profile-repository');
+const { PostgresGatewayIdentityRepository } = require('./postgres-gateway-identity-repository');
+const { PostgresExecutionEvidenceRepository } = require('./postgres-execution-evidence-repository');
 
 function tenantOrLocal(value) {
   return value || 'local';
@@ -900,7 +902,7 @@ class PostgresApprovalRepository {
 }
 
 class PostgresPersistence {
-  constructor({ pool, schema } = {}) {
+  constructor({ pool, schema, evidenceSigning = null } = {}) {
     this.isAsync = true;
     this.db = pool instanceof PostgresDatabase ? pool : new PostgresDatabase({ pool, schema });
     this.executions = new PostgresExecutionRepository(this.db);
@@ -914,11 +916,55 @@ class PostgresPersistence {
     this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
     this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
     this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
+    this.gatewayIdentity = new PostgresGatewayIdentityRepository(this.db);
+    this.executionEvidence = evidenceSigning
+      ? new PostgresExecutionEvidenceRepository(this.db, evidenceSigning)
+      : null;
     this.workers = new PostgresWorkerRegistryRepository(this.db);
   }
 
   initialize() {
     return this.db.initialize();
+  }
+
+  migrate(options = {}) {
+    return this.db.migrate(options);
+  }
+
+  withPrincipal(principal, work) {
+    return this.db.withPrincipal(principal, work);
+  }
+
+  setOwnerId(ownerId) {
+    if (typeof ownerId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(ownerId)) {
+      throw new TypeError('ownerId must be a stable UUID');
+    }
+    this.ownerChat.ownerId = ownerId;
+    this.ownerProfile.ownerId = ownerId;
+  }
+
+  bindPrincipal(principal) {
+    this.db.validatePrincipal(principal);
+    if (this.boundPrincipal) {
+      if (this.boundPrincipal.principalId !== principal.principalId || this.boundPrincipal.ownerId !== principal.ownerId || this.boundPrincipal.tenantId !== principal.tenantId || this.boundPrincipal.workspaceId !== principal.workspaceId || this.boundPrincipal.sessionId !== principal.sessionId || this.boundPrincipal.authSource !== principal.authSource) {
+        throw Object.assign(new Error('PostgreSQL persistence is already bound to a different principal.'), { code: 'PERSISTENCE_PRINCIPAL_ALREADY_BOUND' });
+      }
+      return this;
+    }
+    // Gateway identity is deliberately excluded: each Gateway operation must bind the verified human-session principal, not the background Runtime principal.
+    const names = ['executions','events','idempotency','checkpoints','workers','workflows','workflowLeases','approvals','tenantQuotas','ownerChat','ownerProfile'];
+    for (const name of names) {
+      const repository = this[name];
+      this[name] = new Proxy(repository, {
+        get: (target, property) => {
+          const value = Reflect.get(target, property, target);
+          if (typeof value !== 'function') return value;
+          return (...args) => this.db.withPrincipal(principal, () => value.apply(target, args));
+        }
+      });
+    }
+    this.boundPrincipal = this.db.validatePrincipal(principal);
+    return this;
   }
 
   health() {
@@ -936,6 +982,8 @@ class PostgresPersistence {
         tenantQuotas: true,
         ownerChat: true,
         ownerProfile: true,
+        gatewayIdentity: true,
+        executionEvidence: Boolean(this.executionEvidence),
         workers: true
       }
     };
@@ -953,5 +1001,6 @@ module.exports = {
   PostgresApprovalRepository,
   PostgresWorkerRegistryRepository,
   PostgresOwnerChatConversationRepository,
-  PostgresOwnerWorkProfileRepository
+  PostgresOwnerWorkProfileRepository,
+  PostgresGatewayIdentityRepository
 };

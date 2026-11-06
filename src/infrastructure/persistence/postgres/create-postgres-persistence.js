@@ -1,7 +1,7 @@
 const { Pool } = require('pg');
 const { PostgresPersistence } = require('./postgres-persistence');
 
-function createPostgresPersistence({ connectionString = process.env.DATABASE_URL, ssl = undefined, poolOptions = {} } = {}) {
+function createPostgresPersistence({ connectionString = process.env.DATABASE_URL, ssl = undefined, poolOptions = {}, evidenceSigning = null } = {}) {
   if (!connectionString) {
     throw new Error('DATABASE_URL is required for PostgreSQL persistence');
   }
@@ -14,7 +14,7 @@ function createPostgresPersistence({ connectionString = process.env.DATABASE_URL
 
   return {
     pool,
-    persistence: new PostgresPersistence({ pool })
+    persistence: new PostgresPersistence({ pool, evidenceSigning })
   };
 }
 

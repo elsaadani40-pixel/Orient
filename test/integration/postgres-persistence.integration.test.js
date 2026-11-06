@@ -1,20 +1,359 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const OwnerIdentityService = require('../../src/core/security/owner-identity-service');
+const { provisionPostgresRoles } = require('../../scripts/provision-postgres-roles');
+const { BASE_SCHEMA, MIGRATIONS } = require('../../src/infrastructure/persistence/postgres/postgres-database');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
+const ExecutionContext = require('../../src/core/execution/execution-context');
+const { createEvidenceRecord } = require('../../src/core/execution/evidence-record');
+const { createEvidenceAnchor } = require('../../src/infrastructure/evidence/trusted-evidence-cryptography');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
+const createServer = require('../../src/interfaces/http/server');
+const {
+  Ed25519IdentityTokenIssuer,
+  Ed25519IdentityTokenVerifier
+} = require('../../src/infrastructure/gateway/identity/ed25519-identity-token');
+const { OwnerSessionIdentityAuthority } = require('../../src/infrastructure/gateway/identity/owner-session-identity-authority');
+const { GatewayIdentityExecutionService } = require('../../src/infrastructure/gateway/identity/gateway-identity-execution-service');
+const { GATEWAY_OPERATION_SCOPES, createGatewayOperationHandlers } = require('../../src/infrastructure/gateway/identity/gateway-operation-handlers');
+const { createGatewayIdentityRoutes } = require('../../src/interfaces/http/routes/gateway-identity.routes');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
 
 test('PostgreSQL initializes versioned schema idempotently on a real server', async () => {
+  const readiness = await pool.query("SELECT to_regclass('public.schema_migrations') IS NOT NULL AS ready");
+  if (!readiness.rows[0].ready) {
+    await provisionPostgresRoles({
+      pool,
+      migratorPassword: crypto.randomBytes(24).toString('hex'),
+      runtimePassword: crypto.randomBytes(24).toString('hex')
+    });
+    await persistence.migrate({ role: 'orient_owner' });
+  } else {
+    const current = await pool.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
+    if (Number(current.rows[0].version) < 14) {
+      await provisionPostgresRoles({
+        pool,
+        migratorPassword: crypto.randomBytes(24).toString('hex'),
+        runtimePassword: crypto.randomBytes(24).toString('hex')
+      });
+      await persistence.migrate({ role: 'orient_owner' });
+    }
+  }
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+});
+
+test('PostgreSQL runtime login preflight validates a real least-privilege connection and pooled role reset', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({
+    connectionString: runtimeUrl.toString(),
+    max: 1,
+    application_name: 'orient-runtime-role-integration'
+  });
+
+  try {
+    const { assertRuntimeDatabaseRole } = require('../../src/infrastructure/persistence/postgres/assert-runtime-database-role');
+    assert.deepEqual(await assertRuntimeDatabaseRole(runtimePool), {
+      role: 'orient_runtime_login',
+      leastPrivilege: true
+    });
+
+    const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+    const readiness = await runtimePersistence.initialize();
+    assert.equal(readiness.schemaVersion, 14);
+
+    const client = await runtimePool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SET LOCAL ROLE orient_runtime');
+      const elevated = await client.query('SELECT session_user::text AS session_user, current_user::text AS current_user');
+      assert.equal(elevated.rows[0].session_user, 'orient_runtime_login');
+      assert.equal(elevated.rows[0].current_user, 'orient_runtime');
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+
+    const afterRelease = await runtimePool.query(
+      'SELECT session_user::text AS session_user, current_user::text AS current_user'
+    );
+    assert.equal(afterRelease.rows[0].session_user, 'orient_runtime_login');
+    assert.equal(afterRelease.rows[0].current_user, 'orient_runtime_login');
+    assert.deepEqual(await assertRuntimeDatabaseRole(runtimePool), {
+      role: 'orient_runtime_login',
+      leastPrivilege: true
+    });
+  } finally {
+    await runtimePool.end();
+  }
+});
+
+test('PostgreSQL migration uses the restricted migrator login and resets owner role after migration', async () => {
+  const migratorPassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword,
+    runtimePassword: crypto.randomBytes(24).toString('hex')
+  });
+
+  const migrationUrl = new URL(process.env.DATABASE_URL);
+  migrationUrl.username = 'orient_migrator';
+  migrationUrl.password = migratorPassword;
+  const migrationPool = new Pool({
+    connectionString: migrationUrl.toString(),
+    max: 1,
+    application_name: 'orient-migration-role-integration'
+  });
+
+  try {
+    const { assertMigrationDatabaseRole } = require('../../src/infrastructure/persistence/postgres/assert-migration-database-role');
+    assert.deepEqual(await assertMigrationDatabaseRole(migrationPool), {
+      role: 'orient_migrator',
+      targetRole: 'orient_owner',
+      leastPrivilege: true
+    });
+
+    const migrationPersistence = new PostgresPersistence({ pool: migrationPool });
+    const result = await migrationPersistence.migrate({ role: 'orient_owner' });
+    assert.equal(result.schemaVersion, 14);
+
+    const identityAfterMigration = await migrationPool.query(
+      'SELECT session_user::text AS session_user, current_user::text AS current_user'
+    );
+    assert.equal(identityAfterMigration.rows[0].session_user, 'orient_migrator');
+    assert.equal(identityAfterMigration.rows[0].current_user, 'orient_migrator');
+    assert.deepEqual(await assertMigrationDatabaseRole(migrationPool), {
+      role: 'orient_migrator',
+      targetRole: 'orient_owner',
+      leastPrivilege: true
+    });
+  } finally {
+    await migrationPool.end();
+  }
+});
+
+
+
+test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RLS, signatures, and ordered concurrency', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({
+    connectionString: runtimeUrl.toString(),
+    max: 2,
+    application_name: 'orient-trusted-evidence-integration'
+  });
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' });
+  const anchorPair = crypto.generateKeyPairSync('ed25519');
+  const anchorPrivateKey = anchorPair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const anchorPublicKey = anchorPair.publicKey.export({ type: 'spki', format: 'pem' });
+  const runtimePersistence = new PostgresPersistence({
+    pool: runtimePool,
+    evidenceSigning: {
+      keyId: 'integration-key-1',
+      privateKey,
+      trustedKeys: { 'integration-key-1': { publicKey } },
+      trustedAnchorKeys: { 'owner-anchor-key-1': { publicKey: anchorPublicKey } }
+    }
+  });
+  const principal = tenantId => ({
+    authSource: 'orient-runtime-owner',
+    principalId: '11111111-1111-4111-8111-111111111111',
+    ownerId: '11111111-1111-4111-8111-111111111111',
+    sessionId: '22222222-2222-4222-8222-222222222222',
+    workspaceId: 'workspace-integration',
+    tenantId
+  });
+
+  try {
+    const privilege = await runtimePool.query(`
+      SELECT
+        has_table_privilege(current_user, 'public.execution_evidence', 'SELECT') AS can_select,
+        has_table_privilege(current_user, 'public.execution_evidence', 'INSERT') AS can_insert,
+        has_table_privilege(current_user, 'public.execution_evidence', 'UPDATE') AS can_update,
+        has_table_privilege(current_user, 'public.execution_evidence', 'DELETE') AS can_delete,
+        has_table_privilege(current_user, 'public.execution_evidence', 'TRUNCATE') AS can_truncate
+    `);
+    assert.deepEqual(privilege.rows[0], {
+      can_select: true,
+      can_insert: true,
+      can_update: false,
+      can_delete: false,
+      can_truncate: false
+    });
+
+    const executionId = 'trusted-ledger-integration-execution';
+    const evidenceOne = createEvidenceRecord({
+      executionId, step: 1, tool: 'integration.first', success: true,
+      result: { value: 'first' }, observedAt: '2026-11-06T10:00:00.000Z'
+    });
+    const evidenceTwo = createEvidenceRecord({
+      executionId, step: 2, tool: 'integration.second', success: true,
+      result: { value: 'second' }, observedAt: '2026-11-06T10:00:01.000Z'
+    });
+    const evidenceThree = createEvidenceRecord({
+      executionId, step: 3, tool: 'integration.third', success: true,
+      result: { value: 'third' }, observedAt: '2026-11-06T10:00:02.000Z'
+    });
+
+    const first = await runtimePersistence.executionEvidence.append(evidenceOne, {
+      principal: principal('tenant-evidence-a')
+    });
+    const retry = await runtimePersistence.executionEvidence.append(evidenceOne, {
+      principal: principal('tenant-evidence-a')
+    });
+    assert.equal(retry.sequence, first.sequence);
+    assert.equal(retry.recordHash, first.recordHash);
+
+    const concurrent = await Promise.all([
+      runtimePersistence.executionEvidence.append(evidenceTwo, { principal: principal('tenant-evidence-a') }),
+      runtimePersistence.executionEvidence.append(evidenceThree, { principal: principal('tenant-evidence-a') })
+    ]);
+    assert.deepEqual(concurrent.map(record => record.sequence).sort((a, b) => a - b), [2, 3]);
+    const verified = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
+      principal: principal('tenant-evidence-a')
+    });
+    assert.equal(verified.valid, true);
+    assert.equal(verified.anchored, false);
+    assert.equal(verified.records, 3);
+    assert.equal(verified.verifiedThrough, 3);
+
+    const anchorPayload = await runtimePersistence.executionEvidence.createAnchorPayload(executionId, {
+      principal: principal('tenant-evidence-a')
+    });
+    // The owner-controlled signer runs outside the runtime process and exports the signed anchor.
+    const externalAnchor = createEvidenceAnchor(anchorPayload, {
+      keyId: 'owner-anchor-key-1',
+      privateKey: anchorPrivateKey
+    });
+    const anchored = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
+      principal: principal('tenant-evidence-a'),
+      anchor: externalAnchor
+    });
+    assert.equal(anchored.valid, true);
+    assert.equal(anchored.anchored, true);
+    assert.equal(anchored.headAnchored, true);
+    assert.equal(anchored.code, 'EVIDENCE_CHAIN_VALID_AND_HEAD_ANCHORED');
+
+    const isolated = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
+      principal: principal('tenant-evidence-b')
+    });
+    assert.equal(isolated.valid, true);
+    assert.equal(isolated.records, 0);
+    const crossTenantRead = await runtimePersistence.withPrincipal(
+      principal('tenant-evidence-b'),
+      () => runtimePersistence.db.query(
+        'SELECT COUNT(*)::int AS count FROM public.execution_evidence WHERE tenant_id=$1',
+        ['tenant-evidence-a']
+      )
+    );
+    assert.equal(crossTenantRead.rows[0].count, 0);
+
+    await assert.rejects(
+      () => runtimePool.query(
+        "UPDATE public.execution_evidence SET record_hash = repeat('0',64) WHERE tenant_id=$1 AND execution_id=$2",
+        ['tenant-evidence-a', executionId]
+      ),
+      error => error.code === '42501'
+    );
+    await assert.rejects(
+      () => runtimePool.query(
+        'DELETE FROM public.execution_evidence WHERE tenant_id=$1 AND execution_id=$2',
+        ['tenant-evidence-a', executionId]
+      ),
+      error => error.code === '42501'
+    );
+    await assert.rejects(
+      () => runtimePool.query('TRUNCATE public.execution_evidence'),
+      error => error.code === '42501'
+    );
+    await assert.rejects(
+      () => pool.query(
+        "UPDATE public.execution_evidence SET record_hash = repeat('0',64) WHERE tenant_id=$1 AND execution_id=$2",
+        ['tenant-evidence-a', executionId]
+      ),
+      error => error.code === '55000'
+    );
+    await assert.rejects(
+      () => pool.query(
+        'DELETE FROM public.execution_evidence WHERE tenant_id=$1 AND execution_id=$2',
+        ['tenant-evidence-a', executionId]
+      ),
+      error => error.code === '55000'
+    );
+    await assert.rejects(
+      () => pool.query('TRUNCATE public.execution_evidence'),
+      error => error.code === '55000'
+    );
+
+    await pool.query('ALTER TABLE public.execution_evidence DISABLE TRIGGER ALL');
+    try {
+      await pool.query(
+        'DELETE FROM public.execution_evidence WHERE tenant_id=$1 AND execution_id=$2 AND sequence=3',
+        ['tenant-evidence-a', executionId]
+      );
+    } finally {
+      await pool.query('ALTER TABLE public.execution_evidence ENABLE TRIGGER ALL');
+    }
+    const truncated = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
+      principal: principal('tenant-evidence-a'),
+      anchor: externalAnchor
+    });
+    assert.equal(truncated.valid, false);
+    assert.equal(truncated.code, 'EVIDENCE_ANCHOR_MISMATCH');
+    const evidenceFour = createEvidenceRecord({
+      executionId, step: 4, tool: 'integration.fourth', success: true,
+      result: { value: 'fourth' }, observedAt: '2026-11-06T10:00:03.000Z'
+    });
+    await assert.rejects(
+      () => runtimePersistence.executionEvidence.append(evidenceFour, {
+        principal: principal('tenant-evidence-a'),
+        anchor: externalAnchor
+      }),
+      error => error.code === 'EVIDENCE_ANCHOR_MISMATCH'
+    );
+  } finally {
+    await runtimePool.end();
+    await pool.query('ALTER TABLE public.execution_evidence DISABLE TRIGGER ALL');
+    try {
+      await pool.query(
+        'DELETE FROM public.execution_evidence WHERE tenant_id IN ($1,$2)',
+        ['tenant-evidence-a', 'tenant-evidence-b']
+      );
+    } finally {
+      await pool.query('ALTER TABLE public.execution_evidence ENABLE TRIGGER ALL');
+    }
+  }
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -36,6 +375,100 @@ test('PostgreSQL checkpoints preserve ordered history on a real server', async (
   assert.equal(latest.snapshot.step, 2);
 });
 
+test('PostgreSQL checkpoint restores versioned ExecutionContext evidence after repository restart', async t => {
+  const executionId = 'evidence-checkpoint-' + crypto.randomUUID();
+  const tenantId = 'tenant-evidence-checkpoint';
+  const execution = new ExecutionContext({
+    requestId: 'request-' + crypto.randomUUID(),
+    executionId,
+    input: 'persist and restore execution evidence',
+    tenantId,
+    metadata: { tenantId }
+  });
+  execution.addObservation({
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'running', checkpoint: 'durability-proof' }
+  });
+  const snapshot = execution.snapshot();
+  assert.equal(snapshot.evidenceSchemaVersion, 1);
+  const evidenceId = snapshot.observations[0].evidence.id;
+
+  const restartedPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    application_name: 'orient-evidence-restart-integration'
+  });
+  t.after(async () => {
+    try {
+      await pool.query('DELETE FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
+    } finally {
+      await restartedPool.end();
+    }
+  });
+
+  const saved = await persistence.checkpoints.save(snapshot, {
+    reason: 'evidence_restart_test',
+    tenantId
+  });
+  assert.equal(saved.snapshot.observations[0].evidence.id, evidenceId);
+
+  const restartedPersistence = new PostgresPersistence({ pool: restartedPool });
+  const persistedCheckpoint = await restartedPersistence.checkpoints.findLatest(executionId, {
+    tenantId,
+    verify: true
+  });
+  assert.ok(persistedCheckpoint);
+  assert.equal(persistedCheckpoint.snapshotSha256, saved.snapshotSha256);
+
+  const restored = ExecutionContext.restore(persistedCheckpoint.snapshot);
+  assert.equal(restored.executionId, executionId);
+  assert.equal(restored.observations.length, 1);
+  assert.equal(restored.agentState.observations.length, 1);
+  assert.equal(restored.observations[0].evidence.id, evidenceId);
+  assert.equal(restored.agentState.observations[0].evidence.id, evidenceId);
+  assert.equal(restored.observations[0].evidence.resultSha256, snapshot.observations[0].evidence.resultSha256);
+});
+
+
+test('PostgreSQL checkpoint verification rejects a tampered persisted snapshot', async t => {
+  const executionId = 'tampered-evidence-checkpoint-' + crypto.randomUUID();
+  const tenantId = 'tenant-tampered-evidence-checkpoint';
+  const execution = new ExecutionContext({
+    requestId: 'request-' + crypto.randomUUID(),
+    executionId,
+    input: 'verify checkpoint tamper detection',
+    tenantId,
+    metadata: { tenantId }
+  });
+  execution.addObservation({
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'running', count: 4 }
+  });
+
+  t.after(async () => {
+    await pool.query(
+      'DELETE FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2',
+      [executionId, tenantId]
+    );
+  });
+
+  await persistence.checkpoints.save(execution.snapshot(), { tenantId });
+  const tampered = await pool.query(
+    `UPDATE checkpoints
+     SET snapshot=jsonb_set(snapshot, '{observations,0,result,count}', '99'::jsonb, false)
+     WHERE execution_id=$1 AND tenant_id=$2`,
+    [executionId, tenantId]
+  );
+  assert.equal(tampered.rowCount, 1);
+
+  await assert.rejects(
+    () => persistence.checkpoints.findLatest(executionId, { tenantId, verify: true }),
+    error => error.code === 'CHECKPOINT_INTEGRITY_FAILED'
+  );
+});
 
 test('PostgreSQL resume leases are atomic, tenant-scoped, and releasable only by the owner', async () => {
   const executionId = 'resume-lease-' + Date.now();
@@ -905,5 +1338,925 @@ test('PostgreSQL owner work profile persists validated partial updates and isola
     );
   } finally {
     await pool.query('DELETE FROM owner_work_profiles WHERE owner_id = ANY($1::text[])', [[ownerId, otherOwnerId]]);
+  }
+});
+
+
+test('PostgreSQL runtime role is restricted and tenant RLS blocks cross-tenant CRUD', async () => {
+  const role = await pool.query(
+    "SELECT rolname, rolsuper, rolbypassrls, rolcanlogin, rolcreatedb, rolcreaterole, rolreplication " +
+    "FROM pg_roles WHERE rolname IN ('orient_owner','orient_runtime','orient_runtime_login','orient_migrator') ORDER BY rolname"
+  );
+  const runtime = role.rows.find(row => row.rolname === 'orient_runtime');
+  const runtimeLogin = role.rows.find(row => row.rolname === 'orient_runtime_login');
+  const owner = role.rows.find(row => row.rolname === 'orient_owner');
+  const migrator = role.rows.find(row => row.rolname === 'orient_migrator');
+  assert.equal(runtime.rolsuper, false);
+  assert.equal(runtime.rolbypassrls, false);
+  assert.equal(runtime.rolcanlogin, false);
+  assert.equal(runtime.rolcreatedb, false);
+  assert.equal(runtime.rolcreaterole, false);
+  assert.equal(runtime.rolreplication, false);
+  assert.equal(runtimeLogin.rolsuper, false);
+  assert.equal(runtimeLogin.rolbypassrls, false);
+  assert.equal(runtimeLogin.rolcanlogin, true);
+  assert.equal(runtimeLogin.rolcreatedb, false);
+  assert.equal(runtimeLogin.rolcreaterole, false);
+  assert.equal(runtimeLogin.rolreplication, false);
+  assert.equal(owner.rolcanlogin, false);
+  assert.equal(owner.rolcreatedb, false);
+  assert.equal(owner.rolcreaterole, false);
+  assert.equal(owner.rolreplication, false);
+  assert.equal(migrator.rolsuper, false);
+  assert.equal(migrator.rolbypassrls, false);
+  assert.equal(migrator.rolcreatedb, false);
+  assert.equal(migrator.rolcreaterole, false);
+  assert.equal(migrator.rolreplication, false);
+  const privileges = await pool.query(
+    "SELECT " +
+    "has_schema_privilege('orient_runtime_login','public','CREATE') AS schema_create, " +
+    "has_table_privilege('orient_runtime_login','public.executions','SELECT') AS can_select, " +
+    "has_table_privilege('orient_runtime_login','public.executions','INSERT') AS can_insert, " +
+    "has_table_privilege('orient_runtime_login','public.executions','UPDATE') AS can_update, " +
+    "has_table_privilege('orient_runtime_login','public.executions','DELETE') AS can_delete, " +
+    "has_table_privilege('orient_runtime_login','public.executions','TRUNCATE') AS can_truncate, " +
+    "has_table_privilege('orient_runtime_login','public.executions','REFERENCES') AS can_reference, " +
+    "has_table_privilege('orient_runtime_login','public.executions','TRIGGER') AS can_trigger, " +
+    "has_sequence_privilege('orient_runtime_login','public.workflow_lease_fencing_seq','USAGE') AS sequence_usage, " +
+    "has_sequence_privilege('orient_runtime_login','public.workflow_lease_fencing_seq','UPDATE') AS sequence_update"
+  );
+  assert.deepEqual(privileges.rows[0], {
+    schema_create: false,
+    can_select: true,
+    can_insert: true,
+    can_update: true,
+    can_delete: true,
+    can_truncate: false,
+    can_reference: false,
+    can_trigger: false,
+    sequence_usage: true,
+    sequence_update: false
+  });
+  const membership = await pool.query("SELECT pg_has_role('orient_runtime_login','orient_runtime','MEMBER') AS runtime_member, pg_has_role('orient_migrator','orient_owner','MEMBER') AS migrator_member");
+  assert.equal(membership.rows[0].runtime_member, true);
+  assert.equal(membership.rows[0].migrator_member, true);
+  const tableOwner = await pool.query("SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE oid = 'public.executions'::regclass");
+  assert.equal(tableOwner.rows[0].owner, 'orient_owner');
+
+  const a = 'rls-a-' + crypto.randomUUID();
+  const b = 'rls-b-' + crypto.randomUUID();
+  const now = new Date().toISOString();
+  await pool.query(
+    'INSERT INTO executions(execution_id,tenant_id,owner_id,payload,updated_at) VALUES ($1,$2,$3,$4,$5),($6,$7,$3,$8,$5)',
+    [a,'tenant-a','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',{id:a,tenantId:'tenant-a'},now,b,'tenant-b',{id:b,tenantId:'tenant-b'}]
+  );
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE orient_runtime');
+    await client.query(
+      "SELECT set_config('app.orient_tenant_id',$1,true), set_config('app.orient_owner_id',$2,true)",
+      ['tenant-a','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']
+    );
+    const visible = await client.query('SELECT execution_id FROM executions WHERE execution_id = ANY($1::text[]) ORDER BY execution_id',[ [a,b] ]);
+    assert.deepEqual(visible.rows.map(row => row.execution_id), [a]);
+    const changed = await client.query('UPDATE executions SET payload=$1 WHERE execution_id=$2', [{changed:true},b]);
+    assert.equal(changed.rowCount, 0);
+    const deleted = await client.query('DELETE FROM executions WHERE execution_id=$1',[b]);
+    assert.equal(deleted.rowCount, 0);
+    await assert.rejects(
+      () => client.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES ($1,$2,$3,$4)',
+        ['rls-insert-'+crypto.randomUUID(),'tenant-b',{id:'cross-tenant'},now]
+      ),
+      error => error.code === '42501'
+    );
+    await client.query('ROLLBACK');
+  } finally {
+    client.release();
+    await pool.query('DELETE FROM executions WHERE execution_id = ANY($1::text[])',[[a,b]]);
+  }
+});
+
+test('PostgreSQL owner RLS blocks another owner chat profile', async () => {
+  const ownerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ownerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const messageA = 'owner-a-' + crypto.randomUUID();
+  const messageB = 'owner-b-' + crypto.randomUUID();
+  const now = new Date().toISOString();
+  await pool.query(
+    'INSERT INTO owner_chat_messages(owner_id,message_id,role,content,created_at) VALUES ($1,$2,$3,$4,$5),($6,$7,$3,$4,$5)',
+    [ownerA,messageA,'user','private A',now,ownerB,messageB]
+  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE orient_runtime');
+    await client.query("SELECT set_config('app.orient_owner_id',$1,true)",[ownerA]);
+    const visible = await client.query('SELECT message_id FROM owner_chat_messages ORDER BY message_id');
+    assert.deepEqual(visible.rows.map(row => row.message_id), [messageA]);
+    await client.query('ROLLBACK');
+  } finally {
+    client.release();
+    await pool.query('DELETE FROM owner_chat_messages WHERE message_id = ANY($1::text[])',[[messageA,messageB]]);
+  }
+});
+
+
+test('PostgreSQL Gateway RLS isolates challenge and idempotency rows by tenant, owner, and session', async () => {
+  const tenantId = 'gateway-rls-' + crypto.randomUUID();
+  const ownerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ownerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const sessionA = '11111111-1111-4111-8111-111111111111';
+  const sessionB = '22222222-2222-4222-8222-222222222222';
+  const sessionA2 = '33333333-3333-4333-8333-333333333333';
+  const challengeA = crypto.randomUUID();
+  const challengeB = crypto.randomUUID();
+  const challengeA2 = crypto.randomUUID();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 60_000);
+  const fingerprintA = 'a'.repeat(64);
+  const fingerprintB = 'b'.repeat(64);
+  const fingerprintA2 = 'c'.repeat(64);
+  const keyA = 'gateway-rls-a-' + crypto.randomUUID();
+  const keyB = 'gateway-rls-b-' + crypto.randomUUID();
+  const keyA2 = 'gateway-rls-a2-' + crypto.randomUUID();
+
+  await pool.query(
+    `INSERT INTO gateway_challenges
+     (challenge_id,owner_id,session_id,tenant_id,workspace_id,operation,operation_id,request_id,
+      request_fingerprint,status,issued_at,expires_at)
+     VALUES
+     ($1,$2,$3,$4,'local','execution.get',$7,$8,$9,'ISSUED',$10,$11),
+     ($5,$6,$12,$4,'local','execution.get',$13,$14,$15,'ISSUED',$10,$11),
+     ($16,$2,$17,$4,'local','execution.get',$18,$19,$20,'ISSUED',$10,$11)`,
+    [
+      challengeA,ownerA,sessionA,tenantId,
+      challengeB,ownerB,
+      crypto.randomUUID(),crypto.randomUUID(),fingerprintA,now,expiresAt,
+      sessionB,crypto.randomUUID(),crypto.randomUUID(),fingerprintB,
+      challengeA2,sessionA2,crypto.randomUUID(),crypto.randomUUID(),fingerprintA2
+    ]
+  );
+  await pool.query(
+    `INSERT INTO gateway_idempotency
+     (tenant_id,idempotency_key,request_fingerprint,owner_id,session_id,challenge_id,
+      operation,operation_id,request_id,status,response,created_at,completed_at)
+     VALUES
+     ($1,$2,$3,$4,$5,$6,'execution.get',$7,$8,'COMPLETED','{"ok":true}'::jsonb,$9,$9),
+     ($1,$10,$11,$12,$13,$14,'execution.get',$15,$16,'COMPLETED','{"ok":true}'::jsonb,$9,$9),
+     ($1,$17,$18,$4,$19,$20,'execution.get',$21,$22,'COMPLETED','{"ok":true}'::jsonb,$9,$9)`,
+    [
+      tenantId,keyA,fingerprintA,ownerA,sessionA,challengeA,
+      crypto.randomUUID(),crypto.randomUUID(),now,
+      keyB,fingerprintB,ownerB,sessionB,challengeB,
+      crypto.randomUUID(),crypto.randomUUID(),
+      keyA2,fingerprintA2,sessionA2,challengeA2,crypto.randomUUID(),crypto.randomUUID()
+    ]
+  );
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE orient_runtime');
+    await client.query(
+      "SELECT set_config('app.orient_tenant_id',$1,true), set_config('app.orient_owner_id',$2,true), set_config('app.orient_session_id',$3,true)",
+      [tenantId,ownerA,sessionA]
+    );
+    const visibleChallenges = await client.query(
+      'SELECT challenge_id FROM gateway_challenges WHERE challenge_id = ANY($1::uuid[]) ORDER BY challenge_id',
+      [[challengeA,challengeB,challengeA2]]
+    );
+    assert.deepEqual(visibleChallenges.rows.map(row => row.challenge_id), [challengeA]);
+
+    const visibleIdempotency = await client.query(
+      'SELECT idempotency_key FROM gateway_idempotency WHERE idempotency_key = ANY($1::text[]) ORDER BY idempotency_key',
+      [[keyA,keyB,keyA2]]
+    );
+    assert.deepEqual(visibleIdempotency.rows.map(row => row.idempotency_key), [keyA]);
+
+    const hiddenChallengeUpdate = await client.query(
+      "UPDATE gateway_challenges SET status='CONSUMED',consumed_at=$1 WHERE challenge_id=$2",
+      [now,challengeB]
+    );
+    assert.equal(hiddenChallengeUpdate.rowCount, 0);
+    const hiddenIdempotencyDelete = await client.query(
+      'DELETE FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key=$2',
+      [tenantId,keyB]
+    );
+    assert.equal(hiddenIdempotencyDelete.rowCount, 0);
+
+    await assert.rejects(
+      () => client.query(
+        `INSERT INTO gateway_challenges
+         (challenge_id,owner_id,session_id,tenant_id,workspace_id,operation,operation_id,request_id,
+          request_fingerprint,status,issued_at,expires_at)
+         VALUES($1,$2,$3,$4,'local','execution.get',$5,$6,$7,'ISSUED',$8,$9)`,
+        [crypto.randomUUID(),ownerB,sessionB,tenantId,crypto.randomUUID(),crypto.randomUUID(),'d'.repeat(64),now,expiresAt]
+      ),
+      error => error.code === '42501'
+    );
+    await client.query('ROLLBACK');
+  } finally {
+    client.release();
+    await pool.query('DELETE FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key = ANY($2::text[])',[tenantId,[keyA,keyB,keyA2]]);
+    await pool.query('DELETE FROM gateway_challenges WHERE tenant_id=$1 AND challenge_id = ANY($2::uuid[])',[tenantId,[challengeA,challengeB,challengeA2]]);
+  }
+});
+
+test('PostgreSQL role provisioning normalizes unexpected memberships and multiple grantors on a real server', async () => {
+  const helperRole = 'orient_test_unrelated_admin';
+  const grantorRole = 'orient_test_membership_grantor';
+  const managedRoles = ['orient_owner', 'orient_migrator', 'orient_runtime', 'orient_runtime_login'];
+  try {
+    await pool.query('DROP ROLE IF EXISTS ' + helperRole);
+    await pool.query('DROP ROLE IF EXISTS ' + grantorRole);
+    await pool.query(
+      'CREATE ROLE ' + helperRole + ' NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
+    );
+    await pool.query(
+      'CREATE ROLE ' + grantorRole + ' NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
+    );
+    await pool.query('GRANT orient_owner TO orient_runtime_login WITH ADMIN OPTION');
+    await pool.query('GRANT orient_owner TO ' + grantorRole + ' WITH ADMIN OPTION');
+    const grantorClient = await pool.connect();
+    try {
+      await grantorClient.query('BEGIN');
+      await grantorClient.query('SET LOCAL ROLE ' + grantorRole);
+      await grantorClient.query('GRANT orient_owner TO orient_runtime_login WITH ADMIN OPTION');
+      await grantorClient.query('COMMIT');
+    } catch (error) {
+      await grantorClient.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      grantorClient.release();
+    }
+    await pool.query('GRANT ' + helperRole + ' TO orient_migrator WITH ADMIN OPTION');
+
+    const initialGrantors = await pool.query(
+      'SELECT grantor.rolname AS grantor_role, membership.admin_option ' +
+      'FROM pg_auth_members membership ' +
+      'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
+      'JOIN pg_roles member ON member.oid = membership.member ' +
+      'JOIN pg_roles grantor ON grantor.oid = membership.grantor ' +
+      'WHERE granted.rolname = $1 AND member.rolname = $2 ' +
+      'ORDER BY grantor.rolname',
+      ['orient_owner', 'orient_runtime_login']
+    );
+    assert.deepEqual(initialGrantors.rows, [
+      { grantor_role: 'orient_test_membership_grantor', admin_option: true },
+      { grantor_role: 'postgres', admin_option: true }
+    ]);
+
+    await provisionPostgresRoles({
+      pool,
+      migratorPassword: crypto.randomBytes(24).toString('hex'),
+      runtimePassword: crypto.randomBytes(24).toString('hex')
+    });
+
+    const memberships = await pool.query(
+      'SELECT granted.rolname AS granted_role, member.rolname AS member_role, ' +
+      'membership.admin_option, membership.inherit_option, membership.set_option ' +
+      'FROM pg_auth_members membership ' +
+      'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
+      'JOIN pg_roles member ON member.oid = membership.member ' +
+      'WHERE granted.rolname = ANY($1::text[]) OR member.rolname = ANY($1::text[]) ' +
+      'ORDER BY granted.rolname, member.rolname',
+      [managedRoles]
+    );
+
+    assert.deepEqual(memberships.rows, [
+      {
+        granted_role: 'orient_owner',
+        member_role: 'orient_migrator',
+        admin_option: false,
+        inherit_option: false,
+        set_option: true
+      },
+      {
+        granted_role: 'orient_runtime',
+        member_role: 'orient_runtime_login',
+        admin_option: false,
+        inherit_option: true,
+        set_option: true
+      }
+    ]);
+  } finally {
+    const cleanupClient = await pool.connect();
+    try {
+      await cleanupClient.query('BEGIN');
+      const residual = await cleanupClient.query(
+        'SELECT granted.rolname AS granted_role, member.rolname AS member_role, grantor.rolname AS grantor_role ' +
+        'FROM pg_auth_members membership ' +
+        'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
+        'JOIN pg_roles member ON member.oid = membership.member ' +
+        'JOIN pg_roles grantor ON grantor.oid = membership.grantor ' +
+        'WHERE (granted.rolname = $1 AND member.rolname = ANY($2::text[])) ' +
+        'OR (granted.rolname = $3 AND member.rolname = $4) ' +
+        'ORDER BY CASE WHEN member.rolname = $5 THEN 0 ELSE 1 END',
+        ['orient_owner', ['orient_runtime_login', grantorRole], helperRole, 'orient_migrator', 'orient_runtime_login']
+      );
+      for (const membership of residual.rows) {
+        const quoteIdentifier = value => '"' + value.replace(/"/g, '""') + '"';
+        await cleanupClient.query('SET LOCAL ROLE ' + quoteIdentifier(membership.grantor_role));
+        await cleanupClient.query(
+          'REVOKE ' + quoteIdentifier(membership.granted_role) +
+          ' FROM ' + quoteIdentifier(membership.member_role)
+        );
+      }
+      await cleanupClient.query('COMMIT');
+    } catch (error) {
+      await cleanupClient.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      cleanupClient.release();
+    }
+    await pool.query('DROP ROLE IF EXISTS ' + helperRole);
+    await pool.query('DROP ROLE IF EXISTS ' + grantorRole);
+  }
+});
+
+
+test('PostgreSQL gateway challenge consumption and idempotent mutation are atomic under retries and concurrency', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 8 });
+  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+  const principal = {
+    principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ownerId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    tenantId: 'gateway-atomic-tenant',
+    workspaceId: 'gateway-atomic-workspace',
+    authSource: 'orient-owner-session'
+  };
+  const binding = {
+    ownerId: principal.ownerId,
+    sessionId: principal.sessionId,
+    tenantId: principal.tenantId,
+    workspaceId: principal.workspaceId,
+    challengeId: crypto.randomUUID(),
+    operation: 'execution.create',
+    operationId: crypto.randomUUID(),
+    requestId: crypto.randomUUID()
+  };
+  const request = { goal: 'create one protected execution', priority: 'normal' };
+  const idempotencyKey = 'gateway-' + crypto.randomUUID();
+  const executionId = 'gateway-exec-' + crypto.randomUUID();
+
+  try {
+    await runtimePersistence.initialize();
+    await runtimePersistence.gatewayIdentity.issue({
+      ...binding,
+      request,
+      expiresAt: Date.now() + 60000
+    }, { principal });
+    const issued = await runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId, { principal });
+    assert.equal(issued.status, 'ISSUED');
+    assert.equal(issued.tenantId, principal.tenantId);
+
+    let callbackCalls = 0;
+    const execute = async client => {
+      callbackCalls += 1;
+      await client.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+        [executionId,principal.tenantId,{ id: executionId, tenantId: principal.tenantId, goal: request.goal }]
+      );
+      return { executionId, accepted: true };
+    };
+    const [first, concurrentRetry] = await Promise.all([
+      runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey,request,execute
+      }),
+      runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey,request,execute
+      })
+    ]);
+    assert.equal(callbackCalls, 1);
+    assert.deepEqual(first.response, { executionId, accepted: true });
+    assert.deepEqual(concurrentRetry.response, { executionId, accepted: true });
+    assert.equal([first.replayed, concurrentRetry.replayed].filter(Boolean).length, 1);
+
+    const replay = await runtimePersistence.gatewayIdentity.executeAtomically({
+      principal,binding,idempotencyKey,request,
+      execute: async () => { throw new Error('completed operation must not execute again'); }
+    });
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.response, { executionId, accepted: true });
+
+    await assert.rejects(
+      () => runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey,request:{ ...request, goal:'tampered request' },
+        execute: async () => null
+      }),
+      error => error.code === 'GATEWAY_REQUEST_BINDING_MISMATCH'
+    );
+    await assert.rejects(
+      () => runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey:idempotencyKey + '-other',
+        request,execute: async () => null
+      }),
+      error => error.code === 'GATEWAY_CHALLENGE_REPLAY_REJECTED'
+    );
+
+    const stored = await runtimePersistence.withPrincipal(principal, async () => {
+      const result = await runtimePersistence.db.query(
+        'SELECT COUNT(*)::int AS count FROM executions WHERE execution_id=$1 AND tenant_id=$2',
+        [executionId,principal.tenantId]
+      );
+      return Number(result.rows[0].count);
+    });
+    assert.equal(stored, 1);
+  } finally {
+    await runtimePool.end();
+  }
+});
+
+
+test('PostgreSQL Gateway execution lookup cannot read another owner execution in the same tenant', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 2 });
+  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+  const tenantId = 'gateway-owner-isolation-tenant';
+  const workspaceId = 'gateway-owner-isolation-workspace';
+  const ownerA = {
+    principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ownerId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    tenantId, workspaceId, authSource: 'orient-owner-session'
+  };
+  const ownerB = {
+    principalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ownerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    tenantId, workspaceId, authSource: 'orient-owner-session'
+  };
+  const executionId = 'gateway-owner-' + crypto.randomUUID();
+  const handler = createGatewayOperationHandlers().get('execution.get');
+  const client = { query: (sql, values) => runtimePersistence.db.query(sql, values) };
+
+  try {
+    await runtimePersistence.initialize();
+    await runtimePersistence.withPrincipal(ownerA, () => runtimePersistence.db.query(
+      'INSERT INTO executions(execution_id,tenant_id,owner_id,payload,updated_at) VALUES($1,$2,$3,$4,NOW())',
+      [executionId, tenantId, ownerB.ownerId, { id: executionId, tenantId, status: 'completed' }]
+    ));
+
+    const ownResult = await runtimePersistence.withPrincipal(ownerA, () =>
+      handler(client, { request: { executionId }, principal: ownerA })
+    );
+    assert.equal(ownResult.found, true);
+
+    const crossOwnerResult = await runtimePersistence.withPrincipal(ownerB, () =>
+      handler(client, { request: { executionId }, principal: ownerB })
+    );
+    assert.deepEqual(crossOwnerResult, { found: false, task: null });
+
+    const crossOwnerRepositoryRead = await runtimePersistence.withPrincipal(ownerB, () =>
+      runtimePersistence.executions.findById(executionId, { tenantId })
+    );
+    assert.equal(crossOwnerRepositoryRead, null, 'execution RLS must isolate owners even when repository callers omit owner predicates');
+
+    const attribution = await runtimePersistence.withPrincipal(ownerA, async () => {
+      const result = await runtimePersistence.db.query(
+        'SELECT owner_id::text AS owner_id FROM executions WHERE execution_id=$1 AND tenant_id=$2',
+        [executionId, tenantId]
+      );
+      return result.rows[0]?.owner_id;
+    });
+    assert.equal(attribution, ownerA.ownerId, 'the trigger must override caller-supplied owner attribution');
+
+    await assert.rejects(
+      () => runtimePersistence.withPrincipal(ownerA, () => runtimePersistence.db.query(
+        'UPDATE executions SET owner_id=$1 WHERE execution_id=$2 AND tenant_id=$3',
+        [ownerB.ownerId, executionId, tenantId]
+      )),
+      /ORIENT execution ownership is immutable/
+    );
+
+    await assert.rejects(
+      () => runtimePersistence.db.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+        ['gateway-no-owner-' + crypto.randomUUID(), tenantId, { tenantId }]
+      ),
+      /ORIENT runtime owner context is required/
+    );
+  } finally {
+    await pool.query('DELETE FROM executions WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
+    await runtimePool.end();
+  }
+});
+
+
+test('PostgreSQL gateway transaction rolls back challenge consumption and idempotency when protected mutation fails', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 2 });
+  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+  const principal = {
+    principalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ownerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    tenantId: 'gateway-rollback-tenant',
+    workspaceId: 'gateway-rollback-workspace',
+    authSource: 'orient-owner-session'
+  };
+  const binding = {
+    ownerId: principal.ownerId,
+    sessionId: principal.sessionId,
+    tenantId: principal.tenantId,
+    workspaceId: principal.workspaceId,
+    challengeId: crypto.randomUUID(),
+    operation: 'execution.create',
+    operationId: crypto.randomUUID(),
+    requestId: crypto.randomUUID()
+  };
+  try {
+    await runtimePersistence.initialize();
+    await runtimePersistence.gatewayIdentity.issue({
+      ...binding,request:{ goal:'rollback' },expiresAt:Date.now()+60000
+    }, { principal });
+    await assert.rejects(
+      () => runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey:'rollback-'+crypto.randomUUID(),request:{ goal:'rollback' },
+        execute: async client => {
+          await client.query(
+            'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+            ['rollback-'+binding.challengeId,principal.tenantId,{ tenantId:principal.tenantId }]
+          );
+          throw Object.assign(new Error('simulated protected mutation failure'),{code:'TEST_MUTATION_FAILED'});
+        }
+      }),
+      error => error.code === 'TEST_MUTATION_FAILED'
+    );
+    const challenge = await runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId, { principal });
+    assert.equal(challenge.status,'ISSUED');
+  } finally {
+    await runtimePool.end();
+  }
+});
+
+test('Gateway HTTP challenge, token, execution and replay complete against PostgreSQL under owner RLS', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 4 });
+  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+  const ownerStateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-gateway-owner-'));
+  const ownerStateFile = path.join(ownerStateDirectory, 'owner.json');
+  const bootstrapPassword = 'gateway-owner-bootstrap-2026!';
+  const initialOwnerIdentity = new OwnerIdentityService({
+    stateFile: ownerStateFile,
+    bootstrapPassword
+  });
+  const login = await initialOwnerIdentity.login({ username: 'Admin', password: bootstrapPassword });
+  assert.equal(login.ok, true);
+  assert.equal(login.passwordChangeRequired, true);
+  const passwordChange = await initialOwnerIdentity.changePassword({
+    token: login.token,
+    password: 'gateway-owner-permanent-2026!',
+    confirmPassword: 'gateway-owner-permanent-2026!'
+  });
+  assert.equal(passwordChange.ok, true);
+  assert.equal(passwordChange.passwordChangeRequired, false);
+
+  // Re-open the canonical owner store to prove the post-rotation session survives a process restart.
+  const ownerIdentity = new OwnerIdentityService({ stateFile: ownerStateFile });
+  const restoredSession = ownerIdentity.authenticate(passwordChange.token);
+  assert.ok(restoredSession, 'the persisted owner session must authenticate after restart');
+  const ownerId = restoredSession.ownerId;
+  const sessionId = restoredSession.sessionId;
+  const tenantId = 'gateway-http-' + crypto.randomUUID();
+  const workspaceId = 'workspace-' + crypto.randomUUID();
+  const sessionToken = passwordChange.token;
+  const csrfToken = passwordChange.csrfToken;
+  const idempotencyKey = 'gateway-http-' + crypto.randomUUID();
+  const principal = {
+    principalId: ownerId, ownerId, sessionId, tenantId, workspaceId,
+    authSource: 'orient-owner-session'
+  };
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  const tokenIssuer = new Ed25519IdentityTokenIssuer({ privateKey, kid: 'gateway-http-test-key' });
+  const tokenVerifier = new Ed25519IdentityTokenVerifier({
+    publicKeys: new Map([['gateway-http-test-key', publicKey]])
+  });
+  let challengeId = null;
+  let server;
+  try {
+    await runtimePersistence.initialize();
+    const authority = new OwnerSessionIdentityAuthority({
+      ownerIdentity,
+      tokenIssuer,
+      challengeStore: runtimePersistence.gatewayIdentity,
+      tenantId,
+      workspaceId,
+      operationScopes: GATEWAY_OPERATION_SCOPES
+    });
+    const identityRoutes = createGatewayIdentityRoutes({
+      repository: runtimePersistence.gatewayIdentity,
+      authority,
+      tenantId,
+      workspaceId
+    });
+    const executionService = new GatewayIdentityExecutionService({
+      tokenVerifier,
+      gatewayIdentityRepository: runtimePersistence.gatewayIdentity,
+      operationScopes: GATEWAY_OPERATION_SCOPES,
+      sessionAuthorizer: ({ ownerId: verifiedOwner, sessionId: verifiedSession }) =>
+        verifiedOwner === ownerId && ownerIdentity.isActiveSession(verifiedSession)
+    });
+    server = createServer({
+      memoryRoutes: {},
+      agentRoutes: {},
+      ownerAuth: {
+        enabled: true,
+        authenticate(token) {
+          const ownerSession = ownerIdentity.authenticate(token);
+          if (!ownerSession) return null;
+          return {
+            ...ownerSession,
+            principal: Object.freeze({
+              principalId: ownerSession.ownerId,
+              ownerId: ownerSession.ownerId,
+              tenantId,
+              workspaceId,
+              authSource: 'orient-owner-session',
+              sessionId: ownerSession.sessionId
+            })
+          };
+        },
+        status() { return ownerIdentity.status(); },
+        verifyCsrf(ownerSession, token) { return ownerIdentity.verifyCsrf(ownerSession, token); }
+      },
+      gatewayIdentityRoutes: identityRoutes,
+      gatewayIdentityExecutionService: executionService,
+      gatewayOperationHandlers: createGatewayOperationHandlers()
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const post = (path, body, { authorization = null, key = null } = {}) => new Promise((resolve, reject) => {
+      const payload = JSON.stringify(body);
+      const request = require('node:http').request({
+        hostname: '127.0.0.1', port, path, method: 'POST',
+        headers: {
+          origin: 'http://127.0.0.1:' + port,
+          host: '127.0.0.1:' + port,
+          cookie: 'orient_owner_session=' + sessionToken,
+          'x-orient-csrf': csrfToken,
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload),
+          ...(authorization ? { authorization } : {}),
+          ...(key ? { 'idempotency-key': key } : {})
+        }
+      }, response => {
+        let data = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { data += chunk; });
+        response.on('end', () => resolve({ statusCode: response.statusCode, body: JSON.parse(data) }));
+      });
+      request.on('error', reject);
+      request.end(payload);
+    });
+
+    const requestPayload = { executionId: 'task-not-found-' + crypto.randomUUID() };
+    const created = await post('/owner/gateway/challenges', {
+      operation: 'execution.get', request: requestPayload
+    });
+    assert.equal(created.statusCode, 201);
+    challengeId = created.body.challenge.challengeId;
+    const binding = {
+      challengeId,
+      operation: 'execution.get',
+      operationId: created.body.challenge.operationId,
+      requestId: created.body.challenge.requestId
+    };
+    const issued = await post('/owner/gateway/identity-token', binding);
+    assert.equal(issued.statusCode, 200);
+    const authorization = 'Bearer ' + issued.body.identity.token;
+    const executeBody = { ...binding, request: requestPayload };
+    const first = await post('/owner/gateway/execute', executeBody, { authorization, key: idempotencyKey });
+    assert.equal(first.statusCode, 200);
+    assert.equal(first.body.replayed, false);
+    assert.deepEqual(first.body.response, { found: false, task: null });
+
+    const replay = await post('/owner/gateway/execute', executeBody, { authorization, key: idempotencyKey });
+    assert.equal(replay.statusCode, 200);
+    assert.equal(replay.body.replayed, true);
+    assert.deepEqual(replay.body.response, first.body.response);
+
+    const tampered = await post('/owner/gateway/execute', {
+      ...binding, request: { executionId: 'different-task-id' }
+    }, { authorization, key: idempotencyKey + '-tampered' });
+    assert.equal(tampered.statusCode, 409);
+    assert.equal(tampered.body.code, 'GATEWAY_REQUEST_BINDING_MISMATCH');
+
+    assert.equal(ownerIdentity.logout(sessionToken), true);
+    await assert.rejects(
+      () => executionService.execute({
+        token: issued.body.identity.token,
+        challengeId,
+        operation: binding.operation,
+        operationId: binding.operationId,
+        requestId: binding.requestId,
+        idempotencyKey,
+        request: requestPayload,
+        ownerSessionId: sessionId,
+        execute: async () => ({ shouldNotExecute: true })
+      }),
+      error => error.code === 'GATEWAY_SESSION_REJECTED'
+    );
+  } finally {
+    if (server?.listening) await new Promise(resolve => server.close(resolve));
+    fs.rmSync(ownerStateDirectory, { recursive: true, force: true });
+    if (challengeId) {
+      await runtimePersistence.withPrincipal(principal, async () => {
+        await runtimePersistence.db.query(
+          'DELETE FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key=$2',
+          [tenantId, idempotencyKey]
+        );
+        await runtimePersistence.db.query(
+          'DELETE FROM gateway_challenges WHERE tenant_id=$1 AND challenge_id=$2',
+          [tenantId, challengeId]
+        );
+      }).catch(() => {});
+    }
+    await runtimePool.end();
+  }
+});
+
+
+test('PostgreSQL migration 14 preserves a schema-v13 database on failed legacy attribution, then isolates mapped owners', {
+  skip: process.env.ORIENT_TEST_ALLOW_DATABASE_CREATE !== '1'
+}, async () => {
+  const adminPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+  const databaseName = 'orient_migration14_' + crypto.randomBytes(8).toString('hex');
+  let isolatedPool = null;
+  let databaseCreated = false;
+
+  try {
+    const admin = await adminPool.query(`
+      SELECT current_database() AS database_name,
+             current_user AS user_name,
+             role.rolsuper AS is_superuser
+      FROM pg_roles role
+      WHERE role.rolname = current_user
+    `);
+    assert.equal(admin.rows[0]?.database_name, 'orient_test',
+      'isolated migration fixture may only run from the disposable orient_test database');
+    assert.equal(admin.rows[0]?.is_superuser, true,
+      'isolated migration fixture requires the disposable PostgreSQL CI superuser');
+
+    await adminPool.query('CREATE DATABASE ' + databaseName);
+    databaseCreated = true;
+
+    const isolatedUrl = new URL(process.env.DATABASE_URL);
+    isolatedUrl.pathname = '/' + databaseName;
+    isolatedPool = new Pool({ connectionString: isolatedUrl.toString(), max: 2 });
+
+    // Build the real schema through migration 13 in a separate database. All
+    // migration SQL is the production SQL; no shared CI schema is modified.
+    await isolatedPool.query(BASE_SCHEMA);
+    await isolatedPool.query('INSERT INTO schema_migrations(version) VALUES(1)');
+    for (const migration of MIGRATIONS.filter(item => item.version >= 2 && item.version <= 13)) {
+      await isolatedPool.query(migration.sql);
+      await isolatedPool.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
+    }
+
+    const legacyExecutionId = 'legacy-v13-' + crypto.randomUUID();
+    const tenantId = 'legacy-owner-migration-tenant';
+    await isolatedPool.query(
+      'INSERT INTO public.executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+      [legacyExecutionId, tenantId, { legacy: true }]
+    );
+
+    const policyBefore = await isolatedPool.query(`
+      SELECT policyname, roles::text, qual, with_check
+      FROM pg_policies
+      WHERE schemaname='public' AND tablename='executions'
+      ORDER BY policyname
+    `);
+    assert.ok(policyBefore.rows.some(policy => policy.policyname === 'orient_tenant_scope'));
+
+    const migrationPersistence = new PostgresPersistence({ pool: isolatedPool });
+    await assert.rejects(
+      () => migrationPersistence.migrate(),
+      error => error.code === '55000' && /migration 14 blocked/.test(error.message)
+    );
+
+    const afterRejectedMigration = await isolatedPool.query(`
+      SELECT
+        (SELECT COALESCE(MAX(version),0)::int FROM public.schema_migrations) AS version,
+        (SELECT COUNT(*)::int FROM public.executions WHERE execution_id=$1) AS row_count,
+        (SELECT COUNT(*)::int FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='executions' AND column_name='owner_id') AS owner_column_count
+    `, [legacyExecutionId]);
+    assert.deepEqual(afterRejectedMigration.rows[0], {
+      version: 13,
+      row_count: 1,
+      owner_column_count: 0
+    }, 'failed migration must roll back the added column and preserve schema version and legacy row');
+
+    const policyAfter = await isolatedPool.query(`
+      SELECT policyname, roles::text, qual, with_check
+      FROM pg_policies
+      WHERE schemaname='public' AND tablename='executions'
+      ORDER BY policyname
+    `);
+    assert.deepEqual(policyAfter.rows, policyBefore.rows,
+      'failed migration must leave the prior tenant RLS policy unchanged');
+
+    // The operator-supplied mapping is explicit and applied only after review.
+    const ownerA = '11111111-1111-4111-8111-111111111111';
+    const ownerB = '22222222-2222-4222-8222-222222222222';
+    await isolatedPool.query('ALTER TABLE public.executions ADD COLUMN owner_id UUID');
+    await isolatedPool.query(
+      'UPDATE public.executions SET owner_id=$1 WHERE execution_id=$2',
+      [ownerA, legacyExecutionId]
+    );
+    const mappingCheck = await isolatedPool.query(
+      'SELECT COUNT(*)::int AS unmapped FROM public.executions WHERE owner_id IS NULL'
+    );
+    assert.equal(mappingCheck.rows[0].unmapped, 0);
+
+    const migrated = await migrationPersistence.migrate();
+    assert.equal(migrated.schemaVersion, 14);
+
+    const secondExecutionId = 'mapped-v13-' + crypto.randomUUID();
+    await isolatedPool.query(
+      'INSERT INTO public.executions(execution_id,tenant_id,owner_id,payload,updated_at) VALUES($1,$2,$3,$4,NOW())',
+      [secondExecutionId, tenantId, ownerB, { legacy: true }]
+    );
+
+    const ownerScopedRead = async ownerId => {
+      const client = await isolatedPool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SET LOCAL ROLE orient_runtime');
+        await client.query(
+          "SELECT set_config('app.orient_tenant_id',$1,true), set_config('app.orient_owner_id',$2,true)",
+          [tenantId, ownerId]
+        );
+        const result = await client.query(
+          'SELECT execution_id FROM public.executions WHERE tenant_id=$1 ORDER BY execution_id',
+          [tenantId]
+        );
+        await client.query('COMMIT');
+        return result.rows.map(row => row.execution_id);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
+
+    assert.deepEqual(await ownerScopedRead(ownerA), [legacyExecutionId]);
+    assert.deepEqual(await ownerScopedRead(ownerB), [secondExecutionId]);
+    assert.deepEqual(await ownerScopedRead('33333333-3333-4333-8333-333333333333'), []);
+
+    const finalPolicy = await isolatedPool.query(`
+      SELECT policyname, qual, with_check
+      FROM pg_policies
+      WHERE schemaname='public' AND tablename='executions'
+    `);
+    assert.equal(finalPolicy.rows.length, 1);
+    assert.equal(finalPolicy.rows[0].policyname, 'orient_execution_owner_scope');
+    assert.match(finalPolicy.rows[0].qual, /owner_id/);
+    assert.match(finalPolicy.rows[0].with_check, /owner_id/);
+  } finally {
+    if (isolatedPool) await isolatedPool.end();
+    if (databaseCreated) {
+      await adminPool.query('DROP DATABASE ' + databaseName + ' WITH (FORCE)');
+    }
+    await adminPool.end();
   }
 });

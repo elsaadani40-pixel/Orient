@@ -43,11 +43,12 @@ class OwnerIdentityService {
     if (!this.state) {
       const secret = bootstrapPassword || crypto.randomBytes(24).toString('base64url');
       if (typeof secret !== 'string' || secret.length < MIN_PASSWORD || secret.length > 1024) throw new RangeError('Bootstrap password must be at least 14 characters');
-      this.state = { version: 1, username: 'Admin', passwordHash: passwordHash(secret), mustChangePassword: true, sessions: [] };
+      this.state = { version: 1, username: 'Admin', ownerId: crypto.randomUUID(), passwordHash: passwordHash(secret), mustChangePassword: true, sessions: [] };
       this._bootstrapPassword = secret;
       this.createdBootstrap = true;
       this.save();
     } else {
+      if (!this.state.ownerId) this.state.ownerId = crypto.randomUUID();
       for (const session of this.state.sessions) {
         if (!session || !/^[a-f0-9]{64}$/.test(session.digest) || !TOKEN.test(session.csrfToken) ||
             !Number.isSafeInteger(session.expiresAt) || session.expiresAt <= this.now()) continue;
@@ -82,6 +83,7 @@ class OwnerIdentityService {
       return {
         version: 1,
         username: 'Admin',
+        ownerId: crypto.randomUUID(),
         passwordHash: 'legacy:' + value.password.hash + ':' + value.password.salt,
         mustChangePassword: value.mustChangePassword,
         sessions: []
@@ -89,6 +91,7 @@ class OwnerIdentityService {
     }
 
     if (value?.version !== 1 || value.username !== 'Admin' ||
+        (value.ownerId !== undefined && (typeof value.ownerId !== 'string' || !(new RegExp("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", 'i')).test(value.ownerId))) ||
         typeof value.mustChangePassword !== 'boolean' || !HASH.test(value.passwordHash) ||
         !Array.isArray(value.sessions) || value.sessions.length > 4096) {
       throw Object.assign(new Error('Owner identity state schema is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
@@ -174,7 +177,7 @@ class OwnerIdentityService {
       if (session) { this.sessions.delete(key); this.save(); }
       return null;
     }
-    return Object.freeze({ csrfToken: session.csrfToken, expiresAt: session.expiresAt, sessionId: session.sessionId });
+    return Object.freeze({ csrfToken: session.csrfToken, expiresAt: session.expiresAt, sessionId: session.sessionId, ownerId: this.state.ownerId });
   }
 
   isActiveSession(sessionId) {
@@ -225,6 +228,10 @@ class OwnerIdentityService {
     this.sessions.clear();
     this.save();
     return count;
+  }
+
+  getStableOwnerIdForRuntime() {
+    return this.state.ownerId;
   }
 
   status() {
