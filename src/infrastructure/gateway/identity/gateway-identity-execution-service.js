@@ -42,6 +42,7 @@ class GatewayIdentityExecutionService {
     if (typeof token !== 'string' || !token ||
         typeof challengeId !== 'string' || typeof operationId !== 'string' ||
         typeof requestId !== 'string' || typeof idempotencyKey !== 'string' ||
+        !idempotencyKey.trim() || idempotencyKey.length > 200 ||
         typeof execute !== 'function') {
       reject('GATEWAY_EXECUTION_INPUT_INVALID');
     }
