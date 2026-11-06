@@ -50,7 +50,7 @@ function readPrivateKeyFile(filePath, {
     if (platform !== 'win32' && typeof process.getuid === 'function' && before.uid !== BigInt(process.getuid())) {
       fail('TRUST_SIGNER_KEY_OWNER_INVALID', 'The offline root private-key file must be owned by the signing user');
     }
-    if (platform !== 'win32' && (before.mode & 0o077) !== 0) {
+    if (platform !== 'win32' && (before.mode & 0o077n) !== 0) {
       fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file must not be accessible by group or other users (chmod 600)');
     }
 
@@ -62,7 +62,7 @@ function readPrivateKeyFile(filePath, {
     }
     if (after.size < 1 || after.size > MAX_PRIVATE_KEY_BYTES || after.nlink !== 1n ||
         (platform !== 'win32' && typeof process.getuid === 'function' && after.uid !== BigInt(process.getuid())) ||
-        (platform !== 'win32' && (after.mode & 0o077) !== 0)) {
+        (platform !== 'win32' && (after.mode & 0o077n) !== 0)) {
       fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file permissions or size changed while opening');
     }
     // Never use readFileSync(fd) for secret material: a file can grow after
@@ -86,7 +86,7 @@ function readPrivateKeyFile(filePath, {
         afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
         afterRead.nlink !== 1n ||
         (platform !== 'win32' && typeof process.getuid === 'function' && afterRead.uid !== BigInt(process.getuid())) ||
-        (platform !== 'win32' && (afterRead.mode & 0o077) !== 0)) {
+        (platform !== 'win32' && (afterRead.mode & 0o077n) !== 0)) {
       bounded.fill(0);
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file changed or exceeded its size limit while reading');
     }
