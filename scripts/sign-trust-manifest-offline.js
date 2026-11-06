@@ -110,9 +110,9 @@ function readManifestFile(filePath) {
   let descriptor;
   let bytes;
   try {
-    const before = fs.lstatSync(absolutePath);
+    const before = fs.lstatSync(absolutePath, { bigint: true });
     if (before.isSymbolicLink() || !before.isFile() ||
-        before.size < 1 || before.size > MAX_MANIFEST_BYTES) {
+        before.size < 1n || before.size > BigInt(MAX_MANIFEST_BYTES)) {
       fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must be a regular non-symlink file no larger than 1 MiB');
     }
     descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
@@ -129,7 +129,7 @@ function readManifestFile(filePath) {
       if (read === 0) break;
       total += read;
     }
-    const afterRead = fs.fstatSync(descriptor);
+    const afterRead = fs.fstatSync(descriptor, { bigint: true });
     if (total < 1 || total > MAX_MANIFEST_BYTES || afterRead.size !== BigInt(total) ||
         afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
         afterRead.mtimeNs !== opened.mtimeNs || afterRead.ctimeNs !== opened.ctimeNs) {
