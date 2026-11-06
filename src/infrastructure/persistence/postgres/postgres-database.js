@@ -334,7 +334,7 @@ const MIGRATIONS = [
       AS $function$
       DECLARE configured_owner TEXT;
       BEGIN
-        IF NOT pg_has_role(current_user, 'orient_runtime', 'MEMBER') THEN
+        IF session_user <> 'orient_runtime_login' AND current_user <> 'orient_runtime' THEN
           RETURN NEW;
         END IF;
 
