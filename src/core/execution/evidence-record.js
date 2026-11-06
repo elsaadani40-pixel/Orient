@@ -61,6 +61,22 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+function verifyEvidenceRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return false;
+  }
+  if (typeof record.id !== 'string' || !/^ev_[a-f0-9]{64}$/.test(record.id)) {
+    return false;
+  }
+
+  const { id, ...identity } = record;
+  try {
+    return id === 'ev_' + sha256(canonicalJson(identity));
+  } catch {
+    return false;
+  }
+}
+
 function createEvidenceRecord({
   executionId,
   step,
@@ -142,5 +158,6 @@ function createEvidenceRecord({
 
 module.exports = {
   canonicalJson,
-  createEvidenceRecord
+  createEvidenceRecord,
+  verifyEvidenceRecord
 };
