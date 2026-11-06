@@ -9,7 +9,7 @@ const Goal =
 const AgentStateMachine =
   require('../agent/state/agent-state-machine');
 
-const { createEvidenceRecord } =
+const { createEvidenceRecord, verifyEvidenceRecord } =
   require('./evidence-record');
 
 const EXECUTION_STATUS = Object.freeze({
@@ -790,6 +790,27 @@ class ExecutionContext {
       Array.isArray(snapshot.observations)
         ? snapshot.observations.map(observation => ({ ...observation }))
         : [];
+
+    for (const observation of context.observations) {
+      if (!observation || typeof observation !== 'object') {
+        throw new TypeError('snapshot contains an invalid observation');
+      }
+      if (observation.evidence !== undefined) {
+        const evidence = observation.evidence;
+        if (
+          !verifyEvidenceRecord(evidence) ||
+          evidence.executionId !== context.executionId ||
+          evidence.step !== observation.step ||
+          evidence.operation !== observation.tool ||
+          evidence.outcome !== (observation.success ? 'success' : 'failure') ||
+          evidence.observedAt !== observation.timestamp
+        ) {
+          const error = new Error('Persisted execution evidence failed integrity validation');
+          error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+          throw error;
+        }
+      }
+    }
 
     context.events =
       Array.isArray(snapshot.events)
