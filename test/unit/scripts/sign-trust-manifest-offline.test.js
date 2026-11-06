@@ -9,7 +9,8 @@ const path = require('node:path');
 const {
   signManifestFile,
   readPrivateKeyFile,
-  parseArgs
+  parseArgs,
+  MAX_PRIVATE_KEY_BYTES
 } = require('../../../scripts/sign-trust-manifest-offline');
 const { verifyTrustManifest } = require('../../../src/infrastructure/evidence/trusted-evidence-trust-manifest');
 
@@ -121,6 +122,13 @@ test('offline signer argument parser rejects unknown, duplicate, and incomplete 
     error => error.code === 'TRUST_SIGNER_ARGUMENT_INVALID');
 });
 
+
+test('offline signer rejects private-key files above the bounded read limit', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.keyPath, Buffer.alloc(MAX_PRIVATE_KEY_BYTES + 1, 0x41), { mode: 0o600 });
+  assert.throws(() => readPrivateKeyFile(f.keyPath, { repoRoot: f.repoRoot }),
+    error => error.code === 'TRUST_SIGNER_KEY_FILE_INVALID');
+});
 
 test('offline signer rejects private keys with additional hard links', t => {
   const f = fixture(t);
