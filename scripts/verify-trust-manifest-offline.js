@@ -138,9 +138,12 @@ function verifyManifestFile({
   const manifest = readManifest(manifestPath);
   const publicKey = readRootPublicKey(rootPublicKeyPath);
   const roots = { [rootKeyId]: { publicKey } };
+  const effectiveVerificationTime = historical
+    ? undefined
+    : verificationTime === undefined ? now() : verificationTime;
   const verified = historical
     ? verifyTrustManifest(manifest, roots)
-    : verifyTrustManifest(manifest, roots, { verificationTime: verificationTime === undefined ? now() : verificationTime });
+    : verifyTrustManifest(manifest, roots, { verificationTime: effectiveVerificationTime });
   if (!verified) {
     fail('TRUST_VERIFY_MANIFEST_REJECTED', historical
       ? 'Manifest failed historical signature or payload verification'
@@ -152,7 +155,8 @@ function verifyManifestFile({
     rootKeyId,
     issuedAt: verified.issuedAt,
     expiresAt: verified.expiresAt,
-    verificationMode: historical ? 'historical-audit-only' : 'current-acceptance'
+    verificationMode: historical ? 'historical-audit-only' : verificationTime === undefined ? 'current-acceptance' : 'verification-at-specified-time',
+    ...(historical ? {} : { verifiedAt: effectiveVerificationTime })
   });
 }
 
