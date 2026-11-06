@@ -314,6 +314,22 @@ const MIGRATIONS = [
 
   {version:14,sql:`
     ALTER TABLE public.executions ADD COLUMN IF NOT EXISTS owner_id UUID;
+
+    -- Migration 14 tightens execution access from tenant scope to owner scope.
+    -- Never silently strand pre-existing rows whose owner cannot be inferred.
+    -- Operators must backfill an explicit, reviewed owner mapping before retrying.
+    DO $owner_migration$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM public.executions WHERE owner_id IS NULL
+      ) THEN
+        RAISE EXCEPTION
+          'ORIENT migration 14 blocked: executions.owner_id contains NULL rows. Apply an explicit owner mapping before retrying; no owner can be inferred safely.'
+          USING ERRCODE = '55000';
+      END IF;
+    END
+    $owner_migration$;
+
     CREATE INDEX IF NOT EXISTS idx_executions_tenant_owner_updated
       ON public.executions(tenant_id, owner_id, updated_at DESC);
 
