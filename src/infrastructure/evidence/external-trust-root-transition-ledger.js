@@ -60,6 +60,8 @@ class ExternalTrustRootTransitionLedger {
     recoveryPolicy,
     clockSkewMs,
     maxValidityMs,
+    manifestHeadProvider,
+    manifestHeadVerifier,
     now = () => new Date().toISOString()
   } = {}) {
     if (!backend || typeof backend.putIfAbsent !== 'function' ||
@@ -91,12 +93,19 @@ class ExternalTrustRootTransitionLedger {
     }
     recoveryPolicyDigest(recoveryPolicy);
     if (typeof now !== 'function') throw new TypeError('A clock function is required');
+    if ((manifestHeadProvider === undefined) !== (manifestHeadVerifier === undefined) ||
+        (manifestHeadProvider !== undefined && typeof manifestHeadProvider !== 'function') ||
+        (manifestHeadVerifier !== undefined && typeof manifestHeadVerifier !== 'function')) {
+      throw new TypeError('Manifest head provider and verifier must be supplied together');
+    }
     this.backend = backend;
     this.initialState = cloneState(initialState);
     this.initialTrustedRootKeys = structuredClone(trustedRootKeys);
     this.recoveryPolicy = structuredClone(recoveryPolicy);
     this.clockSkewMs = clockSkewMs;
     this.maxValidityMs = maxValidityMs;
+    this.manifestHeadProvider = manifestHeadProvider || null;
+    this.manifestHeadVerifier = manifestHeadVerifier || null;
     this.now = now;
   }
 
@@ -123,6 +132,34 @@ class ExternalTrustRootTransitionLedger {
       const { envelope } = parsed[index];
       if (envelope.payload.transitionSequence !== index + 1) {
         fail('EVIDENCE_ROOT_TRANSITION_LEDGER_GAP', 'Root-transition history must be contiguous from sequence 1');
+      }
+      if (envelope.payload.manifestHeadVersion < state.manifestHeadVersion) {
+        fail('EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_ROLLBACK', 'A root transition cannot bind an older manifest head');
+      }
+      if (envelope.payload.manifestHeadVersion === state.manifestHeadVersion) {
+        if (envelope.payload.manifestHeadDigest !== state.manifestHeadDigest) {
+          fail('EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_CONFLICT', 'Manifest digest conflicts with the previously verified head');
+        }
+      } else {
+        if (!this.manifestHeadVerifier) {
+          fail('EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_UNVERIFIABLE', 'Manifest head advancement requires an independent anchor verifier');
+        }
+        let anchored = false;
+        try {
+          anchored = await this.manifestHeadVerifier({
+            version: envelope.payload.manifestHeadVersion,
+            digest: envelope.payload.manifestHeadDigest,
+            expectedRootKeyId: state.rootKeyId,
+            trustedRootKeys
+          });
+        } catch {
+          fail('EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_UNVERIFIABLE', 'Manifest head anchor verification failed');
+        }
+        if (anchored !== true) {
+          fail('EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_UNVERIFIABLE', 'Transition manifest head is not independently anchored under the active root');
+        }
+        state.manifestHeadVersion = envelope.payload.manifestHeadVersion;
+        state.manifestHeadDigest = envelope.payload.manifestHeadDigest;
       }
       const verified = verifyRootTransition(envelope, {
         trustedRootKeys,
@@ -190,10 +227,33 @@ class ExternalTrustRootTransitionLedger {
       fail('EVIDENCE_ROOT_TRANSITION_LEDGER_HEAD_CONFLICT', 'Expected transition head is stale; reload and prepare a new signed transition');
     }
     const verificationTime = this.now();
+    const expectedState = cloneState(current.state);
+    if (this.manifestHeadProvider) {
+      let manifestHead;
+      try {
+        manifestHead = await this.manifestHeadProvider({
+          trustedRootKeys: current.trustedRootKeys,
+          expectedRootKeyId: current.state.rootKeyId
+        });
+      } catch {
+        fail('EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_UNAVAILABLE', 'Current external manifest head could not be resolved');
+      }
+      if (!manifestHead || !Number.isSafeInteger(manifestHead.version) ||
+          manifestHead.version < expectedState.manifestHeadVersion ||
+          !/^[a-f0-9]{64}$/.test(manifestHead.digest || '') ||
+          (manifestHead.version === expectedState.manifestHeadVersion &&
+            manifestHead.digest !== expectedState.manifestHeadDigest) ||
+          envelope?.payload?.manifestHeadVersion !== manifestHead.version ||
+          envelope?.payload?.manifestHeadDigest !== manifestHead.digest) {
+        fail('EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_CONFLICT', 'Transition must bind the exact current independently anchored manifest head');
+      }
+      expectedState.manifestHeadVersion = manifestHead.version;
+      expectedState.manifestHeadDigest = manifestHead.digest;
+    }
     const verified = verifyRootTransition(envelope, {
       trustedRootKeys: current.trustedRootKeys,
       recoveryPolicy: this.recoveryPolicy,
-      expectedState: current.state,
+      expectedState,
       verificationTime,
       clockSkewMs: this.clockSkewMs,
       maxValidityMs: this.maxValidityMs
