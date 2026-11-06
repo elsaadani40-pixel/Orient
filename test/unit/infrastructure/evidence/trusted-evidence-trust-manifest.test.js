@@ -6,7 +6,8 @@ const crypto = require('node:crypto');
 const {
   signTrustManifest,
   verifyTrustManifest,
-  verifyAndAcceptTrustManifest
+  verifyAndAcceptTrustManifest,
+  MANIFEST_DOMAIN
 } = require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest');
 
 function fixture() {
@@ -143,4 +144,9 @@ test('monotonic trust store rejects malformed persisted state', async () => {
     }),
     error => error.code === 'EVIDENCE_TRUST_MANIFEST_STORE_INVALID'
   );
+});
+
+test('trust manifest domain separator uses a terminating NUL byte', () => {
+  assert.equal(MANIFEST_DOMAIN, 'ORIENT-TRUSTED-EVIDENCE-MANIFEST-V1\\0');
+  assert.equal(Buffer.from(MANIFEST_DOMAIN, 'utf8').at(-1), 0);
 });
