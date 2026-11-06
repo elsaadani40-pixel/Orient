@@ -170,14 +170,21 @@ class ExternalTrustManifestAnchorStore {
 
   async append(manifest, {
     verificationTime = new Date().toISOString(),
-    trustedRootKeys: suppliedRootKeys
+    trustedRootKeys: suppliedRootKeys,
+    activeRootKeyId,
+    activeFromVersion
   } = {}) {
     const trustedRootKeys = await this.resolveTrustedRootKeys(suppliedRootKeys);
     const verified = verifyTrustManifest(manifest, trustedRootKeys, { verificationTime });
     if (!verified) {
       fail('EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID', 'Only a currently valid root-signed manifest can be anchored');
     }
-    const head = await this.readHead({ trustedRootKeys });
+    if (activeRootKeyId !== undefined &&
+        (manifest.rootKeyId !== activeRootKeyId || !Number.isSafeInteger(activeFromVersion) ||
+          activeFromVersion < 0 || verified.version <= activeFromVersion)) {
+      fail('EVIDENCE_TRUST_MANIFEST_ROOT_NOT_ACTIVE', 'Manifest must advance under the currently effective root');
+    }
+    const head = await this.readHead({ trustedRootKeys, activeRootKeyId, activeFromVersion });
     if (head && verified.version === head.version) {
       if (verified.digest !== head.digest) {
         fail('EVIDENCE_TRUST_MANIFEST_VERSION_CONFLICT', 'An immutable external anchor already binds this version to different content');
