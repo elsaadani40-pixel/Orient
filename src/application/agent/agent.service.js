@@ -240,8 +240,8 @@ class AgentService {
     return this.runtime.getExecutionApprovals(executionId);
   }
 
-  resumeExecution(executionId, options = {}) {
-    return this.runtime.resume(executionId, options);
+  resumeExecution(executionId, options = {}, ownerSessionContext = null) {
+    return this.runtime.resume(executionId, options, ownerSessionContext);
   }
 
   cancelExecution(executionId, options = {}) {
