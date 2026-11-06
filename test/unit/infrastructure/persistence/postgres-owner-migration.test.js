@@ -15,6 +15,6 @@ test('PostgreSQL owner-scope migration fails closed when legacy executions lack 
   assert.notEqual(guard, -1, 'migration must detect unassigned legacy execution rows');
   assert.notEqual(policyChange, -1, 'migration must install the owner-scoped policy');
   assert.ok(guard < policyChange, 'legacy attribution must be checked before replacing tenant-only RLS');
-  assert.match(sql, /ORIENT migration 14 blocked: executions\\.owner_id contains NULL rows/);
+  assert.match(sql, /ORIENT migration 14 blocked: executions\.owner_id contains NULL rows/);
   assert.match(sql, /USING ERRCODE = '55000'/);
 });
