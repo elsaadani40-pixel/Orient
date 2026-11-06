@@ -284,6 +284,8 @@ function verifyRootTransition(envelope, {
         (expectedState.transitionSequence === 0 ? expectedState.transitionDigest !== null : !HASH_PATTERN.test(expectedState.transitionDigest || '')) ||
         !Array.isArray(expectedState.usedRootKeyIds) ||
         !expectedState.usedRootKeyIds.includes(payload.previousRootKeyId) ||
+        !Array.isArray(expectedState.usedRootFingerprints) ||
+        !expectedState.usedRootFingerprints.includes(payload.previousRootFingerprint) ||
         expectedState.rootEpoch !== payload.previousRootEpoch ||
         expectedState.rootKeyId !== payload.previousRootKeyId ||
         expectedState.rootFingerprint !== payload.previousRootFingerprint ||
@@ -309,8 +311,7 @@ function verifyRootTransition(envelope, {
     const currentRootPublicKey = publicKeyObject(currentRootKeyText, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
 
     if (expectedState.usedRootKeyIds.includes(payload.nextRootKeyId) ||
-        (Array.isArray(expectedState.usedRootFingerprints) &&
-          expectedState.usedRootFingerprints.includes(payload.nextRootFingerprint))) return null;
+        expectedState.usedRootFingerprints.includes(payload.nextRootFingerprint)) return null;
     if (publicKeyFingerprint(payload.nextRootPublicKey) === payload.previousRootFingerprint) return null;
     const nextRootPublicKey = publicKeyObject(payload.nextRootPublicKey, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
 
