@@ -164,3 +164,27 @@ test('external evidence anchors require a separate trusted Ed25519 key and detec
   assert.equal(verifyEvidenceAnchor({ ...anchor, anchoredAt: '2026-11-06T10:11:00.000Z' }, trustedKeys), false);
   assert.equal(verifyEvidenceAnchor(anchor, {}), false);
 });
+
+
+test('external evidence anchor rejects invalid trusted key validity metadata', () => {
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' });
+  const anchor = createEvidenceAnchor({
+    tenantId: 'tenant-a',
+    executionId: 'exec-ledger-test',
+    sequence: 1,
+    recordHash: 'c'.repeat(64),
+    anchoredAt: '2026-11-06T10:10:00.000Z'
+  }, { keyId: 'owner-anchor-key-2', privateKey });
+  assert.equal(verifyEvidenceAnchor(anchor, {
+    'owner-anchor-key-2': { publicKey, validFrom: 'not-a-date' }
+  }), false);
+  assert.equal(verifyEvidenceAnchor(anchor, {
+    'owner-anchor-key-2': {
+      publicKey,
+      validFrom: '2026-11-06T10:20:00.000Z',
+      revokedAt: '2026-11-06T10:15:00.000Z'
+    }
+  }), false);
+});
