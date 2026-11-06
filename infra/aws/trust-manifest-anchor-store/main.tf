@@ -73,39 +73,46 @@ resource "aws_s3_bucket_ownership_controls" "trust_manifest" {
   }
 }
 
-resource "aws_iam_role_policy" "trust_manifest_runtime" {
-  name = "orient-trust-manifest-anchor-runtime"
-  role = var.runtime_role_name
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "ListTrustManifestNamespace"
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket"]
-        Resource = aws_s3_bucket.trust_manifest.arn
-        Condition = {
-          StringLike = {
-            "s3:prefix" = ["orient/trust-manifests/v1/*"]
-          }
-        }
-      },
-      {
-        Sid    = "ReadAndCreateTrustManifestObjects"
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:PutObjectRetention"
-        ]
-        Resource = "${aws_s3_bucket.trust_manifest.arn}/orient/trust-manifests/v1/*"
-      }
-    ]
-  })
-}
-
 data "aws_iam_policy_document" "trust_manifest_bucket" {
+  statement {
+    sid    = "AllowRuntimeReadAndCreateOnly"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = [var.runtime_role_arn]
+    }
+
+    actions = [
+      "s3:ListBucket"
+    ]
+
+    resources = [aws_s3_bucket.trust_manifest.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["orient/trust-manifests/v1/*"]
+    }
+  }
+
+  statement {
+    sid    = "AllowRuntimeReadAndCreateObjects"
+    effect = "Allow"
+
+    principals {
+      type        = "AWS"
+      identifiers = [var.runtime_role_arn]
+    }
+
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:PutObjectRetention"
+    ]
+
+    resources = ["${aws_s3_bucket.trust_manifest.arn}/orient/trust-manifests/v1/*"]
+  }
   statement {
     sid    = "DenyInsecureTransport"
     effect = "Deny"
