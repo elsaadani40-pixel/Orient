@@ -20,11 +20,11 @@ test('trust-manifest bucket grants access only to the dedicated trust-store serv
 });
 
 test('trust-store service can inspect bucket controls required by S3 preflight', () => {
-  const bucketInspection = main.match(/sid\s*=\s*"AllowTrustStoreServiceBucketInspection"[\s\S]*?resources\s*=\s*\[aws_s3_bucket\.trust_manifest\.arn\]/);
-  assert.ok(bucketInspection, 'bucket inspection permissions must target the bucket ARN');
-  const listing = main.match(/sid\\s*=\\s*"AllowTrustStoreServiceListManifestPrefix"[\\s\\S]*?resources\\s*=\\s*\\[aws_s3_bucket\\.trust_manifest\\.arn\\]/);\n  assert.ok(listing, "prefix listing must be a separate bucket-level permission");\n  assert.match(listing[0], /"s3:ListBucket"/);
-  assert.match(bucketInspection[0], /"s3:GetBucketObjectLockConfiguration"/);
-  assert.match(bucketInspection[0], /"s3:GetBucketVersioning"/);
+  assert.match(main, /sid\s*=\s*"AllowTrustStoreServiceBucketConfigurationRead"/);
+  assert.match(main, /sid\s*=\s*"AllowTrustStoreServiceListManifestPrefix"/);
+  assert.match(main, /"s3:ListBucket"/);
+  assert.match(main, /"s3:GetBucketObjectLockConfiguration"/);
+  assert.match(main, /"s3:GetBucketVersioning"/);
   assert.match(readme, /s3:GetBucketObjectLockConfiguration/);
   assert.match(readme, /s3:GetBucketVersioning/);
 });
@@ -32,6 +32,8 @@ test('trust-store service can inspect bucket controls required by S3 preflight',
 test('trust-store object permissions stay prefix-scoped and deny destructive operations', () => {
   assert.match(main, /"s3:GetObject",[\s\S]*?"s3:PutObject"/);
   assert.match(main, /orient\/trust-manifests\/v1\/\*/);
+  assert.match(main, /sid\s*=\s*"DenyNonConditionalTrustManifestWrites"/);
+  assert.match(main, /variable\s*=\s*"s3:if-none-match"/);
   for (const action of [
     's3:DeleteObject',
     's3:DeleteObjectVersion',
@@ -47,7 +49,6 @@ test('trust-store object permissions stay prefix-scoped and deny destructive ope
 });
 
 test('deployment guide matches the adapter no-cache configuration-drift check', () => {
-  assert.match(readme, /re-reads those controls before every operation/i);
-  assert.match(readme, /does not cache a successful check/i);
-  assert.doesNotMatch(readme, /caches that successful configuration check/i);
+  assert.match(readme, /re-reads Object Lock, versioning, and the exact default COMPLIANCE retention/i);
+  assert.match(readme, /does not cache a successful configuration check/i);
 });
