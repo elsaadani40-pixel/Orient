@@ -20,6 +20,38 @@ test('canonical JSON rejects cycles and non-JSON values', () => {
   assert.throws(() => canonicalJson({ value: Number.NaN }), /non-finite number/);
 });
 
+test('canonical JSON rejects sparse arrays, array extensions, symbols, and accessors', () => {
+  const sparse = new Array(1);
+  assert.throws(() => canonicalJson(sparse), /sparse arrays/);
+
+  const extended = [1];
+  extended.extra = 2;
+  assert.throws(() => canonicalJson(extended), /extra properties/);
+
+  const symbolKeyed = { value: 1 };
+  symbolKeyed[Symbol('hidden')] = 2;
+  assert.throws(() => canonicalJson(symbolKeyed), /symbol keys/);
+
+  let getterCalls = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, 'value', {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return 'unstable';
+    }
+  });
+  assert.throws(() => canonicalJson(accessor), /accessors/);
+  assert.equal(getterCalls, 0);
+});
+
+test('canonical JSON enforces its byte limit while producing output', () => {
+  assert.throws(
+    () => canonicalJson({ value: 'x'.repeat(2 * 1024 * 1024) }),
+    /maximum canonical size/
+  );
+});
+
 test('evidence identity is content-addressed and independent of object key insertion order', () => {
   const common = {
     executionId: 'execution-1',
