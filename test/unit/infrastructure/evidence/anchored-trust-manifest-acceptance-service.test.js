@@ -100,7 +100,7 @@ test('anchored acceptance requires contiguous external history and rejects cache
   });
   await assert.rejects(
     service.accept({ manifest: f.create(1), principal: { id: 'owner' } }),
-    error => error.code === 'EVIDENCE_TRUST_MANIFEST_ROLLBACK'
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_ANCHOR_BEHIND_CACHE'
   );
 });
 
