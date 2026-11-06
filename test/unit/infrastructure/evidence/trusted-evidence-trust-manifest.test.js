@@ -20,6 +20,7 @@ function fixture() {
   const create = (version, overrides = {}) => signTrustManifest({
     version,
     issuedAt: `2026-11-06T10:0${version}:00.000Z`,
+    expiresAt: `2026-12-06T10:0${version}:00.000Z`,
     keys: {
       'evidence-key-1': {
         publicKey: signingPublicKey,
@@ -188,6 +189,38 @@ test('monotonic trust store rejects malformed persisted state', async () => {
     }),
     error => error.code === 'EVIDENCE_TRUST_MANIFEST_STORE_INVALID'
   );
+});
+
+
+test('trust manifest acceptance rejects expired and future-issued manifests', async () => {
+  const f = fixture();
+  const store = memoryVersionStore();
+  const expired = f.create(1, { payload: { expiresAt: '2026-11-06T10:01:00.000Z' } });
+  await assert.rejects(
+    verifyAndAcceptTrustManifest(expired, {
+      trustedRootKeys: f.trustedRootKeys,
+      versionStore: store,
+      now: '2026-11-06T10:02:00.000Z'
+    }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID'
+  );
+
+  const future = f.create(2, { payload: { issuedAt: '2026-11-06T12:00:00.000Z', expiresAt: '2026-12-06T12:00:00.000Z' } });
+  await assert.rejects(
+    verifyAndAcceptTrustManifest(future, {
+      trustedRootKeys: f.trustedRootKeys,
+      versionStore: store,
+      now: '2026-11-06T10:02:00.000Z'
+    }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID'
+  );
+});
+
+test('trust manifest validity interval is bounded to 90 days', () => {
+  const f = fixture();
+  assert.throws(() => f.create(1, {
+    payload: { expiresAt: '2027-03-01T10:01:00.000Z' }
+  }), error => error.code === 'EVIDENCE_TRUST_MANIFEST_EXPIRY_INVALID');
 });
 
 test('trust manifest domain separator uses a terminating NUL byte', () => {
