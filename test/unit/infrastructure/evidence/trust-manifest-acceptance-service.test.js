@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { TrustManifestAcceptanceService } = require('../../../../src/infrastructure/evidence/trust-manifest-acceptance-service');
 const { signTrustManifest } = require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest');
+const { ExternalTrustManifestAnchorStore } = require('../../../../src/infrastructure/evidence/external-trust-manifest-anchor-store');
 
 function fixture() {
   const root = crypto.generateKeyPairSync('ed25519');
@@ -19,6 +20,18 @@ function fixture() {
     expiresAt: '2026-12-06T10:01:00.000Z',
     keys: { evidence: { publicKey: evidencePublicKey } }
   }, { rootKeyId: 'root', rootPrivateKey });
+  const backend = {
+    objects: new Map(),
+    async putIfAbsent(key, value) {
+      if (this.objects.has(key)) return { created: false, existingValue: this.objects.get(key) };
+      this.objects.set(key, value);
+      return { created: true };
+    },
+    async get(key) { return this.objects.get(key) ?? null; },
+    async list(prefix) { return [...this.objects.entries()].filter(([key]) => key.startsWith(prefix)).map(([key, value]) => ({ key, value })); }
+  };
+  const externalAnchorStore = new ExternalTrustManifestAnchorStore({ backend, trustedRootKeys });
+  const now = () => '2026-11-06T10:03:00.000Z';
   let state = null;
   const versionStore = {
     async read() { return state && { ...state }; },
@@ -28,14 +41,15 @@ function fixture() {
       return true;
     }
   };
-  return { manifest, trustedRootKeys, versionStore };
+  return { manifest, trustedRootKeys, versionStore, externalAnchorStore, now };
 }
 
 test('acceptance service requires an explicit authenticated authorization boundary', () => {
   const f = fixture();
   assert.throws(() => new TrustManifestAcceptanceService({
     trustedRootKeys: f.trustedRootKeys,
-    versionStore: f.versionStore
+    versionStore: f.versionStore,
+    externalAnchorStore: f.externalAnchorStore
   }), /authorizer/);
 });
 
@@ -46,6 +60,8 @@ test('acceptance service rejects unauthorized principals before reading trust st
   const service = new TrustManifestAcceptanceService({
     trustedRootKeys: f.trustedRootKeys,
     versionStore,
+    externalAnchorStore: f.externalAnchorStore,
+    now: f.now,
     authorize: async () => false
   });
   await assert.rejects(service.accept({ manifest: f.manifest, principal: { id: 'untrusted' } }),
@@ -58,6 +74,8 @@ test('acceptance service verifies signed manifest and returns only bounded accep
   const service = new TrustManifestAcceptanceService({
     trustedRootKeys: f.trustedRootKeys,
     versionStore: f.versionStore,
+    externalAnchorStore: f.externalAnchorStore,
+    now: f.now,
     authorize: async (principal, action) => principal?.role === 'trust-admin' && action === 'trust-manifest.accept'
   });
   const result = await service.accept({ manifest: f.manifest, principal: { role: 'trust-admin' } });
@@ -75,6 +93,8 @@ test('acceptance service rejects oversized and malformed manifests', async () =>
   const service = new TrustManifestAcceptanceService({
     trustedRootKeys: f.trustedRootKeys,
     versionStore: f.versionStore,
+    externalAnchorStore: f.externalAnchorStore,
+    now: f.now,
     authorize: async () => true,
     maxManifestBytes: 1024
   });
@@ -89,6 +109,8 @@ test('acceptance service fails closed when host authorization throws', async () 
   const service = new TrustManifestAcceptanceService({
     trustedRootKeys: f.trustedRootKeys,
     versionStore: f.versionStore,
+    externalAnchorStore: f.externalAnchorStore,
+    now: f.now,
     authorize: async () => { throw new Error('identity provider unavailable'); }
   });
   await assert.rejects(service.accept({ manifest: f.manifest, principal: {} }),
