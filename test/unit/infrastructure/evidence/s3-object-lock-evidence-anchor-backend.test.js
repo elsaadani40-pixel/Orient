@@ -150,6 +150,50 @@ test('S3 Object Lock backend reads missing objects as null and rejects unsupport
   );
 });
 
+test('S3 Object Lock backend enforces a byte limit before buffering anchor bodies', async () => {
+  const { backend, client, commands } = fixture({ maxObjectBytes: 8 });
+  client.send = async command => {
+    if (command instanceof commands.GetObjectCommand) {
+      return { ContentLength: 9, Body: Buffer.from('123456789') };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.get('orient/evidence-anchors/v1/large'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_OBJECT_TOO_LARGE'
+  );
+
+  client.send = async command => {
+    if (command instanceof commands.GetObjectCommand) {
+      return {
+        Body: (async function* () {
+          yield Buffer.from('1234');
+          yield Buffer.from('56789');
+        })()
+      };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.get('orient/evidence-anchors/v1/stream-large'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_OBJECT_TOO_LARGE'
+  );
+});
+
+test('S3 Object Lock backend rejects buffered bodies without a trusted ContentLength', async () => {
+  const { backend, client, commands } = fixture();
+  client.send = async command => {
+    if (command instanceof commands.GetObjectCommand) {
+      return { Body: { transformToString: async () => '{"anchor":true}' } };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.get('orient/evidence-anchors/v1/unknown-length'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_RESPONSE_INVALID'
+  );
+});
+
 test('S3 Object Lock backend paginates listings and reads object bytes', async () => {
   const { backend, client } = fixture();
   client.pageSize = 1;
