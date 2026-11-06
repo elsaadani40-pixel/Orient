@@ -2,7 +2,7 @@
 
 ## Status
 
-**Protocol design specification — implementation pending.** This document is the normative design gate for automated root rotation and emergency root recovery. It does not activate any key, change a deployed trust configuration, or establish a production trust guarantee.
+**Implementation status: core primitives, immutable adapter contract, replay loader, and manifest-acceptance integration implemented; production verification remains pending.** This document is the normative design gate for automated root rotation and emergency root recovery. The implementation has been tested with ephemeral keys and fake backends only. It does not activate any real key, change a deployed trust configuration, or establish a production trust guarantee.
 
 The protocol is deliberately separate from the evidence-key list in a trust manifest. A manifest cannot introduce a trust root merely by listing its public key.
 
@@ -34,7 +34,7 @@ A hash chain alone is not an authenticity guarantee. Each transition is signed, 
 - **Current root:** authorizes ordinary planned rotation while it remains trusted.
 - **Next root:** proves possession of the proposed replacement private key.
 - **Recovery authorities:** a separately pinned set of Ed25519 public keys, with a configured threshold. They are not members of the ordinary root key set by implication.
-- **Transition ledger:** independent append-only store, separate from manifest anchors and PostgreSQL.
+- **Transition ledger:** independent append-only store, separate from manifest anchors and PostgreSQL. Its append path is wired to a host-supplied manifest-head provider, and replay is wired to a host-supplied historical-anchor verifier.
 - **Trust-state loader:** host-controlled component that replays and verifies the complete transition history against the initial pinned configuration before constructing the effective root set.
 - **Runtime:** receives only the resulting verified public-key set. It never receives root or recovery private keys and cannot write the transition ledger.
 
@@ -128,7 +128,7 @@ The expected bootstrap state must carry the complete historical set of used root
 
 The ledger is independent from the trust-manifest anchor ledger. A manifest version does not substitute for a root-transition sequence, and a transition does not silently rewrite an already anchored manifest.
 
-The transition payload binds the current manifest head. After a transition becomes effective, the first manifest signed by the new root must be the next contiguous manifest version. If the manifest head changes between transition preparation and acceptance, the transition is stale and must be prepared and signed again.
+The transition payload binds the current manifest head. The implemented ledger append path resolves the current external manifest head and requires an exact version, digest, and active-root match before writing. During replay, any head advance between transitions must be verified against the external manifest-anchor store and attributed to the root that was active at that point. After a transition becomes effective, the first manifest signed by the new root must be the next contiguous manifest version. If the manifest head changes between transition preparation and acceptance, the transition is stale and must be prepared and signed again.
 
 ## State reconstruction and activation
 
@@ -157,12 +157,14 @@ Root IDs are never reused, including after revocation. Old public keys may remai
 
 ## Manifest acceptance integration
 
-The trust-manifest acceptance path must consume the verified effective root state from the trust-state loader, not a caller-supplied manifest key set and not a key introduced by the candidate manifest.
+The trust-manifest acceptance path must consume the verified effective root state from the trust-state loader, not a caller-supplied manifest key set and not a key introduced by the candidate manifest. `AnchoredTrustManifestAcceptanceService` now accepts a `rootTransitionLedger` dependency, reconstructs the effective key set for each operation, and fails closed if that history cannot be loaded. `ExternalTrustManifestAnchorStore` can resolve its verification keys from the reconstructed state and exposes `getManifest`/`hasAnchor` for transition replay.
 
-The acceptance transaction must compare the candidate manifest version against:
+The acceptance transaction compares the candidate manifest version against:
 - the immutable manifest-anchor head;
 - the durable local cache;
 - the manifest head bound by the latest effective root transition.
+
+When the root-transition ledger is configured, the candidate's `rootKeyId` must equal the effective root ID, and its version must be strictly greater than the transition-bound manifest head. The external manifest ledger still enforces contiguous versions and exact-content idempotency.
 
 A new root can sign only a manifest version strictly after the transition's bound manifest head. An old root cannot sign new manifests after the transition becomes effective. Historical verification remains available with an explicitly historical API and cannot update trust state.
 
@@ -219,13 +221,13 @@ Negative cases:
 
 ## Implementation sequence and release gates
 
-1. Implement pure canonicalization, key fingerprinting, signing, and verification primitives with the domain separation above.
-2. Implement a transition-ledger adapter contract and an independently immutable backend adapter; test with a fake backend first.
-3. Implement full-history trust-state reconstruction from pinned bootstrap policy.
-4. Integrate the loader with manifest acceptance so new roots become effective only through verified transitions.
-5. Add the complete positive/negative test matrix and restart/replay tests.
-6. Update offline tooling and operator documentation only after the API and test behavior are stable.
-7. Run focused tests, full repository CI, CodeQL, and static security checks on the exact same branch SHA.
+1. Implement pure canonicalization, key fingerprinting, signing, and verification primitives with the domain separation above. **Implemented; automated tests use ephemeral keys.**
+2. Implement the transition-ledger adapter contract and immutable backend interface. **Implemented against fake backends; no real provider is configured.**
+3. Implement full-history trust-state reconstruction from pinned bootstrap policy. **Implemented with strict contiguous replay and effective-time validation.**
+4. Integrate the loader with manifest acceptance so new roots become effective only through verified transitions. **Implemented through injected manifest-head provider/verifier callbacks and active-root-only manifest acceptance.**
+5. Complete the positive/negative matrix, concurrency/race tests, restart/replay tests, and production adapter review. **Partially implemented; further adversarial and provider-level testing remains.**
+6. Update offline tooling and operator documentation only after the API and test behavior are stable. **Documentation updated; offline transition CLI and operator ceremony automation remain pending.**
+7. Run focused tests, full repository CI, CodeQL, and static security checks on the exact same branch SHA. **Latest completed CI applies to an earlier implementation SHA; rerun is required after the integration changes.**
 
 Do not declare root lifecycle complete until all seven gates pass. Do not begin ToolSpec or Unified Tool Gateway work before this milestone is closed.
 
