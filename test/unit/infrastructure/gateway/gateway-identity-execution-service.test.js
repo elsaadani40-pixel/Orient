@@ -136,6 +136,20 @@ test('gateway execution rejects a token carrying broader scope than the operatio
   assert.equal(calls.length, 0);
 });
 
+test('gateway execution requires the live owner session to match the signed session claim', async () => {
+  const { service, calls, token } = fixture();
+  service.sessionAuthorizer = async ({ sessionId }) => sessionId === IDS.session;
+  await assert.rejects(
+    () => service.execute({ ...input(token), ownerSessionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }),
+    error => error.code === 'GATEWAY_SESSION_REJECTED'
+  );
+  await assert.rejects(
+    () => service.execute({ ...input(token), ownerSessionId: IDS.session }),
+    error => error.code === 'GATEWAY_SESSION_REJECTED'
+  );
+  assert.equal(calls.length, 0);
+});
+
 test('gateway execution rejects absent idempotency keys and missing database mutation handlers', async () => {
   const { service, calls, token } = fixture();
   await assert.rejects(
