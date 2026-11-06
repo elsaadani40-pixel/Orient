@@ -308,3 +308,45 @@ test('S3 Object Lock backend rejects invalid configuration and unnamespaced keys
     error => error.code === 'EVIDENCE_ANCHOR_S3_INPUT_INVALID'
   );
 });
+
+test('S3 Object Lock backend verifies actual buffered string bytes against ContentLength and limit', async () => {
+  const { backend, client, commands } = fixture({ maxObjectBytes: 16 });
+  client.send = async command => {
+    if (command instanceof commands.GetObjectCommand) {
+      return {
+        ContentLength: 4,
+        Body: { transformToString: async () => 'longer-than-four-bytes' }
+      };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.get('orient/evidence-anchors/v1/b/mismatched-buffer'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_RESPONSE_INVALID'
+  );
+
+  client.send = async command => {
+    if (command instanceof commands.GetObjectCommand) {
+      return {
+        ContentLength: 16,
+        Body: { transformToString: async () => 'this body is too long' }
+      };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.get('orient/evidence-anchors/v1/b/oversized-buffer'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_OBJECT_TOO_LARGE'
+  );
+
+  client.send = async command => {
+    if (command instanceof commands.GetObjectCommand) {
+      return {
+        ContentLength: 7,
+        Body: { transformToString: async () => 'éééa' }
+      };
+    }
+    throw new Error('unexpected');
+  };
+  assert.equal(await backend.get('orient/evidence-anchors/v1/b/valid-utf8'), 'éééa');
+});
