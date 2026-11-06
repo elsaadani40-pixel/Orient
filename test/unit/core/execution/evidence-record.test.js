@@ -105,6 +105,13 @@ test('execution observations carry evidence metadata without duplicating raw res
     () => ExecutionContext.restore(tamperedSnapshot),
     error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
   );
+
+  const tamperedAgentSnapshot = execution.snapshot();
+  tamperedAgentSnapshot.agentState.observations[0].evidence.operation = 'execution.delete';
+  assert.throws(
+    () => ExecutionContext.restore(tamperedAgentSnapshot),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
 });
 
 test('failed observations preserve a bounded error code in their evidence record', () => {
