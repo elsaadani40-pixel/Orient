@@ -108,7 +108,6 @@ data "aws_iam_policy_document" "trust_manifest_bucket" {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
-      "s3:PutObjectRetention"
     ]
 
     resources = ["${aws_s3_bucket.trust_manifest.arn}/orient/trust-manifests/v1/*"]
@@ -149,6 +148,8 @@ data "aws_iam_policy_document" "trust_manifest_bucket" {
       "s3:DeleteObject",
       "s3:DeleteObjectVersion",
       "s3:BypassGovernanceRetention",
+      "s3:PutObjectRetention",
+      "s3:PutObjectLegalHold",
       "s3:PutBucketObjectLockConfiguration",
       "s3:PutBucketVersioning",
       "s3:PutLifecycleConfiguration",
