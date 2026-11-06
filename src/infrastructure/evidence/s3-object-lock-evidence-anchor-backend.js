@@ -87,7 +87,8 @@ class S3ObjectLockEvidenceAnchorBackend {
     retryDelayMs = 25,
     sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
     maxConcurrentReads = 8,
-    maxObjectBytes = 1024 * 1024
+    maxObjectBytes = 1024 * 1024,
+    namespacePrefix = 'orient/evidence-anchors/v1/'
   } = {}) {
     if (!client || typeof client.send !== 'function') {
       throw new TypeError('An AWS S3 SDK v3 client is required');
@@ -113,6 +114,9 @@ class S3ObjectLockEvidenceAnchorBackend {
     if (!Number.isSafeInteger(maxConcurrentReads) || maxConcurrentReads < 1) {
       throw new TypeError('A positive maximum concurrent read count is required');
     }
+    if (typeof namespacePrefix !== 'string' || !namespacePrefix.endsWith('/') || namespacePrefix.startsWith('/') || namespacePrefix.includes('..')) {
+      throw new TypeError('A safe S3 object namespace prefix is required');
+    }
     if (!Number.isSafeInteger(maxObjectBytes) || maxObjectBytes < 1) {
       throw new TypeError('A positive maximum S3 object byte size is required');
     }
@@ -127,10 +131,11 @@ class S3ObjectLockEvidenceAnchorBackend {
     this.sleep = sleep;
     this.maxConcurrentReads = maxConcurrentReads;
     this.maxObjectBytes = maxObjectBytes;
+    this.namespacePrefix = namespacePrefix;
   }
 
   async putIfAbsent(key, value) {
-    if (typeof key !== 'string' || !key.startsWith('orient/evidence-anchors/v1/') ||
+    if (typeof key !== 'string' || !key.startsWith(this.namespacePrefix) ||
         typeof value !== 'string') {
       fail('EVIDENCE_ANCHOR_S3_INPUT_INVALID', 'A namespaced anchor key and canonical string value are required');
     }
@@ -188,7 +193,7 @@ class S3ObjectLockEvidenceAnchorBackend {
   }
 
   async list(prefix) {
-    if (typeof prefix !== 'string' || !prefix.startsWith('orient/evidence-anchors/v1/')) {
+    if (typeof prefix !== 'string' || !prefix.startsWith(this.namespacePrefix)) {
       fail('EVIDENCE_ANCHOR_S3_INPUT_INVALID', 'A namespaced anchor prefix is required');
     }
     const keys = [];
