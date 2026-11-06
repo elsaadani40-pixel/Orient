@@ -264,6 +264,14 @@ test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RL
     });
     assert.equal(isolated.valid, true);
     assert.equal(isolated.records, 0);
+    const crossTenantRead = await runtimePersistence.withPrincipal(
+      principal('tenant-evidence-b'),
+      () => runtimePersistence.db.query(
+        'SELECT COUNT(*)::int AS count FROM public.execution_evidence WHERE tenant_id=$1',
+        ['tenant-evidence-a']
+      )
+    );
+    assert.equal(crossTenantRead.rows[0].count, 0);
 
     await assert.rejects(
       () => runtimePool.query(
