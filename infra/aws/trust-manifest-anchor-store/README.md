@@ -12,7 +12,7 @@ The trust-store service role receives only:
 - `s3:PutObject` for objects under that prefix, with the bucket policy requiring `If-None-Match: *`
 - `s3:GetBucketObjectLockConfiguration` and `s3:GetBucketVersioning` for the adapter's configuration preflight
 
-The bucket policy separates prefix-scoped object listing from bucket-level configuration reads; the latter do not carry an `s3:prefix` condition. It denies trust-store service deletion, retention/legal-hold changes, bucket configuration changes, and bucket deletion. It also denies `PutObject` requests that omit the conditional `If-None-Match` header, so create-only behavior is enforced by S3 policy rather than relying only on the adapter to send the header.
+The bucket policy separates prefix-scoped object listing from bucket-level configuration reads; the latter do not carry an `s3:prefix` condition. It denies trust-store service deletion, retention/legal-hold changes, bucket configuration changes, and bucket deletion. It denies `PutObject` requests unless `If-None-Match` is exactly `*`, so create-only behavior is enforced by S3 policy rather than relying only on the adapter to send the header.
 
 The adapter deliberately sends **no per-object retention headers** for this backend: S3 applies the bucket-owned default COMPLIANCE retention. This prevents service configuration from choosing a shorter retention period on an individual write.
 
@@ -60,7 +60,7 @@ After a separately authorized deployment, capture evidence for:
 3. Default retention mode is COMPLIANCE with the explicitly approved duration.
 4. Public access block and bucket-owner-enforced ownership are active.
 5. Effective bucket policy denies service-role deletion, retention/legal-hold changes, and bucket configuration changes.
-6. The service role can list/read/create only within the trust-manifest prefix; it cannot write without `If-None-Match: *`, delete objects, or alter retention.
+6. The service role can list/read/create only within the trust-manifest prefix; it cannot write unless `If-None-Match: *` is supplied, delete objects, or alter retention.
 7. A write/read/restart recovery drill succeeds using the real AWS SDK and account.
 8. CloudTrail / audit records and an independently administered recovery procedure are retained.
 
