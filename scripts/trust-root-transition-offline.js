@@ -112,11 +112,9 @@ function signTransitionFile({
   const payload = readJsonFile(payloadPath, 'TRUST_ROOT_TRANSITION_PAYLOAD');
   const context = loadContext(contextPath);
   if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
-      !payload.payload && payload.schemaVersion !== 1) {
+      payload.schemaVersion !== 1) {
     // The signer accepts the transition payload itself, never an already signed envelope.
-    if (!payload || payload.schemaVersion !== 1) {
-      fail('TRUST_ROOT_TRANSITION_PAYLOAD_INVALID', 'A schemaVersion 1 transition payload is required');
-    }
+    fail('TRUST_ROOT_TRANSITION_PAYLOAD_INVALID', 'A schemaVersion 1 transition payload is required');
   }
   const mode = payload.mode;
   if (!['planned-rotation', 'emergency-recovery'].includes(mode)) {
