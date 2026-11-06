@@ -852,6 +852,34 @@ class ExecutionContext {
         ? persistedAgentState.observations.map(observation => ({ ...observation }))
         : context.observations.map(observation => ({ ...observation }));
 
+    for (let index = 0; index < agentState.observations.length; index += 1) {
+      const observation = agentState.observations[index];
+      if (!observation || typeof observation !== 'object') {
+        throw new TypeError('snapshot contains an invalid agent observation');
+      }
+      if (observation.evidence !== undefined) {
+        const evidence = observation.evidence;
+        if (
+          !verifyEvidenceRecord(evidence) ||
+          evidence.executionId !== context.executionId ||
+          evidence.step !== observation.step ||
+          evidence.operation !== observation.tool ||
+          evidence.outcome !== (observation.success ? 'success' : 'failure') ||
+          evidence.observedAt !== observation.timestamp
+        ) {
+          const error = new Error('Persisted agent evidence failed integrity validation');
+          error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+          throw error;
+        }
+      }
+      const canonicalEvidenceId = context.observations[index]?.evidence?.id;
+      if (observation.evidence && observation.evidence.id !== canonicalEvidenceId) {
+        const error = new Error('Execution and agent evidence records do not match');
+        error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+        throw error;
+      }
+    }
+
     agentState.decisions =
       Array.isArray(persistedAgentState.decisions)
         ? persistedAgentState.decisions.map(decision => ({ ...decision }))
