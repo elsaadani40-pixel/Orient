@@ -104,11 +104,9 @@ test('monotonic trust store permits exact retry but rejects same-version content
   });
   assert.equal(retry.digest, accepted.digest);
 
-  const other = signTrustManifest({
-    version: 1,
-    issuedAt: '2026-11-06T10:01:00.000Z',
-    keys: {}
-  }, { rootKeyId: 'offline-root-1', rootPrivateKey: f.rootPrivateKey });
+  const other = f.create(1, {
+    payload: { issuedAt: '2026-11-06T10:02:00.000Z' }
+  });
   await assert.rejects(
     verifyAndAcceptTrustManifest(other, { trustedRootKeys: f.trustedRootKeys, versionStore: store }),
     error => error.code === 'EVIDENCE_TRUST_MANIFEST_VERSION_CONFLICT'
