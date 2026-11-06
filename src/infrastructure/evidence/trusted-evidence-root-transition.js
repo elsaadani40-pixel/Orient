@@ -170,14 +170,17 @@ function normalizeRecoveryPolicy(policy) {
   return { threshold, authorities };
 }
 
-function recoveryPolicyDigest(policy) {
-  const normalized = normalizeRecoveryPolicy(policy);
+function digestNormalizedRecoveryPolicy(normalized) {
   return sha256(Buffer.from(canonicalJson({
     threshold: normalized.threshold,
     authorities: normalized.authorities.map(({ keyId, fingerprint, validFrom, revokedAt }) => ({
       keyId, fingerprint, validFrom: validFrom || null, revokedAt: revokedAt || null
     }))
   }), 'utf8'));
+}
+
+function recoveryPolicyDigest(policy) {
+  return digestNormalizedRecoveryPolicy(normalizeRecoveryPolicy(policy));
 }
 
 function signatureBytes(value, code) {
@@ -350,7 +353,7 @@ function verifyRootTransition(envelope, {
       if (payload.recoveryPolicyDigest !== recoveryPolicyDigest(recoveryPolicy)) return null;
     } else {
       const policy = normalizeRecoveryPolicy(recoveryPolicy);
-      if (payload.recoveryPolicyDigest !== recoveryPolicyDigest(policy) ||
+      if (payload.recoveryPolicyDigest !== digestNormalizedRecoveryPolicy(policy) ||
           authorizationSignatures.length < policy.threshold) return null;
       const authorities = new Map(policy.authorities.map(authority => [authority.keyId, authority]));
       const seen = new Set();
