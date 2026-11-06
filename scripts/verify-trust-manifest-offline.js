@@ -33,17 +33,27 @@ function readBoundedRegularFile(filePath, maxBytes, codePrefix) {
       fail(codePrefix + '_FILE_CHANGED', 'Input file changed while it was being opened');
     }
 
+    // Bound allocation and reading, then verify the opened inode again after
+    // EOF. A file can grow or be modified after the initial fstat().
     const buffer = Buffer.alloc(maxBytes + 1);
-    let total = 0;
-    while (total < buffer.length) {
-      const read = fs.readSync(descriptor, buffer, total, Math.min(64 * 1024, buffer.length - total), null);
-      if (read === 0) break;
-      total += read;
+    try {
+      let total = 0;
+      while (total < buffer.length) {
+        const read = fs.readSync(descriptor, buffer, total,
+          Math.min(64 * 1024, buffer.length - total), null);
+        if (read === 0) break;
+        total += read;
+      }
+      const afterRead = fs.fstatSync(descriptor);
+      if (total < 1 || total > maxBytes || afterRead.size !== total ||
+          afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
+          afterRead.nlink !== after.nlink) {
+        fail(codePrefix + '_FILE_CHANGED', 'Input file changed or exceeded its size limit while being read');
+      }
+      return Buffer.from(buffer.subarray(0, total));
+    } finally {
+      buffer.fill(0);
     }
-    if (total < 1 || total > maxBytes) {
-      fail(codePrefix + '_FILE_INVALID', 'Input file is empty or exceeds the configured size limit');
-    }
-    return Buffer.from(buffer.subarray(0, total));
   } catch (error) {
     if (error && error.code && error.code.startsWith(codePrefix + '_')) throw error;
     fail(codePrefix + '_FILE_UNREADABLE', 'Unable to safely read input file');
