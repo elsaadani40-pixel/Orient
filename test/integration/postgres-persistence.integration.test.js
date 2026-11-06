@@ -9,6 +9,7 @@ const OwnerIdentityService = require('../../src/core/security/owner-identity-ser
 const { provisionPostgresRoles } = require('../../scripts/provision-postgres-roles');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
+const ExecutionContext = require('../../src/core/execution/execution-context');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
@@ -166,6 +167,58 @@ test('PostgreSQL checkpoints preserve ordered history on a real server', async (
   assert.equal(second.sequence, 2);
   assert.equal(latest.sequence, 2);
   assert.equal(latest.snapshot.step, 2);
+});
+
+test('PostgreSQL checkpoint restores versioned ExecutionContext evidence after repository restart', async t => {
+  const executionId = 'evidence-checkpoint-' + crypto.randomUUID();
+  const tenantId = 'tenant-evidence-checkpoint';
+  const execution = new ExecutionContext({
+    requestId: 'request-' + crypto.randomUUID(),
+    executionId,
+    input: 'persist and restore execution evidence',
+    tenantId,
+    metadata: { tenantId }
+  });
+  execution.addObservation({
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'running', checkpoint: 'durability-proof' }
+  });
+  const snapshot = execution.snapshot();
+  assert.equal(snapshot.evidenceSchemaVersion, 1);
+  const evidenceId = snapshot.observations[0].evidence.id;
+
+  const saved = await persistence.checkpoints.save(snapshot, {
+    reason: 'evidence_restart_test',
+    tenantId
+  });
+  assert.equal(saved.snapshot.observations[0].evidence.id, evidenceId);
+
+  const restartedPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    application_name: 'orient-evidence-restart-integration'
+  });
+  t.after(async () => {
+    await pool.query('DELETE FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
+    await restartedPool.end();
+  });
+
+  const restartedPersistence = new PostgresPersistence({ pool: restartedPool });
+  const persistedCheckpoint = await restartedPersistence.checkpoints.findLatest(executionId, {
+    tenantId,
+    verify: true
+  });
+  assert.ok(persistedCheckpoint);
+  assert.equal(persistedCheckpoint.snapshotSha256, saved.snapshotSha256);
+
+  const restored = ExecutionContext.restore(persistedCheckpoint.snapshot);
+  assert.equal(restored.executionId, executionId);
+  assert.equal(restored.observations.length, 1);
+  assert.equal(restored.agentState.observations.length, 1);
+  assert.equal(restored.observations[0].evidence.id, evidenceId);
+  assert.equal(restored.agentState.observations[0].evidence.id, evidenceId);
+  assert.equal(restored.observations[0].evidence.resultSha256, snapshot.observations[0].evidence.resultSha256);
 });
 
 
