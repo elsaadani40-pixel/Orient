@@ -172,12 +172,17 @@ test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RL
   const pair = crypto.generateKeyPairSync('ed25519');
   const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
   const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' });
+  const anchorPair = crypto.generateKeyPairSync('ed25519');
+  const anchorPrivateKey = anchorPair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const anchorPublicKey = anchorPair.publicKey.export({ type: 'spki', format: 'pem' });
   const runtimePersistence = new PostgresPersistence({
     pool: runtimePool,
     evidenceSigning: {
       keyId: 'integration-key-1',
       privateKey,
-      trustedKeys: { 'integration-key-1': { publicKey } }
+      trustedKeys: { 'integration-key-1': { publicKey } },
+      anchorSigning: { keyId: 'owner-anchor-key-1', privateKey: anchorPrivateKey },
+      trustedAnchorKeys: { 'owner-anchor-key-1': { publicKey: anchorPublicKey } }
     }
   });
   const principal = tenantId => ({
@@ -242,6 +247,18 @@ test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RL
     assert.equal(verified.records, 3);
     assert.equal(verified.verifiedThrough, 3);
 
+    const externalAnchor = await runtimePersistence.executionEvidence.createAnchor(executionId, {
+      principal: principal('tenant-evidence-a')
+    });
+    const anchored = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
+      principal: principal('tenant-evidence-a'),
+      anchor: externalAnchor
+    });
+    assert.equal(anchored.valid, true);
+    assert.equal(anchored.anchored, true);
+    assert.equal(anchored.headAnchored, true);
+    assert.equal(anchored.code, 'EVIDENCE_CHAIN_VALID_AND_HEAD_ANCHORED');
+
     const isolated = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
       principal: principal('tenant-evidence-b')
     });
@@ -266,6 +283,40 @@ test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RL
       () => runtimePool.query('TRUNCATE public.execution_evidence'),
       error => error.code === '42501'
     );
+    await assert.rejects(
+      () => pool.query(
+        "UPDATE public.execution_evidence SET record_hash = repeat('0',64) WHERE tenant_id=$1 AND execution_id=$2",
+        ['tenant-evidence-a', executionId]
+      ),
+      error => error.code === '55000'
+    );
+    await assert.rejects(
+      () => pool.query(
+        'DELETE FROM public.execution_evidence WHERE tenant_id=$1 AND execution_id=$2',
+        ['tenant-evidence-a', executionId]
+      ),
+      error => error.code === '55000'
+    );
+    await assert.rejects(
+      () => pool.query('TRUNCATE public.execution_evidence'),
+      error => error.code === '55000'
+    );
+
+    await pool.query('ALTER TABLE public.execution_evidence DISABLE TRIGGER ALL');
+    try {
+      await pool.query(
+        'DELETE FROM public.execution_evidence WHERE tenant_id=$1 AND execution_id=$2 AND sequence=3',
+        ['tenant-evidence-a', executionId]
+      );
+    } finally {
+      await pool.query('ALTER TABLE public.execution_evidence ENABLE TRIGGER ALL');
+    }
+    const truncated = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
+      principal: principal('tenant-evidence-a'),
+      anchor: externalAnchor
+    });
+    assert.equal(truncated.valid, false);
+    assert.equal(truncated.code, 'EVIDENCE_ANCHOR_MISMATCH');
   } finally {
     await runtimePool.end();
     await pool.query('ALTER TABLE public.execution_evidence DISABLE TRIGGER ALL');
