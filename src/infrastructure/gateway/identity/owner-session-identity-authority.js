@@ -102,6 +102,7 @@ class OwnerSessionIdentityAuthority {
     const now = this.now();
     if (!challenge || challenge.challengeId !== challengeId ||
         challenge.status !== 'ISSUED' ||
+        !/^[a-f0-9]{64}$/.test(challenge.requestFingerprint || '') ||
         !Number.isSafeInteger(challenge.expiresAt) || challenge.expiresAt <= now) {
       reject('IDENTITY_AUTH_CHALLENGE_REJECTED');
     }
