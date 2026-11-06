@@ -20,7 +20,7 @@ test('PostgreSQL trust store inserts initial state with a singleton conditional 
 test('PostgreSQL trust store advances only from the exact expected version and digest', async () => {
   const calls = [];
   const store = new PostgresTrustManifestVersionStore({
-    pool: { async query(sql, values) { calls.push({ sql, values }); return { rowCount: 1, rows: [{ version: '2' }] }; }
+    pool: { async query(sql, values) { calls.push({ sql, values }); return { rowCount: 1, rows: [{ version: '2' }] }; } }
   });
   assert.equal(await store.compareAndSet({ version: 1, digest: digestA }, { version: 2, digest: digestB }), true);
   assert.match(calls[0].sql, /version=\$3 AND digest=\$4/);
