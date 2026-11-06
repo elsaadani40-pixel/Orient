@@ -156,3 +156,14 @@ The PostgreSQL integration suite now provisions the role topology, applies migra
 - owner-scoped chat rows are invisible across owner IDs.
 
 These tests use a real PostgreSQL 17 service in CI. They validate the policy/grant behavior under `SET ROLE orient_runtime`; they do not prove resistance to a malicious SQL caller able to change custom GUC values.
+
+
+## 11. Execution ownership and Gateway read isolation
+
+Migration version 14 adds a nullable executions.owner_id attribution column and an owner-scoped lookup index. Existing rows remain unassigned because their historical owner cannot be inferred safely; the Gateway deliberately treats those rows as not readable by an owner-scoped lookup until a separately reviewed attribution process exists.
+
+A database trigger assigns owner_id from the transaction-local app.orient_owner_id context for inserts made by a login that is a member of orient_runtime. The trigger recognizes the actual orient_runtime_login membership model (rather than assuming current_user is literally orient_runtime). It rejects missing/invalid owner context, overwrites caller-supplied ownership on insert, and prevents ownership changes on update. It does not reassign legacy NULL-owned rows.
+
+The execution.get Gateway handler now requires a verified UUID principal.ownerId and queries by all three values: execution ID, tenant ID, and owner ID. A tenant match alone is not sufficient. A real PostgreSQL integration test creates an execution as owner A, verifies owner A can read it, and verifies owner B in the same tenant receives the bounded not-found response. The test also verifies that the database trigger persisted owner A's identity.
+
+Compatibility note: existing execution rows created before migration 14 have owner_id = NULL and are intentionally invisible to the Gateway execution.get operation. Normal tenant-scoped Runtime repository behavior remains unchanged. No automatic backfill is performed because assigning historical executions to an owner without trustworthy provenance would create a false security claim.
