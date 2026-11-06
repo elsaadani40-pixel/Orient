@@ -225,6 +225,45 @@ test('PostgreSQL checkpoint restores versioned ExecutionContext evidence after r
 });
 
 
+test('PostgreSQL checkpoint verification rejects a tampered persisted snapshot', async t => {
+  const executionId = 'tampered-evidence-checkpoint-' + crypto.randomUUID();
+  const tenantId = 'tenant-tampered-evidence-checkpoint';
+  const execution = new ExecutionContext({
+    requestId: 'request-' + crypto.randomUUID(),
+    executionId,
+    input: 'verify checkpoint tamper detection',
+    tenantId,
+    metadata: { tenantId }
+  });
+  execution.addObservation({
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'running', count: 4 }
+  });
+
+  t.after(async () => {
+    await pool.query(
+      'DELETE FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2',
+      [executionId, tenantId]
+    );
+  });
+
+  await persistence.checkpoints.save(execution.snapshot(), { tenantId });
+  const tampered = await pool.query(
+    `UPDATE checkpoints
+     SET snapshot=jsonb_set(snapshot, '{observations,0,result,count}', '99'::jsonb, false)
+     WHERE execution_id=$1 AND tenant_id=$2`,
+    [executionId, tenantId]
+  );
+  assert.equal(tampered.rowCount, 1);
+
+  await assert.rejects(
+    () => persistence.checkpoints.findLatest(executionId, { tenantId, verify: true }),
+    error => error.code === 'CHECKPOINT_INTEGRITY_FAILED'
+  );
+});
+
 test('PostgreSQL resume leases are atomic, tenant-scoped, and releasable only by the owner', async () => {
   const executionId = 'resume-lease-' + Date.now();
   const tenantId = 'tenant-resume-lease';
