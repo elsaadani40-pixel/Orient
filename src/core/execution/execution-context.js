@@ -26,6 +26,20 @@ const TERMINAL_STATUSES = new Set([
   EXECUTION_STATUS.CANCELLED
 ]);
 
+function observationResultMatchesEvidence(observation, evidence) {
+  if (evidence.resultSha256 === null) {
+    return true;
+  }
+  try {
+    const digest = crypto.createHash('sha256')
+      .update(canonicalJson(observation.result), 'utf8')
+      .digest('hex');
+    return digest === evidence.resultSha256;
+  } catch {
+    return false;
+  }
+}
+
 class ExecutionContext {
   constructor({
     requestId,
@@ -826,22 +840,10 @@ class ExecutionContext {
           error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
           throw error;
         }
-        if (evidence.resultSha256 !== null) {
-          let resultDigest;
-          try {
-            resultDigest = crypto.createHash('sha256')
-              .update(canonicalJson(observation.result), 'utf8')
-              .digest('hex');
-          } catch {
-            const error = new Error('Persisted execution result cannot be verified against its evidence digest');
-            error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
-            throw error;
-          }
-          if (resultDigest !== evidence.resultSha256) {
-            const error = new Error('Persisted execution result does not match its evidence digest');
-            error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
-            throw error;
-          }
+        if (!observationResultMatchesEvidence(observation, evidence)) {
+          const error = new Error('Persisted execution result does not match its evidence digest');
+          error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+          throw error;
         }
       }
     }
@@ -917,6 +919,11 @@ class ExecutionContext {
           evidence.observedAt !== observation.timestamp
         ) {
           const error = new Error('Persisted agent evidence failed integrity validation');
+          error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+          throw error;
+        }
+        if (!observationResultMatchesEvidence(observation, evidence)) {
+          const error = new Error('Persisted agent result does not match its evidence digest');
           error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
           throw error;
         }
