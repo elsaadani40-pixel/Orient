@@ -215,7 +215,11 @@ class AnchoredTrustManifestAcceptanceService {
       }
       await this.externalAnchorStore.append(manifest, {
         verificationTime: now,
-        trustedRootKeys: trustContext.trustedRootKeys
+        trustedRootKeys: trustContext.trustedRootKeys,
+        ...(trustContext.rootState ? {
+          activeRootKeyId: trustContext.rootState.rootKeyId,
+          activeFromVersion: trustContext.rootState.manifestHeadVersion
+        } : {})
       });
     }
 
