@@ -47,7 +47,7 @@ function readPrivateKeyFile(filePath, {
     if (before.size < 1 || before.size > MAX_PRIVATE_KEY_BYTES || before.nlink !== 1n) {
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file has an invalid size or link count');
     }
-    if (platform !== 'win32' && typeof process.getuid === 'function' && before.uid !== process.getuid()) {
+    if (platform !== 'win32' && typeof process.getuid === 'function' && before.uid !== BigInt(process.getuid())) {
       fail('TRUST_SIGNER_KEY_OWNER_INVALID', 'The offline root private-key file must be owned by the signing user');
     }
     if (platform !== 'win32' && (before.mode & 0o077) !== 0) {
@@ -61,7 +61,7 @@ function readPrivateKeyFile(filePath, {
       fail('TRUST_SIGNER_KEY_FILE_CHANGED', 'The offline root private-key file changed while it was being opened');
     }
     if (after.size < 1 || after.size > MAX_PRIVATE_KEY_BYTES || after.nlink !== 1n ||
-        (platform !== 'win32' && typeof process.getuid === 'function' && after.uid !== process.getuid()) ||
+        (platform !== 'win32' && typeof process.getuid === 'function' && after.uid !== BigInt(process.getuid())) ||
         (platform !== 'win32' && (after.mode & 0o077) !== 0)) {
       fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file permissions or size changed while opening');
     }
@@ -85,7 +85,7 @@ function readPrivateKeyFile(filePath, {
     if (total < 1 || total > MAX_PRIVATE_KEY_BYTES || afterRead.size !== BigInt(total) ||
         afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
         afterRead.nlink !== 1n ||
-        (platform !== 'win32' && typeof process.getuid === 'function' && afterRead.uid !== process.getuid()) ||
+        (platform !== 'win32' && typeof process.getuid === 'function' && afterRead.uid !== BigInt(process.getuid())) ||
         (platform !== 'win32' && (afterRead.mode & 0o077) !== 0)) {
       bounded.fill(0);
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file changed or exceeded its size limit while reading');
