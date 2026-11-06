@@ -15,6 +15,11 @@ function isPreconditionFailed(error) {
     error?.$metadata?.httpStatusCode === 412;
 }
 
+function isConditionalConflict(error) {
+  return error?.name === 'ConditionalRequestConflict' ||
+    error?.$metadata?.httpStatusCode === 409;
+}
+
 async function bodyToUtf8(body) {
   if (body && typeof body.transformToString === 'function') {
     return body.transformToString('utf-8');
@@ -43,7 +48,11 @@ class S3ObjectLockEvidenceAnchorBackend {
     commands,
     bucket,
     retentionSeconds,
-    now = () => new Date()
+    now = () => new Date(),
+    maxConditionalRetries = 3,
+    retryDelayMs = 25,
+    sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+    maxConcurrentReads = 8
   } = {}) {
     if (!client || typeof client.send !== 'function') {
       throw new TypeError('An AWS S3 SDK v3 client is required');
@@ -59,12 +68,26 @@ class S3ObjectLockEvidenceAnchorBackend {
       throw new TypeError('A positive S3 Object Lock retention period in seconds is required');
     }
     if (typeof now !== 'function') throw new TypeError('A clock function is required');
+    if (!Number.isSafeInteger(maxConditionalRetries) || maxConditionalRetries < 0) {
+      throw new TypeError('A non-negative maximum conditional retry count is required');
+    }
+    if (!Number.isSafeInteger(retryDelayMs) || retryDelayMs < 0) {
+      throw new TypeError('A non-negative conditional retry delay is required');
+    }
+    if (typeof sleep !== 'function') throw new TypeError('A retry sleep function is required');
+    if (!Number.isSafeInteger(maxConcurrentReads) || maxConcurrentReads < 1) {
+      throw new TypeError('A positive maximum concurrent read count is required');
+    }
 
     this.client = client;
     this.commands = commands;
     this.bucket = bucket;
     this.retentionSeconds = retentionSeconds;
     this.now = now;
+    this.maxConditionalRetries = maxConditionalRetries;
+    this.retryDelayMs = retryDelayMs;
+    this.sleep = sleep;
+    this.maxConcurrentReads = maxConcurrentReads;
   }
 
   async putIfAbsent(key, value) {
@@ -78,24 +101,34 @@ class S3ObjectLockEvidenceAnchorBackend {
       fail('EVIDENCE_ANCHOR_S3_CLOCK_INVALID', 'Unable to calculate an S3 retention deadline');
     }
 
-    try {
-      await this.client.send(new this.commands.PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: value,
-        ContentType: 'application/json',
-        IfNoneMatch: '*',
-        ObjectLockMode: 'COMPLIANCE',
-        ObjectLockRetainUntilDate: retainUntil
-      }));
-      return { created: true };
-    } catch (error) {
-      if (!isPreconditionFailed(error)) throw error;
-      const existingValue = await this.get(key);
-      if (existingValue === null) {
-        fail('EVIDENCE_ANCHOR_S3_CONDITIONAL_RACE', 'S3 rejected conditional creation but the existing object is not readable');
+    const input = {
+      Bucket: this.bucket,
+      Key: key,
+      Body: value,
+      ContentType: 'application/json',
+      IfNoneMatch: '*',
+      ObjectLockMode: 'COMPLIANCE',
+      ObjectLockRetainUntilDate: retainUntil
+    };
+
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.client.send(new this.commands.PutObjectCommand(input));
+        return { created: true };
+      } catch (error) {
+        if (isPreconditionFailed(error)) {
+          const existingValue = await this.get(key);
+          if (existingValue === null) {
+            fail('EVIDENCE_ANCHOR_S3_CONDITIONAL_RACE', 'S3 rejected conditional creation but the existing object is not readable');
+          }
+          return { created: false, existingValue };
+        }
+        if (!isConditionalConflict(error) || attempt >= this.maxConditionalRetries) {
+          throw error;
+        }
+        const delay = this.retryDelayMs * (attempt + 1);
+        if (delay > 0) await this.sleep(delay);
       }
-      return { created: false, existingValue };
     }
   }
 
@@ -155,11 +188,19 @@ class S3ObjectLockEvidenceAnchorBackend {
       }
     } while (continuationToken);
 
-    const uniqueKeys = [...new Set(keys)];
-    const entries = await Promise.all(uniqueKeys.map(async key => ({
-      key,
-      value: await this.get(key)
-    })));
+    const entries = new Array(keys.length);
+    let nextIndex = 0;
+    const workerCount = Math.min(this.maxConcurrentReads, keys.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= keys.length) return;
+        const key = keys[index];
+        entries[index] = { key, value: await this.get(key) };
+      }
+    }));
+
     if (entries.some(entry => entry.value === null)) {
       fail('EVIDENCE_ANCHOR_S3_LIST_RACE', 'An object listed by S3 could not be read back');
     }
