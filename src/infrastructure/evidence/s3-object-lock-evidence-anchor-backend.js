@@ -82,6 +82,7 @@ class S3ObjectLockEvidenceAnchorBackend {
     commands,
     bucket,
     retentionSeconds,
+    useBucketDefaultRetention = false,
     now = () => new Date(),
     maxConditionalRetries = 3,
     retryDelayMs = 25,
@@ -100,7 +101,10 @@ class S3ObjectLockEvidenceAnchorBackend {
     if (typeof bucket !== 'string' || !bucket.trim()) {
       throw new TypeError('A dedicated S3 bucket is required');
     }
-    if (!Number.isSafeInteger(retentionSeconds) || retentionSeconds < 1) {
+    if (typeof useBucketDefaultRetention !== 'boolean') {
+      throw new TypeError('useBucketDefaultRetention must be a boolean');
+    }
+    if (!useBucketDefaultRetention && (!Number.isSafeInteger(retentionSeconds) || retentionSeconds < 1)) {
       throw new TypeError('A positive S3 Object Lock retention period in seconds is required');
     }
     if (typeof now !== 'function') throw new TypeError('A clock function is required');
@@ -125,6 +129,7 @@ class S3ObjectLockEvidenceAnchorBackend {
     this.commands = commands;
     this.bucket = bucket;
     this.retentionSeconds = retentionSeconds;
+    this.useBucketDefaultRetention = useBucketDefaultRetention;
     this.now = now;
     this.maxConditionalRetries = maxConditionalRetries;
     this.retryDelayMs = retryDelayMs;
@@ -139,20 +144,23 @@ class S3ObjectLockEvidenceAnchorBackend {
         typeof value !== 'string') {
       fail('EVIDENCE_ANCHOR_S3_INPUT_INVALID', 'A namespaced anchor key and canonical string value are required');
     }
-    const now = this.now();
-    const retainUntil = new Date(now.getTime() + this.retentionSeconds * 1000);
-    if (!Number.isFinite(now.getTime()) || !Number.isFinite(retainUntil.getTime())) {
-      fail('EVIDENCE_ANCHOR_S3_CLOCK_INVALID', 'Unable to calculate an S3 retention deadline');
-    }
-
     const input = {
       Bucket: this.bucket,
       Key: key,
       Body: value,
       ContentType: 'application/json',
       IfNoneMatch: '*',
-      ObjectLockMode: 'COMPLIANCE',
-      ObjectLockRetainUntilDate: retainUntil
+      ...(!this.useBucketDefaultRetention ? (() => {
+        const now = this.now();
+        const retainUntil = new Date(now.getTime() + this.retentionSeconds * 1000);
+        if (!Number.isFinite(now.getTime()) || !Number.isFinite(retainUntil.getTime())) {
+          fail('EVIDENCE_ANCHOR_S3_CLOCK_INVALID', 'Unable to calculate an S3 retention deadline');
+        }
+        return {
+          ObjectLockMode: 'COMPLIANCE',
+          ObjectLockRetainUntilDate: retainUntil
+        };
+      })() : {})
     };
 
     for (let attempt = 0; ; attempt += 1) {
