@@ -835,6 +835,16 @@ class ExecutionContext {
         ? snapshot.agentState
         : {};
 
+    if (
+      evidenceSchemaVersion === 1 &&
+      (!snapshot.agentState ||
+        !Array.isArray(snapshot.agentState.observations))
+    ) {
+      const error = new Error('Versioned snapshot is missing AgentState observations');
+      error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+      throw error;
+    }
+
     const agentState =
       new AgentState({
         agentId:
