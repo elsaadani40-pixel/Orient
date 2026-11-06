@@ -75,16 +75,18 @@ resource "aws_s3_bucket_ownership_controls" "trust_manifest" {
 
 data "aws_iam_policy_document" "trust_manifest_bucket" {
   statement {
-    sid    = "AllowRuntimeReadAndCreateOnly"
+    sid    = "AllowTrustStoreServiceBucketInspection"
     effect = "Allow"
 
     principals {
       type        = "AWS"
-      identifiers = [var.runtime_role_arn]
+      identifiers = [var.trust_store_service_role_arn]
     }
 
     actions = [
-      "s3:ListBucket"
+      "s3:ListBucket",
+      "s3:GetBucketObjectLockConfiguration",
+      "s3:GetBucketVersioning"
     ]
 
     resources = [aws_s3_bucket.trust_manifest.arn]
@@ -97,12 +99,12 @@ data "aws_iam_policy_document" "trust_manifest_bucket" {
   }
 
   statement {
-    sid    = "AllowRuntimeReadAndCreateObjects"
+    sid    = "AllowTrustStoreServiceReadAndCreateObjects"
     effect = "Allow"
 
     principals {
       type        = "AWS"
-      identifiers = [var.runtime_role_arn]
+      identifiers = [var.trust_store_service_role_arn]
     }
 
     actions = [
@@ -136,7 +138,7 @@ data "aws_iam_policy_document" "trust_manifest_bucket" {
   }
 
   statement {
-    sid    = "DenyRuntimeDestructiveOperations"
+    sid    = "DenyTrustStoreServiceDestructiveOperations"
     effect = "Deny"
 
     principals {
@@ -174,7 +176,7 @@ data "aws_iam_policy_document" "trust_manifest_bucket" {
     condition {
       test     = "ArnEquals"
       variable = "aws:PrincipalArn"
-      values   = [var.runtime_role_arn]
+      values   = [var.trust_store_service_role_arn]
     }
   }
 }
