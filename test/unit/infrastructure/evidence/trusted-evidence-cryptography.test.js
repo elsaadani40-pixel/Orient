@@ -6,7 +6,9 @@ const crypto = require('node:crypto');
 const { createEvidenceRecord } = require('../../../../src/core/execution/evidence-record');
 const {
   signEvidenceEnvelope,
-  verifyEvidenceEnvelope
+  verifyEvidenceEnvelope,
+  createEvidenceAnchor,
+  verifyEvidenceAnchor
 } = require('../../../../src/infrastructure/evidence/trusted-evidence-cryptography');
 
 function setup() {
@@ -137,4 +139,28 @@ test('trusted evidence envelope enforces key validity and revocation timestamps'
       revokedAt: '2026-11-06T10:02:00.000Z'
     }
   }), true);
+});
+
+
+test('external evidence anchors require a separate trusted Ed25519 key and detect tampering', () => {
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' });
+  const anchor = createEvidenceAnchor({
+    tenantId: 'tenant-a',
+    executionId: 'exec-ledger-test',
+    sequence: 4,
+    recordHash: 'a'.repeat(64),
+    anchoredAt: '2026-11-06T10:10:00.000Z'
+  }, { keyId: 'owner-anchor-key-1', privateKey });
+  const trustedKeys = {
+    'owner-anchor-key-1': { publicKey, validFrom: '2026-11-06T10:00:00.000Z' }
+  };
+
+  assert.equal(verifyEvidenceAnchor(anchor, trustedKeys), true);
+  assert.equal(verifyEvidenceAnchor({ ...anchor, tenantId: 'tenant-b' }, trustedKeys), false);
+  assert.equal(verifyEvidenceAnchor({ ...anchor, sequence: 5 }, trustedKeys), false);
+  assert.equal(verifyEvidenceAnchor({ ...anchor, recordHash: 'b'.repeat(64) }, trustedKeys), false);
+  assert.equal(verifyEvidenceAnchor({ ...anchor, anchoredAt: '2026-11-06T10:11:00.000Z' }, trustedKeys), false);
+  assert.equal(verifyEvidenceAnchor(anchor, {}), false);
 });
