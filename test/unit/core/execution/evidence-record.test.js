@@ -217,6 +217,20 @@ test('versioned snapshots require complete matching evidence in context and Agen
     error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
   );
 
+  const missingContextObservations = structuredClone(snapshot);
+  delete missingContextObservations.observations;
+  assert.throws(
+    () => ExecutionContext.restore(missingContextObservations),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
+  const invalidContextObservations = structuredClone(snapshot);
+  invalidContextObservations.observations = null;
+  assert.throws(
+    () => ExecutionContext.restore(invalidContextObservations),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
   const unsupportedVersion = structuredClone(snapshot);
   unsupportedVersion.evidenceSchemaVersion = 2;
   assert.throws(
