@@ -1,7 +1,7 @@
 'use strict';
 
 const { canonicalJson, verifyEvidenceRecord } = require('../../../core/execution/evidence-record');
-const { signEvidenceEnvelope, verifyEvidenceEnvelope, createEvidenceAnchor, verifyEvidenceAnchor } = require('../../evidence/trusted-evidence-cryptography');
+const { signEvidenceEnvelope, verifyEvidenceEnvelope, buildEvidenceAnchorPayload, verifyEvidenceAnchor } = require('../../evidence/trusted-evidence-cryptography');
 
 function fail(code, message) {
   throw Object.assign(new Error(message), { code });
@@ -24,7 +24,7 @@ function rowToEnvelope(row) {
 }
 
 class PostgresExecutionEvidenceRepository {
-  constructor(db, { keyId, privateKey, trustedKeys, anchorSigning = null, trustedAnchorKeys = null, now = () => new Date() } = {}) {
+  constructor(db, { keyId, privateKey, trustedKeys, trustedAnchorKeys = null, now = () => new Date() } = {}) {
     if (!db || typeof db.query !== 'function' || typeof db.transaction !== 'function' ||
         typeof db.withPrincipal !== 'function') {
       throw new TypeError('A scoped PostgresDatabase is required');
@@ -39,7 +39,6 @@ class PostgresExecutionEvidenceRepository {
     this.keyId = keyId;
     this.privateKey = privateKey;
     this.trustedKeys = trustedKeys;
-    this.anchorSigning = anchorSigning;
     this.trustedAnchorKeys = trustedAnchorKeys;
     this.now = now;
   }
@@ -132,21 +131,18 @@ class PostgresExecutionEvidenceRepository {
     }));
   }
 
-  async createAnchor(executionId, { principal } = {}) {
-    if (!this.anchorSigning?.keyId || !this.anchorSigning?.privateKey) {
-      fail('EVIDENCE_ANCHOR_SIGNING_CONFIGURATION_REQUIRED', 'An independently managed external anchor signing key is required');
-    }
+  async createAnchorPayload(executionId, { principal } = {}) {
     const verification = await this.verifyExecution(executionId, { principal });
     if (!verification.valid || verification.records < 1 || !verification.headHash) {
       fail('EVIDENCE_CHAIN_NOT_ANCHORABLE', 'A non-empty valid evidence chain is required before anchoring');
     }
-    return createEvidenceAnchor({
+    return buildEvidenceAnchorPayload({
       tenantId: principal.tenantId,
       executionId,
       sequence: verification.verifiedThrough,
       recordHash: verification.headHash,
       anchoredAt: this.now().toISOString()
-    }, this.anchorSigning);
+    });
   }
 
   async verifyExecution(executionId, { principal, anchor = null } = {}) {
