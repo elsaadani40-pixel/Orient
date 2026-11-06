@@ -120,6 +120,7 @@ class S3ObjectLockEvidenceAnchorBackend {
       fail('EVIDENCE_ANCHOR_S3_INPUT_INVALID', 'A namespaced anchor prefix is required');
     }
     const keys = [];
+    const seenKeys = new Set();
     const seenTokens = new Set();
     let continuationToken;
     do {
@@ -136,9 +137,10 @@ class S3ObjectLockEvidenceAnchorBackend {
         if (typeof item?.Key !== 'string' || !item.Key.startsWith(prefix)) {
           fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 returned an object outside the requested prefix');
         }
-        if (keys.includes(item.Key)) {
+        if (seenKeys.has(item.Key)) {
           fail('EVIDENCE_ANCHOR_S3_DUPLICATE_KEY', 'S3 returned a duplicate object key across listing pages');
         }
+        seenKeys.add(item.Key);
         keys.push(item.Key);
       }
       if (result?.IsTruncated) {
