@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const { canonicalJson } = require('../../../../src/core/execution/evidence-record');
 const {
   publicKeyFingerprint,
   recoveryPolicyDigest,
@@ -231,7 +232,7 @@ test('ledger rejects gaps and tampered stored envelopes', async () => {
   );
   f.backend.values.clear();
   f.backend.values.set(keyForSequence(1),
-    JSON.stringify({ ...envelope, transitionDigest: 'f'.repeat(64) }));
+    canonicalJson({ ...envelope, transitionDigest: 'f'.repeat(64) }));
   await assert.rejects(
     () => f.ledger.readHistory(),
     error => error.code === 'EVIDENCE_ROOT_TRANSITION_LEDGER_INVALID'
