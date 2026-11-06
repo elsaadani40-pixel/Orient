@@ -147,6 +147,9 @@ function verifyManifestFile({
     ...(rootRevokedAt === undefined ? {} : { revokedAt: rootRevokedAt })
   };
   const roots = { [rootKeyId]: rootEntry };
+  const rootPublicKeySha256 = crypto.createHash('sha256')
+    .update(crypto.createPublicKey(publicKey).export({ type: 'spki', format: 'der' }))
+    .digest('hex');
   const rootValidityMetadataProvided = rootValidFrom !== undefined || rootRevokedAt !== undefined;
   const effectiveVerificationTime = historical
     ? undefined
@@ -163,6 +166,7 @@ function verifyManifestFile({
     version: verified.version,
     digest: verified.digest,
     rootKeyId,
+    rootPublicKeySha256,
     issuedAt: verified.issuedAt,
     expiresAt: verified.expiresAt,
     verificationMode: historical ? 'historical-audit-only'
