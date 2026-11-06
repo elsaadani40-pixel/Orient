@@ -43,8 +43,14 @@ class PostgresGatewayIdentityRepository {
     this.now = now;
   }
 
-  async issue(challenge) {
+  async issue(challenge, { principal } = {}) {
     validateBinding(challenge);
+    if (!principal || principal.ownerId !== challenge.ownerId ||
+        principal.principalId !== challenge.ownerId || principal.sessionId !== challenge.sessionId ||
+        principal.tenantId !== challenge.tenantId || principal.workspaceId !== challenge.workspaceId) {
+      reject('GATEWAY_PRINCIPAL_BINDING_MISMATCH');
+    }
+    return this.db.withPrincipal(principal, async () => {
     const now = this.now();
     const expiresAt = challenge.expiresAt;
     if (!Number.isSafeInteger(now) || !Number.isSafeInteger(expiresAt) || expiresAt <= now) {
@@ -61,15 +67,25 @@ class PostgresGatewayIdentityRepository {
         issuedAt,new Date(expiresAt).toISOString()]
     );
     return result.rows[0]?.challenge_id || null;
+    });
   }
 
-  async getForIssuance(challengeId) {
+  async getForIssuance(challengeId, { principal } = {}) {
     if (!UUID.test(challengeId || '')) return null;
+    if (!principal || !UUID.test(principal.ownerId || '') ||
+        principal.principalId !== principal.ownerId || !UUID.test(principal.sessionId || '') ||
+        typeof principal.tenantId !== 'string' || !principal.tenantId.trim() ||
+        typeof principal.workspaceId !== 'string' || !principal.workspaceId.trim()) {
+      reject('GATEWAY_PRINCIPAL_REQUIRED');
+    }
+    return this.db.withPrincipal(principal, async () => {
     const result = await this.db.query(
       `SELECT challenge_id,owner_id,session_id,tenant_id,workspace_id,operation,
               operation_id,request_id,status,issued_at,expires_at,consumed_at
-       FROM gateway_challenges WHERE challenge_id=$1 LIMIT 1`,
-      [challengeId]
+       FROM gateway_challenges
+       WHERE challenge_id=$1 AND owner_id=$2 AND session_id=$3
+         AND tenant_id=$4 AND workspace_id=$5 LIMIT 1`,
+      [challengeId,principal.ownerId,principal.sessionId,principal.tenantId,principal.workspaceId]
     );
     if (!result.rows.length) return null;
     const row = result.rows[0];
@@ -87,6 +103,7 @@ class PostgresGatewayIdentityRepository {
       expiresAt: new Date(row.expires_at).getTime(),
       consumedAt: row.consumed_at ? new Date(row.consumed_at).getTime() : null
     };
+    });
   }
 
   /**
