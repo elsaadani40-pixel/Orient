@@ -150,3 +150,54 @@ test('trust manifest domain separator uses a terminating NUL byte', () => {
   assert.equal(MANIFEST_DOMAIN, 'ORIENT-TRUSTED-EVIDENCE-MANIFEST-V1\0');
   assert.equal(Buffer.from(MANIFEST_DOMAIN, 'utf8').at(-1), 0);
 });
+
+
+test('trust manifest parsing never invokes accessors or accepts inherited trust roots', () => {
+  const f = fixture();
+  const valid = f.create(1);
+  let getterCalls = 0;
+  const unsafeEntry = {};
+  Object.defineProperty(unsafeEntry, 'publicKey', {
+    enumerable: true,
+    get() { getterCalls += 1; return valid.keys['evidence-key-1'].publicKey; }
+  });
+  const unsafeKeys = { 'evidence-key-1': unsafeEntry };
+  const unsafeManifest = { ...valid, keys: unsafeKeys };
+  assert.equal(verifyTrustManifest(unsafeManifest, f.trustedRootKeys), null);
+  assert.equal(getterCalls, 0);
+
+  let rootGetterCalls = 0;
+  const unsafeRoots = {};
+  Object.defineProperty(unsafeRoots, 'offline-root-1', {
+    enumerable: true,
+    get() { rootGetterCalls += 1; return f.trustedRootKeys['offline-root-1']; }
+  });
+  assert.equal(verifyTrustManifest(valid, unsafeRoots), null);
+  assert.equal(rootGetterCalls, 0);
+
+  const inheritedRoots = Object.create({
+    'offline-root-1': f.trustedRootKeys['offline-root-1']
+  });
+  assert.equal(verifyTrustManifest(valid, inheritedRoots), null);
+});
+
+test('trust manifest signing rejects symbol and unknown properties', () => {
+  const f = fixture();
+  const input = {
+    version: 1,
+    issuedAt: '2026-11-06T10:01:00.000Z',
+    keys: { 'evidence-key-1': { publicKey: f.create(1).keys['evidence-key-1'].publicKey } },
+    extra: true
+  };
+  assert.throws(() => signTrustManifest(input, {
+    rootKeyId: 'offline-root-1',
+    rootPrivateKey: f.rootPrivateKey
+  }), error => error.code === 'EVIDENCE_TRUST_MANIFEST_INVALID');
+
+  const symbolInput = { version: 1, issuedAt: '2026-11-06T10:01:00.000Z', keys: input.keys };
+  symbolInput[Symbol('hidden')] = true;
+  assert.throws(() => signTrustManifest(symbolInput, {
+    rootKeyId: 'offline-root-1',
+    rootPrivateKey: f.rootPrivateKey
+  }), error => error.code === 'EVIDENCE_TRUST_MANIFEST_INVALID');
+});
