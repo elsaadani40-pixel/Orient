@@ -1,0 +1,44 @@
+name: ORIENT — Terraform Validation
+
+on:
+  pull_request:
+    paths:
+      - "infra/**/*.tf"
+      - "infra/**/*.tfvars.example"
+      - ".github/workflows/terraform-validation.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/**/*.tf"
+      - "infra/**/*.tfvars.example"
+      - ".github/workflows/terraform-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-trust-anchor-infrastructure:
+    name: Validate AWS trust-anchor Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/aws/trust-manifest-anchor-store
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive
+
+      - name: Initialize without a backend
+        run: terraform init -backend=false -input=false
+
+      - name: Validate configuration
+        run: terraform validate -no-color
