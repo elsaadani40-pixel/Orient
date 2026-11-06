@@ -22,9 +22,14 @@ function createGatewayOperationHandlers() {
         !/^[A-Za-z0-9_-]{1,200}$/.test(request.executionId)) {
       invalidRequest();
     }
+    if (!principal || typeof principal.tenantId !== 'string' || !principal.tenantId.trim() ||
+        typeof principal.ownerId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(principal.ownerId)) {
+      invalidRequest();
+    }
     const result = await client.query(
-      'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2 LIMIT 1',
-      [request.executionId, principal.tenantId]
+      'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND owner_id=$3 LIMIT 1',
+      [request.executionId, principal.tenantId, principal.ownerId]
     );
     if (!result.rows.length) return { found: false, task: null };
     const payload = result.rows[0].payload && typeof result.rows[0].payload === 'object'
