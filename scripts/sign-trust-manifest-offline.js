@@ -107,19 +107,47 @@ function readManifestFile(filePath) {
     fail('TRUST_SIGNER_INPUT_REQUIRED', 'A manifest input file path is required');
   }
   const absolutePath = path.resolve(filePath);
-  let stat;
+  let descriptor;
+  let bytes;
   try {
-    stat = fs.statSync(absolutePath);
-  } catch {
-    fail('TRUST_SIGNER_INPUT_UNREADABLE', 'Unable to read the trust manifest input file');
-  }
-  if (!stat.isFile() || stat.size < 1 || stat.size > MAX_MANIFEST_BYTES) {
-    fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must be a non-empty file no larger than 1 MiB');
-  }
-  try {
-    return JSON.parse(fs.readFileSync(absolutePath, 'utf8'));
-  } catch {
-    fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must contain valid JSON');
+    const before = fs.lstatSync(absolutePath);
+    if (before.isSymbolicLink() || !before.isFile() ||
+        before.size < 1 || before.size > MAX_MANIFEST_BYTES) {
+      fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must be a regular non-symlink file no larger than 1 MiB');
+    }
+    descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino ||
+        opened.size < 1 || opened.size > MAX_MANIFEST_BYTES) {
+      fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input changed while it was being opened');
+    }
+    const bounded = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
+    let total = 0;
+    while (total < bounded.length) {
+      const read = fs.readSync(descriptor, bounded, total,
+        Math.min(64 * 1024, bounded.length - total), null);
+      if (read === 0) break;
+      total += read;
+    }
+    const afterRead = fs.fstatSync(descriptor);
+    if (total < 1 || total > MAX_MANIFEST_BYTES || afterRead.size !== total ||
+        afterRead.dev !== before.dev || afterRead.ino !== before.ino) {
+      bounded.fill(0);
+      fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input changed or exceeded its size limit while reading');
+    }
+    bytes = Buffer.from(bounded.subarray(0, total));
+    bounded.fill(0);
+    try {
+      return JSON.parse(bytes.toString('utf8'));
+    } catch {
+      fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must contain valid JSON');
+    }
+  } catch (error) {
+    if (error && error.code && error.code.startsWith('TRUST_SIGNER_')) throw error;
+    fail('TRUST_SIGNER_INPUT_UNREADABLE', 'Unable to safely read the trust manifest input file');
+  } finally {
+    if (bytes) bytes.fill(0);
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 
