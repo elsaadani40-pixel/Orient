@@ -9,7 +9,7 @@ const Goal =
 const AgentStateMachine =
   require('../agent/state/agent-state-machine');
 
-const { createEvidenceRecord, verifyEvidenceRecord } =
+const { createEvidenceRecord, verifyEvidenceRecord, canonicalJson } =
   require('./evidence-record');
 
 const EXECUTION_STATUS = Object.freeze({
@@ -825,6 +825,23 @@ class ExecutionContext {
           const error = new Error('Persisted execution evidence failed integrity validation');
           error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
           throw error;
+        }
+        if (evidence.resultSha256 !== null) {
+          let resultDigest;
+          try {
+            resultDigest = crypto.createHash('sha256')
+              .update(canonicalJson(observation.result), 'utf8')
+              .digest('hex');
+          } catch {
+            const error = new Error('Persisted execution result cannot be verified against its evidence digest');
+            error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+            throw error;
+          }
+          if (resultDigest !== evidence.resultSha256) {
+            const error = new Error('Persisted execution result does not match its evidence digest');
+            error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+            throw error;
+          }
         }
       }
     }
