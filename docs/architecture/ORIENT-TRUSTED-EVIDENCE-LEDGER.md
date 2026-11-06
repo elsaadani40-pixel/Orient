@@ -223,7 +223,9 @@ The first implementation slice has been added on `feat/supabase-optional-cloud-a
 
 ### Current implementation limits
 
-- The external anchor transport/storage adapter and its operational retention/backup policy are not implemented yet. The payload export and signature-verification contract exists, but an independent signer and independently administered anchor store still need to be operated.
+- `ExternalEvidenceAnchorStore` now provides a backend-neutral append/get/list adapter for signed anchors. It verifies signatures before persistence, uses tenant/execution-scoped immutable object keys, performs conditional create-only writes, makes exact retries idempotent, rejects conflicting sequence reuse, and verifies scope/signatures/canonical bytes on read and list.
+- The storage backend contract requires strongly consistent `putIfAbsent`, `get`, and `list`. The backend principal must be unable to overwrite or delete objects; retention/object-lock and backup/restore must be configured and independently administered by the operator. The adapter deliberately has no update/delete method.
+- Unit tests use an in-memory immutable backend to validate adapter semantics only. They do not prove durability, object-lock enforcement, backup recovery, or independent trust-domain separation for a real provider. A production provider adapter and operational deployment evidence remain outstanding.
 - The first append implementation verifies the full execution chain before every write, which is intentionally conservative and O(n) per append. A later optimization must preserve verification against a trusted external anchor and must not silently trust an unverified database-local head.
 - Evidence signing keys and anchor signing keys are supplied by the host application. A production key-provider/rotation workflow and authenticated trust-manifest distribution remain integration requirements.
 - No hosted Supabase project has been changed. Migration 13 is only code in the branch until an explicitly authorized deployment runs it.
