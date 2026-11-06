@@ -15,13 +15,19 @@ class Command {
 const commands = {
   PutObjectCommand: class PutObjectCommand extends Command {},
   GetObjectCommand: class GetObjectCommand extends Command {},
-  ListObjectsV2Command: class ListObjectsV2Command extends Command {}
+  ListObjectsV2Command: class ListObjectsV2Command extends Command {},
+  GetObjectLockConfigurationCommand: class GetObjectLockConfigurationCommand extends Command {},
+  GetBucketVersioningCommand: class GetBucketVersioningCommand extends Command {}
 };
 
 class FakeS3 {
   constructor() { this.objects = new Map(); }
   async send(command) {
     const input = command.input;
+    if (command instanceof commands.GetObjectLockConfigurationCommand) {
+      return { ObjectLockConfiguration: { ObjectLockEnabled: 'Enabled', Rule: { DefaultRetention: { Mode: 'COMPLIANCE', Days: 365 } } } };
+    }
+    if (command instanceof commands.GetBucketVersioningCommand) return { Status: 'Enabled' };
     if (command instanceof commands.PutObjectCommand) {
       if (this.objects.has(input.Key)) {
         throw Object.assign(new Error('exists'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } });
@@ -51,6 +57,7 @@ function fixture() {
     client,
     commands,
     bucket: 'orient-trust-manifests',
+    expectedRetentionDays: 365,
     now: () => new Date('2026-11-06T12:00:00.000Z')
   });
   return { client, backend };
@@ -125,4 +132,50 @@ test('S3 Object Lock backend interoperates with the external trust-manifest ledg
   });
   assert.equal(client.objects.size, 1);
   assert.equal([...client.objects.keys()][0], 'orient/trust-manifests/v1/0000000000000001.json');
+});
+
+
+test('trust manifest S3 backend verifies versioning and exact default compliance retention before IO', async () => {
+  const { backend, client } = fixture();
+  assert.deepEqual(await backend.verifyConfiguration(), {
+    objectLockEnabled: true,
+    versioningEnabled: true,
+    retentionMode: 'COMPLIANCE',
+    retentionDays: 365
+  });
+  assert.deepEqual(await backend.verifyConfiguration(), {
+    objectLockEnabled: true,
+    versioningEnabled: true,
+    retentionMode: 'COMPLIANCE',
+    retentionDays: 365
+  });
+
+  const invalid = new FakeS3();
+  invalid.send = async command => {
+    if (command instanceof commands.GetObjectLockConfigurationCommand) {
+      return { ObjectLockConfiguration: { ObjectLockEnabled: 'Enabled', Rule: { DefaultRetention: { Mode: 'GOVERNANCE', Days: 365 } } } };
+    }
+    if (command instanceof commands.GetBucketVersioningCommand) return { Status: 'Enabled' };
+    throw new Error('trust IO must not proceed with invalid bucket configuration');
+  };
+  const unsafeBackend = new S3ObjectLockTrustManifestAnchorBackend({
+    client: invalid,
+    commands,
+    bucket: 'orient-trust-manifests',
+    expectedRetentionDays: 365
+  });
+  await assert.rejects(
+    unsafeBackend.putIfAbsent('orient/trust-manifests/v1/0000000000000001.json', '{}'),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_S3_CONFIGURATION_INVALID'
+  );
+  assert.equal(client.objects.size, 0);
+});
+
+test('trust manifest S3 backend requires an explicit expected retention policy', () => {
+  const client = new FakeS3();
+  assert.throws(() => new S3ObjectLockTrustManifestAnchorBackend({
+    client,
+    commands,
+    bucket: 'orient-trust-manifests'
+  }), /expected bucket COMPLIANCE retention/);
 });
