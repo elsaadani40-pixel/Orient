@@ -95,14 +95,15 @@ test('rejects modified token payloads and signatures', () => {
 });
 
 test('rejects unknown signing keys', () => {
-  const { issuer, input } = fixture();
+  const { issuer, input, verifier } = fixture();
   const token = issuer.issue(input);
-  const verifier = new Ed25519IdentityTokenVerifier({
-    publicKeys: new Map(),
+  const unknownKeyIssuer = new Ed25519IdentityTokenIssuer({
+    privateKey: crypto.generateKeyPairSync('ed25519').privateKey,
+    kid: 'untrusted-key',
     now: () => 1_800_000_000_000
   });
-  // An empty key set is rejected at construction rather than accepting a token.
-  assert.throws(() => verifier, { code: 'IDENTITY_TOKEN_KEY_UNKNOWN' });
+  const unknownToken = unknownKeyIssuer.issue(input);
+  assert.throws(() => verifier.verify(unknownToken), { code: 'IDENTITY_TOKEN_KEY_UNKNOWN' });
   assert.equal(typeof token, 'string');
 });
 
