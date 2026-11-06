@@ -28,42 +28,36 @@ class S3ObjectLockTrustManifestAnchorBackend extends S3ObjectLockEvidenceAnchorB
       useBucketDefaultRetention: true
     });
     this.expectedRetentionDays = expectedRetentionDays;
-    this.configurationPromise = null;
   }
 
   async verifyConfiguration() {
-    if (!this.configurationPromise) {
-      this.configurationPromise = (async () => {
-        const [lock, versioning] = await Promise.all([
-          this.client.send(new this.commands.GetObjectLockConfigurationCommand({
-            Bucket: this.bucket
-          })),
-          this.client.send(new this.commands.GetBucketVersioningCommand({
-            Bucket: this.bucket
-          }))
-        ]);
-        const retention = lock?.ObjectLockConfiguration?.Rule?.DefaultRetention;
-        if (lock?.ObjectLockConfiguration?.ObjectLockEnabled !== 'Enabled' ||
-            retention?.Mode !== 'COMPLIANCE' ||
-            retention?.Days !== this.expectedRetentionDays ||
-            versioning?.Status !== 'Enabled') {
-          throw Object.assign(
-            new Error('S3 trust bucket must have versioning and the expected default COMPLIANCE retention'),
-            { code: 'EVIDENCE_TRUST_MANIFEST_S3_CONFIGURATION_INVALID' }
-          );
-        }
-        return Object.freeze({
-          objectLockEnabled: true,
-          versioningEnabled: true,
-          retentionMode: 'COMPLIANCE',
-          retentionDays: retention.Days
-        });
-      })().catch(error => {
-        this.configurationPromise = null;
-        throw error;
-      });
+    // Bucket defaults can be changed by an independently administered S3
+    // operator while this process remains alive. Re-read the control-plane
+    // configuration for every operation instead of trusting a startup cache.
+    const [lock, versioning] = await Promise.all([
+      this.client.send(new this.commands.GetObjectLockConfigurationCommand({
+        Bucket: this.bucket
+      })),
+      this.client.send(new this.commands.GetBucketVersioningCommand({
+        Bucket: this.bucket
+      }))
+    ]);
+    const retention = lock?.ObjectLockConfiguration?.Rule?.DefaultRetention;
+    if (lock?.ObjectLockConfiguration?.ObjectLockEnabled !== 'Enabled' ||
+        retention?.Mode !== 'COMPLIANCE' ||
+        retention?.Days !== this.expectedRetentionDays ||
+        versioning?.Status !== 'Enabled') {
+      throw Object.assign(
+        new Error('S3 trust bucket must have versioning and the expected default COMPLIANCE retention'),
+        { code: 'EVIDENCE_TRUST_MANIFEST_S3_CONFIGURATION_INVALID' }
+      );
     }
-    return this.configurationPromise;
+    return Object.freeze({
+      objectLockEnabled: true,
+      versioningEnabled: true,
+      retentionMode: 'COMPLIANCE',
+      retentionDays: retention.Days
+    });
   }
 
   async putIfAbsent(key, value) {
