@@ -34,7 +34,8 @@ class AnchoredTrustManifestAcceptanceService {
       throw new TypeError('An independent durable trust-state cache is required');
     }
     if (!externalAnchorStore || typeof externalAnchorStore.readHead !== 'function' ||
-        typeof externalAnchorStore.append !== 'function') {
+        typeof externalAnchorStore.append !== 'function' ||
+        (rootTransitionLedger && typeof externalAnchorStore.getManifest !== 'function')) {
       throw new TypeError('An independently administered immutable trust history is required');
     }
     if (typeof authorize !== 'function') {
@@ -72,6 +73,29 @@ class AnchoredTrustManifestAcceptanceService {
     return { trustedRootKeys: state.trustedRootKeys, rootState: state };
   }
 
+  async verifyExternalHeadRoot(trustContext, head) {
+    if (!trustContext.rootState || !head) return;
+    const state = trustContext.rootState;
+    if (head.version < state.manifestHeadVersion ||
+        (head.version === state.manifestHeadVersion && head.digest !== state.manifestHeadDigest)) {
+      fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_BEHIND_ROOT_STATE', 'Manifest anchor history is behind or conflicts with the root-transition manifest head');
+    }
+    if (head.version > state.manifestHeadVersion) {
+      let anchored;
+      try {
+        anchored = await this.externalAnchorStore.getManifest(head.version, {
+          trustedRootKeys: trustContext.trustedRootKeys
+        });
+      } catch {
+        fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_INVALID', 'Current manifest head could not be verified against reconstructed root state');
+      }
+      if (!anchored || anchored.digest !== head.digest ||
+          anchored.manifest.rootKeyId !== state.rootKeyId) {
+        fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_ROOT_MISMATCH', 'Manifest head after root activation must be signed by the currently effective root');
+      }
+    }
+  }
+
   async recover({ principal } = {}) {
     let authorized = false;
     try {
@@ -88,11 +112,7 @@ class AnchoredTrustManifestAcceptanceService {
     if (!head) {
       fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_EMPTY', 'No independently anchored trust history is available for recovery');
     }
-    if (trustContext.rootState && (head.version < trustContext.rootState.manifestHeadVersion ||
-        (head.version === trustContext.rootState.manifestHeadVersion &&
-          head.digest !== trustContext.rootState.manifestHeadDigest))) {
-      fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_BEHIND_ROOT_STATE', 'Manifest anchor history is behind or conflicts with the root-transition manifest head');
-    }
+    await this.verifyExternalHeadRoot(trustContext, head);
     const current = await this.versionStore.read();
     if (current !== null && (!current || !Number.isSafeInteger(current.version) ||
         current.version < 1 || !/^[a-f0-9]{64}$/.test(current.digest || ''))) {
@@ -153,6 +173,7 @@ class AnchoredTrustManifestAcceptanceService {
     }
 
     const externalHead = await this.externalAnchorStore.readHead({ trustedRootKeys: trustContext.trustedRootKeys });
+    await this.verifyExternalHeadRoot(trustContext, externalHead);
     const cachedState = await this.versionStore.read();
     if (cachedState !== null && (!cachedState || !Number.isSafeInteger(cachedState.version) ||
         cachedState.version < 1 || !/^[a-f0-9]{64}$/.test(cachedState.digest || ''))) {
