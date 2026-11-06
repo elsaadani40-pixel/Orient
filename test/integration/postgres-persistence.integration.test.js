@@ -1813,8 +1813,8 @@ test('PostgreSQL Gateway execution lookup cannot read another owner execution in
   try {
     await runtimePersistence.initialize();
     await runtimePersistence.withPrincipal(ownerA, () => runtimePersistence.db.query(
-      'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
-      [executionId, tenantId, { id: executionId, tenantId, status: 'completed' }]
+      'INSERT INTO executions(execution_id,tenant_id,owner_id,payload,updated_at) VALUES($1,$2,$3,$4,NOW())',
+      [executionId, tenantId, ownerB.ownerId, { id: executionId, tenantId, status: 'completed' }]
     ));
 
     const ownResult = await runtimePersistence.withPrincipal(ownerA, () =>
@@ -1839,7 +1839,23 @@ test('PostgreSQL Gateway execution lookup cannot read another owner execution in
       );
       return result.rows[0]?.owner_id;
     });
-    assert.equal(attribution, ownerA.ownerId);
+    assert.equal(attribution, ownerA.ownerId, 'the trigger must override caller-supplied owner attribution');
+
+    await assert.rejects(
+      () => runtimePersistence.withPrincipal(ownerA, () => runtimePersistence.db.query(
+        'UPDATE executions SET owner_id=$1 WHERE execution_id=$2 AND tenant_id=$3',
+        [ownerB.ownerId, executionId, tenantId]
+      )),
+      /ORIENT execution ownership is immutable/
+    );
+
+    await assert.rejects(
+      () => runtimePersistence.db.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+        ['gateway-no-owner-' + crypto.randomUUID(), tenantId, { tenantId }]
+      ),
+      /ORIENT runtime owner context is required/
+    );
   } finally {
     await pool.query('DELETE FROM executions WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
     await runtimePool.end();
