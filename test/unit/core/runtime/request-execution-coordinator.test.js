@@ -738,3 +738,36 @@ test('cancels before the next tool step when the owner session is revoked mid-ex
   assert.equal(toolRuns, 0);
   assert.equal(observedReason, 'Owner session is no longer active');
 });
+
+
+test('rejects a revoked owner session before loading a resumable checkpoint', async () => {
+  let checkpointReads = 0;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: {},
+    persistence: {
+      checkpoints: {
+        findLatest: async () => {
+          checkpointReads += 1;
+          return null;
+        }
+      }
+    },
+    persistenceCoordinator: {},
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async () => false
+  });
+
+  await assert.rejects(
+    coordinator.resume('execution-pending-approval', {
+      ownerSessionContext: { sessionId: 'revoked-before-resume' }
+    }),
+    error => error.code === 'OWNER_SESSION_REJECTED'
+  );
+
+  assert.equal(checkpointReads, 0);
+});
