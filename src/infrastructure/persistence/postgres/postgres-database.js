@@ -227,7 +227,9 @@ const MIGRATIONS = [
       WHERE request_fingerprint IS NULL;
     ALTER TABLE gateway_challenges ALTER COLUMN request_fingerprint SET NOT NULL;
     ALTER TABLE gateway_challenges ADD CONSTRAINT gateway_challenges_request_fingerprint_format
-      CHECK (request_fingerprint ~ '^[a-f0-9]{64}
+      CHECK (request_fingerprint ~ '^[a-f0-9]{64}$');
+  `},
+];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
     if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
