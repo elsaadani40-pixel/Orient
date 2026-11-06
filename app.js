@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const config = require('./src/core/config');
 const logger = require('./src/core/logging/logger');
 
@@ -19,8 +20,16 @@ const OwnerIdentityService =
 const OwnerIdentityRuntimeAdapter =
   require('./src/core/security/owner-identity-runtime-adapter');
 const { createOwnerServer } = require('./server');
-const { Ed25519IdentityTokenIssuer } = require('./src/infrastructure/gateway/identity/ed25519-identity-token');
+const {
+  Ed25519IdentityTokenIssuer,
+  Ed25519IdentityTokenVerifier
+} = require('./src/infrastructure/gateway/identity/ed25519-identity-token');
 const { OwnerSessionIdentityAuthority } = require('./src/infrastructure/gateway/identity/owner-session-identity-authority');
+const { GatewayIdentityExecutionService } = require('./src/infrastructure/gateway/identity/gateway-identity-execution-service');
+const {
+  GATEWAY_OPERATION_SCOPES,
+  createGatewayOperationHandlers
+} = require('./src/infrastructure/gateway/identity/gateway-operation-handlers');
 const { createGatewayIdentityRoutes } = require('./src/interfaces/http/routes/gateway-identity.routes');
 
 const AgentRegistry =
@@ -197,25 +206,55 @@ const ownerIdentityService = new OwnerIdentityService({
 const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService, tenantId: config.defaultTenantId });
 const gatewaySigningKey = process.env.ORIENT_GATEWAY_SIGNING_PRIVATE_KEY;
 const gatewaySigningKid = process.env.ORIENT_GATEWAY_SIGNING_KID;
+const gatewayVerifyKeysJson = process.env.ORIENT_GATEWAY_VERIFY_PUBLIC_KEYS;
 let gatewayIdentityRoutes = null;
-if (gatewaySigningKey || gatewaySigningKid) {
+let gatewayIdentityExecutionService = null;
+let gatewayOperationHandlers = new Map();
+if (gatewaySigningKey || gatewaySigningKid || gatewayVerifyKeysJson) {
   if (config.persistenceMode !== 'postgres' || !persistence.gatewayIdentity ||
       !gatewaySigningKey || !gatewaySigningKid) {
     throw Object.assign(
-      new Error('Gateway identity signing requires PostgreSQL plus ORIENT_GATEWAY_SIGNING_PRIVATE_KEY and ORIENT_GATEWAY_SIGNING_KID.'),
+      new Error('Gateway identity requires PostgreSQL plus an active Ed25519 private key and key id.'),
       { code: 'GATEWAY_IDENTITY_CONFIGURATION_INVALID' }
     );
   }
+  const privateKey = crypto.createPrivateKey(gatewaySigningKey);
+  const publicKeys = new Map([[gatewaySigningKid, crypto.createPublicKey(privateKey)]]);
+  if (gatewayVerifyKeysJson) {
+    let configuredKeys;
+    try { configuredKeys = JSON.parse(gatewayVerifyKeysJson); }
+    catch { throw Object.assign(new Error('ORIENT_GATEWAY_VERIFY_PUBLIC_KEYS must be a JSON object.'), { code: 'GATEWAY_IDENTITY_CONFIGURATION_INVALID' }); }
+    if (!configuredKeys || typeof configuredKeys !== 'object' || Array.isArray(configuredKeys)) {
+      throw Object.assign(new Error('ORIENT_GATEWAY_VERIFY_PUBLIC_KEYS must be a JSON object.'), { code: 'GATEWAY_IDENTITY_CONFIGURATION_INVALID' });
+    }
+    for (const [kid, pem] of Object.entries(configuredKeys)) {
+      if (publicKeys.has(kid) || typeof pem !== 'string' || !pem.trim()) {
+        throw Object.assign(new Error('Gateway verification key ids must be unique and values must be PEM strings.'), { code: 'GATEWAY_IDENTITY_CONFIGURATION_INVALID' });
+      }
+      publicKeys.set(kid, crypto.createPublicKey(pem));
+    }
+  }
   const tokenIssuer = new Ed25519IdentityTokenIssuer({
-    privateKey: gatewaySigningKey,
+    privateKey,
     kid: gatewaySigningKid
   });
+  const tokenVerifier = new Ed25519IdentityTokenVerifier({ publicKeys });
   const identityAuthority = new OwnerSessionIdentityAuthority({
     ownerIdentity: ownerIdentityService,
     tokenIssuer,
     challengeStore: persistence.gatewayIdentity,
     tenantId: config.defaultTenantId,
-    workspaceId: ownerAuthService.workspaceId
+    workspaceId: ownerAuthService.workspaceId,
+    operationScopes: GATEWAY_OPERATION_SCOPES
+  });
+  gatewayOperationHandlers = createGatewayOperationHandlers();
+  gatewayIdentityExecutionService = new GatewayIdentityExecutionService({
+    tokenVerifier,
+    gatewayIdentityRepository: persistence.gatewayIdentity,
+    operationScopes: GATEWAY_OPERATION_SCOPES,
+    sessionAuthorizer: ({ ownerId, sessionId }) =>
+      ownerIdentityService.getStableOwnerIdForRuntime() === ownerId &&
+      ownerAuthService.isActiveSession(sessionId)
   });
   gatewayIdentityRoutes = createGatewayIdentityRoutes({
     repository: persistence.gatewayIdentity,
@@ -502,6 +541,8 @@ const server =
     accessAudit: accessAuditRepository,
     ownerAuth: ownerAuthService,
     gatewayIdentityRoutes,
+    gatewayIdentityExecutionService,
+    gatewayOperationHandlers,
     ownerProfile: ownerWorkProfileStore,
     ownerChatStore: ownerChatConversationStore,
     ownerChatHistoryResolver: async messages => {
