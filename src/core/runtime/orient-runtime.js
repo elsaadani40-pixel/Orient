@@ -42,7 +42,8 @@ class OrientRuntime {
     agentRegistry = null,
     agentInvocationService = null,
     capabilityGovernance = null,
-    approvalDecisionAuthorizer = null
+    approvalDecisionAuthorizer = null,
+    ownerSessionAuthorizer = null
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -205,7 +206,8 @@ class OrientRuntime {
       tenantId: this.tenantId,
       userId: this.userId,
       workspaceId: this.workspaceId,
-      maxInputChars: this.maxInputChars
+      maxInputChars: this.maxInputChars,
+      ownerSessionAuthorizer
     });
 
     this.name =
