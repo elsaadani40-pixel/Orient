@@ -16,13 +16,13 @@ test('trust-manifest bucket grants access only to the dedicated trust-store serv
   assert.match(main, /identifiers = \[var\.trust_store_service_role_arn\]/);
   assert.doesNotMatch(main, /var\.runtime_role_arn/);
   assert.match(readme, /never the ORIENT application Runtime role/i);
-  assert.match(readme, /ORIENT application Runtime must have no credentials or direct S3 access/i);
+  assert.match(readme, /Do not use the Runtime application role/i);
 });
 
 test('trust-store service can inspect bucket controls required by S3 preflight', () => {
   const bucketInspection = main.match(/sid\s*=\s*"AllowTrustStoreServiceBucketInspection"[\s\S]*?resources\s*=\s*\[aws_s3_bucket\.trust_manifest\.arn\]/);
   assert.ok(bucketInspection, 'bucket inspection permissions must target the bucket ARN');
-  assert.match(bucketInspection[0], /"s3:ListBucket"/);
+  const listing = main.match(/sid\\s*=\\s*"AllowTrustStoreServiceListManifestPrefix"[\\s\\S]*?resources\\s*=\\s*\\[aws_s3_bucket\\.trust_manifest\\.arn\\]/);\n  assert.ok(listing, "prefix listing must be a separate bucket-level permission");\n  assert.match(listing[0], /"s3:ListBucket"/);
   assert.match(bucketInspection[0], /"s3:GetBucketObjectLockConfiguration"/);
   assert.match(bucketInspection[0], /"s3:GetBucketVersioning"/);
   assert.match(readme, /s3:GetBucketObjectLockConfiguration/);
