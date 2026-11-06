@@ -49,6 +49,9 @@ test('migration 14 binds execution rows to the authenticated runtime owner', () 
   for (const fragment of [
     'ADD COLUMN IF NOT EXISTS owner_id UUID',
     'idx_executions_tenant_owner_updated',
+    'DROP POLICY IF EXISTS orient_tenant_scope ON public.executions',
+    'CREATE POLICY orient_execution_owner_scope ON public.executions TO orient_runtime',
+    "owner_id::text = current_setting('app.orient_owner_id', true)",
     "pg_has_role(current_user, 'orient_runtime', 'MEMBER')",
     "current_setting('app.orient_owner_id', true)",
     'NEW.owner_id := configured_owner::uuid',
