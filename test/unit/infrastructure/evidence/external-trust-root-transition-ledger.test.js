@@ -189,7 +189,9 @@ test('ledger supports sequential rotations and exact idempotent append retry', a
     sequence: 2, previousDigest: first.transitionDigest, previousEpoch: 2,
     previousRootKeyId: 'root-2',
     previousRootFingerprint: publicKeyFingerprint(f.next.publicKey),
-    nextRoot: f.third, nextRootKeyId: 'root-3'
+    nextRoot: f.third, nextRootKeyId: 'root-3',
+    issuedAt: '2026-11-06T10:02:00.000Z',
+    effectiveAt: '2026-11-06T10:03:00.000Z'
   });
   const second = signRootTransition(secondPayload, {
     currentRootKeyId: 'root-2',
