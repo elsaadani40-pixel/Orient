@@ -278,7 +278,8 @@ function verifyRootTransition(envelope, {
   expectedState,
   verificationTime,
   clockSkewMs,
-  maxValidityMs
+  maxValidityMs,
+  historicalReplay = false
 } = {}) {
   try {
     assertFields(envelope, ['payload', 'authorizationSignatures', 'nextRootProof', 'transitionDigest'],
@@ -292,13 +293,17 @@ function verifyRootTransition(envelope, {
         transitionDigest !== envelopeDigest(payload, authorizationSignatures, nextRootProof)) return null;
 
     const now = timestamp(verificationTime, 'EVIDENCE_ROOT_TRANSITION_TIME_INVALID');
+    if (typeof historicalReplay !== 'boolean') return null;
     if (!Number.isSafeInteger(clockSkewMs) || clockSkewMs < 0 || clockSkewMs > 10 * 60 * 1000 ||
         !Number.isSafeInteger(maxValidityMs) || maxValidityMs < 60 * 1000 ||
         maxValidityMs > 30 * 24 * 60 * 60 * 1000) return null;
-    if (Date.parse(payload.issuedAt) > Date.parse(now) + clockSkewMs ||
+    if (Date.parse(payload.expiresAt) - Date.parse(payload.issuedAt) > maxValidityMs) return null;
+    if (historicalReplay) {
+      if (now !== payload.effectiveAt || Date.parse(payload.effectiveAt) < Date.parse(payload.issuedAt) ||
+          Date.parse(payload.expiresAt) <= Date.parse(payload.effectiveAt)) return null;
+    } else if (Date.parse(payload.issuedAt) > Date.parse(now) + clockSkewMs ||
         Date.parse(payload.expiresAt) <= Date.parse(now) ||
-        Date.parse(payload.effectiveAt) > Date.parse(now) ||
-        Date.parse(payload.expiresAt) - Date.parse(payload.issuedAt) > maxValidityMs) return null;
+        Date.parse(payload.effectiveAt) > Date.parse(now)) return null;
 
     if (!isPlainRecord(expectedState)) return null;
     assertFields(expectedState, ['rootEpoch', 'rootKeyId', 'rootFingerprint', 'manifestHeadVersion',
