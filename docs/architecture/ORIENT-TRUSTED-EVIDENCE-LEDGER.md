@@ -207,7 +207,6 @@ At the reviewed schema version 12:
 
 These observations are based on branch source at the time this contract was written and must be rechecked before implementation if the branch head changes.
 
-
 ## 12. Implementation status — branch work in progress
 
 The first implementation slice has been added on `feat/supabase-optional-cloud-architecture`:
@@ -227,6 +226,8 @@ The first implementation slice has been added on `feat/supabase-optional-cloud-a
 - The storage backend contract requires strongly consistent `putIfAbsent`, `get`, and `list`. The backend principal must be unable to overwrite or delete objects; retention/object-lock and backup/restore must be configured and independently administered by the operator. The adapter deliberately has no update/delete method.
 - Unit tests use an in-memory immutable backend to validate generic adapter semantics and a fake S3 client to validate the AWS S3 Object Lock command contract. They do not prove real AWS account configuration, durability, retention enforcement, backup recovery, or independent trust-domain separation.
 - `S3ObjectLockEvidenceAnchorBackend` is an optional provider adapter that accepts an AWS SDK for JavaScript v3 S3 client and command constructors by dependency injection; the core package does not add an AWS SDK dependency. It uses conditional `PutObject` (`IfNoneMatch: "*"`), applies COMPLIANCE Object Lock retention at creation, reads objects, and paginates listings. It intentionally exposes no overwrite or delete operation.
+- The S3 adapter now retries HTTP 409 `ConditionalRequestConflict` responses with a bounded, linearly increasing delay (three retries by default); HTTP 412 still triggers a read-back to implement exact idempotent retry semantics. Retry count, delay, and sleep function are injectable and validated.
+- S3 listing now reads object bodies through a bounded worker pool (eight concurrent reads by default), preserving listing order without launching an unbounded `Promise.all` across the entire key set. The concurrency limit is configurable and validated.
 - Production use requires a dedicated bucket with S3 Object Lock enabled at bucket creation, versioning enabled, a separately administered bucket policy denying delete and retention-bypass permissions to the adapter principal, a documented retention period, and an independently administered backup/restore procedure. The operator must verify these controls in the actual AWS account; passing fake-client tests is not evidence that the bucket enforces them.
 - A real-provider integration test and operational evidence (bucket configuration, effective IAM policy, retention verification, recovery drill, and independent administrator boundary) remain outstanding. Until then this adapter is an implemented integration boundary, not a production deployment claim.
 - The first append implementation verifies the full execution chain before every write, which is intentionally conservative and O(n) per append. A later optimization must preserve verification against a trusted external anchor and must not silently trust an unverified database-local head.
