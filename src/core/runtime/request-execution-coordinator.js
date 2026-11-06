@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const ExecutionContext = require('../execution/execution-context');
 const AgentState = require('../agent/state/agent-state');
+const AppError = require('../errors/AppError');
 
 function createApprovalSummary(tool, input) {
   if (tool !== 'project.execute_change') {
@@ -178,9 +179,7 @@ class RequestExecutionCoordinator {
       ? await this.ownerSessionAuthorizer(sessionId) === true
       : false;
     if (!authorized) {
-      throw Object.assign(new Error('An active authenticated owner session is required'), {
-        code: 'OWNER_SESSION_REJECTED'
-      });
+      throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
     }
     return true;
   }
