@@ -41,7 +41,8 @@ function fixture() {
     manifestHeadDigest: 'a'.repeat(64),
     transitionSequence: 0,
     transitionDigest: null,
-    usedRootKeyIds: ['root-1']
+    usedRootKeyIds: ['root-1'],
+    usedRootFingerprints: [publicKeyFingerprint(root.publicKey)]
   };
   const now = '2026-11-06T10:05:00.000Z';
   const payload = (mode = 'planned-rotation', overrides = {}) => ({
@@ -122,7 +123,7 @@ test('planned rotation rejects a changed payload, stale manifest head, and reuse
     expectedState: { ...f.expectedState, manifestHeadDigest: 'b'.repeat(64) }
   }), null);
   assert.equal(f.verify(envelope, {
-    expectedState: { ...f.expectedState, usedRootKeyIds: ['root-1', 'root-2'] }
+    expectedState: { ...f.expectedState, usedRootKeyIds: ['root-1', 'root-2'], usedRootFingerprints: [...f.expectedState.usedRootFingerprints, publicKeyFingerprint(f.next.publicKey)] }
   }), null);
 });
 
