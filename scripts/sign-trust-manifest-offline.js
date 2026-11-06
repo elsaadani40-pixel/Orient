@@ -38,6 +38,7 @@ function readPrivateKeyFile(filePath, {
 
   let descriptor;
   let keyBytes;
+  let bounded;
   try {
     const before = fs.lstatSync(absolutePath);
     if (before.isSymbolicLink() || !before.isFile()) {
@@ -67,7 +68,7 @@ function readPrivateKeyFile(filePath, {
     // Never use readFileSync(fd) for secret material: a file can grow after
     // the metadata check and cause an unbounded allocation. Read at most
     // MAX_PRIVATE_KEY_BYTES + 1 bytes, then re-check the opened inode.
-    const bounded = Buffer.alloc(MAX_PRIVATE_KEY_BYTES + 1);
+    bounded = Buffer.alloc(MAX_PRIVATE_KEY_BYTES + 1);
     let total = 0;
     while (total < bounded.length) {
       const read = fs.readSync(
@@ -96,6 +97,7 @@ function readPrivateKeyFile(filePath, {
     if (error && error.code && error.code.startsWith('TRUST_SIGNER_')) throw error;
     fail('TRUST_SIGNER_KEY_FILE_UNREADABLE', 'Unable to safely read the offline root private-key file');
   } finally {
+    if (bounded) bounded.fill(0);
     if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
