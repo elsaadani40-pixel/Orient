@@ -34,17 +34,17 @@ class FakeS3 {
 
   async send(command) {
     const input = command.input;
-    if (command instanceof commandSet().PutObjectCommand) {
+    if (command.constructor.name === 'PutObjectCommand') {
       this.putInputs.push(input);
       if (this.objects.has(input.Key)) throw preconditionFailed();
       this.objects.set(input.Key, input.Body);
       return {};
     }
-    if (command instanceof commandSet().GetObjectCommand) {
+    if (command.constructor.name === 'GetObjectCommand') {
       if (!this.objects.has(input.Key)) throw notFound();
       return { Body: Buffer.from(this.objects.get(input.Key), 'utf8') };
     }
-    if (command instanceof commandSet().ListObjectsV2Command) {
+    if (command.constructor.name === 'ListObjectsV2Command') {
       this.listCalls.push(input);
       const keys = [...this.objects.keys()].filter(key => key.startsWith(input.Prefix)).sort();
       const offset = input.ContinuationToken ? Number(input.ContinuationToken) : 0;
