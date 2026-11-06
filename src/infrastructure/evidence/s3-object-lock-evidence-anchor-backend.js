@@ -177,7 +177,7 @@ class S3ObjectLockEvidenceAnchorBackend {
   }
 
   async get(key) {
-    if (typeof key !== 'string' || !key.startsWith('orient/evidence-anchors/v1/')) {
+    if (typeof key !== 'string' || !key.startsWith(this.namespacePrefix)) {
       fail('EVIDENCE_ANCHOR_S3_INPUT_INVALID', 'A namespaced anchor key is required');
     }
     try {
