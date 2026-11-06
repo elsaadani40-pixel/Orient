@@ -139,7 +139,7 @@ jobs:
           node --check server.js
           while IFS= read -r file; do
             node --check "$file"
-          done < <(find src test -type f -name '*.js' -print | sort)
+          done < <(find src test scripts -type f -name '*.js' -print | sort)
 
       - name: Verify shell script syntax
         shell: bash
