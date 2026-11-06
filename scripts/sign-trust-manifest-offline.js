@@ -82,7 +82,7 @@ function readPrivateKeyFile(filePath, {
       total += read;
     }
     const afterRead = fs.fstatSync(descriptor, { bigint: true });
-    if (total < 1 || total > MAX_PRIVATE_KEY_BYTES || afterRead.size !== total ||
+    if (total < 1 || total > MAX_PRIVATE_KEY_BYTES || afterRead.size !== BigInt(total) ||
         afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
         afterRead.nlink !== 1n ||
         (platform !== 'win32' && typeof process.getuid === 'function' && afterRead.uid !== process.getuid()) ||
