@@ -121,8 +121,78 @@ function verifyEvidenceEnvelope(record, trustedKeys) {
   }
 }
 
+
+function createEvidenceAnchor({ tenantId, executionId, sequence, recordHash, anchoredAt = new Date().toISOString() } = {}, { keyId, privateKey } = {}) {
+  if (!privateKey) fail('EVIDENCE_ANCHOR_SIGNING_KEY_REQUIRED', 'A persistent external anchor signing key is required');
+  let key;
+  try {
+    key = crypto.createPrivateKey(privateKey);
+  } catch (cause) {
+    fail('EVIDENCE_ANCHOR_SIGNING_KEY_INVALID', `Unable to load anchor signing key: ${cause.message}`);
+  }
+  if (key.asymmetricKeyType !== 'ed25519') {
+    fail('EVIDENCE_ANCHOR_SIGNING_KEY_INVALID', 'External anchor signing key must use Ed25519');
+  }
+  if (typeof tenantId !== 'string' || !tenantId.trim() || tenantId.length > 128 ||
+      typeof executionId !== 'string' || !executionId.trim() || executionId.length > 256 ||
+      !Number.isSafeInteger(sequence) || sequence < 1 || !HASH_PATTERN.test(recordHash || '') ||
+      typeof keyId !== 'string' || !KEY_ID_PATTERN.test(keyId)) {
+    fail('EVIDENCE_ANCHOR_INVALID', 'External anchor scope, sequence, hash, and key identifier are required');
+  }
+  const timestamp = new Date(anchoredAt);
+  if (!Number.isFinite(timestamp.getTime())) {
+    fail('EVIDENCE_ANCHOR_TIMESTAMP_INVALID', 'External anchor timestamp is invalid');
+  }
+  const unsigned = {
+    schemaVersion: 1,
+    tenantId,
+    executionId,
+    sequence,
+    recordHash,
+    keyId,
+    anchoredAt: timestamp.toISOString()
+  };
+  const signature = crypto.sign(
+    null,
+    Buffer.concat([ANCHOR_DOMAIN, Buffer.from(canonicalJson(unsigned), 'utf8')]),
+    key
+  ).toString('base64');
+  return Object.freeze({ ...unsigned, signature });
+}
+
+function verifyEvidenceAnchor(anchor, trustedKeys) {
+  try {
+    if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor) ||
+        anchor.schemaVersion !== 1 || typeof anchor.tenantId !== 'string' ||
+        !anchor.tenantId.trim() || typeof anchor.executionId !== 'string' ||
+        !anchor.executionId.trim() || !Number.isSafeInteger(anchor.sequence) ||
+        anchor.sequence < 1 || !HASH_PATTERN.test(anchor.recordHash || '') ||
+        typeof anchor.signature !== 'string' || !anchor.signature.length) return false;
+    const { signature, ...unsigned } = anchor;
+    if (typeof unsigned.keyId !== 'string' || !KEY_ID_PATTERN.test(unsigned.keyId)) return false;
+    const timestamp = new Date(unsigned.anchoredAt);
+    if (!Number.isFinite(timestamp.getTime()) || timestamp.toISOString() !== unsigned.anchoredAt) return false;
+    const entry = normalizeKeyEntry(trustedKeys?.[unsigned.keyId], unsigned.keyId);
+    if (entry.validFrom && timestamp < entry.validFrom) return false;
+    if (entry.revokedAt && timestamp >= entry.revokedAt) return false;
+    const signatureBytes = Buffer.from(signature, 'base64');
+    if (signatureBytes.toString('base64') !== signature) return false;
+    return crypto.verify(
+      null,
+      Buffer.concat([ANCHOR_DOMAIN, Buffer.from(canonicalJson(unsigned), 'utf8')]),
+      entry.publicKey,
+      signatureBytes
+    );
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   RECORD_DOMAIN: RECORD_DOMAIN.toString('utf8'),
+  ANCHOR_DOMAIN: ANCHOR_DOMAIN.toString('utf8'),
   signEvidenceEnvelope,
-  verifyEvidenceEnvelope
+  verifyEvidenceEnvelope,
+  createEvidenceAnchor,
+  verifyEvidenceAnchor
 };
