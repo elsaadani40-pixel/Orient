@@ -9,6 +9,9 @@ const Goal =
 const AgentStateMachine =
   require('../agent/state/agent-state-machine');
 
+const { createEvidenceRecord } =
+  require('./evidence-record');
+
 const EXECUTION_STATUS = Object.freeze({
   CREATED: 'created',
   RUNNING: 'running',
@@ -482,6 +485,18 @@ class ExecutionContext {
     result = null,
     error = null
   }) {
+    const timestamp = new Date().toISOString();
+    const normalizedSuccess = Boolean(success);
+    const evidence = createEvidenceRecord({
+      executionId: this.executionId,
+      step,
+      tool,
+      success: normalizedSuccess,
+      result,
+      error,
+      observedAt: timestamp
+    });
+
     const observation = {
       id:
         crypto.randomUUID(),
@@ -493,13 +508,13 @@ class ExecutionContext {
       tool,
 
       success:
-        Boolean(success),
+        normalizedSuccess,
 
-      timestamp:
-        new Date().toISOString(),
+      timestamp,
 
       result,
-      error
+      error,
+      evidence
     };
 
     this.observations.push(
