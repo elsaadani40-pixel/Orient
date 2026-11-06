@@ -255,6 +255,851 @@ const MIGRATIONS = [
         AND session_id::text = current_setting('app.orient_session_id', true)
       );
   `},
+  {version:13,sql:`
+    CREATE TABLE IF NOT EXISTS execution_evidence (
+      tenant_id TEXT NOT NULL CHECK (length(tenant_id) BETWEEN 1 AND 128),
+      execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
+      sequence BIGINT NOT NULL CHECK (sequence > 0),
+      evidence_id TEXT NOT NULL CHECK (evidence_id ~ '^ev_[a-f0-9]{64} {
+  constructor({pool,schema=null}={}) {
+    if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
+    this.pool=pool; this.schema=schema;
+    this.contextStorage = new AsyncLocalStorage();
+    this.savepointCounter = 0;
+  }
+  async initialize() {
+    const exists = await this.pool.query(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ready"
+    );
+    if (!exists.rows[0]?.ready) {
+      throw Object.assign(
+        new Error('PostgreSQL schema is not installed. Run the explicit database migration command before starting ORIENT.'),
+        { code: 'PERSISTENCE_SCHEMA_NOT_READY' }
+      );
+    }
+
+    const current = await this.pool.query(
+      'SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations'
+    );
+    const version = Number(current.rows[0]?.version || 0);
+    const latest = Math.max(...MIGRATIONS.map(migration => migration.version));
+    if (version < latest) {
+      throw Object.assign(
+        new Error(`PostgreSQL schema is outdated (version ${version}; expected ${latest}). Run the explicit database migration command.`),
+        { code: 'PERSISTENCE_SCHEMA_OUTDATED', currentVersion: version, expectedVersion: latest }
+      );
+    }
+
+    return { schemaVersion: version };
+  }
+
+  async migrate({ role = null } = {}) {
+    const client=await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      if (role !== null) {
+        if (typeof role !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(role)) throw new TypeError('Invalid PostgreSQL migration role name');
+        // Keep the elevated migration identity transaction-local so a pooled
+        // connection can never return to the pool still running as orient_owner.
+        await client.query('SET LOCAL ROLE ' + role);
+      }
+      await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
+      await client.query(BASE_SCHEMA);
+      const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
+      const version=Number(current.rows[0].version);
+      if(version===0){
+        for(const migration of MIGRATIONS.filter(m=>m.version>1)){
+          await client.query(migration.sql);
+        }
+        for (const migration of MIGRATIONS) await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
+      } else {
+        for(const migration of MIGRATIONS.filter(m=>m.version>version)){
+          await client.query(migration.sql);
+          await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
+        }
+      }
+      await client.query('COMMIT');
+      return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
+    } catch(error){
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  validatePrincipal(principal) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!principal || !['orient-owner-session', 'orient-runtime-owner'].includes(principal.authSource) ||
+        typeof principal.ownerId !== 'string' || !uuid.test(principal.ownerId) ||
+        principal.principalId !== principal.ownerId ||
+        typeof principal.sessionId !== 'string' || !uuid.test(principal.sessionId) ||
+        typeof principal.tenantId !== 'string' || !principal.tenantId.trim() || principal.tenantId.length > 128 ||
+        typeof principal.workspaceId !== 'string' || !principal.workspaceId.trim() || principal.workspaceId.length > 128) {
+      throw Object.assign(new Error('A verified ORIENT owner principal is required for a scoped PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_INVALID' });
+    }
+    return Object.freeze({ principalId: principal.principalId, ownerId: principal.ownerId, tenantId: principal.tenantId, workspaceId: principal.workspaceId, sessionId: principal.sessionId, authSource: principal.authSource });
+  }
+
+  async withPrincipal(principal, work) {
+    if (typeof work !== 'function') throw new TypeError('work callback is required');
+    const verifiedPrincipal = this.validatePrincipal(principal);
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const current = active.principal;
+      if (current.principalId !== verifiedPrincipal.principalId || current.tenantId !== verifiedPrincipal.tenantId || current.workspaceId !== verifiedPrincipal.workspaceId || current.sessionId !== verifiedPrincipal.sessionId) {
+        throw Object.assign(new Error('Cannot change ORIENT principal inside an active PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_SWITCH_REJECTED' });
+      }
+      return work();
+    }
+
+    const client = await this.pool.connect();
+    const context = { client, principal: verifiedPrincipal, poisoned: null };
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+        [verifiedPrincipal.principalId, verifiedPrincipal.ownerId, verifiedPrincipal.tenantId, verifiedPrincipal.workspaceId, verifiedPrincipal.sessionId]
+      );
+      const result = await this.contextStorage.run(context, () => work());
+      if (context.poisoned) {
+        throw Object.assign(
+          new Error('A nested PostgreSQL savepoint could not be rolled back; the outer transaction cannot commit.'),
+          { code: 'PERSISTENCE_TRANSACTION_CLEANUP_FAILED', cause: context.poisoned }
+        );
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+
+  async query(text, values = []) {
+    const active = this.contextStorage.getStore();
+    return active ? active.client.query(text, values) : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const savepoint = 'orient_nested_' + (++this.savepointCounter);
+      await active.client.query('SAVEPOINT ' + savepoint);
+      try {
+        const result = await work(active.client);
+        await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        return result;
+      } catch (error) {
+        try {
+          await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint);
+          await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        } catch (rollbackError) {
+          active.poisoned = rollbackError;
+        }
+        throw error;
+      }
+    }
+    const client = await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  static json(value){return value===undefined?null:value;}
+  static uuid(){return crypto.randomUUID();}
+}
+module.exports={PostgresDatabase,BASE_SCHEMA,MIGRATIONS,SCHEMA:BASE_SCHEMA};
+),
+      previous_hash CHAR(64),
+      record_hash CHAR(64) NOT NULL CHECK (record_hash ~ '^[a-f0-9]{64} {
+  constructor({pool,schema=null}={}) {
+    if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
+    this.pool=pool; this.schema=schema;
+    this.contextStorage = new AsyncLocalStorage();
+    this.savepointCounter = 0;
+  }
+  async initialize() {
+    const exists = await this.pool.query(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ready"
+    );
+    if (!exists.rows[0]?.ready) {
+      throw Object.assign(
+        new Error('PostgreSQL schema is not installed. Run the explicit database migration command before starting ORIENT.'),
+        { code: 'PERSISTENCE_SCHEMA_NOT_READY' }
+      );
+    }
+
+    const current = await this.pool.query(
+      'SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations'
+    );
+    const version = Number(current.rows[0]?.version || 0);
+    const latest = Math.max(...MIGRATIONS.map(migration => migration.version));
+    if (version < latest) {
+      throw Object.assign(
+        new Error(`PostgreSQL schema is outdated (version ${version}; expected ${latest}). Run the explicit database migration command.`),
+        { code: 'PERSISTENCE_SCHEMA_OUTDATED', currentVersion: version, expectedVersion: latest }
+      );
+    }
+
+    return { schemaVersion: version };
+  }
+
+  async migrate({ role = null } = {}) {
+    const client=await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      if (role !== null) {
+        if (typeof role !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(role)) throw new TypeError('Invalid PostgreSQL migration role name');
+        // Keep the elevated migration identity transaction-local so a pooled
+        // connection can never return to the pool still running as orient_owner.
+        await client.query('SET LOCAL ROLE ' + role);
+      }
+      await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
+      await client.query(BASE_SCHEMA);
+      const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
+      const version=Number(current.rows[0].version);
+      if(version===0){
+        for(const migration of MIGRATIONS.filter(m=>m.version>1)){
+          await client.query(migration.sql);
+        }
+        for (const migration of MIGRATIONS) await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
+      } else {
+        for(const migration of MIGRATIONS.filter(m=>m.version>version)){
+          await client.query(migration.sql);
+          await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
+        }
+      }
+      await client.query('COMMIT');
+      return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
+    } catch(error){
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  validatePrincipal(principal) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!principal || !['orient-owner-session', 'orient-runtime-owner'].includes(principal.authSource) ||
+        typeof principal.ownerId !== 'string' || !uuid.test(principal.ownerId) ||
+        principal.principalId !== principal.ownerId ||
+        typeof principal.sessionId !== 'string' || !uuid.test(principal.sessionId) ||
+        typeof principal.tenantId !== 'string' || !principal.tenantId.trim() || principal.tenantId.length > 128 ||
+        typeof principal.workspaceId !== 'string' || !principal.workspaceId.trim() || principal.workspaceId.length > 128) {
+      throw Object.assign(new Error('A verified ORIENT owner principal is required for a scoped PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_INVALID' });
+    }
+    return Object.freeze({ principalId: principal.principalId, ownerId: principal.ownerId, tenantId: principal.tenantId, workspaceId: principal.workspaceId, sessionId: principal.sessionId, authSource: principal.authSource });
+  }
+
+  async withPrincipal(principal, work) {
+    if (typeof work !== 'function') throw new TypeError('work callback is required');
+    const verifiedPrincipal = this.validatePrincipal(principal);
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const current = active.principal;
+      if (current.principalId !== verifiedPrincipal.principalId || current.tenantId !== verifiedPrincipal.tenantId || current.workspaceId !== verifiedPrincipal.workspaceId || current.sessionId !== verifiedPrincipal.sessionId) {
+        throw Object.assign(new Error('Cannot change ORIENT principal inside an active PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_SWITCH_REJECTED' });
+      }
+      return work();
+    }
+
+    const client = await this.pool.connect();
+    const context = { client, principal: verifiedPrincipal, poisoned: null };
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+        [verifiedPrincipal.principalId, verifiedPrincipal.ownerId, verifiedPrincipal.tenantId, verifiedPrincipal.workspaceId, verifiedPrincipal.sessionId]
+      );
+      const result = await this.contextStorage.run(context, () => work());
+      if (context.poisoned) {
+        throw Object.assign(
+          new Error('A nested PostgreSQL savepoint could not be rolled back; the outer transaction cannot commit.'),
+          { code: 'PERSISTENCE_TRANSACTION_CLEANUP_FAILED', cause: context.poisoned }
+        );
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+
+  async query(text, values = []) {
+    const active = this.contextStorage.getStore();
+    return active ? active.client.query(text, values) : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const savepoint = 'orient_nested_' + (++this.savepointCounter);
+      await active.client.query('SAVEPOINT ' + savepoint);
+      try {
+        const result = await work(active.client);
+        await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        return result;
+      } catch (error) {
+        try {
+          await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint);
+          await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        } catch (rollbackError) {
+          active.poisoned = rollbackError;
+        }
+        throw error;
+      }
+    }
+    const client = await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  static json(value){return value===undefined?null:value;}
+  static uuid(){return crypto.randomUUID();}
+}
+module.exports={PostgresDatabase,BASE_SCHEMA,MIGRATIONS,SCHEMA:BASE_SCHEMA};
+),
+      key_id TEXT NOT NULL CHECK (key_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127} {
+  constructor({pool,schema=null}={}) {
+    if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
+    this.pool=pool; this.schema=schema;
+    this.contextStorage = new AsyncLocalStorage();
+    this.savepointCounter = 0;
+  }
+  async initialize() {
+    const exists = await this.pool.query(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ready"
+    );
+    if (!exists.rows[0]?.ready) {
+      throw Object.assign(
+        new Error('PostgreSQL schema is not installed. Run the explicit database migration command before starting ORIENT.'),
+        { code: 'PERSISTENCE_SCHEMA_NOT_READY' }
+      );
+    }
+
+    const current = await this.pool.query(
+      'SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations'
+    );
+    const version = Number(current.rows[0]?.version || 0);
+    const latest = Math.max(...MIGRATIONS.map(migration => migration.version));
+    if (version < latest) {
+      throw Object.assign(
+        new Error(`PostgreSQL schema is outdated (version ${version}; expected ${latest}). Run the explicit database migration command.`),
+        { code: 'PERSISTENCE_SCHEMA_OUTDATED', currentVersion: version, expectedVersion: latest }
+      );
+    }
+
+    return { schemaVersion: version };
+  }
+
+  async migrate({ role = null } = {}) {
+    const client=await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      if (role !== null) {
+        if (typeof role !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(role)) throw new TypeError('Invalid PostgreSQL migration role name');
+        // Keep the elevated migration identity transaction-local so a pooled
+        // connection can never return to the pool still running as orient_owner.
+        await client.query('SET LOCAL ROLE ' + role);
+      }
+      await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
+      await client.query(BASE_SCHEMA);
+      const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
+      const version=Number(current.rows[0].version);
+      if(version===0){
+        for(const migration of MIGRATIONS.filter(m=>m.version>1)){
+          await client.query(migration.sql);
+        }
+        for (const migration of MIGRATIONS) await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
+      } else {
+        for(const migration of MIGRATIONS.filter(m=>m.version>version)){
+          await client.query(migration.sql);
+          await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
+        }
+      }
+      await client.query('COMMIT');
+      return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
+    } catch(error){
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  validatePrincipal(principal) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!principal || !['orient-owner-session', 'orient-runtime-owner'].includes(principal.authSource) ||
+        typeof principal.ownerId !== 'string' || !uuid.test(principal.ownerId) ||
+        principal.principalId !== principal.ownerId ||
+        typeof principal.sessionId !== 'string' || !uuid.test(principal.sessionId) ||
+        typeof principal.tenantId !== 'string' || !principal.tenantId.trim() || principal.tenantId.length > 128 ||
+        typeof principal.workspaceId !== 'string' || !principal.workspaceId.trim() || principal.workspaceId.length > 128) {
+      throw Object.assign(new Error('A verified ORIENT owner principal is required for a scoped PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_INVALID' });
+    }
+    return Object.freeze({ principalId: principal.principalId, ownerId: principal.ownerId, tenantId: principal.tenantId, workspaceId: principal.workspaceId, sessionId: principal.sessionId, authSource: principal.authSource });
+  }
+
+  async withPrincipal(principal, work) {
+    if (typeof work !== 'function') throw new TypeError('work callback is required');
+    const verifiedPrincipal = this.validatePrincipal(principal);
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const current = active.principal;
+      if (current.principalId !== verifiedPrincipal.principalId || current.tenantId !== verifiedPrincipal.tenantId || current.workspaceId !== verifiedPrincipal.workspaceId || current.sessionId !== verifiedPrincipal.sessionId) {
+        throw Object.assign(new Error('Cannot change ORIENT principal inside an active PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_SWITCH_REJECTED' });
+      }
+      return work();
+    }
+
+    const client = await this.pool.connect();
+    const context = { client, principal: verifiedPrincipal, poisoned: null };
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+        [verifiedPrincipal.principalId, verifiedPrincipal.ownerId, verifiedPrincipal.tenantId, verifiedPrincipal.workspaceId, verifiedPrincipal.sessionId]
+      );
+      const result = await this.contextStorage.run(context, () => work());
+      if (context.poisoned) {
+        throw Object.assign(
+          new Error('A nested PostgreSQL savepoint could not be rolled back; the outer transaction cannot commit.'),
+          { code: 'PERSISTENCE_TRANSACTION_CLEANUP_FAILED', cause: context.poisoned }
+        );
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+
+  async query(text, values = []) {
+    const active = this.contextStorage.getStore();
+    return active ? active.client.query(text, values) : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const savepoint = 'orient_nested_' + (++this.savepointCounter);
+      await active.client.query('SAVEPOINT ' + savepoint);
+      try {
+        const result = await work(active.client);
+        await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        return result;
+      } catch (error) {
+        try {
+          await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint);
+          await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        } catch (rollbackError) {
+          active.poisoned = rollbackError;
+        }
+        throw error;
+      }
+    }
+    const client = await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  static json(value){return value===undefined?null:value;}
+  static uuid(){return crypto.randomUUID();}
+}
+module.exports={PostgresDatabase,BASE_SCHEMA,MIGRATIONS,SCHEMA:BASE_SCHEMA};
+),
+      signature TEXT NOT NULL CHECK (signature ~ '^[A-Za-z0-9+/]{86}== {
+  constructor({pool,schema=null}={}) {
+    if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
+    this.pool=pool; this.schema=schema;
+    this.contextStorage = new AsyncLocalStorage();
+    this.savepointCounter = 0;
+  }
+  async initialize() {
+    const exists = await this.pool.query(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ready"
+    );
+    if (!exists.rows[0]?.ready) {
+      throw Object.assign(
+        new Error('PostgreSQL schema is not installed. Run the explicit database migration command before starting ORIENT.'),
+        { code: 'PERSISTENCE_SCHEMA_NOT_READY' }
+      );
+    }
+
+    const current = await this.pool.query(
+      'SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations'
+    );
+    const version = Number(current.rows[0]?.version || 0);
+    const latest = Math.max(...MIGRATIONS.map(migration => migration.version));
+    if (version < latest) {
+      throw Object.assign(
+        new Error(`PostgreSQL schema is outdated (version ${version}; expected ${latest}). Run the explicit database migration command.`),
+        { code: 'PERSISTENCE_SCHEMA_OUTDATED', currentVersion: version, expectedVersion: latest }
+      );
+    }
+
+    return { schemaVersion: version };
+  }
+
+  async migrate({ role = null } = {}) {
+    const client=await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      if (role !== null) {
+        if (typeof role !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(role)) throw new TypeError('Invalid PostgreSQL migration role name');
+        // Keep the elevated migration identity transaction-local so a pooled
+        // connection can never return to the pool still running as orient_owner.
+        await client.query('SET LOCAL ROLE ' + role);
+      }
+      await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
+      await client.query(BASE_SCHEMA);
+      const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
+      const version=Number(current.rows[0].version);
+      if(version===0){
+        for(const migration of MIGRATIONS.filter(m=>m.version>1)){
+          await client.query(migration.sql);
+        }
+        for (const migration of MIGRATIONS) await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
+      } else {
+        for(const migration of MIGRATIONS.filter(m=>m.version>version)){
+          await client.query(migration.sql);
+          await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
+        }
+      }
+      await client.query('COMMIT');
+      return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
+    } catch(error){
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  validatePrincipal(principal) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!principal || !['orient-owner-session', 'orient-runtime-owner'].includes(principal.authSource) ||
+        typeof principal.ownerId !== 'string' || !uuid.test(principal.ownerId) ||
+        principal.principalId !== principal.ownerId ||
+        typeof principal.sessionId !== 'string' || !uuid.test(principal.sessionId) ||
+        typeof principal.tenantId !== 'string' || !principal.tenantId.trim() || principal.tenantId.length > 128 ||
+        typeof principal.workspaceId !== 'string' || !principal.workspaceId.trim() || principal.workspaceId.length > 128) {
+      throw Object.assign(new Error('A verified ORIENT owner principal is required for a scoped PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_INVALID' });
+    }
+    return Object.freeze({ principalId: principal.principalId, ownerId: principal.ownerId, tenantId: principal.tenantId, workspaceId: principal.workspaceId, sessionId: principal.sessionId, authSource: principal.authSource });
+  }
+
+  async withPrincipal(principal, work) {
+    if (typeof work !== 'function') throw new TypeError('work callback is required');
+    const verifiedPrincipal = this.validatePrincipal(principal);
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const current = active.principal;
+      if (current.principalId !== verifiedPrincipal.principalId || current.tenantId !== verifiedPrincipal.tenantId || current.workspaceId !== verifiedPrincipal.workspaceId || current.sessionId !== verifiedPrincipal.sessionId) {
+        throw Object.assign(new Error('Cannot change ORIENT principal inside an active PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_SWITCH_REJECTED' });
+      }
+      return work();
+    }
+
+    const client = await this.pool.connect();
+    const context = { client, principal: verifiedPrincipal, poisoned: null };
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+        [verifiedPrincipal.principalId, verifiedPrincipal.ownerId, verifiedPrincipal.tenantId, verifiedPrincipal.workspaceId, verifiedPrincipal.sessionId]
+      );
+      const result = await this.contextStorage.run(context, () => work());
+      if (context.poisoned) {
+        throw Object.assign(
+          new Error('A nested PostgreSQL savepoint could not be rolled back; the outer transaction cannot commit.'),
+          { code: 'PERSISTENCE_TRANSACTION_CLEANUP_FAILED', cause: context.poisoned }
+        );
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+
+  async query(text, values = []) {
+    const active = this.contextStorage.getStore();
+    return active ? active.client.query(text, values) : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const savepoint = 'orient_nested_' + (++this.savepointCounter);
+      await active.client.query('SAVEPOINT ' + savepoint);
+      try {
+        const result = await work(active.client);
+        await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        return result;
+      } catch (error) {
+        try {
+          await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint);
+          await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        } catch (rollbackError) {
+          active.poisoned = rollbackError;
+        }
+        throw error;
+      }
+    }
+    const client = await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  static json(value){return value===undefined?null:value;}
+  static uuid(){return crypto.randomUUID();}
+}
+module.exports={PostgresDatabase,BASE_SCHEMA,MIGRATIONS,SCHEMA:BASE_SCHEMA};
+),
+      recorded_at TIMESTAMPTZ NOT NULL,
+      record_payload JSONB NOT NULL CHECK (jsonb_typeof(record_payload) = 'object'),
+      PRIMARY KEY (tenant_id, execution_id, sequence),
+      UNIQUE (tenant_id, execution_id, evidence_id),
+      CHECK (previous_hash IS NULL OR previous_hash ~ '^[a-f0-9]{64} {
+  constructor({pool,schema=null}={}) {
+    if (!pool || typeof pool.query !== 'function') throw new TypeError('pool with query(sql, params) is required');
+    this.pool=pool; this.schema=schema;
+    this.contextStorage = new AsyncLocalStorage();
+    this.savepointCounter = 0;
+  }
+  async initialize() {
+    const exists = await this.pool.query(
+      "SELECT to_regclass('schema_migrations') IS NOT NULL AS ready"
+    );
+    if (!exists.rows[0]?.ready) {
+      throw Object.assign(
+        new Error('PostgreSQL schema is not installed. Run the explicit database migration command before starting ORIENT.'),
+        { code: 'PERSISTENCE_SCHEMA_NOT_READY' }
+      );
+    }
+
+    const current = await this.pool.query(
+      'SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations'
+    );
+    const version = Number(current.rows[0]?.version || 0);
+    const latest = Math.max(...MIGRATIONS.map(migration => migration.version));
+    if (version < latest) {
+      throw Object.assign(
+        new Error(`PostgreSQL schema is outdated (version ${version}; expected ${latest}). Run the explicit database migration command.`),
+        { code: 'PERSISTENCE_SCHEMA_OUTDATED', currentVersion: version, expectedVersion: latest }
+      );
+    }
+
+    return { schemaVersion: version };
+  }
+
+  async migrate({ role = null } = {}) {
+    const client=await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      if (role !== null) {
+        if (typeof role !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(role)) throw new TypeError('Invalid PostgreSQL migration role name');
+        // Keep the elevated migration identity transaction-local so a pooled
+        // connection can never return to the pool still running as orient_owner.
+        await client.query('SET LOCAL ROLE ' + role);
+      }
+      await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
+      await client.query(BASE_SCHEMA);
+      const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
+      const version=Number(current.rows[0].version);
+      if(version===0){
+        for(const migration of MIGRATIONS.filter(m=>m.version>1)){
+          await client.query(migration.sql);
+        }
+        for (const migration of MIGRATIONS) await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
+      } else {
+        for(const migration of MIGRATIONS.filter(m=>m.version>version)){
+          await client.query(migration.sql);
+          await client.query('INSERT INTO schema_migrations(version) VALUES($1)',[migration.version]);
+        }
+      }
+      await client.query('COMMIT');
+      return { schemaVersion: Math.max(...MIGRATIONS.map(migration => migration.version)) };
+    } catch(error){
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  validatePrincipal(principal) {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!principal || !['orient-owner-session', 'orient-runtime-owner'].includes(principal.authSource) ||
+        typeof principal.ownerId !== 'string' || !uuid.test(principal.ownerId) ||
+        principal.principalId !== principal.ownerId ||
+        typeof principal.sessionId !== 'string' || !uuid.test(principal.sessionId) ||
+        typeof principal.tenantId !== 'string' || !principal.tenantId.trim() || principal.tenantId.length > 128 ||
+        typeof principal.workspaceId !== 'string' || !principal.workspaceId.trim() || principal.workspaceId.length > 128) {
+      throw Object.assign(new Error('A verified ORIENT owner principal is required for a scoped PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_INVALID' });
+    }
+    return Object.freeze({ principalId: principal.principalId, ownerId: principal.ownerId, tenantId: principal.tenantId, workspaceId: principal.workspaceId, sessionId: principal.sessionId, authSource: principal.authSource });
+  }
+
+  async withPrincipal(principal, work) {
+    if (typeof work !== 'function') throw new TypeError('work callback is required');
+    const verifiedPrincipal = this.validatePrincipal(principal);
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const current = active.principal;
+      if (current.principalId !== verifiedPrincipal.principalId || current.tenantId !== verifiedPrincipal.tenantId || current.workspaceId !== verifiedPrincipal.workspaceId || current.sessionId !== verifiedPrincipal.sessionId) {
+        throw Object.assign(new Error('Cannot change ORIENT principal inside an active PostgreSQL transaction.'), { code: 'PERSISTENCE_PRINCIPAL_SWITCH_REJECTED' });
+      }
+      return work();
+    }
+
+    const client = await this.pool.connect();
+    const context = { client, principal: verifiedPrincipal, poisoned: null };
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_principal_id', $1, true), set_config('app.orient_owner_id', $2, true), set_config('app.orient_tenant_id', $3, true), set_config('app.orient_workspace_id', $4, true), set_config('app.orient_session_id', $5, true)",
+        [verifiedPrincipal.principalId, verifiedPrincipal.ownerId, verifiedPrincipal.tenantId, verifiedPrincipal.workspaceId, verifiedPrincipal.sessionId]
+      );
+      const result = await this.contextStorage.run(context, () => work());
+      if (context.poisoned) {
+        throw Object.assign(
+          new Error('A nested PostgreSQL savepoint could not be rolled back; the outer transaction cannot commit.'),
+          { code: 'PERSISTENCE_TRANSACTION_CLEANUP_FAILED', cause: context.poisoned }
+        );
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+
+  async query(text, values = []) {
+    const active = this.contextStorage.getStore();
+    return active ? active.client.query(text, values) : this.pool.query(text, values);
+  }
+
+  async transaction(work) {
+    const active = this.contextStorage.getStore();
+    if (active) {
+      const savepoint = 'orient_nested_' + (++this.savepointCounter);
+      await active.client.query('SAVEPOINT ' + savepoint);
+      try {
+        const result = await work(active.client);
+        await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        return result;
+      } catch (error) {
+        try {
+          await active.client.query('ROLLBACK TO SAVEPOINT ' + savepoint);
+          await active.client.query('RELEASE SAVEPOINT ' + savepoint);
+        } catch (rollbackError) {
+          active.poisoned = rollbackError;
+        }
+        throw error;
+      }
+    }
+    const client = await this.pool.connect();
+    let releaseError = null;
+    try {
+      await client.query('BEGIN');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); }
+      catch (rollbackError) { releaseError = rollbackError; }
+      throw error;
+    } finally { client.release(releaseError || undefined); }
+  }
+  static json(value){return value===undefined?null:value;}
+  static uuid(){return crypto.randomUUID();}
+}
+module.exports={PostgresDatabase,BASE_SCHEMA,MIGRATIONS,SCHEMA:BASE_SCHEMA};
+),
+      CHECK ((sequence = 1 AND previous_hash IS NULL) OR (sequence > 1 AND previous_hash IS NOT NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_execution_evidence_execution_time
+      ON execution_evidence(tenant_id, execution_id, recorded_at, sequence);
+    ALTER TABLE execution_evidence ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY orient_execution_evidence_tenant_scope ON execution_evidence
+      TO orient_runtime
+      USING (tenant_id = current_setting('app.orient_tenant_id', true))
+      WITH CHECK (tenant_id = current_setting('app.orient_tenant_id', true));
+    REVOKE ALL ON TABLE execution_evidence FROM PUBLIC;
+    DO $evidence_grants$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.execution_evidence FROM anon';
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        EXECUTE 'REVOKE ALL ON TABLE public.execution_evidence FROM authenticated';
+      END IF;
+    END
+    $evidence_grants$;
+    GRANT SELECT, INSERT ON TABLE execution_evidence TO orient_runtime;
+    REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE execution_evidence FROM orient_runtime;
+
+    CREATE OR REPLACE FUNCTION public.orient_reject_execution_evidence_mutation()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $function$
+      BEGIN
+        RAISE EXCEPTION 'ORIENT execution evidence is append-only'
+          USING ERRCODE = '55000';
+      END;
+      $function$;
+    REVOKE ALL ON FUNCTION public.orient_reject_execution_evidence_mutation() FROM PUBLIC;
+    CREATE TRIGGER execution_evidence_reject_row_mutation
+      BEFORE UPDATE OR DELETE ON public.execution_evidence
+      FOR EACH ROW EXECUTE FUNCTION public.orient_reject_execution_evidence_mutation();
+    CREATE TRIGGER execution_evidence_reject_truncate
+      BEFORE TRUNCATE ON public.execution_evidence
+      FOR EACH STATEMENT EXECUTE FUNCTION public.orient_reject_execution_evidence_mutation();
+  `},
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
