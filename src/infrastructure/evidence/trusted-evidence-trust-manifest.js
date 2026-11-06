@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { canonicalJson } = require('../../core/execution/evidence-record');
 
-const MANIFEST_DOMAIN = Buffer.from('ORIENT-TRUSTED-EVIDENCE-MANIFEST-V1\\0', 'utf8');
+const MANIFEST_DOMAIN = Buffer.from('ORIENT-TRUSTED-EVIDENCE-MANIFEST-V1\0', 'utf8');
 const KEY_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
