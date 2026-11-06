@@ -301,7 +301,7 @@ function verifyRootTransition(envelope, {
     };
     if (typeof currentRootKeyText !== 'string' ||
         publicKeyFingerprint(currentRootKeyText) !== payload.previousRootFingerprint ||
-        !validAt(currentRootEntry, payload.issuedAt, now)) return null;
+        (payload.mode === 'planned-rotation' && !validAt(currentRootEntry, payload.issuedAt, now))) return null;
     const currentRootPublicKey = publicKeyObject(currentRootKeyText, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
 
     if (Array.isArray(expectedState.usedRootKeyIds) &&
