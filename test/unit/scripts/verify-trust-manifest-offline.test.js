@@ -166,6 +166,32 @@ test('offline verifier detects a file that grows after the bounded read reaches 
   }
 });
 
+test('offline verifier detects same-size input mutation during bounded read', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-offline-verifier-same-size-'));
+  const filePath = path.join(directory, 'input.json');
+  fs.writeFileSync(filePath, '{"ok":true}');
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const originalReadSync = fs.readSync;
+  let changed = false;
+  fs.readSync = function (...args) {
+    const count = originalReadSync.apply(this, args);
+    if (count > 0 && !changed) {
+      changed = true;
+      fs.writeFileSync(filePath, '{"ok":bad}');
+    }
+    return count;
+  };
+  try {
+    assert.throws(
+      () => readBoundedRegularFile(filePath, 64, 'TRUST_VERIFY_INPUT'),
+      error => error.code === 'TRUST_VERIFY_INPUT_FILE_CHANGED'
+    );
+  } finally {
+    fs.readSync = originalReadSync;
+  }
+});
+
 test('offline verifier argument parser rejects duplicate, unknown, and conflicting modes', () => {
   assert.deepEqual(parseArgs([
     '--manifest', 'signed.json',
