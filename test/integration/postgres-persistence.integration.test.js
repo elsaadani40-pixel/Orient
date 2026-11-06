@@ -32,7 +32,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
     await persistence.migrate({ role: 'orient_owner' });
   } else {
     const current = await pool.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
-    if (Number(current.rows[0].version) < 11) {
+    if (Number(current.rows[0].version) < 12) {
       await provisionPostgresRoles({
         pool,
         migratorPassword: crypto.randomBytes(24).toString('hex'),
@@ -44,7 +44,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 });
 
 test('PostgreSQL runtime login preflight validates a real least-privilege connection and pooled role reset', async () => {
@@ -73,7 +73,7 @@ test('PostgreSQL runtime login preflight validates a real least-privilege connec
 
     const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
     const readiness = await runtimePersistence.initialize();
-    assert.equal(readiness.schemaVersion, 11);
+    assert.equal(readiness.schemaVersion, 12);
 
     const client = await runtimePool.connect();
     try {
@@ -128,7 +128,7 @@ test('PostgreSQL migration uses the restricted migrator login and resets owner r
 
     const migrationPersistence = new PostgresPersistence({ pool: migrationPool });
     const result = await migrationPersistence.migrate({ role: 'orient_owner' });
-    assert.equal(result.schemaVersion, 11);
+    assert.equal(result.schemaVersion, 12);
 
     const identityAfterMigration = await migrationPool.query(
       'SELECT session_user::text AS session_user, current_user::text AS current_user'
@@ -1158,6 +1158,107 @@ test('PostgreSQL owner RLS blocks another owner chat profile', async () => {
   }
 });
 
+
+test('PostgreSQL Gateway RLS isolates challenge and idempotency rows by tenant, owner, and session', async () => {
+  const tenantId = 'gateway-rls-' + crypto.randomUUID();
+  const ownerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ownerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const sessionA = '11111111-1111-4111-8111-111111111111';
+  const sessionB = '22222222-2222-4222-8222-222222222222';
+  const sessionA2 = '33333333-3333-4333-8333-333333333333';
+  const challengeA = crypto.randomUUID();
+  const challengeB = crypto.randomUUID();
+  const challengeA2 = crypto.randomUUID();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 60_000);
+  const fingerprintA = 'a'.repeat(64);
+  const fingerprintB = 'b'.repeat(64);
+  const fingerprintA2 = 'c'.repeat(64);
+  const keyA = 'gateway-rls-a-' + crypto.randomUUID();
+  const keyB = 'gateway-rls-b-' + crypto.randomUUID();
+  const keyA2 = 'gateway-rls-a2-' + crypto.randomUUID();
+
+  await pool.query(
+    `INSERT INTO gateway_challenges
+     (challenge_id,owner_id,session_id,tenant_id,workspace_id,operation,operation_id,request_id,
+      request_fingerprint,status,issued_at,expires_at)
+     VALUES
+     ($1,$2,$3,$4,'local','execution.get',$7,$8,$9,'ISSUED',$10,$11),
+     ($5,$6,$12,$4,'local','execution.get',$13,$14,$15,'ISSUED',$10,$11),
+     ($16,$2,$17,$4,'local','execution.get',$18,$19,$20,'ISSUED',$10,$11)`,
+    [
+      challengeA,ownerA,sessionA,tenantId,
+      challengeB,ownerB,
+      crypto.randomUUID(),crypto.randomUUID(),fingerprintA,now,expiresAt,
+      sessionB,crypto.randomUUID(),crypto.randomUUID(),fingerprintB,
+      challengeA2,sessionA2,crypto.randomUUID(),crypto.randomUUID(),fingerprintA2
+    ]
+  );
+  await pool.query(
+    `INSERT INTO gateway_idempotency
+     (tenant_id,idempotency_key,request_fingerprint,owner_id,session_id,challenge_id,
+      operation,operation_id,request_id,status,response,created_at,completed_at)
+     VALUES
+     ($1,$2,$3,$4,$5,$6,'execution.get',$7,$8,'COMPLETED,'{"ok":true}'::jsonb,$9,$9),
+     ($1,$10,$11,$12,$13,$14,'execution.get',$15,$16,'COMPLETED,'{"ok":true}'::jsonb,$9,$9),
+     ($1,$17,$18,$4,$19,$20,'execution.get',$21,$22,'COMPLETED,'{"ok":true}'::jsonb,$9,$9)`,
+    [
+      tenantId,keyA,fingerprintA,ownerA,sessionA,challengeA,
+      crypto.randomUUID(),crypto.randomUUID(),now,
+      keyB,fingerprintB,ownerB,sessionB,challengeB,
+      crypto.randomUUID(),crypto.randomUUID(),
+      keyA2,fingerprintA2,sessionA2,challengeA2,crypto.randomUUID(),crypto.randomUUID()
+    ]
+  );
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE orient_runtime');
+    await client.query(
+      "SELECT set_config('app.orient_tenant_id',$1,true), set_config('app.orient_owner_id',$2,true), set_config('app.orient_session_id',$3,true)",
+      [tenantId,ownerA,sessionA]
+    );
+    const visibleChallenges = await client.query(
+      'SELECT challenge_id FROM gateway_challenges WHERE challenge_id = ANY($1::uuid[]) ORDER BY challenge_id',
+      [[challengeA,challengeB,challengeA2]]
+    );
+    assert.deepEqual(visibleChallenges.rows.map(row => row.challenge_id), [challengeA]);
+
+    const visibleIdempotency = await client.query(
+      'SELECT idempotency_key FROM gateway_idempotency WHERE idempotency_key = ANY($1::text[]) ORDER BY idempotency_key',
+      [[keyA,keyB,keyA2]]
+    );
+    assert.deepEqual(visibleIdempotency.rows.map(row => row.idempotency_key), [keyA]);
+
+    const hiddenChallengeUpdate = await client.query(
+      "UPDATE gateway_challenges SET status='CONSUMED',consumed_at=$1 WHERE challenge_id=$2",
+      [now,challengeB]
+    );
+    assert.equal(hiddenChallengeUpdate.rowCount, 0);
+    const hiddenIdempotencyDelete = await client.query(
+      'DELETE FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key=$2',
+      [tenantId,keyB]
+    );
+    assert.equal(hiddenIdempotencyDelete.rowCount, 0);
+
+    await assert.rejects(
+      () => client.query(
+        `INSERT INTO gateway_challenges
+         (challenge_id,owner_id,session_id,tenant_id,workspace_id,operation,operation_id,request_id,
+          request_fingerprint,status,issued_at,expires_at)
+         VALUES($1,$2,$3,$4,'local','execution.get',$5,$6,$7,'ISSUED',$8,$9)`,
+        [crypto.randomUUID(),ownerB,sessionB,tenantId,crypto.randomUUID(),crypto.randomUUID(),'d'.repeat(64),now,expiresAt]
+      ),
+      error => error.code === '42501'
+    );
+    await client.query('ROLLBACK');
+  } finally {
+    client.release();
+    await pool.query('DELETE FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key = ANY($2::text[])',[[tenantId],[keyA,keyB,keyA2]]);
+    await pool.query('DELETE FROM gateway_challenges WHERE tenant_id=$1 AND challenge_id = ANY($2::uuid[])',[[tenantId],[challengeA,challengeB,challengeA2]]);
+  }
+});
 
 test('PostgreSQL role provisioning normalizes unexpected memberships and multiple grantors on a real server', async () => {
   const helperRole = 'orient_test_unrelated_admin';
