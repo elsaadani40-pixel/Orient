@@ -44,7 +44,7 @@ function readPrivateKeyFile(filePath, {
     if (before.isSymbolicLink() || !before.isFile()) {
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private key must be a regular non-symlink file');
     }
-    if (before.size < 1 || before.size > MAX_PRIVATE_KEY_BYTES || before.nlink !== 1) {
+    if (before.size < 1 || before.size > MAX_PRIVATE_KEY_BYTES || before.nlink !== 1n) {
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file has an invalid size or link count');
     }
     if (platform !== 'win32' && typeof process.getuid === 'function' && before.uid !== process.getuid()) {
@@ -56,11 +56,11 @@ function readPrivateKeyFile(filePath, {
 
     const noFollow = fs.constants.O_NOFOLLOW || 0;
     descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | noFollow);
-    const after = fs.fstatSync(descriptor);
+    const after = fs.fstatSync(descriptor, { bigint: true });
     if (!after.isFile() || after.dev !== before.dev || after.ino !== before.ino) {
       fail('TRUST_SIGNER_KEY_FILE_CHANGED', 'The offline root private-key file changed while it was being opened');
     }
-    if (after.size < 1 || after.size > MAX_PRIVATE_KEY_BYTES || after.nlink !== 1 ||
+    if (after.size < 1 || after.size > MAX_PRIVATE_KEY_BYTES || after.nlink !== 1n ||
         (platform !== 'win32' && typeof process.getuid === 'function' && after.uid !== process.getuid()) ||
         (platform !== 'win32' && (after.mode & 0o077) !== 0)) {
       fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file permissions or size changed while opening');
@@ -84,7 +84,7 @@ function readPrivateKeyFile(filePath, {
     const afterRead = fs.fstatSync(descriptor, { bigint: true });
     if (total < 1 || total > MAX_PRIVATE_KEY_BYTES || afterRead.size !== total ||
         afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
-        afterRead.nlink !== 1 ||
+        afterRead.nlink !== 1n ||
         (platform !== 'win32' && typeof process.getuid === 'function' && afterRead.uid !== process.getuid()) ||
         (platform !== 'win32' && (afterRead.mode & 0o077) !== 0)) {
       bounded.fill(0);
