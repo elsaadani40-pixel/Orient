@@ -88,7 +88,8 @@ test('website owner session creates and reads a task through the real Runtime', 
     approvalService,
     persistence,
     tenantId: 'website-runtime-test',
-    agentRegistry
+    agentRegistry,
+    ownerSessionAuthorizer: sessionId => ownerAuth.isActiveSession(sessionId)
   });
   const server = createServer({
     memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('home'); } },
