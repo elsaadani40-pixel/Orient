@@ -457,7 +457,8 @@ class RequestExecutionCoordinator {
     };
   }
 
-  async resume(executionId, { approval = null, approvals = {} } = {}) {
+  async resume(executionId, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+    await this.assertOwnerSessionContext(ownerSessionContext);
     if (!this.persistence?.checkpoints?.findLatest) {
       throw Object.assign(new Error('Durable checkpoint storage is required for resume'), {
         code: 'CHECKPOINT_STORAGE_REQUIRED'
@@ -678,8 +679,19 @@ class RequestExecutionCoordinator {
         agentId: context.metadata?.agentId || 'ORIENT_RUNTIME',
         resumed: true,
         renewResumeLease: heartbeat ? heartbeat.renew : null,
-        isCancellationRequested: () => this.isCancellationRequested(context.executionId),
-        cancellationReason: context.cancellationReason || 'Execution cancellation requested'
+        isCancellationRequested: async () => {
+          if (ownerSessionContext !== null) {
+            try {
+              await this.assertOwnerSessionContext(ownerSessionContext);
+            } catch (_) {
+              return true;
+            }
+          }
+          return this.isCancellationRequested(context.executionId);
+        },
+        cancellationReason: ownerSessionContext !== null
+          ? 'Owner session is no longer active'
+          : context.cancellationReason || 'Execution cancellation requested'
         });
       } finally {
         if (heartbeat) await heartbeat.stop();
