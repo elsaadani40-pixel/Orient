@@ -43,8 +43,11 @@ function readPrivateKeyFile(filePath, {
     if (before.isSymbolicLink() || !before.isFile()) {
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private key must be a regular non-symlink file');
     }
-    if (before.size < 1 || before.size > MAX_PRIVATE_KEY_BYTES) {
-      fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file has an invalid size');
+    if (before.size < 1 || before.size > MAX_PRIVATE_KEY_BYTES || before.nlink !== 1) {
+      fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file has an invalid size or link count');
+    }
+    if (platform !== 'win32' && typeof process.getuid === 'function' && before.uid !== process.getuid()) {
+      fail('TRUST_SIGNER_KEY_OWNER_INVALID', 'The offline root private-key file must be owned by the signing user');
     }
     if (platform !== 'win32' && (before.mode & 0o077) !== 0) {
       fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file must not be accessible by group or other users (chmod 600)');
@@ -56,7 +59,8 @@ function readPrivateKeyFile(filePath, {
     if (!after.isFile() || after.dev !== before.dev || after.ino !== before.ino) {
       fail('TRUST_SIGNER_KEY_FILE_CHANGED', 'The offline root private-key file changed while it was being opened');
     }
-    if (after.size < 1 || after.size > MAX_PRIVATE_KEY_BYTES ||
+    if (after.size < 1 || after.size > MAX_PRIVATE_KEY_BYTES || after.nlink !== 1 ||
+        (platform !== 'win32' && typeof process.getuid === 'function' && after.uid !== process.getuid()) ||
         (platform !== 'win32' && (after.mode & 0o077) !== 0)) {
       fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file permissions or size changed while opening');
     }
