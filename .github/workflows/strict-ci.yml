@@ -188,6 +188,7 @@ jobs:
       - name: Run PostgreSQL integration suite
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
+          ORIENT_TEST_ALLOW_DATABASE_CREATE: "1"
         run: |
           node --test --test-timeout=120000 test/integration/postgres-persistence.integration.test.js
           node --test --test-timeout=120000 test/integration/postgres-task-idempotency.integration.test.js
@@ -285,6 +286,7 @@ jobs:
         shell: bash
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
+          ORIENT_TEST_ALLOW_DATABASE_CREATE: "1"
           ORIENT_OWNER_BOOTSTRAP_PASSWORD: "temporary-owner-password-9F!x"
           PORT: "8080"
           HOST: "127.0.0.1"
