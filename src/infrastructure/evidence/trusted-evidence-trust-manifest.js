@@ -117,7 +117,7 @@ function signTrustManifest(input, { rootKeyId, rootPrivateKey } = {}) {
   return Object.freeze({ ...unsigned, signature });
 }
 
-function verifyTrustManifest(manifest, trustedRootKeys) {
+function verifyTrustManifest(manifest, trustedRootKeys, { verificationTime } = {}) {
   try {
     if (!isPlainRecord(manifest)) return null;
     assertAllowedDataProperties(manifest, ['schemaVersion', 'version', 'issuedAt', 'keys', 'rootKeyId', 'signature'],
@@ -150,9 +150,15 @@ function verifyTrustManifest(manifest, trustedRootKeys) {
       : isoTimestamp(rootRevokedAtValue, 'EVIDENCE_TRUST_MANIFEST_ROOT_KEY_METADATA_INVALID');
     if (rootValidFrom && rootRevokedAt && rootRevokedAt < rootValidFrom) return null;
     if (rootValidFrom && payload.issuedAt < rootValidFrom) return null;
-    // Revocation is effective from revokedAt onward; manifests issued before
-    // that instant remain verifiable for historical audit.
     if (rootRevokedAt && payload.issuedAt >= rootRevokedAt) return null;
+    // Default verification is historical: assess the root at manifest issuance.
+    // Acceptance callers must supply the current time so a revoked root cannot
+    // authorize a delayed, pre-revocation manifest after the revocation event.
+    const verificationTimestamp = verificationTime === undefined
+      ? payload.issuedAt
+      : isoTimestamp(verificationTime, 'EVIDENCE_TRUST_MANIFEST_VERIFICATION_TIME_INVALID');
+    if (rootValidFrom && verificationTimestamp < rootValidFrom) return null;
+    if (rootRevokedAt && verificationTimestamp >= rootRevokedAt) return null;
     const rootPublicKey = crypto.createPublicKey(rootPublicKeyText);
     if (rootPublicKey.asymmetricKeyType !== 'ed25519') return null;
     const signatureBytes = Buffer.from(signature, 'base64');
@@ -172,12 +178,12 @@ function verifyTrustManifest(manifest, trustedRootKeys) {
  *   compareAndSet(expectedState, nextState) -> boolean
  * Its CAS must be atomic and must not permit rollback by the Runtime identity.
  */
-async function verifyAndAcceptTrustManifest(manifest, { trustedRootKeys, versionStore } = {}) {
+async function verifyAndAcceptTrustManifest(manifest, { trustedRootKeys, versionStore, now = new Date().toISOString() } = {}) {
   if (!versionStore || typeof versionStore.read !== 'function' ||
       typeof versionStore.compareAndSet !== 'function') {
     fail('EVIDENCE_TRUST_MANIFEST_STORE_REQUIRED', 'An independent durable monotonic version store is required');
   }
-  const verified = verifyTrustManifest(manifest, trustedRootKeys);
+  const verified = verifyTrustManifest(manifest, trustedRootKeys, { verificationTime: now });
   if (!verified) fail('EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID', 'Trust manifest signature or payload is invalid');
   const current = await versionStore.read();
   if (current !== null && (!current || !Number.isSafeInteger(current.version) ||
