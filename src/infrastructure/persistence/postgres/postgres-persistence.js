@@ -947,7 +947,8 @@ class PostgresPersistence {
       }
       return this;
     }
-    const names = ['executions','events','idempotency','checkpoints','workers','workflows','workflowLeases','approvals','tenantQuotas','ownerChat','ownerProfile','gatewayIdentity'];
+    // Gateway identity is deliberately excluded: each Gateway operation must bind the verified human-session principal, not the background Runtime principal.
+    const names = ['executions','events','idempotency','checkpoints','workers','workflows','workflowLeases','approvals','tenantQuotas','ownerChat','ownerProfile'];
     for (const name of names) {
       const repository = this[name];
       this[name] = new Proxy(repository, {
