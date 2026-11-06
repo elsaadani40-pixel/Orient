@@ -9,7 +9,7 @@ function invalidRequest() {
 }
 
 function safeText(value, max = 120) {
-  return typeof value === 'string' ? value.replace(/[\\r\\n\\0]/g, '').slice(0, max) : null;
+  return typeof value === 'string' ? value.replace(/[\r\n\0]/g, '').slice(0, max) : null;
 }
 
 function createGatewayOperationHandlers() {
