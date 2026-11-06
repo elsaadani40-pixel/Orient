@@ -21,15 +21,15 @@ function readBoundedRegularFile(filePath, maxBytes, codePrefix) {
   const absolutePath = path.resolve(filePath);
   let descriptor;
   try {
-    const before = fs.lstatSync(absolutePath);
+    const before = fs.lstatSync(absolutePath, { bigint: true });
     if (before.isSymbolicLink() || !before.isFile() || before.size < 1 || before.size > maxBytes) {
       fail(codePrefix + '_FILE_INVALID', 'Input must be a regular non-symlink file within the configured size limit');
     }
     const noFollow = fs.constants.O_NOFOLLOW || 0;
     descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | noFollow);
-    const after = fs.fstatSync(descriptor);
+    const after = fs.fstatSync(descriptor, { bigint: true });
     if (!after.isFile() || after.dev !== before.dev || after.ino !== before.ino ||
-        after.size < 1 || after.size > maxBytes) {
+        after.size < 1n || after.size > BigInt(maxBytes)) {
       fail(codePrefix + '_FILE_CHANGED', 'Input file changed while it was being opened');
     }
 
@@ -44,10 +44,11 @@ function readBoundedRegularFile(filePath, maxBytes, codePrefix) {
         if (read === 0) break;
         total += read;
       }
-      const afterRead = fs.fstatSync(descriptor);
-      if (total < 1 || total > maxBytes || afterRead.size !== total ||
+      const afterRead = fs.fstatSync(descriptor, { bigint: true });
+      if (total < 1 || total > maxBytes || afterRead.size !== BigInt(total) ||
           afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
-          afterRead.nlink !== after.nlink) {
+          afterRead.nlink !== after.nlink || afterRead.mtimeNs !== after.mtimeNs ||
+          afterRead.ctimeNs !== after.ctimeNs) {
         fail(codePrefix + '_FILE_CHANGED', 'Input file changed or exceeded its size limit while being read');
       }
       return Buffer.from(buffer.subarray(0, total));
