@@ -20,16 +20,42 @@ function isConditionalConflict(error) {
     error?.$metadata?.httpStatusCode === 409;
 }
 
-async function bodyToUtf8(body) {
-  if (body && typeof body.transformToString === 'function') {
-    return body.transformToString('utf-8');
+async function bodyToUtf8(body, maxBytes, contentLength) {
+  if (contentLength !== undefined &&
+      (!Number.isSafeInteger(contentLength) || contentLength < 0 || contentLength > maxBytes)) {
+    fail('EVIDENCE_ANCHOR_S3_OBJECT_TOO_LARGE', 'S3 anchor object exceeds the configured byte limit');
   }
   if (body && typeof body[Symbol.asyncIterator] === 'function') {
     const chunks = [];
-    for await (const chunk of body) chunks.push(Buffer.from(chunk));
-    return Buffer.concat(chunks).toString('utf8');
+    let totalBytes = 0;
+    for await (const chunk of body) {
+      const bytes = Buffer.from(chunk);
+      totalBytes += bytes.length;
+      if (totalBytes > maxBytes) {
+        fail('EVIDENCE_ANCHOR_S3_OBJECT_TOO_LARGE', 'S3 anchor object exceeds the configured byte limit');
+      }
+      chunks.push(bytes);
+    }
+    if (contentLength !== undefined && totalBytes !== contentLength) {
+      fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 object body length does not match ContentLength');
+    }
+    return Buffer.concat(chunks, totalBytes).toString('utf8');
   }
-  if (typeof body === 'string' || Buffer.isBuffer(body)) return String(body);
+  if (body && typeof body.transformToString === 'function') {
+    if (contentLength === undefined) {
+      fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 ContentLength is required for buffered body conversion');
+    }
+    return body.transformToString('utf-8');
+  }
+  if (typeof body === 'string' || Buffer.isBuffer(body)) {
+    const bytes = Buffer.from(body);
+    if (bytes.length > maxBytes ||
+        (contentLength !== undefined && bytes.length !== contentLength)) {
+      fail(bytes.length > maxBytes ? 'EVIDENCE_ANCHOR_S3_OBJECT_TOO_LARGE' : 'EVIDENCE_ANCHOR_S3_RESPONSE_INVALID',
+        'S3 object body length is invalid');
+    }
+    return bytes.toString('utf8');
+  }
   fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 GetObject returned an unsupported body type');
 }
 
@@ -52,7 +78,8 @@ class S3ObjectLockEvidenceAnchorBackend {
     maxConditionalRetries = 3,
     retryDelayMs = 25,
     sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
-    maxConcurrentReads = 8
+    maxConcurrentReads = 8,
+    maxObjectBytes = 1024 * 1024
   } = {}) {
     if (!client || typeof client.send !== 'function') {
       throw new TypeError('An AWS S3 SDK v3 client is required');
@@ -78,6 +105,9 @@ class S3ObjectLockEvidenceAnchorBackend {
     if (!Number.isSafeInteger(maxConcurrentReads) || maxConcurrentReads < 1) {
       throw new TypeError('A positive maximum concurrent read count is required');
     }
+    if (!Number.isSafeInteger(maxObjectBytes) || maxObjectBytes < 1) {
+      throw new TypeError('A positive maximum S3 object byte size is required');
+    }
 
     this.client = client;
     this.commands = commands;
@@ -88,6 +118,7 @@ class S3ObjectLockEvidenceAnchorBackend {
     this.retryDelayMs = retryDelayMs;
     this.sleep = sleep;
     this.maxConcurrentReads = maxConcurrentReads;
+    this.maxObjectBytes = maxObjectBytes;
   }
 
   async putIfAbsent(key, value) {
@@ -141,7 +172,7 @@ class S3ObjectLockEvidenceAnchorBackend {
         Bucket: this.bucket,
         Key: key
       }));
-      return await bodyToUtf8(result?.Body);
+      return await bodyToUtf8(result?.Body, this.maxObjectBytes, result?.ContentLength);
     } catch (error) {
       if (isNotFound(error)) return null;
       throw error;
