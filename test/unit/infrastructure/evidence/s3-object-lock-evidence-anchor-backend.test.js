@@ -24,6 +24,13 @@ function preconditionFailed() {
   return Object.assign(new Error('already exists'), { name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } });
 }
 
+function conditionalConflict() {
+  return Object.assign(new Error('conditional conflict'), {
+    name: 'ConditionalRequestConflict',
+    $metadata: { httpStatusCode: 409 }
+  });
+}
+
 class FakeS3 {
   constructor() {
     this.objects = new Map();
@@ -86,14 +93,48 @@ test('S3 Object Lock backend creates anchors conditionally with compliance reten
   assert.equal(client.putInputs[0].Bucket, 'orient-evidence-anchors');
 });
 
-test('S3 Object Lock backend returns existing bytes on conditional retry', async () => {
-  const { backend } = fixture();
-  const key = 'orient/evidence-anchors/v1/dGVuYW50/ZXhlY3V0aW9u/0000000000000001';
-  await backend.putIfAbsent(key, '{"signed":true}');
-  assert.deepEqual(await backend.putIfAbsent(key, '{"signed":true}'), {
-    created: false,
-    existingValue: '{"signed":true}'
+test('S3 Object Lock backend retries bounded 409 conditional conflicts', async () => {
+  const delays = [];
+  const { backend, client, commands } = fixture({
+    retryDelayMs: 7,
+    sleep: async delay => delays.push(delay)
   });
+  const send = client.send.bind(client);
+  let conflicts = 0;
+  client.send = async command => {
+    if (command instanceof commands.PutObjectCommand && conflicts < 2) {
+      conflicts += 1;
+      throw conditionalConflict();
+    }
+    return send(command);
+  };
+
+  const key = 'orient/evidence-anchors/v1/retry/1';
+  assert.deepEqual(await backend.putIfAbsent(key, '{"retry":true}'), { created: true });
+  assert.equal(conflicts, 2);
+  assert.deepEqual(delays, [7, 14]);
+  assert.equal(client.putInputs.length, 1);
+});
+
+test('S3 Object Lock backend stops after the configured conditional conflict retry limit', async () => {
+  const { backend, client, commands } = fixture({
+    maxConditionalRetries: 2,
+    retryDelayMs: 0
+  });
+  let attempts = 0;
+  client.send = async command => {
+    if (command instanceof commands.PutObjectCommand) {
+      attempts += 1;
+      throw conditionalConflict();
+    }
+    throw new Error('unexpected');
+  };
+
+  await assert.rejects(
+    backend.putIfAbsent('orient/evidence-anchors/v1/retry/2', '{"retry":false}'),
+    error => error.$metadata?.httpStatusCode === 409
+  );
+  assert.equal(attempts, 3);
 });
 
 test('S3 Object Lock backend reads missing objects as null and rejects unsupported response bodies', async () => {
@@ -120,6 +161,40 @@ test('S3 Object Lock backend paginates listings and reads object bytes', async (
     { key: 'orient/evidence-anchors/v1/a/2', value: '{"n":2}' }
   ]);
   assert.equal(client.listCalls.length, 2);
+});
+
+test('S3 Object Lock backend bounds concurrent object reads while preserving listing order', async () => {
+  const { backend, client, commands } = fixture({ maxConcurrentReads: 2 });
+  for (let index = 1; index <= 5; index += 1) {
+    await backend.putIfAbsent(`orient/evidence-anchors/v1/b/${index}`, JSON.stringify({ index }));
+  }
+
+  const send = client.send.bind(client);
+  let active = 0;
+  let peak = 0;
+  client.send = async command => {
+    if (command instanceof commands.GetObjectCommand) {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 2));
+      try {
+        return await send(command);
+      } finally {
+        active -= 1;
+      }
+    }
+    return send(command);
+  };
+
+  const entries = await backend.list('orient/evidence-anchors/v1/b/');
+  assert.equal(peak, 2);
+  assert.deepEqual(entries.map(entry => entry.key), [
+    'orient/evidence-anchors/v1/b/1',
+    'orient/evidence-anchors/v1/b/2',
+    'orient/evidence-anchors/v1/b/3',
+    'orient/evidence-anchors/v1/b/4',
+    'orient/evidence-anchors/v1/b/5'
+  ]);
 });
 
 test('S3 Object Lock backend rejects malformed and duplicate listing entries', async () => {
@@ -158,6 +233,9 @@ test('S3 Object Lock backend rejects invalid configuration and unnamespaced keys
   assert.throws(() => new S3ObjectLockEvidenceAnchorBackend({
     client, commands: commandSet(), bucket: 'bucket', retentionSeconds: 0
   }), /retention period/);
+  assert.throws(() => new S3ObjectLockEvidenceAnchorBackend({
+    client, commands: commandSet(), bucket: 'bucket', retentionSeconds: 10, maxConcurrentReads: 0
+  }), /concurrent read count/);
   const { backend } = fixture();
   await assert.rejects(
     backend.get('untrusted/key'),
