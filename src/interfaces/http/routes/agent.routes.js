@@ -453,7 +453,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         await agentService.assertOwnerSessionContext(ownerSessionContext);
       }
       const result =
-        await agentService.resumeExecution(executionId, options || {});
+        await agentService.resumeExecution(executionId, options || {}, ownerSessionContext);
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
