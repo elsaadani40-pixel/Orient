@@ -611,3 +611,75 @@ test('resume fails closed before tool execution when a pending approval has no d
   assert.equal(recoveryFailures, 0, 'missing approval must not convert a waiting execution into a failed execution');
   assert.equal(leaseReleases, 1, 'the resume lease must be released after fail-closed rejection');
 });
+
+
+test('rejects an inactive owner session before creating a durable execution', async () => {
+  let persisted = false;
+  let planned = false;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: { plan: async () => { planned = true; } },
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: {},
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async () => { persisted = true; }
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async () => false
+  });
+
+  await assert.rejects(
+    coordinator.execute('run task', {
+      ownerSessionContext: { sessionId: 'revoked-session' }
+    }),
+    error => error.code === 'OWNER_SESSION_REJECTED'
+  );
+
+  assert.equal(persisted, false);
+  assert.equal(planned, false);
+});
+
+test('records only the verified owner session identity in execution metadata', async () => {
+  let persistedMetadata = null;
+  let authorizedSessionId = null;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: {},
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async context => {
+        persistedMetadata = { ...context.metadata };
+        throw new Error('stop after metadata assertion');
+      }
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async sessionId => {
+      authorizedSessionId = sessionId;
+      return sessionId === 'active-session';
+    }
+  });
+
+  await assert.rejects(
+    coordinator.execute('run task', {
+      ownerSessionContext: { sessionId: 'active-session' }
+    }),
+    /stop after metadata assertion/
+  );
+
+  assert.equal(authorizedSessionId, 'active-session');
+  assert.equal(persistedMetadata.ownerSessionId, 'active-session');
+  assert.equal(Object.hasOwn(persistedMetadata, 'csrfToken'), false);
+});
