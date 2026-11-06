@@ -56,6 +56,7 @@ class RequestExecutionCoordinator {
     workspaceId,
     maxInputChars,
     approvalService = null,
+    ownerSessionAuthorizer = null,
     resumeLeaseDurationMs = 30000
   }) {
     if (!agentOrchestrator) throw new TypeError('agentOrchestrator is required');
@@ -75,6 +76,7 @@ class RequestExecutionCoordinator {
     this.workspaceId = workspaceId || 'local';
     this.maxInputChars = maxInputChars;
     this.approvalService = approvalService;
+    this.ownerSessionAuthorizer = ownerSessionAuthorizer;
     this.resumeLeaseDurationMs = resumeLeaseDurationMs;
   }
 
@@ -167,7 +169,21 @@ class RequestExecutionCoordinator {
     };
   }
 
-  async execute(input, { approval = null, approvals = {} } = {}) {
+  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+    if (ownerSessionContext !== null) {
+      const sessionId = ownerSessionContext && typeof ownerSessionContext.sessionId === 'string'
+        ? ownerSessionContext.sessionId
+        : '';
+      const authorized = sessionId && typeof this.ownerSessionAuthorizer === 'function'
+        ? await this.ownerSessionAuthorizer(sessionId) === true
+        : false;
+      if (!authorized) {
+        throw Object.assign(new Error('An active authenticated owner session is required'), {
+          code: 'OWNER_SESSION_REJECTED'
+        });
+      }
+    }
+
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
 
@@ -189,7 +205,8 @@ class RequestExecutionCoordinator {
       input: text,
       tenantId: this.tenantId,
       userId: this.userId,
-      workspaceId: this.workspaceId
+      workspaceId: this.workspaceId,
+      metadata: ownerSessionContext ? { ownerSessionId: ownerSessionContext.sessionId } : {}
     });
 
     context.start();
