@@ -23,7 +23,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
     await persistence.migrate({ role: 'orient_owner' });
   } else {
     const current = await pool.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
-    if (Number(current.rows[0].version) < 9) {
+    if (Number(current.rows[0].version) < 10) {
       await provisionPostgresRoles({
         pool,
         migratorPassword: crypto.randomBytes(24).toString('hex'),
@@ -35,7 +35,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 });
 
 test('PostgreSQL runtime login preflight validates a real least-privilege connection and pooled role reset', async () => {
@@ -64,7 +64,7 @@ test('PostgreSQL runtime login preflight validates a real least-privilege connec
 
     const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
     const readiness = await runtimePersistence.initialize();
-    assert.equal(readiness.schemaVersion, 9);
+    assert.equal(readiness.schemaVersion, 10);
 
     const client = await runtimePool.connect();
     try {
@@ -119,7 +119,7 @@ test('PostgreSQL migration uses the restricted migrator login and resets owner r
 
     const migrationPersistence = new PostgresPersistence({ pool: migrationPool });
     const result = await migrationPersistence.migrate({ role: 'orient_owner' });
-    assert.equal(result.schemaVersion, 9);
+    assert.equal(result.schemaVersion, 10);
 
     const identityAfterMigration = await migrationPool.query(
       'SELECT session_user::text AS session_user, current_user::text AS current_user'
@@ -1259,5 +1259,166 @@ test('PostgreSQL role provisioning normalizes unexpected memberships and multipl
     }
     await pool.query('DROP ROLE IF EXISTS ' + helperRole);
     await pool.query('DROP ROLE IF EXISTS ' + grantorRole);
+  }
+});
+
+
+test('PostgreSQL gateway challenge consumption and idempotent mutation are atomic under retries and concurrency', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 8 });
+  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+  const principal = {
+    principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    ownerId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    tenantId: 'gateway-atomic-tenant',
+    workspaceId: 'gateway-atomic-workspace',
+    authSource: 'orient-owner-session'
+  };
+  const binding = {
+    ownerId: principal.ownerId,
+    sessionId: principal.sessionId,
+    tenantId: principal.tenantId,
+    workspaceId: principal.workspaceId,
+    challengeId: crypto.randomUUID(),
+    operation: 'execution.create',
+    operationId: crypto.randomUUID(),
+    requestId: crypto.randomUUID()
+  };
+  const request = { goal: 'create one protected execution', priority: 'normal' };
+  const idempotencyKey = 'gateway-' + crypto.randomUUID();
+  const executionId = 'gateway-exec-' + crypto.randomUUID();
+
+  try {
+    await runtimePersistence.initialize();
+    await runtimePersistence.withPrincipal(principal, () => runtimePersistence.gatewayIdentity.issue({
+      ...binding,
+      expiresAt: Date.now() + 60000
+    }));
+    const issued = await runtimePersistence.withPrincipal(principal, () =>
+      runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId)
+    );
+    assert.equal(issued.status, 'ISSUED');
+    assert.equal(issued.tenantId, principal.tenantId);
+
+    let callbackCalls = 0;
+    const execute = async client => {
+      callbackCalls += 1;
+      await client.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+        [executionId,principal.tenantId,{ id: executionId, tenantId: principal.tenantId, goal: request.goal }]
+      );
+      return { executionId, accepted: true };
+    };
+    const [first, concurrentRetry] = await Promise.all([
+      runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey,request,execute
+      }),
+      runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey,request,execute
+      })
+    ]);
+    assert.equal(callbackCalls, 1);
+    assert.deepEqual(first.response, { executionId, accepted: true });
+    assert.deepEqual(concurrentRetry.response, { executionId, accepted: true });
+    assert.equal([first.replayed, concurrentRetry.replayed].filter(Boolean).length, 1);
+
+    const replay = await runtimePersistence.gatewayIdentity.executeAtomically({
+      principal,binding,idempotencyKey,request,
+      execute: async () => { throw new Error('completed operation must not execute again'); }
+    });
+    assert.equal(replay.replayed, true);
+    assert.deepEqual(replay.response, { executionId, accepted: true });
+
+    await assert.rejects(
+      () => runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey,request:{ ...request, goal:'tampered request' },
+        execute: async () => null
+      }),
+      error => error.code === 'GATEWAY_IDEMPOTENCY_CONFLICT'
+    );
+    await assert.rejects(
+      () => runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey:idempotencyKey + '-other',
+        request,execute: async () => null
+      }),
+      error => error.code === 'GATEWAY_CHALLENGE_REPLAY_REJECTED'
+    );
+
+    const stored = await runtimePersistence.withPrincipal(principal, async () => {
+      const result = await runtimePersistence.db.query(
+        'SELECT COUNT(*)::int AS count FROM executions WHERE execution_id=$1 AND tenant_id=$2',
+        [executionId,principal.tenantId]
+      );
+      return Number(result.rows[0].count);
+    });
+    assert.equal(stored, 1);
+  } finally {
+    await runtimePool.end();
+  }
+});
+
+test('PostgreSQL gateway transaction rolls back challenge consumption and idempotency when protected mutation fails', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 2 });
+  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+  const principal = {
+    principalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ownerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    tenantId: 'gateway-rollback-tenant',
+    workspaceId: 'gateway-rollback-workspace',
+    authSource: 'orient-owner-session'
+  };
+  const binding = {
+    ownerId: principal.ownerId,
+    sessionId: principal.sessionId,
+    tenantId: principal.tenantId,
+    workspaceId: principal.workspaceId,
+    challengeId: crypto.randomUUID(),
+    operation: 'execution.create',
+    operationId: crypto.randomUUID(),
+    requestId: crypto.randomUUID()
+  };
+  try {
+    await runtimePersistence.initialize();
+    await runtimePersistence.withPrincipal(principal, () => runtimePersistence.gatewayIdentity.issue({
+      ...binding,expiresAt:Date.now()+60000
+    }));
+    await assert.rejects(
+      () => runtimePersistence.gatewayIdentity.executeAtomically({
+        principal,binding,idempotencyKey:'rollback-'+crypto.randomUUID(),request:{ goal:'rollback' },
+        execute: async client => {
+          await client.query(
+            'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
+            ['rollback-'+binding.challengeId,principal.tenantId,{ tenantId:principal.tenantId }]
+          );
+          throw Object.assign(new Error('simulated protected mutation failure'),{code:'TEST_MUTATION_FAILED'});
+        }
+      }),
+      error => error.code === 'TEST_MUTATION_FAILED'
+    );
+    const challenge = await runtimePersistence.withPrincipal(principal, () =>
+      runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId)
+    );
+    assert.equal(challenge.status,'ISSUED');
+  } finally {
+    await runtimePool.end();
   }
 });
