@@ -147,6 +147,6 @@ test('monotonic trust store rejects malformed persisted state', async () => {
 });
 
 test('trust manifest domain separator uses a terminating NUL byte', () => {
-  assert.equal(MANIFEST_DOMAIN, 'ORIENT-TRUSTED-EVIDENCE-MANIFEST-V1\\0');
+  assert.equal(MANIFEST_DOMAIN, 'ORIENT-TRUSTED-EVIDENCE-MANIFEST-V1\0');
   assert.equal(Buffer.from(MANIFEST_DOMAIN, 'utf8').at(-1), 0);
 });
