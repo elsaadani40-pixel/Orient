@@ -58,6 +58,27 @@ test('root-signed trust manifest verifies and exposes its trusted evidence keys'
   assert.match(verified.digest, /^[a-f0-9]{64}$/);
 });
 
+test('trust manifest enforces root key validity and revocation at manifest issuance time', () => {
+  const f = fixture();
+  const manifest = f.create(1);
+  const root = f.trustedRootKeys['offline-root-1'];
+  assert.equal(verifyTrustManifest(manifest, {
+    'offline-root-1': { ...root, validFrom: '2026-11-06T10:02:00.000Z' }
+  }), null);
+  assert.equal(verifyTrustManifest(manifest, {
+    'offline-root-1': { ...root, revokedAt: '2026-11-06T10:01:00.000Z' }
+  }), null);
+  assert.ok(verifyTrustManifest(manifest, {
+    'offline-root-1': { ...root, revokedAt: '2026-11-06T10:02:00.000Z' }
+  }));
+  assert.ok(verifyTrustManifest(manifest, {
+    'offline-root-1': { ...root, revokedAt: '2026-11-06T10:00:00.000Z' }
+  }) === null);
+  assert.equal(verifyTrustManifest(manifest, {
+    'offline-root-1': { ...root, validFrom: 'not-a-timestamp' }
+  }), null);
+});
+
 test('trust manifest rejects payload tampering, unknown roots, and noncanonical signatures', () => {
   const f = fixture();
   const manifest = f.create(1);
