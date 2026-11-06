@@ -30,7 +30,13 @@ function parseStoredAnchor(value) {
   } catch {
     fail('EVIDENCE_ANCHOR_STORE_CORRUPT', 'Stored anchor is not valid JSON');
   }
-  if (canonicalJson(parsed) !== value) {
+  let canonical;
+  try {
+    canonical = canonicalJson(parsed);
+  } catch {
+    fail('EVIDENCE_ANCHOR_STORE_CORRUPT', 'Stored anchor cannot be canonicalized safely');
+  }
+  if (canonical !== value) {
     fail('EVIDENCE_ANCHOR_STORE_NON_CANONICAL', 'Stored anchor is not in canonical form');
   }
   return parsed;
