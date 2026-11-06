@@ -125,6 +125,8 @@ function verifyManifestFile({
   manifestPath,
   rootKeyId,
   rootPublicKeyPath,
+  rootValidFrom,
+  rootRevokedAt,
   verificationTime,
   historical = false,
   now = () => new Date().toISOString()
@@ -155,7 +157,11 @@ function verifyManifestFile({
     rootKeyId,
     issuedAt: verified.issuedAt,
     expiresAt: verified.expiresAt,
-    verificationMode: historical ? 'historical-audit-only' : verificationTime === undefined ? 'current-acceptance' : 'verification-at-specified-time',
+    verificationMode: historical ? 'historical-audit-only'
+      : verificationTime === undefined
+        ? rootValidityMetadataProvided ? 'current-pinned-root-verification' : 'current-signature-time-verification'
+        : rootValidityMetadataProvided ? 'time-scoped-pinned-root-verification' : 'time-scoped-signature-verification',
+    rootValidityMetadataProvided,
     ...(historical ? {} : { verifiedAt: effectiveVerificationTime })
   });
 }
