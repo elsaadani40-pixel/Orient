@@ -159,6 +159,56 @@ const MIGRATIONS = [
     GRANT SELECT ON TABLE public.schema_migrations TO orient_runtime;
     REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.schema_migrations FROM orient_runtime;
     GRANT USAGE, SELECT ON SEQUENCE public.workflow_lease_fencing_seq TO orient_runtime;
+  `},,
+  {version:10,sql:`
+    CREATE TABLE IF NOT EXISTS gateway_challenges (
+      challenge_id UUID PRIMARY KEY,
+      owner_id UUID NOT NULL,
+      session_id UUID NOT NULL,
+      tenant_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      operation_id UUID NOT NULL,
+      request_id UUID NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('ISSUED','CONSUMED')),
+      issued_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      CHECK ((status = 'ISSUED' AND consumed_at IS NULL) OR (status = 'CONSUMED' AND consumed_at IS NOT NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_gateway_challenges_scope_expiry
+      ON gateway_challenges(tenant_id, owner_id, session_id, expires_at);
+    CREATE TABLE IF NOT EXISTS gateway_idempotency (
+      tenant_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_fingerprint CHAR(64) NOT NULL,
+      owner_id UUID NOT NULL,
+      session_id UUID NOT NULL,
+      challenge_id UUID NOT NULL REFERENCES gateway_challenges(challenge_id),
+      operation TEXT NOT NULL,
+      operation_id UUID NOT NULL,
+      request_id UUID NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('RUNNING','COMPLETED')),
+      response JSONB,
+      created_at TIMESTAMPTZ NOT NULL,
+      completed_at TIMESTAMPTZ,
+      PRIMARY KEY (tenant_id, idempotency_key),
+      UNIQUE (tenant_id, challenge_id),
+      CHECK ((status = 'RUNNING' AND response IS NULL AND completed_at IS NULL) OR
+             (status = 'COMPLETED' AND response IS NOT NULL AND completed_at IS NOT NULL))
+    );
+    CREATE INDEX IF NOT EXISTS idx_gateway_idempotency_owner_created
+      ON gateway_idempotency(tenant_id, owner_id, created_at DESC);
+    ALTER TABLE gateway_challenges ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY orient_gateway_challenge_scope ON gateway_challenges TO orient_runtime
+      USING (tenant_id = current_setting('app.orient_tenant_id', true))
+      WITH CHECK (tenant_id = current_setting('app.orient_tenant_id', true));
+    ALTER TABLE gateway_idempotency ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY orient_gateway_idempotency_scope ON gateway_idempotency TO orient_runtime
+      USING (tenant_id = current_setting('app.orient_tenant_id', true))
+      WITH CHECK (tenant_id = current_setting('app.orient_tenant_id', true));
+    REVOKE ALL ON TABLE gateway_challenges, gateway_idempotency FROM PUBLIC;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE gateway_challenges, gateway_idempotency TO orient_runtime;
   `},
 ];
 class PostgresDatabase {
@@ -213,7 +263,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9)',[1,2,3,4,5,6,7,8,9]);
+        for (const migration of MIGRATIONS) await client.query('INSERT INTO schema_migrations(version) VALUES($1)', [migration.version]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
