@@ -1,7 +1,7 @@
 'use strict';
 
 const { canonicalJson } = require('../../core/execution/evidence-record');
-const { verifyRootTransition } = require('./trusted-evidence-root-transition');
+const { verifyRootTransition, publicKeyFingerprint, recoveryPolicyDigest } = require('./trusted-evidence-root-transition');
 
 const PREFIX = 'orient/trust-root-transitions/v1/';
 
@@ -80,6 +80,16 @@ class ExternalTrustRootTransitionLedger {
         !recoveryPolicy || typeof recoveryPolicy !== 'object') {
       throw new TypeError('Pinned root keys and recovery policy are required');
     }
+    const initialRoot = trustedRootKeys[initialState.rootKeyId];
+    if (!initialRoot || typeof initialRoot.publicKey !== 'string' ||
+        publicKeyFingerprint(initialRoot.publicKey) !== initialState.rootFingerprint ||
+        initialState.usedRootKeyIds.length !== 1 ||
+        initialState.usedRootKeyIds[0] !== initialState.rootKeyId ||
+        initialState.usedRootFingerprints.length !== 1 ||
+        initialState.usedRootFingerprints[0] !== initialState.rootFingerprint) {
+      throw new TypeError('Bootstrap must pin exactly the initial root ID and fingerprint');
+    }
+    recoveryPolicyDigest(recoveryPolicy);
     if (typeof now !== 'function') throw new TypeError('A clock function is required');
     this.backend = backend;
     this.initialState = cloneState(initialState);
