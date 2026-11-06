@@ -91,8 +91,7 @@ class Ed25519IdentityTokenIssuer {
     if (!privateKey || !nonEmpty(kid, 128) || !nonEmpty(issuer, 256) || !nonEmpty(audience, 256) ||
         !Number.isSafeInteger(maxTtlSeconds) || maxTtlSeconds < 1 || maxTtlSeconds > 60 ||
         typeof now !== 'function') throw new TypeError('Invalid identity token issuer configuration');
-    this.privateKey = privateKey && privateKey.type === 'private' &&
-      typeof privateKey.asymmetricKeyType === 'string'
+    this.privateKey = privateKey instanceof crypto.KeyObject
       ? privateKey
       : crypto.createPrivateKey(privateKey);
     if (this.privateKey.asymmetricKeyType !== 'ed25519') throw new TypeError('Identity signing key must be Ed25519');
