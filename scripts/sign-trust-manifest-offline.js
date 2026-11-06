@@ -56,6 +56,10 @@ function readPrivateKeyFile(filePath, {
     if (!after.isFile() || after.dev !== before.dev || after.ino !== before.ino) {
       fail('TRUST_SIGNER_KEY_FILE_CHANGED', 'The offline root private-key file changed while it was being opened');
     }
+    if (after.size < 1 || after.size > MAX_PRIVATE_KEY_BYTES ||
+        (platform !== 'win32' && (after.mode & 0o077) !== 0)) {
+      fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file permissions or size changed while opening');
+    }
     keyBytes = fs.readFileSync(descriptor);
     if (keyBytes.length < 1 || keyBytes.length > MAX_PRIVATE_KEY_BYTES) {
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file has an invalid size');
@@ -136,7 +140,12 @@ function signManifestFile({
   const manifest = readManifestFile(inputPath);
   const privateKeyBytes = readPrivateKeyFile(keyPath, { repoRoot, platform });
   try {
-    const privateKey = crypto.createPrivateKey(privateKeyBytes);
+    let privateKey;
+    try {
+      privateKey = crypto.createPrivateKey(privateKeyBytes);
+    } catch {
+      fail('TRUST_SIGNER_KEY_INVALID', 'The offline root private-key file is not a valid supported private key');
+    }
     if (privateKey.asymmetricKeyType !== 'ed25519') {
       fail('TRUST_SIGNER_KEY_TYPE_INVALID', 'The offline root private key must be Ed25519');
     }
