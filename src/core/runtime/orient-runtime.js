@@ -245,6 +245,10 @@ class OrientRuntime {
     return this.workflowExecutionCoordinator.execute(input, options);
   }
 
+  async assertOwnerSessionContext(ownerSessionContext) {
+    return this.requestExecutionCoordinator.assertOwnerSessionContext(ownerSessionContext);
+  }
+
   async execute(input, options = {}) {
     return this.requestExecutionCoordinator.execute(input, options);
   }
