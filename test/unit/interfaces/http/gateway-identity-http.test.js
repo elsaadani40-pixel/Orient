@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const createServer = require('../../../../src/interfaces/http/server');
 
-function post(port, path, { cookie = 'orient_owner_session=valid-session', csrf = 'valid-csrf', body = { operation: 'execution.get' } } = {}) {
+function post(port, path, { cookie = 'orient_owner_session=valid-session', csrf = 'valid-csrf', body = { operation: 'execution.get', request: { id: 'task-1' } } } = {}) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const req = http.request({ hostname: '127.0.0.1', port, path, method: 'POST', headers: {
