@@ -227,9 +227,9 @@ test('manifest acceptance rejects a delayed retired-root manifest at the externa
     keys: { evidence: { publicKey: evidencePublic } }
   }, { rootKeyId: 'root-1', rootPrivateKey: oldPrivate }));
   const legitimateAfterRotation = signTrustManifest({
-    version: 7,
-    issuedAt: '2026-11-06T10:08:00.000Z',
-    expiresAt: '2026-12-06T10:08:00.000Z',
+    version: 6,
+    issuedAt: '2026-11-06T10:07:00.000Z',
+    expiresAt: '2026-12-06T10:07:00.000Z',
     keys: { evidence: { publicKey: evidencePublic } }
   }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
   const backend = new MemoryImmutableBackend();
@@ -258,9 +258,9 @@ test('manifest acceptance rejects a delayed retired-root manifest at the externa
     now: () => '2026-11-06T10:10:00.000Z'
   });
   const candidate = signTrustManifest({
-    version: 6,
-    issuedAt: '2026-11-06T10:07:00.000Z',
-    expiresAt: '2026-12-06T10:07:00.000Z',
+    version: 7,
+    issuedAt: '2026-11-06T10:08:00.000Z',
+    expiresAt: '2026-12-06T10:08:00.000Z',
     keys: { evidence: { publicKey: evidencePublic } }
   }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
   await assert.rejects(
