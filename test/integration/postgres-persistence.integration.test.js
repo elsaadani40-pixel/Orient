@@ -10,6 +10,7 @@ const { provisionPostgresRoles } = require('../../scripts/provision-postgres-rol
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const ExecutionContext = require('../../src/core/execution/execution-context');
+const { createEvidenceRecord } = require('../../src/core/execution/evidence-record');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
@@ -37,7 +38,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
     await persistence.migrate({ role: 'orient_owner' });
   } else {
     const current = await pool.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
-    if (Number(current.rows[0].version) < 12) {
+    if (Number(current.rows[0].version) < 13) {
       await provisionPostgresRoles({
         pool,
         migratorPassword: crypto.randomBytes(24).toString('hex'),
@@ -49,7 +50,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
 });
 
 test('PostgreSQL runtime login preflight validates a real least-privilege connection and pooled role reset', async () => {
@@ -78,7 +79,7 @@ test('PostgreSQL runtime login preflight validates a real least-privilege connec
 
     const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
     const readiness = await runtimePersistence.initialize();
-    assert.equal(readiness.schemaVersion, 12);
+    assert.equal(readiness.schemaVersion, 13);
 
     const client = await runtimePool.connect();
     try {
@@ -133,7 +134,7 @@ test('PostgreSQL migration uses the restricted migrator login and resets owner r
 
     const migrationPersistence = new PostgresPersistence({ pool: migrationPool });
     const result = await migrationPersistence.migrate({ role: 'orient_owner' });
-    assert.equal(result.schemaVersion, 12);
+    assert.equal(result.schemaVersion, 13);
 
     const identityAfterMigration = await migrationPool.query(
       'SELECT session_user::text AS session_user, current_user::text AS current_user'
@@ -147,6 +148,130 @@ test('PostgreSQL migration uses the restricted migrator login and resets owner r
     });
   } finally {
     await migrationPool.end();
+  }
+});
+
+
+
+test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RLS, signatures, and ordered concurrency', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({
+    connectionString: runtimeUrl.toString(),
+    max: 2,
+    application_name: 'orient-trusted-evidence-integration'
+  });
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' });
+  const runtimePersistence = new PostgresPersistence({
+    pool: runtimePool,
+    evidenceSigning: {
+      keyId: 'integration-key-1',
+      privateKey,
+      trustedKeys: { 'integration-key-1': { publicKey } }
+    }
+  });
+  const principal = tenantId => ({
+    authSource: 'orient-runtime-owner',
+    principalId: '11111111-1111-4111-8111-111111111111',
+    ownerId: '11111111-1111-4111-8111-111111111111',
+    sessionId: '22222222-2222-4222-8222-222222222222',
+    workspaceId: 'workspace-integration',
+    tenantId
+  });
+
+  try {
+    const privilege = await runtimePool.query(`
+      SELECT
+        has_table_privilege(current_user, 'public.execution_evidence', 'SELECT') AS can_select,
+        has_table_privilege(current_user, 'public.execution_evidence', 'INSERT') AS can_insert,
+        has_table_privilege(current_user, 'public.execution_evidence', 'UPDATE') AS can_update,
+        has_table_privilege(current_user, 'public.execution_evidence', 'DELETE') AS can_delete,
+        has_table_privilege(current_user, 'public.execution_evidence', 'TRUNCATE') AS can_truncate
+    `);
+    assert.deepEqual(privilege.rows[0], {
+      can_select: true,
+      can_insert: true,
+      can_update: false,
+      can_delete: false,
+      can_truncate: false
+    });
+
+    const executionId = 'trusted-ledger-integration-execution';
+    const evidenceOne = createEvidenceRecord({
+      executionId, step: 1, tool: 'integration.first', success: true,
+      result: { value: 'first' }, observedAt: '2026-11-06T10:00:00.000Z'
+    });
+    const evidenceTwo = createEvidenceRecord({
+      executionId, step: 2, tool: 'integration.second', success: true,
+      result: { value: 'second' }, observedAt: '2026-11-06T10:00:01.000Z'
+    });
+    const evidenceThree = createEvidenceRecord({
+      executionId, step: 3, tool: 'integration.third', success: true,
+      result: { value: 'third' }, observedAt: '2026-11-06T10:00:02.000Z'
+    });
+
+    const first = await runtimePersistence.executionEvidence.append(evidenceOne, {
+      principal: principal('tenant-evidence-a')
+    });
+    const retry = await runtimePersistence.executionEvidence.append(evidenceOne, {
+      principal: principal('tenant-evidence-a')
+    });
+    assert.equal(retry.sequence, first.sequence);
+    assert.equal(retry.recordHash, first.recordHash);
+
+    const concurrent = await Promise.all([
+      runtimePersistence.executionEvidence.append(evidenceTwo, { principal: principal('tenant-evidence-a') }),
+      runtimePersistence.executionEvidence.append(evidenceThree, { principal: principal('tenant-evidence-a') })
+    ]);
+    assert.deepEqual(concurrent.map(record => record.sequence).sort((a, b) => a - b), [2, 3]);
+    const verified = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
+      principal: principal('tenant-evidence-a')
+    });
+    assert.equal(verified.valid, true);
+    assert.equal(verified.anchored, false);
+    assert.equal(verified.records, 3);
+    assert.equal(verified.verifiedThrough, 3);
+
+    const isolated = await runtimePersistence.executionEvidence.verifyExecution(executionId, {
+      principal: principal('tenant-evidence-b')
+    });
+    assert.equal(isolated.valid, true);
+    assert.equal(isolated.records, 0);
+
+    await assert.rejects(
+      () => runtimePool.query(
+        "UPDATE public.execution_evidence SET record_hash = repeat('0',64) WHERE tenant_id=$1 AND execution_id=$2",
+        ['tenant-evidence-a', executionId]
+      ),
+      error => error.code === '42501'
+    );
+    await assert.rejects(
+      () => runtimePool.query(
+        'DELETE FROM public.execution_evidence WHERE tenant_id=$1 AND execution_id=$2',
+        ['tenant-evidence-a', executionId]
+      ),
+      error => error.code === '42501'
+    );
+    await assert.rejects(
+      () => runtimePool.query('TRUNCATE public.execution_evidence'),
+      error => error.code === '42501'
+    );
+  } finally {
+    await runtimePool.end();
+    await pool.query(
+      'DELETE FROM public.execution_evidence WHERE tenant_id IN ($1,$2)',
+      ['tenant-evidence-a', 'tenant-evidence-b']
+    );
   }
 });
 
