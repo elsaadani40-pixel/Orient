@@ -7,7 +7,7 @@ const { verifyTrustManifest } = require('../src/infrastructure/evidence/trusted-
 
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_PUBLIC_KEY_BYTES = 64 * 1024;
-const USAGE = 'Usage: node scripts/verify-trust-manifest-offline.js --manifest <signed-manifest.json> --root-key-id <id> --root-public-key <pinned-root-public.pem> [--at <canonical-utc-time> | --historical]';
+const USAGE = 'Usage: node scripts/verify-trust-manifest-offline.js --manifest <signed-manifest.json> --root-key-id <id> --root-public-key <pinned-root-public.pem> [--root-valid-from <canonical-utc-time>] [--root-revoked-at <canonical-utc-time>] [--at <canonical-utc-time> | --historical]';
 
 function fail(code, message) {
   throw Object.assign(new Error(message), { code });
@@ -86,6 +86,8 @@ function parseArgs(argv) {
     '--manifest': 'manifestPath',
     '--root-key-id': 'rootKeyId',
     '--root-public-key': 'rootPublicKeyPath',
+    '--root-valid-from': 'rootValidFrom',
+    '--root-revoked-at': 'rootRevokedAt',
     '--at': 'verificationTime'
   };
   const options = {};
@@ -139,7 +141,13 @@ function verifyManifestFile({
   }
   const manifest = readManifest(manifestPath);
   const publicKey = readRootPublicKey(rootPublicKeyPath);
-  const roots = { [rootKeyId]: { publicKey } };
+  const rootEntry = {
+    publicKey,
+    ...(rootValidFrom === undefined ? {} : { validFrom: rootValidFrom }),
+    ...(rootRevokedAt === undefined ? {} : { revokedAt: rootRevokedAt })
+  };
+  const roots = { [rootKeyId]: rootEntry };
+  const rootValidityMetadataProvided = rootValidFrom !== undefined || rootRevokedAt !== undefined;
   const effectiveVerificationTime = historical
     ? undefined
     : verificationTime === undefined ? now() : verificationTime;
