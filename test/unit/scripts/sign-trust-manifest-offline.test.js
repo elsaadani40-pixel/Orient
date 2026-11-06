@@ -104,6 +104,33 @@ test('offline signer rejects manifest input above the bounded read limit', t => 
   }), error => error.code === 'TRUST_SIGNER_INPUT_INVALID');
 });
 
+test('offline signer detects same-size manifest mutation during bounded read', t => {
+  const f = fixture(t);
+  const originalReadSync = fs.readSync;
+  let changed = false;
+  fs.readSync = function (...args) {
+    const count = originalReadSync.apply(this, args);
+    if (count > 0 && !changed) {
+      changed = true;
+      const current = fs.readFileSync(f.inputPath, 'utf8');
+      fs.writeFileSync(f.inputPath, current.replace('"version":1', '"version":2'));
+    }
+    return count;
+  };
+  try {
+    assert.throws(() => signManifestFile({
+      inputPath: f.inputPath,
+      keyPath: f.keyPath,
+      rootKeyId: 'offline-root-2026',
+      outputPath: f.outputPath,
+      repoRoot: f.repoRoot,
+      now: () => f.now
+    }), error => error.code === 'TRUST_SIGNER_INPUT_INVALID');
+  } finally {
+    fs.readSync = originalReadSync;
+  }
+});
+
 test('offline signer refuses to overwrite an existing signed manifest', t => {
   const f = fixture(t);
   fs.writeFileSync(f.outputPath, 'preserve-existing-output');
