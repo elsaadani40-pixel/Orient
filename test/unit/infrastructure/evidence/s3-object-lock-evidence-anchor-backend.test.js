@@ -210,6 +210,28 @@ test('S3 Object Lock backend rejects malformed and duplicate listing entries', a
     error => error.code === 'EVIDENCE_ANCHOR_S3_RESPONSE_INVALID'
   );
 
+  client.send = async command => {
+    if (command instanceof commands.ListObjectsV2Command) {
+      return { Contents: [], NextContinuationToken: 'next' };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.list('orient/evidence-anchors/v1/a/'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_RESPONSE_INVALID'
+  );
+
+  client.send = async command => {
+    if (command instanceof commands.ListObjectsV2Command) {
+      return { Contents: [], IsTruncated: 'false' };
+    }
+    throw new Error('unexpected');
+  };
+  await assert.rejects(
+    backend.list('orient/evidence-anchors/v1/a/'),
+    error => error.code === 'EVIDENCE_ANCHOR_S3_RESPONSE_INVALID'
+  );
+
   let page = 0;
   client.send = async command => {
     if (command instanceof commands.ListObjectsV2Command) {
