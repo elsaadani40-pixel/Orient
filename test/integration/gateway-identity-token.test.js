@@ -54,6 +54,8 @@ function fixture() {
 test('issues and verifies an Ed25519 token bound to one gateway request', () => {
   const { issuer, verifier, input } = fixture();
   const token = issuer.issue(input);
+  const [encodedHeader] = token.split('.');
+  assert.equal(JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf8')).kid, 'test-key-1');
   const claims = verifier.verify(token, {
     challenge_id: UUIDS.challenge,
     operation: 'execution.get',
