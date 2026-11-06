@@ -52,7 +52,7 @@ test('trust-manifest bucket requires conditional create-only writes', () => {
   assert.match(main, /sid\s*=\s*"DenyNonConditionalTrustManifestWrites"/);
   assert.match(main, /variable\s*=\s*"s3:if-none-match"/);
   assert.match(main, /values\s*=\s*\["true"\]/);
-});
+  assert.match(main, /sid\\s*=\\s*"DenyNonWildcardConditionalTrustManifestWrites"/);\n  assert.match(main, /test\\s*=\\s*"StringNotEquals"[\\s\\S]*?variable\\s*=\\s*"s3:if-none-match"[\\s\\S]*?values\\s*=\\s*\\["\\*"\\]/);\n});
 
 test('deployment guide matches the adapter no-cache configuration-drift check', () => {
   assert.match(readme, /re-reads Object Lock, versioning, and the exact default COMPLIANCE retention/i);
