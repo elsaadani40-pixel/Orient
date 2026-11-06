@@ -146,6 +146,40 @@ test('execution observations carry evidence metadata without duplicating raw res
   );
 });
 
+test('restore rejects observation results that no longer match their evidence digest', () => {
+  const execution = new ExecutionContext({
+    requestId: 'request-result-integrity',
+    executionId: 'execution-result-integrity',
+    input: 'verify observation result integrity'
+  });
+  execution.addObservation({
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'completed', count: 4 }
+  });
+
+  const snapshot = execution.snapshot();
+  assert.doesNotThrow(() => ExecutionContext.restore(snapshot));
+
+  const tamperedContextResult = structuredClone(snapshot);
+  tamperedContextResult.observations[0].result.count = 5;
+  assert.throws(
+    () => ExecutionContext.restore(tamperedContextResult),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
+  const tamperedAgentResult = structuredClone(snapshot);
+  tamperedAgentResult.agentState.observations[0] = {
+    ...tamperedAgentResult.agentState.observations[0],
+    result: { status: 'completed', count: 5 }
+  };
+  assert.throws(
+    () => ExecutionContext.restore(tamperedAgentResult),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+});
+
 test('versioned snapshots require complete matching evidence in context and AgentState', () => {
   const execution = new ExecutionContext({
     requestId: 'request-versioned',
