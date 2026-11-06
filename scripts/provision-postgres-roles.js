@@ -97,7 +97,7 @@ async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword 
   if (!pool || typeof pool.connect !== 'function') throw new TypeError('An administrative PostgreSQL pool is required.');
   const client = await pool.connect();
   const applicationTables = [
-    'schema_migrations','executions','events','idempotency','checkpoints',
+    'schema_migrations','executions','events','idempotency','checkpoints','execution_evidence',
     'execution_resume_leases','workflows','workflow_leases','workflow_dispatch_claims',
     'approvals','worker_nodes','tenant_quota_limits','tenant_quota_reservations',
     'owner_chat_messages','owner_work_profiles'
