@@ -16,8 +16,6 @@ variable "bucket_name" {
 variable "retention_days" {
   description = "Default COMPLIANCE retention for all objects. Compliance retention cannot be shortened."
   type        = number
-  default     = 365
-
   validation {
     condition     = var.retention_days >= 1 && var.retention_days <= 36500 && floor(var.retention_days) == var.retention_days
     error_message = "retention_days must be a whole number between 1 and 36500."
