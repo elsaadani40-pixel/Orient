@@ -292,6 +292,29 @@ test('authenticated dashboard request completes a harmless mission through the r
   });
   assert.equal(durableTask.metadata.ownerSessionId, authenticatedOwner.sessionId);
   assert.notEqual(durableTask.metadata.ownerSessionId, 'attacker-forged-session');
+ 
+  const legacyExecutionResponse = await fetch(origin + '/agent', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie
+    },
+    body: JSON.stringify({
+      input: 'افحص المشروع',
+      ownerSessionContext: { sessionId: 'legacy-forged-session' }
+    })
+  });
+  assert.equal(legacyExecutionResponse.status, 200);
+  const legacyExecutionResult = await legacyExecutionResponse.json();
+  assert.ok(legacyExecutionResult.execution?.executionId);
+  const legacyDurableExecution = await persistence.executions.findById(
+    legacyExecutionResult.execution.executionId,
+    { tenantId: 'tenant-owner-runtime' }
+  );
+  assert.equal(legacyDurableExecution.metadata.ownerSessionId, authenticatedOwner.sessionId);
+  assert.notEqual(legacyDurableExecution.metadata.ownerSessionId, 'legacy-forged-session');
+
 
   const replayResponse = await fetch(origin + '/api/v1/tasks', {
     method: 'POST',
