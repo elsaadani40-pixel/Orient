@@ -8,6 +8,15 @@ const ApprovalService = require('../../src/core/agent/approval/approval-service'
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
+const createServer = require('../../src/interfaces/http/server');
+const {
+  Ed25519IdentityTokenIssuer,
+  Ed25519IdentityTokenVerifier
+} = require('../../src/infrastructure/gateway/identity/ed25519-identity-token');
+const { OwnerSessionIdentityAuthority } = require('../../src/infrastructure/gateway/identity/owner-session-identity-authority');
+const { GatewayIdentityExecutionService } = require('../../src/infrastructure/gateway/identity/gateway-identity-execution-service');
+const { GATEWAY_OPERATION_SCOPES, createGatewayOperationHandlers } = require('../../src/infrastructure/gateway/identity/gateway-operation-handlers');
+const { createGatewayIdentityRoutes } = require('../../src/interfaces/http/routes/gateway-identity.routes');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
@@ -1416,6 +1425,154 @@ test('PostgreSQL gateway transaction rolls back challenge consumption and idempo
     const challenge = await runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId, { principal });
     assert.equal(challenge.status,'ISSUED');
   } finally {
+    await runtimePool.end();
+  }
+});
+
+test('Gateway HTTP challenge, token, execution and replay complete against PostgreSQL under owner RLS', async () => {
+  const runtimePassword = crypto.randomBytes(24).toString('hex');
+  await provisionPostgresRoles({
+    pool,
+    migratorPassword: crypto.randomBytes(24).toString('hex'),
+    runtimePassword
+  });
+  const runtimeUrl = new URL(process.env.DATABASE_URL);
+  runtimeUrl.username = 'orient_runtime_login';
+  runtimeUrl.password = runtimePassword;
+  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 4 });
+  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
+  const ownerId = crypto.randomUUID();
+  const sessionId = crypto.randomUUID();
+  const tenantId = 'gateway-http-' + crypto.randomUUID();
+  const workspaceId = 'workspace-' + crypto.randomUUID();
+  const sessionToken = 'owner-session-' + crypto.randomUUID();
+  const csrfToken = 'csrf-' + crypto.randomUUID();
+  const idempotencyKey = 'gateway-http-' + crypto.randomUUID();
+  const principal = {
+    principalId: ownerId, ownerId, sessionId, tenantId, workspaceId,
+    authSource: 'orient-owner-session'
+  };
+  const session = { ownerId, sessionId };
+  const ownerIdentity = {
+    authenticate(token) { return token === sessionToken ? session : null; },
+    isActiveSession(id) { return id === sessionId; }
+  };
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  const tokenIssuer = new Ed25519IdentityTokenIssuer({ privateKey, kid: 'gateway-http-test-key' });
+  const tokenVerifier = new Ed25519IdentityTokenVerifier({
+    publicKeys: new Map([['gateway-http-test-key', publicKey]])
+  });
+  let challengeId = null;
+  let server;
+  try {
+    await runtimePersistence.initialize();
+    const authority = new OwnerSessionIdentityAuthority({
+      ownerIdentity,
+      tokenIssuer,
+      challengeStore: runtimePersistence.gatewayIdentity,
+      tenantId,
+      workspaceId,
+      operationScopes: GATEWAY_OPERATION_SCOPES
+    });
+    const identityRoutes = createGatewayIdentityRoutes({
+      repository: runtimePersistence.gatewayIdentity,
+      authority,
+      tenantId,
+      workspaceId
+    });
+    const executionService = new GatewayIdentityExecutionService({
+      tokenVerifier,
+      gatewayIdentityRepository: runtimePersistence.gatewayIdentity,
+      operationScopes: GATEWAY_OPERATION_SCOPES,
+      sessionAuthorizer: ({ ownerId: verifiedOwner, sessionId: verifiedSession }) =>
+        verifiedOwner === ownerId && ownerIdentity.isActiveSession(verifiedSession)
+    });
+    server = createServer({
+      memoryRoutes: {},
+      agentRoutes: {},
+      ownerAuth: {
+        enabled: true,
+        authenticate(token) {
+          return token === sessionToken ? { ...session, csrfToken, principal } : null;
+        },
+        status() { return { passwordChangeRequired: false }; },
+        verifyCsrf(_ownerSession, token) { return token === csrfToken; }
+      },
+      gatewayIdentityRoutes: identityRoutes,
+      gatewayIdentityExecutionService: executionService,
+      gatewayOperationHandlers: createGatewayOperationHandlers()
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const post = (path, body, { authorization = null, key = null } = {}) => new Promise((resolve, reject) => {
+      const payload = JSON.stringify(body);
+      const request = require('node:http').request({
+        hostname: '127.0.0.1', port, path, method: 'POST',
+        headers: {
+          origin: 'http://127.0.0.1:' + port,
+          host: '127.0.0.1:' + port,
+          cookie: 'orient_owner_session=' + sessionToken,
+          'x-orient-csrf': csrfToken,
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload),
+          ...(authorization ? { authorization } : {}),
+          ...(key ? { 'idempotency-key': key } : {})
+        }
+      }, response => {
+        let data = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { data += chunk; });
+        response.on('end', () => resolve({ statusCode: response.statusCode, body: JSON.parse(data) }));
+      });
+      request.on('error', reject);
+      request.end(payload);
+    });
+
+    const requestPayload = { executionId: 'task-not-found-' + crypto.randomUUID() };
+    const created = await post('/owner/gateway/challenges', {
+      operation: 'execution.get', request: requestPayload
+    });
+    assert.equal(created.statusCode, 201);
+    challengeId = created.body.challenge.challengeId;
+    const binding = {
+      challengeId,
+      operation: 'execution.get',
+      operationId: created.body.challenge.operationId,
+      requestId: created.body.challenge.requestId
+    };
+    const issued = await post('/owner/gateway/identity-token', binding);
+    assert.equal(issued.statusCode, 200);
+    const authorization = 'Bearer ' + issued.body.identity.token;
+    const executeBody = { ...binding, request: requestPayload };
+    const first = await post('/owner/gateway/execute', executeBody, { authorization, key: idempotencyKey });
+    assert.equal(first.statusCode, 200);
+    assert.equal(first.body.replayed, false);
+    assert.deepEqual(first.body.response, { found: false, task: null });
+
+    const replay = await post('/owner/gateway/execute', executeBody, { authorization, key: idempotencyKey });
+    assert.equal(replay.statusCode, 200);
+    assert.equal(replay.body.replayed, true);
+    assert.deepEqual(replay.body.response, first.body.response);
+
+    const tampered = await post('/owner/gateway/execute', {
+      ...binding, request: { executionId: 'different-task-id' }
+    }, { authorization, key: idempotencyKey + '-tampered' });
+    assert.equal(tampered.statusCode, 409);
+    assert.equal(tampered.body.code, 'GATEWAY_REQUEST_BINDING_MISMATCH');
+  } finally {
+    if (server?.listening) await new Promise(resolve => server.close(resolve));
+    if (challengeId) {
+      await runtimePersistence.withPrincipal(principal, async () => {
+        await runtimePersistence.db.query(
+          'DELETE FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key=$2',
+          [tenantId, idempotencyKey]
+        );
+        await runtimePersistence.db.query(
+          'DELETE FROM gateway_challenges WHERE tenant_id=$1 AND challenge_id=$2',
+          [tenantId, challengeId]
+        );
+      }).catch(() => {});
+    }
     await runtimePool.end();
   }
 });
