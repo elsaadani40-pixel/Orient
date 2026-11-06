@@ -1301,6 +1301,7 @@ test('PostgreSQL gateway challenge consumption and idempotent mutation are atomi
     await runtimePersistence.initialize();
     await runtimePersistence.gatewayIdentity.issue({
       ...binding,
+      request,
       expiresAt: Date.now() + 60000
     }, { principal });
     const issued = await runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId, { principal });
@@ -1397,7 +1398,7 @@ test('PostgreSQL gateway transaction rolls back challenge consumption and idempo
   try {
     await runtimePersistence.initialize();
     await runtimePersistence.gatewayIdentity.issue({
-      ...binding,expiresAt:Date.now()+60000
+      ...binding,request:{ goal:'rollback' },expiresAt:Date.now()+60000
     }, { principal });
     await assert.rejects(
       () => runtimePersistence.gatewayIdentity.executeAtomically({
