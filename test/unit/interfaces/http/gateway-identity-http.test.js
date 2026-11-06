@@ -80,6 +80,20 @@ test('Gateway challenge and token endpoints require an owner session and CSRF pr
     });
     assert.equal(calls[2][0], 'execute');
     assert.equal(calls[2][1].ownerSessionId, '22222222-2222-4222-8222-222222222222');
+    const unsupported = await post(port, '/owner/gateway/execute', {
+      authorization: 'Bearer signed-proof',
+      idempotencyKey: 'gateway-unsupported-key',
+      body: {
+        challengeId: '33333333-3333-4333-8333-333333333333',
+        operation: 'execution.delete',
+        operationId: '44444444-4444-4444-8444-444444444444',
+        requestId: '55555555-5555-4555-8555-555555555555',
+        request: { executionId: 'task-123' }
+      }
+    });
+    assert.equal(unsupported.statusCode, 400);
+    assert.equal(unsupported.body.code, 'GATEWAY_EXECUTION_INPUT_INVALID');
+    assert.equal(calls.length, 3, 'unsupported operations must never reach the execution service');
   } finally {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
