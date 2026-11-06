@@ -247,6 +247,25 @@ test('root transition rejects malformed recovery policy, unsafe accessors, and i
   const f = fixture();
   assert.throws(() => recoveryPolicyDigest({ threshold: 0, authorities: [] }),
     error => error.code === 'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
+  assert.throws(() => recoveryPolicyDigest({ threshold: 2, authorities: [
+    { keyId: 'recovery-a', publicKey: f.recoveries[0].publicKey },
+    { keyId: 'recovery-b', publicKey: f.recoveries[0].publicKey }
+  ] }), error => error.code === 'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
+  let policyGetterCalls = 0;
+  const unsafePolicy = {};
+  Object.defineProperties(unsafePolicy, {
+    threshold: { enumerable: true, get() { policyGetterCalls += 1; return 1; } },
+    authorities: { enumerable: true, value: [] }
+  });
+  assert.throws(() => recoveryPolicyDigest(unsafePolicy),
+    error => error.code === 'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
+  assert.equal(policyGetterCalls, 0);
+  const policyWithRevocation = {
+    ...f.recoveryPolicy,
+    authorities: f.recoveryPolicy.authorities.map((authority, index) =>
+      index === 0 ? { ...authority, revokedAt: '2026-12-01T00:00:00.000Z' } : authority)
+  };
+  assert.notEqual(recoveryPolicyDigest(policyWithRevocation), recoveryPolicyDigest(f.recoveryPolicy));
 
   let getterCalls = 0;
   const unsafe = {};
