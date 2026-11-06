@@ -15,7 +15,8 @@ class S3ObjectLockTrustManifestAnchorBackend extends S3ObjectLockEvidenceAnchorB
   constructor(options = {}) {
     super({
       ...options,
-      namespacePrefix: 'orient/trust-manifests/v1/'
+      namespacePrefix: 'orient/trust-manifests/v1/',
+      useBucketDefaultRetention: true
     });
   }
 }
