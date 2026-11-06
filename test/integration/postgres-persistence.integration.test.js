@@ -1827,6 +1827,11 @@ test('PostgreSQL Gateway execution lookup cannot read another owner execution in
     );
     assert.deepEqual(crossOwnerResult, { found: false, task: null });
 
+    const crossOwnerRepositoryRead = await runtimePersistence.withPrincipal(ownerB, () =>
+      runtimePersistence.executions.findById(executionId, { tenantId })
+    );
+    assert.equal(crossOwnerRepositoryRead, null, 'execution RLS must isolate owners even when repository callers omit owner predicates');
+
     const attribution = await runtimePersistence.withPrincipal(ownerA, async () => {
       const result = await runtimePersistence.db.query(
         'SELECT owner_id::text AS owner_id FROM executions WHERE execution_id=$1 AND tenant_id=$2',
