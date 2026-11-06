@@ -194,6 +194,7 @@ function envelopeDigest(payload, authorizationSignatures, nextRootProof) {
 function signRootTransition(input, {
   currentRootKeyId,
   currentRootPrivateKey,
+  nextRootPrivateKey,
   recoverySigners = []
 } = {}) {
   const payload = normalizePayload(input);
@@ -227,8 +228,7 @@ function signRootTransition(input, {
   }
 
   const nextRootProof = signBytes(PROOF_DOMAIN, payloadBytes,
-    privateKeyObject(input.nextRootPrivateKey || arguments[1]?.nextRootPrivateKey,
-      'EVIDENCE_ROOT_TRANSITION_PROOF_REQUIRED'));
+    privateKeyObject(nextRootPrivateKey, 'EVIDENCE_ROOT_TRANSITION_PROOF_REQUIRED'));
   const digest = envelopeDigest(payload, authorizationSignatures, nextRootProof);
   return Object.freeze({
     payload: Object.freeze(payload),
@@ -278,6 +278,8 @@ function verifyRootTransition(envelope, {
         Date.parse(payload.expiresAt) - Date.parse(payload.issuedAt) > maxValidityMs) return null;
 
     if (!isPlainRecord(expectedState) || !Number.isSafeInteger(expectedState.rootEpoch) ||
+        !Number.isSafeInteger(expectedState.transitionSequence) || expectedState.transitionSequence < 0 ||
+        (expectedState.transitionSequence === 0 ? expectedState.transitionDigest !== null : !HASH_PATTERN.test(expectedState.transitionDigest || '')) ||
         expectedState.rootEpoch !== payload.previousRootEpoch ||
         expectedState.rootKeyId !== payload.previousRootKeyId ||
         expectedState.rootFingerprint !== payload.previousRootFingerprint ||
@@ -289,10 +291,18 @@ function verifyRootTransition(envelope, {
     if (!isPlainRecord(trustedRootKeys)) return null;
     const rootEntry = readDataProperty(trustedRootKeys, payload.previousRootKeyId,
       'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
-    if (!isPlainRecord(rootEntry) || typeof rootEntry.publicKey !== 'string' ||
-        publicKeyFingerprint(rootEntry.publicKey) !== payload.previousRootFingerprint ||
-        !validAt(rootEntry, payload.issuedAt, now)) return null;
-    const currentRootPublicKey = publicKeyObject(rootEntry.publicKey, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
+    if (!isPlainRecord(rootEntry)) return null;
+    assertFields(rootEntry, ['publicKey', 'validFrom', 'revokedAt'], 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
+    const currentRootKeyText = readDataProperty(rootEntry, 'publicKey', 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
+    const currentRootEntry = {
+      publicKey: currentRootKeyText,
+      validFrom: readDataProperty(rootEntry, 'validFrom', 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID'),
+      revokedAt: readDataProperty(rootEntry, 'revokedAt', 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID')
+    };
+    if (typeof currentRootKeyText !== 'string' ||
+        publicKeyFingerprint(currentRootKeyText) !== payload.previousRootFingerprint ||
+        !validAt(currentRootEntry, payload.issuedAt, now)) return null;
+    const currentRootPublicKey = publicKeyObject(currentRootKeyText, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
 
     if (Array.isArray(expectedState.usedRootKeyIds) &&
         expectedState.usedRootKeyIds.includes(payload.nextRootKeyId)) return null;
