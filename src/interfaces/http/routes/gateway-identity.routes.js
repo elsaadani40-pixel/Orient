@@ -18,11 +18,15 @@ function createGatewayIdentityRoutes({ repository, authority, tenantId, workspac
     throw new TypeError('Invalid Gateway identity route dependencies');
   }
 
-  async function createChallenge({ ownerSession, operation } = {}) {
+  async function createChallenge({ ownerSession, operation, request } = {}) {
     if (!ownerSession?.principal || !UUID.test(ownerSession.ownerId || '') ||
         !UUID.test(ownerSession.sessionId || '')) reject('IDENTITY_AUTH_SESSION_REJECTED', 401);
     if (typeof operation !== 'string' || !authority.operationScopes.has(operation)) {
       reject('IDENTITY_AUTH_OPERATION_DENIED', 403);
+    }
+    if (!request || typeof request !== 'object' || Array.isArray(request) ||
+        Object.getPrototypeOf(request) !== Object.prototype) {
+      reject('GATEWAY_REQUEST_NOT_JSON');
     }
     const issuedAt = now();
     if (!Number.isSafeInteger(issuedAt)) throw new TypeError('Gateway clock must return an integer timestamp');
@@ -35,6 +39,7 @@ function createGatewayIdentityRoutes({ repository, authority, tenantId, workspac
       operation,
       operationId: crypto.randomUUID(),
       requestId: crypto.randomUUID(),
+      request,
       expiresAt: issuedAt + challengeTtlMs
     });
     await repository.issue(challenge, { principal: ownerSession.principal });
