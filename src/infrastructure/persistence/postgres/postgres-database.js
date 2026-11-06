@@ -317,6 +317,17 @@ const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_executions_tenant_owner_updated
       ON public.executions(tenant_id, owner_id, updated_at DESC);
 
+    DROP POLICY IF EXISTS orient_tenant_scope ON public.executions;
+    CREATE POLICY orient_execution_owner_scope ON public.executions TO orient_runtime
+      USING (
+        tenant_id = current_setting('app.orient_tenant_id', true)
+        AND owner_id::text = current_setting('app.orient_owner_id', true)
+      )
+      WITH CHECK (
+        tenant_id = current_setting('app.orient_tenant_id', true)
+        AND owner_id::text = current_setting('app.orient_owner_id', true)
+      );
+
     CREATE OR REPLACE FUNCTION public.orient_bind_execution_owner()
       RETURNS trigger
       LANGUAGE plpgsql
