@@ -1,0 +1,140 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { createEvidenceRecord } = require('../../../../src/core/execution/evidence-record');
+const {
+  signEvidenceEnvelope,
+  verifyEvidenceEnvelope
+} = require('../../../../src/infrastructure/evidence/trusted-evidence-cryptography');
+
+function setup() {
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' });
+  const evidence = createEvidenceRecord({
+    executionId: 'exec-ledger-test',
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'completed', count: 3 },
+    observedAt: '2026-11-06T10:00:00.000Z'
+  });
+  return { privateKey, publicKey, evidence, trustedKeys: { 'test-key-1': { publicKey } } };
+}
+
+test('trusted evidence envelope signs and verifies with Ed25519', () => {
+  const fixture = setup();
+  const envelope = signEvidenceEnvelope({
+    tenantId: 'tenant-a',
+    executionId: fixture.evidence.executionId,
+    sequence: 1,
+    evidence: fixture.evidence,
+    previousHash: null
+  }, {
+    keyId: 'test-key-1',
+    privateKey: fixture.privateKey,
+    recordedAt: '2026-11-06T10:01:00.000Z'
+  });
+
+  assert.equal(envelope.schemaVersion, 1);
+  assert.equal(envelope.sequence, 1);
+  assert.equal(envelope.previousHash, null);
+  assert.match(envelope.recordHash, /^[a-f0-9]{64}$/);
+  assert.equal(verifyEvidenceEnvelope(envelope, fixture.trustedKeys), true);
+});
+
+test('trusted evidence envelope rejects payload and chain metadata tampering', () => {
+  const fixture = setup();
+  const envelope = signEvidenceEnvelope({
+    tenantId: 'tenant-a',
+    executionId: fixture.evidence.executionId,
+    sequence: 1,
+    evidence: fixture.evidence,
+    previousHash: null
+  }, {
+    keyId: 'test-key-1',
+    privateKey: fixture.privateKey,
+    recordedAt: '2026-11-06T10:01:00.000Z'
+  });
+
+  for (const changed of [
+    { ...envelope, tenantId: 'tenant-b' },
+    { ...envelope, executionId: 'exec-other' },
+    { ...envelope, sequence: 2 },
+    { ...envelope, previousHash: 'a'.repeat(64) },
+    { ...envelope, evidence: { ...fixture.evidence, operation: 'different.tool' } },
+    { ...envelope, keyId: 'unknown-key' },
+    { ...envelope, recordedAt: '2026-11-06T10:02:00.000Z' },
+    { ...envelope, recordHash: 'b'.repeat(64) },
+    { ...envelope, signature: Buffer.alloc(64, 7).toString('base64') }
+  ]) {
+    assert.equal(verifyEvidenceEnvelope(changed, fixture.trustedKeys), false);
+  }
+});
+
+test('trusted evidence envelope rejects unknown keys and invalid key types', () => {
+  const fixture = setup();
+  assert.throws(
+    () => signEvidenceEnvelope({
+      tenantId: 'tenant-a',
+      executionId: fixture.evidence.executionId,
+      sequence: 1,
+      evidence: fixture.evidence,
+      previousHash: null
+    }, { keyId: 'test-key-1', privateKey: 'not-a-private-key' }),
+    error => error.code === 'EVIDENCE_SIGNING_KEY_INVALID'
+  );
+  assert.equal(
+    verifyEvidenceEnvelope(
+      signEvidenceEnvelope({
+        tenantId: 'tenant-a',
+        executionId: fixture.evidence.executionId,
+        sequence: 1,
+        evidence: fixture.evidence,
+        previousHash: null
+      }, {
+        keyId: 'test-key-1',
+        privateKey: fixture.privateKey,
+        recordedAt: '2026-11-06T10:01:00.000Z'
+      }),
+      {}
+    ),
+    false
+  );
+});
+
+test('trusted evidence envelope enforces key validity and revocation timestamps', () => {
+  const fixture = setup();
+  const envelope = signEvidenceEnvelope({
+    tenantId: 'tenant-a',
+    executionId: fixture.evidence.executionId,
+    sequence: 1,
+    evidence: fixture.evidence,
+    previousHash: null
+  }, {
+    keyId: 'test-key-1',
+    privateKey: fixture.privateKey,
+    recordedAt: '2026-11-06T10:01:00.000Z'
+  });
+
+  assert.equal(verifyEvidenceEnvelope(envelope, {
+    'test-key-1': {
+      publicKey: fixture.trustedKeys['test-key-1'].publicKey,
+      validFrom: '2026-11-06T10:02:00.000Z'
+    }
+  }), false);
+  assert.equal(verifyEvidenceEnvelope(envelope, {
+    'test-key-1': {
+      publicKey: fixture.trustedKeys['test-key-1'].publicKey,
+      revokedAt: '2026-11-06T10:00:00.000Z'
+    }
+  }), false);
+  assert.equal(verifyEvidenceEnvelope(envelope, {
+    'test-key-1': {
+      publicKey: fixture.trustedKeys['test-key-1'].publicKey,
+      revokedAt: '2026-11-06T10:02:00.000Z'
+    }
+  }), true);
+});
