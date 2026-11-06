@@ -199,11 +199,11 @@ test('emergency recovery works after old-root revocation but never counts old-ro
   });
   assert.ok(f.verify(envelope, { trustedRootKeys: revokedRoot }));
 
-  const oldRootOnly = signRootTransition(f.payload('emergency-recovery'), {
-    recoverySigners: [],
+  const belowThreshold = signRootTransition(f.payload('emergency-recovery'), {
+    recoverySigners: [{ keyId: 'recovery-1', privateKey: f.recoveries[0].privateKey }],
     nextRootPrivateKey: f.next.privateKey
   });
-  assert.equal(f.verify(oldRootOnly, { trustedRootKeys: revokedRoot }), null);
+  assert.equal(f.verify(belowThreshold, { trustedRootKeys: revokedRoot }), null);
 });
 
 test('emergency recovery rejects duplicate, unknown, revoked, and insufficient recovery signers', () => {
