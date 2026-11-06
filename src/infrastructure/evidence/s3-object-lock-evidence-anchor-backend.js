@@ -45,7 +45,15 @@ async function bodyToUtf8(body, maxBytes, contentLength) {
     if (contentLength === undefined) {
       fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 ContentLength is required for buffered body conversion');
     }
-    return body.transformToString('utf-8');
+    const value = await body.transformToString('utf-8');
+    const actualBytes = Buffer.byteLength(value, 'utf8');
+    if (actualBytes > maxBytes) {
+      fail('EVIDENCE_ANCHOR_S3_OBJECT_TOO_LARGE', 'S3 anchor object exceeds the configured byte limit');
+    }
+    if (actualBytes !== contentLength) {
+      fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 object body length does not match ContentLength');
+    }
+    return value;
   }
   if (typeof body === 'string' || Buffer.isBuffer(body)) {
     const bytes = Buffer.from(body);
