@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const { canonicalJson } = require('../../../../src/core/execution/evidence-record');
+const { manifestKey } = require('../../../../src/infrastructure/evidence/external-trust-manifest-anchor-store');
 const { signTrustManifest } = require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest');
 const { ExternalTrustManifestAnchorStore } = require('../../../../src/infrastructure/evidence/external-trust-manifest-anchor-store');
 const { AnchoredTrustManifestAcceptanceService } = require('../../../../src/infrastructure/evidence/anchored-trust-manifest-acceptance-service');
@@ -202,6 +204,64 @@ test('manifest acceptance uses reconstructed active root and rejects retired-roo
     service.accept({ manifest: nonAdvancing, principal: { id: 'owner' } }),
     error => error.code === 'EVIDENCE_TRUST_MANIFEST_ROOT_HEAD_ROLLBACK'
   );
+});
+
+test('manifest acceptance rejects a delayed retired-root manifest at the external head', async () => {
+  const oldRoot = crypto.generateKeyPairSync('ed25519');
+  const nextRoot = crypto.generateKeyPairSync('ed25519');
+  const evidence = crypto.generateKeyPairSync('ed25519');
+  const oldPrivate = oldRoot.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const nextPrivate = nextRoot.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const oldPublic = oldRoot.publicKey.export({ type: 'spki', format: 'pem' });
+  const nextPublic = nextRoot.publicKey.export({ type: 'spki', format: 'pem' });
+  const evidencePublic = evidence.publicKey.export({ type: 'spki', format: 'pem' });
+  const initialRoots = { 'root-1': { publicKey: oldPublic } };
+  const currentRoots = {
+    'root-1': { publicKey: oldPublic, revokedAt: '2026-11-06T10:06:00.000Z' },
+    'root-2': { publicKey: nextPublic, validFrom: '2026-11-06T10:06:00.000Z' }
+  };
+  const delayed = [1, 2, 3, 4, 5].map(version => signTrustManifest({
+    version,
+    issuedAt: `2026-11-06T10:0${version}:00.000Z`,
+    expiresAt: `2026-12-06T10:0${version}:00.000Z`,
+    keys: { evidence: { publicKey: evidencePublic } }
+  }, { rootKeyId: 'root-1', rootPrivateKey: oldPrivate }));
+  const backend = new MemoryImmutableBackend();
+  for (const manifest of delayed) {
+    backend.objects.set(manifestKey(manifest.version), canonicalJson(manifest));
+  }
+  const externalAnchorStore = new ExternalTrustManifestAnchorStore({
+    backend,
+    trustedRootKeysProvider: async () => currentRoots
+  });
+  const { verifyTrustManifest } = require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest');
+  const rootState = {
+    rootEpoch: 2,
+    rootKeyId: 'root-2',
+    rootFingerprint: crypto.createHash('sha256').update(nextRoot.publicKey.export({ type: 'spki', format: 'der' })).digest('hex'),
+    manifestHeadVersion: 4,
+    manifestHeadDigest: verifyTrustManifest(delayed[3], initialRoots).digest,
+    trustedRootKeys: currentRoots
+  };
+  const versionStore = memoryVersionStore();
+  const service = new AnchoredTrustManifestAcceptanceService({
+    rootTransitionLedger: { async readState() { return rootState; } },
+    versionStore,
+    externalAnchorStore,
+    authorize: async () => true,
+    now: () => '2026-11-06T10:10:00.000Z'
+  });
+  const candidate = signTrustManifest({
+    version: 6,
+    issuedAt: '2026-11-06T10:07:00.000Z',
+    expiresAt: '2026-12-06T10:07:00.000Z',
+    keys: { evidence: { publicKey: evidencePublic } }
+  }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
+  await assert.rejects(
+    service.accept({ manifest: candidate, principal: { id: 'owner' } }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_ANCHOR_ROOT_MISMATCH'
+  );
+  assert.equal(versionStore.current(), null);
 });
 
 test('manifest acceptance fails closed when reconstructed root history is unavailable', async () => {
