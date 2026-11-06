@@ -261,6 +261,23 @@ function signRootTransition(input, {
   });
 }
 
+function isDenseUniqueArray(value, validator) {
+  if (!Array.isArray(value)) return false;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || keys.some(key =>
+    key !== 'length' && (typeof key !== 'string' ||
+      !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length))) return false;
+  const seen = new Set();
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !descriptor.enumerable ||
+        !Object.prototype.hasOwnProperty.call(descriptor, 'value') ||
+        !validator(descriptor.value) || seen.has(descriptor.value)) return false;
+    seen.add(descriptor.value);
+  }
+  return true;
+}
+
 function validAt(entry, issuedAt, verificationTime) {
   const validFrom = entry.validFrom ? timestamp(entry.validFrom, 'EVIDENCE_ROOT_TRANSITION_KEY_METADATA_INVALID') : null;
   const revokedAt = entry.revokedAt ? timestamp(entry.revokedAt, 'EVIDENCE_ROOT_TRANSITION_KEY_METADATA_INVALID') : null;
@@ -316,8 +333,11 @@ function verifyRootTransition(envelope, {
     if (!Number.isSafeInteger(state.rootEpoch) || !Number.isSafeInteger(state.transitionSequence) ||
         state.transitionSequence < 0 ||
         (state.transitionSequence === 0 ? state.transitionDigest !== null : !HASH_PATTERN.test(state.transitionDigest || '')) ||
-        !Array.isArray(state.usedRootKeyIds) || !state.usedRootKeyIds.includes(payload.previousRootKeyId) ||
-        !Array.isArray(state.usedRootFingerprints) || !state.usedRootFingerprints.includes(payload.previousRootFingerprint) ||
+        !isDenseUniqueArray(state.usedRootKeyIds, value => typeof value === 'string' && KEY_ID_PATTERN.test(value)) ||
+        !isDenseUniqueArray(state.usedRootFingerprints, value => typeof value === 'string' && HASH_PATTERN.test(value)) ||
+        state.usedRootKeyIds.length !== state.usedRootFingerprints.length ||
+        !state.usedRootKeyIds.includes(payload.previousRootKeyId) ||
+        !state.usedRootFingerprints.includes(payload.previousRootFingerprint) ||
         state.rootEpoch !== payload.previousRootEpoch || state.rootKeyId !== payload.previousRootKeyId ||
         state.rootFingerprint !== payload.previousRootFingerprint ||
         state.manifestHeadVersion !== payload.manifestHeadVersion || state.manifestHeadDigest !== payload.manifestHeadDigest ||
