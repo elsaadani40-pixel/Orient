@@ -1299,13 +1299,11 @@ test('PostgreSQL gateway challenge consumption and idempotent mutation are atomi
 
   try {
     await runtimePersistence.initialize();
-    await runtimePersistence.withPrincipal(principal, () => runtimePersistence.gatewayIdentity.issue({
+    await runtimePersistence.gatewayIdentity.issue({
       ...binding,
       expiresAt: Date.now() + 60000
-    }));
-    const issued = await runtimePersistence.withPrincipal(principal, () =>
-      runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId)
-    );
+    }, { principal });
+    const issued = await runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId, { principal });
     assert.equal(issued.status, 'ISSUED');
     assert.equal(issued.tenantId, principal.tenantId);
 
@@ -1398,9 +1396,9 @@ test('PostgreSQL gateway transaction rolls back challenge consumption and idempo
   };
   try {
     await runtimePersistence.initialize();
-    await runtimePersistence.withPrincipal(principal, () => runtimePersistence.gatewayIdentity.issue({
+    await runtimePersistence.gatewayIdentity.issue({
       ...binding,expiresAt:Date.now()+60000
-    }));
+    }, { principal });
     await assert.rejects(
       () => runtimePersistence.gatewayIdentity.executeAtomically({
         principal,binding,idempotencyKey:'rollback-'+crypto.randomUUID(),request:{ goal:'rollback' },
@@ -1414,9 +1412,7 @@ test('PostgreSQL gateway transaction rolls back challenge consumption and idempo
       }),
       error => error.code === 'TEST_MUTATION_FAILED'
     );
-    const challenge = await runtimePersistence.withPrincipal(principal, () =>
-      runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId)
-    );
+    const challenge = await runtimePersistence.gatewayIdentity.getForIssuance(binding.challengeId, { principal });
     assert.equal(challenge.status,'ISSUED');
   } finally {
     await runtimePool.end();
