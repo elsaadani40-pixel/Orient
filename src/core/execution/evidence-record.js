@@ -5,56 +5,114 @@ const crypto = require('node:crypto');
 const MAX_CANONICAL_DEPTH = 64;
 const MAX_CANONICAL_BYTES = 2 * 1024 * 1024;
 
-function canonicalJson(value, depth = 0, ancestors = new Set()) {
-  if (depth > MAX_CANONICAL_DEPTH) {
-    throw new TypeError('Evidence payload exceeds the maximum nesting depth');
-  }
+function canonicalJson(value) {
+  const chunks = [];
+  const ancestors = new Set();
+  let byteLength = 0;
 
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') {
-    return JSON.stringify(value);
-  }
-
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) {
-      throw new TypeError('Evidence payload contains a non-finite number');
+  function append(part) {
+    byteLength += Buffer.byteLength(part, 'utf8');
+    if (byteLength > MAX_CANONICAL_BYTES) {
+      throw new TypeError('Evidence payload exceeds the maximum canonical size');
     }
-    return JSON.stringify(value);
+    chunks.push(part);
   }
 
-  if (Array.isArray(value)) {
-    if (ancestors.has(value)) {
+  function visit(item, depth) {
+    if (depth > MAX_CANONICAL_DEPTH) {
+      throw new TypeError('Evidence payload exceeds the maximum nesting depth');
+    }
+
+    if (item === null || typeof item === 'boolean' || typeof item === 'string') {
+      append(JSON.stringify(item));
+      return;
+    }
+
+    if (typeof item === 'number') {
+      if (!Number.isFinite(item)) {
+        throw new TypeError('Evidence payload contains a non-finite number');
+      }
+      append(JSON.stringify(item));
+      return;
+    }
+
+    if (!item || typeof item !== 'object') {
+      throw new TypeError('Evidence payload contains a non-JSON value');
+    }
+
+    if (ancestors.has(item)) {
       throw new TypeError('Evidence payload contains a circular reference');
     }
-    ancestors.add(value);
-    const result = '[' + value.map(item =>
-      canonicalJson(item, depth + 1, ancestors)
-    ).join(',') + ']';
-    ancestors.delete(value);
-    return result;
-  }
 
-  if (typeof value === 'object') {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
+    const isArray = Array.isArray(item);
+    const prototype = Object.getPrototypeOf(item);
+    if (!isArray && prototype !== Object.prototype && prototype !== null) {
       throw new TypeError('Evidence payload must contain plain JSON objects');
     }
-    if (ancestors.has(value)) {
-      throw new TypeError('Evidence payload contains a circular reference');
-    }
-    ancestors.add(value);
-    const keys = Object.keys(value).sort();
-    const fields = keys.map(key => {
-      const item = value[key];
-      if (item === undefined || typeof item === 'function' || typeof item === 'symbol' || typeof item === 'bigint') {
-        throw new TypeError('Evidence payload contains a non-JSON value');
+
+    ancestors.add(item);
+    try {
+      const descriptors = Object.getOwnPropertyDescriptors(item);
+      const ownKeys = Reflect.ownKeys(descriptors);
+      if (ownKeys.some(key => typeof key === 'symbol')) {
+        throw new TypeError('Evidence payload cannot contain symbol keys');
       }
-      return JSON.stringify(key) + ':' + canonicalJson(item, depth + 1, ancestors);
-    });
-    ancestors.delete(value);
-    return '{' + fields.join(',') + '}';
+
+      if (isArray) {
+        const length = descriptors.length?.value;
+        if (!Number.isSafeInteger(length) || length < 0) {
+          throw new TypeError('Evidence array has an invalid length');
+        }
+        const expectedKeys = new Set(['length']);
+        for (let index = 0; index < length; index += 1) {
+          const key = String(index);
+          expectedKeys.add(key);
+          const descriptor = descriptors[key];
+          if (!descriptor) {
+            throw new TypeError('Evidence payload cannot contain sparse arrays');
+          }
+          if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+            throw new TypeError('Evidence payload cannot contain array accessors or hidden values');
+          }
+        }
+        if (ownKeys.some(key => !expectedKeys.has(key))) {
+          throw new TypeError('Evidence arrays cannot contain extra properties');
+        }
+
+        append('[');
+        for (let index = 0; index < length; index += 1) {
+          if (index > 0) append(',');
+          visit(descriptors[String(index)].value, depth + 1);
+        }
+        append(']');
+        return;
+      }
+
+      const keys = ownKeys.sort();
+      const entries = [];
+      for (const key of keys) {
+        const descriptor = descriptors[key];
+        if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+          throw new TypeError('Evidence payload cannot contain accessors or hidden values');
+        }
+        entries.push([key, descriptor.value]);
+      }
+
+      append('{');
+      for (let index = 0; index < entries.length; index += 1) {
+        if (index > 0) append(',');
+        append(JSON.stringify(entries[index][0]));
+        append(':');
+        visit(entries[index][1], depth + 1);
+      }
+      append('}');
+    } finally {
+      ancestors.delete(item);
+    }
   }
 
-  throw new TypeError('Evidence payload contains a non-JSON value');
+  visit(value, 0);
+  return chunks.join('');
 }
 
 function sha256(value) {
@@ -111,9 +169,6 @@ function createEvidenceRecord({
   const limitations = [];
   try {
     const canonicalResult = canonicalJson(result);
-    if (Buffer.byteLength(canonicalResult, 'utf8') > MAX_CANONICAL_BYTES) {
-      throw new TypeError('Evidence result exceeds the maximum canonical size');
-    }
     resultSha256 = sha256(canonicalResult);
   } catch (cause) {
     limitations.push(Object.freeze({
