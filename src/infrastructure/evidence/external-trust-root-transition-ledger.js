@@ -141,7 +141,10 @@ class ExternalTrustRootTransitionLedger {
         ...previous,
         revokedAt: envelope.payload.effectiveAt
       };
-      trustedRootKeys[verified.nextRoot.keyId] = { publicKey: verified.nextRoot.publicKey };
+      trustedRootKeys[verified.nextRoot.keyId] = {
+        publicKey: verified.nextRoot.publicKey,
+        validFrom: envelope.payload.effectiveAt
+      };
       state.rootEpoch = envelope.payload.nextRootEpoch;
       state.rootKeyId = verified.nextRoot.keyId;
       state.rootFingerprint = verified.nextRoot.fingerprint;
