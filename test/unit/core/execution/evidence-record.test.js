@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { canonicalJson, createEvidenceRecord } = require('../../../../src/core/execution/evidence-record');
+const { canonicalJson, createEvidenceRecord, verifyEvidenceRecord } = require('../../../../src/core/execution/evidence-record');
 const ExecutionContext = require('../../../../src/core/execution/execution-context');
 
 test('canonical JSON sorts object keys and preserves array order', () => {
@@ -39,6 +39,22 @@ test('evidence identity is content-addressed and independent of object key inser
   assert.deepEqual(first.coverage, { status: 'unknown' });
   assert.equal(Object.hasOwn(first, 'result'), false);
   assert.equal(Object.isFrozen(first), true);
+  assert.equal(verifyEvidenceRecord(first), true);
+});
+
+test('evidence verification detects modified records and invalid digests', () => {
+  const evidence = createEvidenceRecord({
+    executionId: 'execution-integrity',
+    step: 1,
+    tool: 'execution.get',
+    success: true,
+    result: { status: 'completed' },
+    observedAt: '2026-11-06T12:00:00.000Z'
+  });
+
+  assert.equal(verifyEvidenceRecord(evidence), true);
+  assert.equal(verifyEvidenceRecord({ ...evidence, outcome: 'failure' }), false);
+  assert.equal(verifyEvidenceRecord({ ...evidence, id: 'ev_' + '0'.repeat(64) }), false);
 });
 
 test('unsupported result data is explicitly marked instead of being treated as verified', () => {
@@ -78,6 +94,17 @@ test('execution observations carry evidence metadata without duplicating raw res
   assert.equal(JSON.stringify(observation.evidence).includes('do-not-copy'), false);
   assert.equal(execution.snapshot().observations[0].evidence.id, observation.evidence.id);
   assert.equal(execution.agentState.observations[0].evidence.id, observation.evidence.id);
+
+  const restored = ExecutionContext.restore(execution.snapshot());
+  assert.equal(restored.observations[0].evidence.id, observation.evidence.id);
+  assert.equal(verifyEvidenceRecord(restored.observations[0].evidence), true);
+
+  const tamperedSnapshot = execution.snapshot();
+  tamperedSnapshot.observations[0].evidence.outcome = 'failure';
+  assert.throws(
+    () => ExecutionContext.restore(tamperedSnapshot),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
 });
 
 test('failed observations preserve a bounded error code in their evidence record', () => {
