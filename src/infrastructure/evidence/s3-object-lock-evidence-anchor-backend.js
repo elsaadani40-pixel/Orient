@@ -128,9 +128,16 @@ class S3ObjectLockEvidenceAnchorBackend {
         Prefix: prefix,
         ...(continuationToken ? { ContinuationToken: continuationToken } : {})
       }));
-      for (const item of result?.Contents || []) {
+      const contents = result?.Contents ?? [];
+      if (!Array.isArray(contents)) {
+        fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 listing Contents must be an array');
+      }
+      for (const item of contents) {
         if (typeof item?.Key !== 'string' || !item.Key.startsWith(prefix)) {
           fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 returned an object outside the requested prefix');
+        }
+        if (keys.includes(item.Key)) {
+          fail('EVIDENCE_ANCHOR_S3_DUPLICATE_KEY', 'S3 returned a duplicate object key across listing pages');
         }
         keys.push(item.Key);
       }
