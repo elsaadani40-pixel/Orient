@@ -39,7 +39,7 @@ function fixture() {
     expiresAt: `2026-12-06T10:0${version}:00.000Z`,
     keys: { 'evidence-key-1': { publicKey: evidencePublicKey } }
   }, { rootKeyId: 'offline-root-1', rootPrivateKey });
-  return { backend, store, create, trustedRootKeys };
+  return { backend, store, create, trustedRootKeys, rootPrivateKey };
 }
 
 test('external trust anchor store preserves signed manifest history across adapter restart', async () => {
