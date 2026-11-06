@@ -317,6 +317,17 @@ test('PostgreSQL trusted evidence ledger enforces runtime append-only grants, RL
     });
     assert.equal(truncated.valid, false);
     assert.equal(truncated.code, 'EVIDENCE_ANCHOR_MISMATCH');
+    const evidenceFour = createEvidenceRecord({
+      executionId, step: 4, tool: 'integration.fourth', success: true,
+      result: { value: 'fourth' }, observedAt: '2026-11-06T10:00:03.000Z'
+    });
+    await assert.rejects(
+      () => runtimePersistence.executionEvidence.append(evidenceFour, {
+        principal: principal('tenant-evidence-a'),
+        anchor: externalAnchor
+      }),
+      error => error.code === 'EVIDENCE_ANCHOR_MISMATCH'
+    );
   } finally {
     await runtimePool.end();
     await pool.query('ALTER TABLE public.execution_evidence DISABLE TRIGGER ALL');
