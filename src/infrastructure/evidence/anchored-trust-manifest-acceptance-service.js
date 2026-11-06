@@ -108,7 +108,13 @@ class AnchoredTrustManifestAcceptanceService {
     }
 
     const trustContext = await this.resolveTrustContext();
-    const head = await this.externalAnchorStore.readHead({ trustedRootKeys: trustContext.trustedRootKeys });
+    const head = await this.externalAnchorStore.readHead({
+      trustedRootKeys: trustContext.trustedRootKeys,
+      ...(trustContext.rootState ? {
+        activeRootKeyId: trustContext.rootState.rootKeyId,
+        activeFromVersion: trustContext.rootState.manifestHeadVersion
+      } : {})
+    });
     if (!head) {
       fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_EMPTY', 'No independently anchored trust history is available for recovery');
     }
@@ -172,7 +178,13 @@ class AnchoredTrustManifestAcceptanceService {
       fail('EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID', 'Trust manifest signature or validity is invalid');
     }
 
-    const externalHead = await this.externalAnchorStore.readHead({ trustedRootKeys: trustContext.trustedRootKeys });
+    const externalHead = await this.externalAnchorStore.readHead({
+      trustedRootKeys: trustContext.trustedRootKeys,
+      ...(trustContext.rootState ? {
+        activeRootKeyId: trustContext.rootState.rootKeyId,
+        activeFromVersion: trustContext.rootState.manifestHeadVersion
+      } : {})
+    });
     await this.verifyExternalHeadRoot(trustContext, externalHead);
     const cachedState = await this.versionStore.read();
     if (cachedState !== null && (!cachedState || !Number.isSafeInteger(cachedState.version) ||
