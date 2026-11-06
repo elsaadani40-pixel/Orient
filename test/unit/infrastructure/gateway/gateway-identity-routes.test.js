@@ -21,7 +21,8 @@ test('persists owner-scoped challenge and delegates token signing', async () => 
   assert.equal(signed.length, 1);
 });
 test('rejects unapproved operation and missing owner session', async () => {
-  const routes = createGatewayIdentityRoutes({ repository: { issue: async () => assert.fail() }, authority: { operationScopes: new Map(), issueForSession: async () => assert.fail() }, tenantId: 'tenant-a', workspaceId: 'workspace-a' });
+  const routes = createGatewayIdentityRoutes({ repository: { issue: async () => assert.fail() }, authority: { operationScopes: new Map([['execution.get', 'execution.read']]), issueForSession: async () => assert.fail() }, tenantId: 'tenant-a', workspaceId: 'workspace-a' });
   await assert.rejects(routes.createChallenge({ ownerSession: { ownerId, sessionId, principal }, operation: 'database.sql' }), e => e.code === 'IDENTITY_AUTH_OPERATION_DENIED');
   await assert.rejects(routes.createChallenge({ ownerSession: null, operation: 'execution.get' }), e => e.code === 'IDENTITY_AUTH_SESSION_REJECTED');
+  await assert.rejects(routes.createChallenge({ ownerSession: { ownerId, sessionId, principal }, operation: 'execution.get' }), e => e.code === 'GATEWAY_REQUEST_NOT_JSON');
 });
