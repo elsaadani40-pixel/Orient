@@ -47,7 +47,7 @@ function fixture(t) {
 
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return {
-    root, repoRoot, keyPath, inputPath, outputPath, now,
+    root, repoRoot, offlineDir, keyPath, inputPath, outputPath, now,
     publicKeyPem, privateKeyPem
   };
 }
@@ -106,7 +106,7 @@ test('offline signer rejects group-readable or world-readable private-key files'
 
 test('offline signer rejects symlink private-key paths', t => {
   const f = fixture(t);
-  const linkPath = path.join(f.offlineDir || path.dirname(f.keyPath), 'root-link.pem');
+  const linkPath = path.join(f.offlineDir, 'root-link.pem');
   fs.symlinkSync(f.keyPath, linkPath);
   assert.throws(() => readPrivateKeyFile(linkPath, { repoRoot: f.repoRoot, platform: 'linux' }),
     error => error.code === 'TRUST_SIGNER_KEY_FILE_INVALID');
@@ -119,4 +119,13 @@ test('offline signer argument parser rejects unknown, duplicate, and incomplete 
     error => error.code === 'TRUST_SIGNER_ARGUMENT_INVALID');
   assert.throws(() => parseArgs(['--input', 'in.json']),
     error => error.code === 'TRUST_SIGNER_ARGUMENT_INVALID');
+});
+
+
+test('offline signer rejects private keys with additional hard links', t => {
+  const f = fixture(t);
+  const inRepoLink = path.join(f.repoRoot, 'private-hardlink.pem');
+  fs.linkSync(f.keyPath, inRepoLink);
+  assert.throws(() => readPrivateKeyFile(f.keyPath, { repoRoot: f.repoRoot }),
+    error => error.code === 'TRUST_SIGNER_KEY_FILE_INVALID');
 });
