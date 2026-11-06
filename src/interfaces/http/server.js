@@ -379,11 +379,19 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             }
           } catch (error) {
             const code = error.code || 'GATEWAY_IDENTITY_REJECTED';
+            const unauthorized = code.startsWith('IDENTITY_TOKEN_') ||
+              ['IDENTITY_AUTH_SESSION_REJECTED', 'GATEWAY_SESSION_REJECTED'].includes(code);
+            const conflict = [
+              'GATEWAY_IDEMPOTENCY_CONFLICT',
+              'GATEWAY_IDEMPOTENCY_IN_PROGRESS',
+              'GATEWAY_CHALLENGE_REPLAY_REJECTED',
+              'GATEWAY_REQUEST_BINDING_MISMATCH'
+            ].includes(code);
+            const forbidden = code.startsWith('IDENTITY_AUTH_') ||
+              code === 'GATEWAY_OPERATION_DENIED' || code === 'GATEWAY_SCOPE_POLICY_REJECTED';
             const status = Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500
               ? error.statusCode
-              : (/^(IDENTITY_TOKEN_|IDENTITY_AUTH_SESSION_REJECTED|GATEWAY_SESSION_REJECTED)$/.test(code) ? 401
-                : (/^(GATEWAY_IDEMPOTENCY_CONFLICT|GATEWAY_IDEMPOTENCY_IN_PROGRESS|GATEWAY_CHALLENGE_REPLAY_REJECTED|GATEWAY_REQUEST_BINDING_MISMATCH)$/.test(code) ? 409
-                  : (/^(IDENTITY_AUTH_|GATEWAY_OPERATION_DENIED|GATEWAY_SCOPE_POLICY_REJECTED)/.test(code) ? 403 : 400));
+              : (unauthorized ? 401 : (conflict ? 409 : (forbidden ? 403 : 400)));
             sendJson(res, status, { ok: false, code, message: 'تم رفض طلب Gateway.' });
           }
           return;
