@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { canonicalJson, verifyEvidenceRecord } = require('../../../core/execution/evidence-record');
+const { canonicalJson, verifyEvidenceRecord } = require('../../core/execution/evidence-record');
 
 const RECORD_DOMAIN = Buffer.from('ORIENT-TRUSTED-EVIDENCE-V1\0', 'utf8');
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
