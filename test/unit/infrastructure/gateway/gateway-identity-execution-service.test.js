@@ -143,6 +143,7 @@ test('gateway execution requires the live owner session to match the signed sess
     () => service.execute({ ...input(token), ownerSessionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }),
     error => error.code === 'GATEWAY_SESSION_REJECTED'
   );
+  service.sessionAuthorizer = async () => false;
   await assert.rejects(
     () => service.execute({ ...input(token), ownerSessionId: IDS.session }),
     error => error.code === 'GATEWAY_SESSION_REJECTED'
