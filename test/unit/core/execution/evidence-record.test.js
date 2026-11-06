@@ -99,14 +99,14 @@ test('execution observations carry evidence metadata without duplicating raw res
   assert.equal(restored.observations[0].evidence.id, observation.evidence.id);
   assert.equal(verifyEvidenceRecord(restored.observations[0].evidence), true);
 
-  const tamperedSnapshot = execution.snapshot();
+  const tamperedSnapshot = structuredClone(execution.snapshot());
   tamperedSnapshot.observations[0].evidence.outcome = 'failure';
   assert.throws(
     () => ExecutionContext.restore(tamperedSnapshot),
     error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
   );
 
-  const tamperedAgentSnapshot = execution.snapshot();
+  const tamperedAgentSnapshot = structuredClone(execution.snapshot());
   tamperedAgentSnapshot.agentState.observations[0].evidence.operation = 'execution.delete';
   assert.throws(
     () => ExecutionContext.restore(tamperedAgentSnapshot),
