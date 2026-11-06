@@ -79,6 +79,29 @@ test('trust manifest enforces root key validity and revocation at manifest issua
   }), null);
 });
 
+test('historical verification remains possible but acceptance fails after root revocation', async () => {
+  const f = fixture();
+  const manifest = f.create(1);
+  const revokedRoots = {
+    'offline-root-1': {
+      ...f.trustedRootKeys['offline-root-1'],
+      revokedAt: '2026-11-06T10:02:00.000Z'
+    }
+  };
+  assert.ok(verifyTrustManifest(manifest, revokedRoots));
+  assert.equal(verifyTrustManifest(manifest, revokedRoots, {
+    verificationTime: '2026-11-06T10:03:00.000Z'
+  }), null);
+  await assert.rejects(
+    verifyAndAcceptTrustManifest(manifest, {
+      trustedRootKeys: revokedRoots,
+      versionStore: memoryVersionStore(),
+      now: '2026-11-06T10:03:00.000Z'
+    }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID'
+  );
+});
+
 test('trust manifest rejects payload tampering, unknown roots, and noncanonical signatures', () => {
   const f = fixture();
   const manifest = f.create(1);
