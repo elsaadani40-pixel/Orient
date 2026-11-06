@@ -295,3 +295,27 @@ test('PostgresPersistence refuses rebinding to a different tenant or owner princ
     ...principal, tenantId: 'tenant-b'
   }), error => error.code === 'PERSISTENCE_PRINCIPAL_ALREADY_BOUND');
 });
+
+
+test('PostgresPersistence rejects rebinding when the owner session or authority source changes', () => {
+  const persistence = new PostgresPersistence({ pool: fakeDb() });
+  const principal = {
+    principalId: '11111111-1111-4111-8111-111111111111',
+    ownerId: '11111111-1111-4111-8111-111111111111',
+    tenantId: 'tenant-a',
+    workspaceId: 'workspace-a',
+    sessionId: '22222222-2222-4222-8222-222222222222',
+    authSource: 'orient-runtime-owner'
+  };
+  persistence.bindPrincipal(principal);
+
+  for (const changed of [
+    { ...principal, sessionId: '33333333-3333-4333-8333-333333333333' },
+    { ...principal, authSource: 'orient-owner-session' }
+  ]) {
+    assert.throws(
+      () => persistence.bindPrincipal(changed),
+      error => error.code === 'PERSISTENCE_PRINCIPAL_ALREADY_BOUND'
+    );
+  }
+});
