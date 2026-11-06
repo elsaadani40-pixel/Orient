@@ -187,6 +187,13 @@ class AgentService {
     return { text: null, status: 'pending' };
   }
 
+  assertOwnerSessionContext(ownerSessionContext) {
+    if (typeof this.runtime.assertOwnerSessionContext !== 'function') {
+      throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
+    }
+    return this.runtime.assertOwnerSessionContext(ownerSessionContext);
+  }
+
   execute(input, options = {}) {
     const clean = String(input || '').trim();
 
