@@ -163,8 +163,8 @@ class S3ObjectLockEvidenceAnchorBackend {
         ...(continuationToken ? { ContinuationToken: continuationToken } : {})
       }));
       const contents = result?.Contents ?? [];
-      if (!Array.isArray(contents)) {
-        fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 listing Contents must be an array');
+      if (!Array.isArray(contents) || typeof result?.IsTruncated !== 'boolean') {
+        fail('EVIDENCE_ANCHOR_S3_RESPONSE_INVALID', 'S3 listing Contents and IsTruncated metadata are invalid');
       }
       for (const item of contents) {
         if (typeof item?.Key !== 'string' || !item.Key.startsWith(prefix)) {
