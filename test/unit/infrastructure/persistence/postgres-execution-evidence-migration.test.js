@@ -52,7 +52,7 @@ test('migration 14 binds execution rows to the authenticated runtime owner', () 
     'DROP POLICY IF EXISTS orient_tenant_scope ON public.executions',
     'CREATE POLICY orient_execution_owner_scope ON public.executions TO orient_runtime',
     "owner_id::text = current_setting('app.orient_owner_id', true)",
-    "pg_has_role(current_user, 'orient_runtime', 'MEMBER')",
+    "session_user <> 'orient_runtime_login' AND current_user <> 'orient_runtime'",
     "current_setting('app.orient_owner_id', true)",
     'NEW.owner_id := configured_owner::uuid',
     'ORIENT execution ownership is immutable',
