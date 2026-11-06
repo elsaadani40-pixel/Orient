@@ -19,6 +19,9 @@ const OwnerIdentityService =
 const OwnerIdentityRuntimeAdapter =
   require('./src/core/security/owner-identity-runtime-adapter');
 const { createOwnerServer } = require('./server');
+const { Ed25519IdentityTokenIssuer } = require('./src/infrastructure/gateway/identity/ed25519-identity-token');
+const { OwnerSessionIdentityAuthority } = require('./src/infrastructure/gateway/identity/owner-session-identity-authority');
+const { createGatewayIdentityRoutes } = require('./src/interfaces/http/routes/gateway-identity.routes');
 
 const AgentRegistry =
   require('./src/core/agent/boundary/agent-registry');
@@ -192,6 +195,35 @@ const ownerIdentityService = new OwnerIdentityService({
   bootstrapPassword: ownerBootstrapPassword
 });
 const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService, tenantId: config.defaultTenantId });
+const gatewaySigningKey = process.env.ORIENT_GATEWAY_SIGNING_PRIVATE_KEY;
+const gatewaySigningKid = process.env.ORIENT_GATEWAY_SIGNING_KID;
+let gatewayIdentityRoutes = null;
+if (gatewaySigningKey || gatewaySigningKid) {
+  if (config.persistenceMode !== 'postgres' || !persistence.gatewayIdentity ||
+      !gatewaySigningKey || !gatewaySigningKid) {
+    throw Object.assign(
+      new Error('Gateway identity signing requires PostgreSQL plus ORIENT_GATEWAY_SIGNING_PRIVATE_KEY and ORIENT_GATEWAY_SIGNING_KID.'),
+      { code: 'GATEWAY_IDENTITY_CONFIGURATION_INVALID' }
+    );
+  }
+  const tokenIssuer = new Ed25519IdentityTokenIssuer({
+    privateKey: gatewaySigningKey,
+    kid: gatewaySigningKid
+  });
+  const identityAuthority = new OwnerSessionIdentityAuthority({
+    ownerIdentity: ownerIdentityService,
+    tokenIssuer,
+    challengeStore: persistence.gatewayIdentity,
+    tenantId: config.defaultTenantId,
+    workspaceId: ownerAuthService.workspaceId
+  });
+  gatewayIdentityRoutes = createGatewayIdentityRoutes({
+    repository: persistence.gatewayIdentity,
+    authority: identityAuthority,
+    tenantId: config.defaultTenantId,
+    workspaceId: ownerAuthService.workspaceId
+  });
+}
 if (typeof persistence.setOwnerId === 'function') {
   persistence.setOwnerId(ownerIdentityService.getStableOwnerIdForRuntime());
 }
@@ -469,6 +501,7 @@ const server =
     agentRoutes,
     accessAudit: accessAuditRepository,
     ownerAuth: ownerAuthService,
+    gatewayIdentityRoutes,
     ownerProfile: ownerWorkProfileStore,
     ownerChatStore: ownerChatConversationStore,
     ownerChatHistoryResolver: async messages => {
