@@ -18,7 +18,7 @@ test('execution lookup selects by verified tenant and returns only the bounded t
       calls.push({ sql, values });
       return { rows: [{ payload: { status: 'completed', currentStep: 'finalize', startedAt: '2026-11-06T00:00:00.000Z', updatedAt: '2026-11-06T00:01:00.000Z', completedAt: '2026-11-06T00:01:00.000Z', cancellationRequested: false, rawToolOutput: 'must-not-leak' } }] };
     }
-  }, { request: { executionId: 'task-123' }, principal: { tenantId: 'tenant-from-verified-token' } });
+  }, { request: { executionId: 'task-123' }, principal: { tenantId: 'tenant-from-verified-token', ownerId: '11111111-1111-4111-8111-111111111111' } });
   assert.deepEqual(calls, [{
     sql: 'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND owner_id=$3 LIMIT 1',
     values: ['task-123', 'tenant-from-verified-token', '11111111-1111-4111-8111-111111111111']
@@ -34,7 +34,7 @@ test('execution lookup selects by verified tenant and returns only the bounded t
 test('execution lookup returns a bounded not-found response', async () => {
   const handlers = createGatewayOperationHandlers();
   const result = await handlers.get('execution.get')({ async query() { return { rows: [] }; } }, {
-    request: { executionId: 'task-404' }, principal: { tenantId: 'tenant-a' }
+    request: { executionId: 'task-404' }, principal: { tenantId: 'tenant-a', ownerId: '11111111-1111-4111-8111-111111111111' }
   });
   assert.deepEqual(result, { found: false, task: null });
 });
