@@ -9,9 +9,13 @@ function reject(code, message) {
 }
 
 function stableStringify(value) {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
   if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
-  return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stableStringify(value[key])).join(',') + '}';
+  if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stableStringify(value[key])).join(',') + '}';
+  }
+  throw Object.assign(new TypeError('Request must contain only finite JSON values'), { code: 'GATEWAY_REQUEST_NOT_JSON' });
 }
 
 function fingerprint(value) {
