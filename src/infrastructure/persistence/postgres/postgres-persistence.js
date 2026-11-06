@@ -5,6 +5,7 @@ const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-rep
 const PostgresOwnerChatConversationRepository = require('./postgres-owner-chat-conversation-repository');
 const PostgresOwnerWorkProfileRepository = require('./postgres-owner-work-profile-repository');
 const { PostgresGatewayIdentityRepository } = require('./postgres-gateway-identity-repository');
+const { PostgresExecutionEvidenceRepository } = require('./postgres-execution-evidence-repository');
 
 function tenantOrLocal(value) {
   return value || 'local';
@@ -901,7 +902,7 @@ class PostgresApprovalRepository {
 }
 
 class PostgresPersistence {
-  constructor({ pool, schema } = {}) {
+  constructor({ pool, schema, evidenceSigning = null } = {}) {
     this.isAsync = true;
     this.db = pool instanceof PostgresDatabase ? pool : new PostgresDatabase({ pool, schema });
     this.executions = new PostgresExecutionRepository(this.db);
@@ -916,6 +917,9 @@ class PostgresPersistence {
     this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
     this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
     this.gatewayIdentity = new PostgresGatewayIdentityRepository(this.db);
+    this.executionEvidence = evidenceSigning
+      ? new PostgresExecutionEvidenceRepository(this.db, evidenceSigning)
+      : null;
     this.workers = new PostgresWorkerRegistryRepository(this.db);
   }
 
@@ -979,6 +983,7 @@ class PostgresPersistence {
         ownerChat: true,
         ownerProfile: true,
         gatewayIdentity: true,
+        executionEvidence: Boolean(this.executionEvidence),
         workers: true
       }
     };
