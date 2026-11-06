@@ -144,13 +144,15 @@ test('external manifest anchor store resolves keys from reconstructed root state
     version: 2,
     digest: require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest')
       .verifyTrustManifest(second, currentKeys).digest,
-    expectedRootKeyId: 'offline-root-2'
+    expectedRootKeyId: 'offline-root-2',
+    activeFromVersion: 1
   }), true);
   assert.equal(await dynamicStore.hasAnchor({
     version: 2,
     digest: require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest')
       .verifyTrustManifest(second, currentKeys).digest,
-    expectedRootKeyId: 'offline-root-1'
+    expectedRootKeyId: 'offline-root-1',
+    activeFromVersion: 1
   }), false);
 });
 
