@@ -22,6 +22,19 @@ function fingerprint(value) {
   return crypto.createHash('sha256').update(stableStringify(value)).digest('hex');
 }
 
+function fingerprintRequest(binding, request) {
+  return fingerprint({
+    ownerId: binding.ownerId,
+    sessionId: binding.sessionId,
+    tenantId: binding.tenantId,
+    workspaceId: binding.workspaceId,
+    operation: binding.operation,
+    operationId: binding.operationId,
+    requestId: binding.requestId,
+    request
+  });
+}
+
 function validateBinding(binding) {
   if (!binding || !UUID.test(binding.ownerId || '') || !UUID.test(binding.sessionId || '') ||
       !UUID.test(binding.challengeId || '') || !UUID.test(binding.operationId || '') ||
@@ -56,15 +69,17 @@ class PostgresGatewayIdentityRepository {
     if (!Number.isSafeInteger(now) || !Number.isSafeInteger(expiresAt) || expiresAt <= now) {
       reject('GATEWAY_CHALLENGE_EXPIRY_INVALID');
     }
+    const requestFingerprint = fingerprintRequest(challenge, challenge.request);
     const issuedAt = new Date(now).toISOString();
     const result = await this.db.query(
       `INSERT INTO gateway_challenges
-       (challenge_id,owner_id,session_id,tenant_id,workspace_id,operation,operation_id,request_id,status,issued_at,expires_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'ISSUED',$9,$10)
+       (challenge_id,owner_id,session_id,tenant_id,workspace_id,operation,operation_id,request_id,
+        request_fingerprint,status,issued_at,expires_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'ISSUED',$10,$11)
        RETURNING challenge_id`,
       [challenge.challengeId,challenge.ownerId,challenge.sessionId,challenge.tenantId,
         challenge.workspaceId,challenge.operation,challenge.operationId,challenge.requestId,
-        issuedAt,new Date(expiresAt).toISOString()]
+        requestFingerprint,issuedAt,new Date(expiresAt).toISOString()]
     );
     return result.rows[0]?.challenge_id || null;
     });
@@ -81,7 +96,7 @@ class PostgresGatewayIdentityRepository {
     return this.db.withPrincipal(principal, async () => {
     const result = await this.db.query(
       `SELECT challenge_id,owner_id,session_id,tenant_id,workspace_id,operation,
-              operation_id,request_id,status,issued_at,expires_at,consumed_at
+              operation_id,request_id,request_fingerprint,status,issued_at,expires_at,consumed_at
        FROM gateway_challenges
        WHERE challenge_id=$1 AND owner_id=$2 AND session_id=$3
          AND tenant_id=$4 AND workspace_id=$5 LIMIT 1`,
@@ -98,6 +113,7 @@ class PostgresGatewayIdentityRepository {
       operation: row.operation,
       operationId: row.operation_id,
       requestId: row.request_id,
+      requestFingerprint: row.request_fingerprint,
       status: row.status,
       issuedAt: new Date(row.issued_at).getTime(),
       expiresAt: new Date(row.expires_at).getTime(),
@@ -122,16 +138,7 @@ class PostgresGatewayIdentityRepository {
         idempotencyKey.length > 200 || typeof execute !== 'function') {
       reject('GATEWAY_IDEMPOTENCY_INPUT_INVALID');
     }
-    const requestFingerprint = fingerprint({
-      ownerId: binding.ownerId,
-      sessionId: binding.sessionId,
-      tenantId: binding.tenantId,
-      workspaceId: binding.workspaceId,
-      operation: binding.operation,
-      operationId: binding.operationId,
-      requestId: binding.requestId,
-      request
-    });
+    const requestFingerprint = fingerprintRequest(binding, request);
 
     return this.db.withPrincipal(principal, () => this.db.transaction(async client => {
       const challengeResult = await client.query(
@@ -144,6 +151,9 @@ class PostgresGatewayIdentityRepository {
       );
       if (!challengeResult.rows.length) reject('GATEWAY_CHALLENGE_REJECTED');
       const challenge = challengeResult.rows[0];
+      if (challenge.request_fingerprint !== requestFingerprint) {
+        reject('GATEWAY_REQUEST_BINDING_MISMATCH');
+      }
 
       const existingResult = await client.query(
         'SELECT * FROM gateway_idempotency WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE',
