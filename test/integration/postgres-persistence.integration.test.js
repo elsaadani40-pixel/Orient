@@ -1863,67 +1863,6 @@ test('PostgreSQL Gateway execution lookup cannot read another owner execution in
 });
 
 
-test('PostgreSQL Gateway execution lookup cannot read another owner execution in the same tenant', async () => {
-  const runtimePassword = crypto.randomBytes(24).toString('hex');
-  await provisionPostgresRoles({
-    pool,
-    migratorPassword: crypto.randomBytes(24).toString('hex'),
-    runtimePassword
-  });
-  const runtimeUrl = new URL(process.env.DATABASE_URL);
-  runtimeUrl.username = 'orient_runtime_login';
-  runtimeUrl.password = runtimePassword;
-  const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 2 });
-  const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
-  const tenantId = 'gateway-owner-isolation-tenant';
-  const workspaceId = 'gateway-owner-isolation-workspace';
-  const ownerA = {
-    principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    ownerId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-    tenantId, workspaceId, authSource: 'orient-owner-session'
-  };
-  const ownerB = {
-    principalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-    ownerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-    sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-    tenantId, workspaceId, authSource: 'orient-owner-session'
-  };
-  const executionId = 'gateway-owner-' + crypto.randomUUID();
-  const handler = createGatewayOperationHandlers().get('execution.get');
-  const client = { query: (sql, values) => runtimePersistence.db.query(sql, values) };
-
-  try {
-    await runtimePersistence.initialize();
-    await runtimePersistence.withPrincipal(ownerA, () => runtimePersistence.db.query(
-      'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,NOW())',
-      [executionId, tenantId, { id: executionId, tenantId, status: 'completed' }]
-    ));
-
-    const ownResult = await runtimePersistence.withPrincipal(ownerA, () =>
-      handler(client, { request: { executionId }, principal: ownerA })
-    );
-    assert.equal(ownResult.found, true);
-
-    const crossOwnerResult = await runtimePersistence.withPrincipal(ownerB, () =>
-      handler(client, { request: { executionId }, principal: ownerB })
-    );
-    assert.deepEqual(crossOwnerResult, { found: false, task: null });
-
-    const attribution = await runtimePersistence.withPrincipal(ownerA, async () => {
-      const result = await runtimePersistence.db.query(
-        'SELECT owner_id::text AS owner_id FROM executions WHERE execution_id=$1 AND tenant_id=$2',
-        [executionId, tenantId]
-      );
-      return result.rows[0]?.owner_id;
-    });
-    assert.equal(attribution, ownerA.ownerId);
-  } finally {
-    await pool.query('DELETE FROM executions WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
-    await runtimePool.end();
-  }
-});
-
 test('PostgreSQL gateway transaction rolls back challenge consumption and idempotency when protected mutation fails', async () => {
   const runtimePassword = crypto.randomBytes(24).toString('hex');
   await provisionPostgresRoles({
