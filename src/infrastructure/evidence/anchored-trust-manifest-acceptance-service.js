@@ -47,6 +47,45 @@ class AnchoredTrustManifestAcceptanceService {
     this.now = now;
   }
 
+  async recover({ principal } = {}) {
+    let authorized = false;
+    try {
+      authorized = await this.authorize(principal, 'trust-manifest.recover');
+    } catch {
+      fail('EVIDENCE_TRUST_MANIFEST_AUTHORIZATION_FAILED', 'Trust-state recovery authorization could not be established');
+    }
+    if (authorized !== true) {
+      fail('EVIDENCE_TRUST_MANIFEST_FORBIDDEN', 'Principal is not authorized to recover trust state');
+    }
+
+    const head = await this.externalAnchorStore.readHead();
+    if (!head) {
+      fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_EMPTY', 'No independently anchored trust history is available for recovery');
+    }
+    const current = await this.versionStore.read();
+    if (current !== null && (!current || !Number.isSafeInteger(current.version) ||
+        current.version < 1 || !/^[a-f0-9]{64}$/.test(current.digest || ''))) {
+      fail('EVIDENCE_TRUST_MANIFEST_STORE_INVALID', 'Monotonic trust cache is malformed');
+    }
+    if (current && current.version > head.version) {
+      fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_BEHIND_CACHE', 'External trust history is behind the local cache; recovery is refused');
+    }
+    if (current && current.version === head.version) {
+      if (current.digest !== head.digest) {
+        fail('EVIDENCE_TRUST_MANIFEST_VERSION_CONFLICT', 'Local cache conflicts with the independently anchored trust head');
+      }
+      return Object.freeze({ version: head.version, digest: head.digest, recovered: false });
+    }
+    const recovered = await this.versionStore.compareAndSet(
+      current,
+      { version: head.version, digest: head.digest }
+    );
+    if (!recovered) {
+      fail('EVIDENCE_TRUST_MANIFEST_STATE_RACE', 'Trust cache changed during recovery; reload and retry');
+    }
+    return Object.freeze({ version: head.version, digest: head.digest, recovered: true });
+  }
+
   async accept({ manifest, principal } = {}) {
     let authorized = false;
     try {
