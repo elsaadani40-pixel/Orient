@@ -946,7 +946,7 @@ class PostgresPersistence {
   bindPrincipal(principal) {
     this.db.validatePrincipal(principal);
     if (this.boundPrincipal) {
-      if (this.boundPrincipal.principalId !== principal.principalId || this.boundPrincipal.tenantId !== principal.tenantId || this.boundPrincipal.workspaceId !== principal.workspaceId) {
+      if (this.boundPrincipal.principalId !== principal.principalId || this.boundPrincipal.ownerId !== principal.ownerId || this.boundPrincipal.tenantId !== principal.tenantId || this.boundPrincipal.workspaceId !== principal.workspaceId || this.boundPrincipal.sessionId !== principal.sessionId || this.boundPrincipal.authSource !== principal.authSource) {
         throw Object.assign(new Error('PostgreSQL persistence is already bound to a different principal.'), { code: 'PERSISTENCE_PRINCIPAL_ALREADY_BOUND' });
       }
       return this;
