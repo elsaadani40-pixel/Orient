@@ -1,7 +1,7 @@
 'use strict';
 
 const { canonicalJson, verifyEvidenceRecord } = require('../../../core/execution/evidence-record');
-const { signEvidenceEnvelope, verifyEvidenceEnvelope, createEvidenceAnchor, verifyEvidenceAnchor } = require('./trusted-evidence-cryptography');
+const { signEvidenceEnvelope, verifyEvidenceEnvelope, createEvidenceAnchor, verifyEvidenceAnchor } = require('../../evidence/trusted-evidence-cryptography');
 
 function fail(code, message) {
   throw Object.assign(new Error(message), { code });
