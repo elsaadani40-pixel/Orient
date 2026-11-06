@@ -1555,17 +1555,25 @@ test('Gateway HTTP challenge, token, execution and replay complete against Postg
   });
   const login = await initialOwnerIdentity.login({ username: 'Admin', password: bootstrapPassword });
   assert.equal(login.ok, true);
+  assert.equal(login.passwordChangeRequired, true);
+  const passwordChange = await initialOwnerIdentity.changePassword({
+    token: login.token,
+    password: 'gateway-owner-permanent-2026!',
+    confirmPassword: 'gateway-owner-permanent-2026!'
+  });
+  assert.equal(passwordChange.ok, true);
+  assert.equal(passwordChange.passwordChangeRequired, false);
 
-  // Re-open the canonical owner store to prove the session survives a process restart.
+  // Re-open the canonical owner store to prove the post-rotation session survives a process restart.
   const ownerIdentity = new OwnerIdentityService({ stateFile: ownerStateFile });
-  const restoredSession = ownerIdentity.authenticate(login.token);
+  const restoredSession = ownerIdentity.authenticate(passwordChange.token);
   assert.ok(restoredSession, 'the persisted owner session must authenticate after restart');
   const ownerId = restoredSession.ownerId;
   const sessionId = restoredSession.sessionId;
   const tenantId = 'gateway-http-' + crypto.randomUUID();
   const workspaceId = 'workspace-' + crypto.randomUUID();
-  const sessionToken = login.token;
-  const csrfToken = login.csrfToken;
+  const sessionToken = passwordChange.token;
+  const csrfToken = passwordChange.csrfToken;
   const idempotencyKey = 'gateway-http-' + crypto.randomUUID();
   const principal = {
     principalId: ownerId, ownerId, sessionId, tenantId, workspaceId,
