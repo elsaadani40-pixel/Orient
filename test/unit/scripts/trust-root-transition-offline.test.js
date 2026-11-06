@@ -209,13 +209,23 @@ test('offline signer rejects private keys inside the repository and mismatched r
     payloadPath: f.payloadPath,
     contextPath: f.contextPath,
     nextRootKeyPath: f.nextKeyPath,
-    currentRootKeyId: 'not-the-payload-root',
+    currentRootKeyId: 'offline-root-1',
     currentRootKeyPath: f.rootKeyPath,
     outputPath: f.outputPath,
     repoRoot: f.directory,
     now: () => '2026-11-06T10:05:00.000Z'
-  }), error => error.code === 'TRUST_SIGNER_MUST_BE_OUTSIDE_REPOSITORY' ||
-    error.code === 'TRUST_ROOT_TRANSITION_SELF_VERIFICATION_FAILED');
+  }), error => error.code === 'TRUST_SIGNER_KEY_MUST_BE_OUTSIDE_REPOSITORY');
+
+  assert.throws(() => signTransitionFile({
+    payloadPath: f.payloadPath,
+    contextPath: f.contextPath,
+    nextRootKeyPath: f.nextKeyPath,
+    currentRootKeyId: 'not-the-payload-root',
+    currentRootKeyPath: f.rootKeyPath,
+    outputPath: f.outputPath,
+    repoRoot: path.join(f.directory, 'not-the-key-parent'),
+    now: () => '2026-11-06T10:05:00.000Z'
+  }), error => error.code === 'EVIDENCE_ROOT_TRANSITION_AUTHORITY_REQUIRED');
 });
 
 test('offline root-transition parser enforces command-specific arguments', () => {
