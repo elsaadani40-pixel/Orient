@@ -23,7 +23,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
     await persistence.migrate({ role: 'orient_owner' });
   } else {
     const current = await pool.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
-    if (Number(current.rows[0].version) < 10) {
+    if (Number(current.rows[0].version) < 11) {
       await provisionPostgresRoles({
         pool,
         migratorPassword: crypto.randomBytes(24).toString('hex'),
@@ -35,7 +35,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 });
 
 test('PostgreSQL runtime login preflight validates a real least-privilege connection and pooled role reset', async () => {
@@ -64,7 +64,7 @@ test('PostgreSQL runtime login preflight validates a real least-privilege connec
 
     const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
     const readiness = await runtimePersistence.initialize();
-    assert.equal(readiness.schemaVersion, 10);
+    assert.equal(readiness.schemaVersion, 11);
 
     const client = await runtimePool.connect();
     try {
@@ -119,7 +119,7 @@ test('PostgreSQL migration uses the restricted migrator login and resets owner r
 
     const migrationPersistence = new PostgresPersistence({ pool: migrationPool });
     const result = await migrationPersistence.migrate({ role: 'orient_owner' });
-    assert.equal(result.schemaVersion, 10);
+    assert.equal(result.schemaVersion, 11);
 
     const identityAfterMigration = await migrationPool.query(
       'SELECT session_user::text AS session_user, current_user::text AS current_user'
@@ -1342,7 +1342,7 @@ test('PostgreSQL gateway challenge consumption and idempotent mutation are atomi
         principal,binding,idempotencyKey,request:{ ...request, goal:'tampered request' },
         execute: async () => null
       }),
-      error => error.code === 'GATEWAY_IDEMPOTENCY_CONFLICT'
+      error => error.code === 'GATEWAY_REQUEST_BINDING_MISMATCH'
     );
     await assert.rejects(
       () => runtimePersistence.gatewayIdentity.executeAtomically({
