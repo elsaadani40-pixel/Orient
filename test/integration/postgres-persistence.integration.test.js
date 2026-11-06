@@ -2,6 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const OwnerIdentityService = require('../../src/core/security/owner-identity-service');
 const { provisionPostgresRoles } = require('../../scripts/provision-postgres-roles');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
@@ -1542,21 +1546,30 @@ test('Gateway HTTP challenge, token, execution and replay complete against Postg
   runtimeUrl.password = runtimePassword;
   const runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 4 });
   const runtimePersistence = new PostgresPersistence({ pool: runtimePool });
-  const ownerId = crypto.randomUUID();
-  const sessionId = crypto.randomUUID();
+  const ownerStateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-gateway-owner-'));
+  const ownerStateFile = path.join(ownerStateDirectory, 'owner.json');
+  const bootstrapPassword = 'gateway-owner-bootstrap-2026!';
+  const initialOwnerIdentity = new OwnerIdentityService({
+    stateFile: ownerStateFile,
+    bootstrapPassword
+  });
+  const login = await initialOwnerIdentity.login({ username: 'Admin', password: bootstrapPassword });
+  assert.equal(login.ok, true);
+
+  // Re-open the canonical owner store to prove the session survives a process restart.
+  const ownerIdentity = new OwnerIdentityService({ stateFile: ownerStateFile });
+  const restoredSession = ownerIdentity.authenticate(login.token);
+  assert.ok(restoredSession, 'the persisted owner session must authenticate after restart');
+  const ownerId = restoredSession.ownerId;
+  const sessionId = restoredSession.sessionId;
   const tenantId = 'gateway-http-' + crypto.randomUUID();
   const workspaceId = 'workspace-' + crypto.randomUUID();
-  const sessionToken = 'owner-session-' + crypto.randomUUID();
-  const csrfToken = 'csrf-' + crypto.randomUUID();
+  const sessionToken = login.token;
+  const csrfToken = login.csrfToken;
   const idempotencyKey = 'gateway-http-' + crypto.randomUUID();
   const principal = {
     principalId: ownerId, ownerId, sessionId, tenantId, workspaceId,
     authSource: 'orient-owner-session'
-  };
-  const session = { ownerId, sessionId };
-  const ownerIdentity = {
-    authenticate(token) { return token === sessionToken ? session : null; },
-    isActiveSession(id) { return id === sessionId; }
   };
   const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
   const tokenIssuer = new Ed25519IdentityTokenIssuer({ privateKey, kid: 'gateway-http-test-key' });
@@ -1594,10 +1607,22 @@ test('Gateway HTTP challenge, token, execution and replay complete against Postg
       ownerAuth: {
         enabled: true,
         authenticate(token) {
-          return token === sessionToken ? { ...session, csrfToken, principal } : null;
+          const ownerSession = ownerIdentity.authenticate(token);
+          if (!ownerSession) return null;
+          return {
+            ...ownerSession,
+            principal: Object.freeze({
+              principalId: ownerSession.ownerId,
+              ownerId: ownerSession.ownerId,
+              tenantId,
+              workspaceId,
+              authSource: 'orient-owner-session',
+              sessionId: ownerSession.sessionId
+            })
+          };
         },
-        status() { return { passwordChangeRequired: false }; },
-        verifyCsrf(_ownerSession, token) { return token === csrfToken; }
+        status() { return ownerIdentity.status(); },
+        verifyCsrf(ownerSession, token) { return ownerIdentity.verifyCsrf(ownerSession, token); }
       },
       gatewayIdentityRoutes: identityRoutes,
       gatewayIdentityExecutionService: executionService,
@@ -1660,8 +1685,25 @@ test('Gateway HTTP challenge, token, execution and replay complete against Postg
     }, { authorization, key: idempotencyKey + '-tampered' });
     assert.equal(tampered.statusCode, 409);
     assert.equal(tampered.body.code, 'GATEWAY_REQUEST_BINDING_MISMATCH');
+
+    assert.equal(ownerIdentity.logout(sessionToken), true);
+    await assert.rejects(
+      () => executionService.execute({
+        token: issued.body.identity.token,
+        challengeId,
+        operation: binding.operation,
+        operationId: binding.operationId,
+        requestId: binding.requestId,
+        idempotencyKey,
+        request: requestPayload,
+        ownerSessionId: sessionId,
+        execute: async () => ({ shouldNotExecute: true })
+      }),
+      error => error.code === 'GATEWAY_SESSION_REJECTED'
+    );
   } finally {
     if (server?.listening) await new Promise(resolve => server.close(resolve));
+    fs.rmSync(ownerStateDirectory, { recursive: true, force: true });
     if (challengeId) {
       await runtimePersistence.withPrincipal(principal, async () => {
         await runtimePersistence.db.query(
