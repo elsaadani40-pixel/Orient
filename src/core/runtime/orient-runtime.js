@@ -261,9 +261,12 @@ class OrientRuntime {
     return workflow.metadata?.approvalId === approvalId;
   }
 
-  async resume(executionId, options = {}) {
+  async resume(executionId, options = {}, ownerSessionContext = null) {
     try {
-      const result = await this.requestExecutionCoordinator.resume(executionId, options);
+      const result = await this.requestExecutionCoordinator.resume(executionId, {
+        ...options,
+        ownerSessionContext
+      });
       await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result);
       return result;
     } catch (error) {
