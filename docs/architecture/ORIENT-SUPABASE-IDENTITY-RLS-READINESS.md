@@ -56,7 +56,8 @@ The current PostgreSQL schema has the following intended ownership classes:
 
 | Ownership class | Tables | Enforcement key |
 |---|---|---|
-| Tenant-owned | `executions`, `events`, `idempotency`, `checkpoints`, `execution_resume_leases`, `workflows`, `workflow_leases`, `workflow_dispatch_claims`, `approvals`, `worker_nodes`, `tenant_quota_limits`, `tenant_quota_reservations` | `tenant_id = current_setting('app.orient_tenant_id', true)` |
+| Tenant + owner-owned | `executions` | `tenant_id` and `owner_id` must match the transaction-local tenant and owner context |
+| Tenant-owned | `events`, `idempotency`, `checkpoints`, `execution_resume_leases`, `workflows`, `workflow_leases`, `workflow_dispatch_claims`, `approvals`, `worker_nodes`, `tenant_quota_limits`, `tenant_quota_reservations` | `tenant_id = current_setting('app.orient_tenant_id', true)` |
 | Owner-owned | `owner_chat_messages`, `owner_work_profiles` | `owner_id = current_setting('app.orient_owner_id', true)` |
 | Global infrastructure metadata | `schema_migrations`, `workflow_lease_fencing_seq` | Migration-only; never exposed to Runtime application roles |
 
