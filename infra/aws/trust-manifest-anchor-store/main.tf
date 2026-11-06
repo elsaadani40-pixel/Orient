@@ -146,6 +146,25 @@ data "aws_iam_policy_document" "trust_manifest_bucket" {
   }
 
   statement {
+    sid    = "DenyNonWildcardConditionalTrustManifestWrites"
+    effect = "Deny"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.trust_manifest.arn}/orient/trust-manifests/v1/*"]
+
+    condition {
+      test     = "StringNotEquals"
+      variable = "s3:if-none-match"
+      values   = ["*"]
+    }
+  }
+
+  statement {
     sid    = "DenyInsecureTransport"
     effect = "Deny"
 
