@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const moduleRoot = path.resolve(__dirname, '../../../../..');
+const moduleRoot = path.resolve(__dirname, '../../../..');
 const terraformPath = path.join(moduleRoot, 'infra/aws/trust-manifest-anchor-store/main.tf');
 const readmePath = path.join(moduleRoot, 'infra/aws/trust-manifest-anchor-store/README.md');
 const terraform = fs.readFileSync(terraformPath, 'utf8');
