@@ -126,6 +126,100 @@ test('anchored acceptance fails closed without authorization or independent hist
 });
 
 
+test('manifest acceptance uses reconstructed active root and rejects retired-root manifests', async () => {
+  const oldRoot = crypto.generateKeyPairSync('ed25519');
+  const nextRoot = crypto.generateKeyPairSync('ed25519');
+  const evidence = crypto.generateKeyPairSync('ed25519');
+  const oldPrivate = oldRoot.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const nextPrivate = nextRoot.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const oldPublic = oldRoot.publicKey.export({ type: 'spki', format: 'pem' });
+  const nextPublic = nextRoot.publicKey.export({ type: 'spki', format: 'pem' });
+  const evidencePublic = evidence.publicKey.export({ type: 'spki', format: 'pem' });
+  const rootState = {
+    rootEpoch: 2,
+    rootKeyId: 'root-2',
+    rootFingerprint: crypto.createHash('sha256').update(nextRoot.publicKey.export({ type: 'spki', format: 'der' })).digest('hex'),
+    manifestHeadVersion: 4,
+    manifestHeadDigest: 'a'.repeat(64),
+    trustedRootKeys: {
+      'root-1': { publicKey: oldPublic, revokedAt: '2026-11-06T10:02:00.000Z' },
+      'root-2': { publicKey: nextPublic, validFrom: '2026-11-06T10:02:00.000Z' }
+    }
+  };
+  const rootTransitionLedger = { async readState() { return rootState; } };
+  const backend = new MemoryImmutableBackend();
+  const externalAnchorStore = new ExternalTrustManifestAnchorStore({
+    backend,
+    trustedRootKeysProvider: async () => (await rootTransitionLedger.readState()).trustedRootKeys
+  });
+  const versionStore = memoryVersionStore();
+  const service = new AnchoredTrustManifestAcceptanceService({
+    rootTransitionLedger,
+    versionStore,
+    externalAnchorStore,
+    authorize: async () => true,
+    now: () => '2026-11-06T10:05:00.000Z'
+  });
+  const nextManifest = signTrustManifest({
+    version: 5,
+    issuedAt: '2026-11-06T10:03:00.000Z',
+    expiresAt: '2026-12-06T10:03:00.000Z',
+    keys: { 'evidence-key-1': { publicKey: evidencePublic } }
+  }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
+  const accepted = await service.accept({ manifest: nextManifest, principal: { id: 'owner' } });
+  assert.equal(accepted.version, 5);
+  assert.equal((await externalAnchorStore.readHead()).version, 5);
+
+  const nextManifestAgain = signTrustManifest({
+    version: 6,
+    issuedAt: '2026-11-06T10:04:00.000Z',
+    expiresAt: '2026-12-06T10:04:00.000Z',
+    keys: { 'evidence-key-1': { publicKey: evidencePublic } }
+  }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
+  assert.equal((await service.accept({
+    manifest: nextManifestAgain,
+    principal: { id: 'owner' }
+  })).version, 6);
+
+  const retiredManifest = signTrustManifest({
+    version: 7,
+    issuedAt: '2026-11-06T10:04:30.000Z',
+    expiresAt: '2026-12-06T10:04:30.000Z',
+    keys: { 'evidence-key-1': { publicKey: evidencePublic } }
+  }, { rootKeyId: 'root-1', rootPrivateKey: oldPrivate });
+  await assert.rejects(
+    service.accept({ manifest: retiredManifest, principal: { id: 'owner' } }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_ROOT_NOT_ACTIVE'
+  );
+
+  const nonAdvancing = signTrustManifest({
+    version: 4,
+    issuedAt: '2026-11-06T10:04:00.000Z',
+    expiresAt: '2026-12-06T10:04:00.000Z',
+    keys: { 'evidence-key-1': { publicKey: evidencePublic } }
+  }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
+  await assert.rejects(
+    service.accept({ manifest: nonAdvancing, principal: { id: 'owner' } }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_ROOT_HEAD_ROLLBACK'
+  );
+});
+
+test('manifest acceptance fails closed when reconstructed root history is unavailable', async () => {
+  const f = fixture();
+  const unavailableLedger = { async readState() { throw new Error('ledger unavailable'); } };
+  const service = new AnchoredTrustManifestAcceptanceService({
+    rootTransitionLedger: unavailableLedger,
+    versionStore: f.versionStore,
+    externalAnchorStore: f.externalAnchorStore,
+    authorize: async () => true,
+    now: f.now
+  });
+  await assert.rejects(
+    service.accept({ manifest: f.create(1), principal: { id: 'owner' } }),
+    error => error.code === 'EVIDENCE_TRUST_ROOT_STATE_UNAVAILABLE'
+  );
+});
+
 test('trust cache recovery works after manifest expiry without reactivating expired trust', async () => {
   const f = fixture();
   const first = f.create(1);
