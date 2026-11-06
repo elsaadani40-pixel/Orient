@@ -120,13 +120,27 @@ function normalizePayload(input) {
 }
 
 function normalizeRecoveryPolicy(policy) {
-  if (!isPlainRecord(policy) || !Number.isSafeInteger(policy.threshold) ||
-      !Array.isArray(policy.authorities) || policy.threshold < 1 ||
-      policy.threshold > policy.authorities.length) {
+  assertFields(policy, ['threshold', 'authorities'], 'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
+  const threshold = readDataProperty(policy, 'threshold', 'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
+  const authorityList = readDataProperty(policy, 'authorities', 'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
+  if (!Number.isSafeInteger(threshold) || !Array.isArray(authorityList) || threshold < 1 ||
+      threshold > authorityList.length) {
     fail('EVIDENCE_ROOT_RECOVERY_POLICY_INVALID', 'A valid pinned recovery authority set and threshold are required');
   }
   const seen = new Set();
-  const authorities = policy.authorities.map(authority => {
+  const seenFingerprints = new Set();
+  const arrayKeys = Reflect.ownKeys(authorityList);
+  if (arrayKeys.some(key => key !== 'length' &&
+      (typeof key !== 'string' || !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= authorityList.length)) ||
+      arrayKeys.length !== authorityList.length + 1) {
+    fail('EVIDENCE_ROOT_RECOVERY_POLICY_INVALID', 'Recovery authority list must be a dense array without extra properties');
+  }
+  const authorities = Array.from({ length: authorityList.length }, (_, index) => {
+    const descriptor = Object.getOwnPropertyDescriptor(authorityList, String(index));
+    if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+      fail('EVIDENCE_ROOT_RECOVERY_POLICY_INVALID', 'Recovery authority list must contain data entries only');
+    }
+    const authority = descriptor.value;
     assertFields(authority, ['keyId', 'publicKey', 'validFrom', 'revokedAt'],
       'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
     const keyId = readDataProperty(authority, 'keyId', 'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
@@ -139,6 +153,10 @@ function normalizeRecoveryPolicy(policy) {
     }
     seen.add(keyId);
     const fingerprint = publicKeyFingerprint(publicKey);
+    if (seenFingerprints.has(fingerprint)) {
+      fail('EVIDENCE_ROOT_RECOVERY_POLICY_INVALID', 'Recovery authorities must use distinct public keys');
+    }
+    seenFingerprints.add(fingerprint);
     const validFrom = validFromValue === undefined ? null
       : timestamp(validFromValue, 'EVIDENCE_ROOT_RECOVERY_POLICY_INVALID');
     const revokedAt = revokedAtValue === undefined ? null
@@ -149,7 +167,7 @@ function normalizeRecoveryPolicy(policy) {
     return { keyId, fingerprint, publicKey, ...(validFrom ? { validFrom } : {}),
       ...(revokedAt ? { revokedAt } : {}) };
   }).sort((a, b) => a.keyId.localeCompare(b.keyId));
-  return { threshold: policy.threshold, authorities };
+  return { threshold, authorities };
 }
 
 function recoveryPolicyDigest(policy) {
@@ -279,20 +297,24 @@ function verifyRootTransition(envelope, {
         Date.parse(payload.effectiveAt) > Date.parse(now) ||
         Date.parse(payload.expiresAt) - Date.parse(payload.issuedAt) > maxValidityMs) return null;
 
-    if (!isPlainRecord(expectedState) || !Number.isSafeInteger(expectedState.rootEpoch) ||
-        !Number.isSafeInteger(expectedState.transitionSequence) || expectedState.transitionSequence < 0 ||
-        (expectedState.transitionSequence === 0 ? expectedState.transitionDigest !== null : !HASH_PATTERN.test(expectedState.transitionDigest || '')) ||
-        !Array.isArray(expectedState.usedRootKeyIds) ||
-        !expectedState.usedRootKeyIds.includes(payload.previousRootKeyId) ||
-        !Array.isArray(expectedState.usedRootFingerprints) ||
-        !expectedState.usedRootFingerprints.includes(payload.previousRootFingerprint) ||
-        expectedState.rootEpoch !== payload.previousRootEpoch ||
-        expectedState.rootKeyId !== payload.previousRootKeyId ||
-        expectedState.rootFingerprint !== payload.previousRootFingerprint ||
-        expectedState.manifestHeadVersion !== payload.manifestHeadVersion ||
-        expectedState.manifestHeadDigest !== payload.manifestHeadDigest ||
-        payload.transitionSequence !== expectedState.transitionSequence + 1 ||
-        payload.previousTransitionDigest !== expectedState.transitionDigest) return null;
+    if (!isPlainRecord(expectedState)) return null;
+    assertFields(expectedState, ['rootEpoch', 'rootKeyId', 'rootFingerprint', 'manifestHeadVersion',
+      'manifestHeadDigest', 'transitionSequence', 'transitionDigest', 'usedRootKeyIds',
+      'usedRootFingerprints'], 'EVIDENCE_ROOT_TRANSITION_STATE_INVALID');
+    const state = Object.fromEntries(['rootEpoch', 'rootKeyId', 'rootFingerprint', 'manifestHeadVersion',
+      'manifestHeadDigest', 'transitionSequence', 'transitionDigest', 'usedRootKeyIds',
+      'usedRootFingerprints'].map(key => [key, readDataProperty(expectedState, key,
+      'EVIDENCE_ROOT_TRANSITION_STATE_INVALID')]));
+    if (!Number.isSafeInteger(state.rootEpoch) || !Number.isSafeInteger(state.transitionSequence) ||
+        state.transitionSequence < 0 ||
+        (state.transitionSequence === 0 ? state.transitionDigest !== null : !HASH_PATTERN.test(state.transitionDigest || '')) ||
+        !Array.isArray(state.usedRootKeyIds) || !state.usedRootKeyIds.includes(payload.previousRootKeyId) ||
+        !Array.isArray(state.usedRootFingerprints) || !state.usedRootFingerprints.includes(payload.previousRootFingerprint) ||
+        state.rootEpoch !== payload.previousRootEpoch || state.rootKeyId !== payload.previousRootKeyId ||
+        state.rootFingerprint !== payload.previousRootFingerprint ||
+        state.manifestHeadVersion !== payload.manifestHeadVersion || state.manifestHeadDigest !== payload.manifestHeadDigest ||
+        payload.transitionSequence !== state.transitionSequence + 1 ||
+        payload.previousTransitionDigest !== state.transitionDigest) return null;
 
     if (!isPlainRecord(trustedRootKeys)) return null;
     const rootEntry = readDataProperty(trustedRootKeys, payload.previousRootKeyId,
@@ -310,8 +332,8 @@ function verifyRootTransition(envelope, {
         (payload.mode === 'planned-rotation' && !validAt(currentRootEntry, payload.issuedAt, now))) return null;
     const currentRootPublicKey = publicKeyObject(currentRootKeyText, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
 
-    if (expectedState.usedRootKeyIds.includes(payload.nextRootKeyId) ||
-        expectedState.usedRootFingerprints.includes(payload.nextRootFingerprint)) return null;
+    if (state.usedRootKeyIds.includes(payload.nextRootKeyId) ||
+        state.usedRootFingerprints.includes(payload.nextRootFingerprint)) return null;
     if (publicKeyFingerprint(payload.nextRootPublicKey) === payload.previousRootFingerprint) return null;
     const nextRootPublicKey = publicKeyObject(payload.nextRootPublicKey, 'EVIDENCE_ROOT_TRANSITION_KEY_INVALID');
 
