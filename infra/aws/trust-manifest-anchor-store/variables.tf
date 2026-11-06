@@ -24,11 +24,6 @@ variable "retention_days" {
   }
 }
 
-variable "runtime_role_name" {
-  description = "Existing least-privilege IAM role used by the ORIENT host adapter."
-  type        = string
-}
-
 variable "runtime_role_arn" {
   description = "Exact ARN of the runtime role, used by the bucket policy to deny destructive operations."
   type        = string
