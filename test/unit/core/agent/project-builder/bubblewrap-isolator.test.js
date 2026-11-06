@@ -1,3 +1,5 @@
+'use strict';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -5,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const BubblewrapIsolator = require('../../../../../src/core/agent/project-builder/workspace/bubblewrap-isolator');
+const CommandRunner = require('../../../../../src/core/agent/project-builder/workspace/command-runner');
 
 test('Linux isolator creates a private network and exposes workspace as the only writable project mount', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-bwrap-policy-'));
@@ -30,14 +33,61 @@ test('Linux isolator creates a private network and exposes workspace as the only
   }
 });
 
-test('non-Linux platforms fail closed instead of running commands directly', () => {
+for (const platform of ['darwin', 'win32']) {
+  test(`unsupported platform ${platform} returns the stable no-sandbox error`, () => {
+    const isolator = new BubblewrapIsolator({ platform });
+    assert.throws(
+      () => isolator.buildArgs({
+        executable: 'node',
+        workspaceRoot: process.cwd(),
+        cwd: process.cwd()
+      }),
+      error => {
+        assert.equal(error.code, 'ORIENT_E_NO_SANDBOX');
+        assert.match(error.message, /supported only on Linux; refusing unsafe fallback/);
+        return true;
+      }
+    );
+  });
+
+  test(`unsupported platform ${platform} never starts a process`, () => {
+    let spawnCalls = 0;
+    const isolator = new BubblewrapIsolator({
+      platform,
+      spawnProcess() {
+        spawnCalls += 1;
+        throw new Error('spawn must not be called');
+      }
+    });
+
+    assert.throws(
+      () => isolator.spawn({
+        executable: 'node',
+        workspaceRoot: process.cwd(),
+        cwd: process.cwd()
+      }),
+      error => error.code === 'ORIENT_E_NO_SANDBOX'
+    );
+    assert.equal(spawnCalls, 0);
+  });
+}
+
+test('CommandRunner preserves the stable no-sandbox error from its isolator', async () => {
   const isolator = new BubblewrapIsolator({ platform: 'win32' });
-  assert.throws(
-    () => isolator.buildArgs({
-      executable: 'node',
-      workspaceRoot: process.cwd(),
-      cwd: process.cwd()
-    }),
-    /supported only on Linux; refusing unsafe fallback/
+  const runner = new CommandRunner({
+    policy: {
+      allowedRoot: process.cwd(),
+      environment: {},
+      timeoutMs: 1000,
+      resourceLimits: {},
+      assertCommand: command => command,
+      resolve: () => process.cwd()
+    },
+    isolator
+  });
+
+  await assert.rejects(
+    runner.run('node'),
+    error => error.code === 'ORIENT_E_NO_SANDBOX'
   );
 });

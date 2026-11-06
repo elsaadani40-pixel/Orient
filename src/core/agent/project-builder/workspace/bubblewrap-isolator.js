@@ -28,6 +28,14 @@ const SYSTEMD_ENV_KEYS = [
 ];
 
 const RESOURCE_LIMITS_VERIFIED_MARKER = '__ORIENT_RESOURCE_LIMITS_VERIFIED__';
+
+function noSandboxError() {
+  const error = new Error(
+    'OS-isolated command execution is supported only on Linux; refusing unsafe fallback'
+  );
+  error.code = 'ORIENT_E_NO_SANDBOX';
+  return error;
+}
 const SYSTEMD_LIMIT_GATE_SCRIPT = String.raw`
 'use strict';
 const { spawnSync } = require('node:child_process');
@@ -103,7 +111,7 @@ class BubblewrapIsolator {
 
   buildArgs({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
     if (this.platform !== 'linux') {
-      throw new Error('OS-isolated command execution is supported only on Linux; refusing unsafe fallback');
+      throw noSandboxError();
     }
 
     const root = fs.realpathSync.native(workspaceRoot);
@@ -220,7 +228,7 @@ class BubblewrapIsolator {
     resourceLimits = {}
   }) {
     if (this.platform !== 'linux') {
-      throw new Error('OS-isolated command execution is supported only on Linux; refusing unsafe fallback');
+      throw noSandboxError();
     }
 
     this._assertCgroupV2();
