@@ -146,3 +146,21 @@ test('trust cache recovery works after manifest expiry without reactivating expi
     error => error.code === 'EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID'
   );
 });
+
+
+test('anchored acceptance does not mutate external history when local cache is ahead', async () => {
+  const f = fixture();
+  const ahead = memoryVersionStore({ version: 3, digest: 'a'.repeat(64) });
+  const service = new AnchoredTrustManifestAcceptanceService({
+    trustedRootKeys: { 'offline-root-1': { publicKey: Object.values(f.externalAnchorStore.trustedRootKeys)[0].publicKey } },
+    versionStore: ahead,
+    externalAnchorStore: f.externalAnchorStore,
+    authorize: async () => true,
+    now: () => f.now
+  });
+  await assert.rejects(
+    service.accept({ manifest: f.create(1), principal: { id: 'owner' } }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_ROLLBACK'
+  );
+  assert.equal((await f.backend.list('orient/trust-manifests/v1/')).length, 0);
+});
