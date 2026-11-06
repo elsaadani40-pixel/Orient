@@ -4,6 +4,7 @@ const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repositor
 const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-repository');
 const PostgresOwnerChatConversationRepository = require('./postgres-owner-chat-conversation-repository');
 const PostgresOwnerWorkProfileRepository = require('./postgres-owner-work-profile-repository');
+const { PostgresGatewayIdentityRepository } = require('./postgres-gateway-identity-repository');
 
 function tenantOrLocal(value) {
   return value || 'local';
@@ -914,6 +915,7 @@ class PostgresPersistence {
     this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
     this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
     this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
+    this.gatewayIdentity = new PostgresGatewayIdentityRepository(this.db);
     this.workers = new PostgresWorkerRegistryRepository(this.db);
   }
 
@@ -945,7 +947,7 @@ class PostgresPersistence {
       }
       return this;
     }
-    const names = ['executions','events','idempotency','checkpoints','workers','workflows','workflowLeases','approvals','tenantQuotas','ownerChat','ownerProfile'];
+    const names = ['executions','events','idempotency','checkpoints','workers','workflows','workflowLeases','approvals','tenantQuotas','ownerChat','ownerProfile','gatewayIdentity'];
     for (const name of names) {
       const repository = this[name];
       this[name] = new Proxy(repository, {
@@ -975,6 +977,7 @@ class PostgresPersistence {
         tenantQuotas: true,
         ownerChat: true,
         ownerProfile: true,
+        gatewayIdentity: true,
         workers: true
       }
     };
@@ -992,5 +995,6 @@ module.exports = {
   PostgresApprovalRepository,
   PostgresWorkerRegistryRepository,
   PostgresOwnerChatConversationRepository,
-  PostgresOwnerWorkProfileRepository
+  PostgresOwnerWorkProfileRepository,
+  PostgresGatewayIdentityRepository
 };
