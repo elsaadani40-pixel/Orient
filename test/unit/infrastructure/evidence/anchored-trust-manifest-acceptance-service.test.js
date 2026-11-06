@@ -226,8 +226,14 @@ test('manifest acceptance rejects a delayed retired-root manifest at the externa
     expiresAt: `2026-12-06T10:0${version}:00.000Z`,
     keys: { evidence: { publicKey: evidencePublic } }
   }, { rootKeyId: 'root-1', rootPrivateKey: oldPrivate }));
+  const legitimateAfterRotation = signTrustManifest({
+    version: 7,
+    issuedAt: '2026-11-06T10:08:00.000Z',
+    expiresAt: '2026-12-06T10:08:00.000Z',
+    keys: { evidence: { publicKey: evidencePublic } }
+  }, { rootKeyId: 'root-2', rootPrivateKey: nextPrivate });
   const backend = new MemoryImmutableBackend();
-  for (const manifest of delayed) {
+  for (const manifest of [...delayed, legitimateAfterRotation]) {
     backend.objects.set(manifestKey(manifest.version), canonicalJson(manifest));
   }
   const externalAnchorStore = new ExternalTrustManifestAnchorStore({
