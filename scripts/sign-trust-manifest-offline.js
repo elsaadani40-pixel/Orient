@@ -96,8 +96,10 @@ function writeCreateOnly(filePath, content) {
   }
   const absolutePath = path.resolve(filePath);
   let descriptor;
+  let created = false;
   try {
     descriptor = fs.openSync(absolutePath, 'wx', 0o644);
+    created = true;
     fs.writeFileSync(descriptor, content, 'utf8');
     fs.fsyncSync(descriptor);
   } catch (error) {
@@ -105,7 +107,9 @@ function writeCreateOnly(filePath, content) {
       try { fs.closeSync(descriptor); } catch {}
       descriptor = undefined;
     }
-    try { fs.unlinkSync(absolutePath); } catch {}
+    if (created) {
+      try { fs.unlinkSync(absolutePath); } catch {}
+    }
     if (error && error.code === 'EEXIST') {
       fail('TRUST_SIGNER_OUTPUT_EXISTS', 'Refusing to overwrite an existing signed manifest');
     }
@@ -140,7 +144,7 @@ function signManifestFile({
     const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' });
     const signed = signTrustManifest(manifest, {
       rootKeyId,
-      rootPrivateKey: privateKey
+      rootPrivateKey: privateKeyBytes
     });
     const verificationTime = now();
     const verified = verifyTrustManifest(
