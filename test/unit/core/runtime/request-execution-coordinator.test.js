@@ -683,3 +683,58 @@ test('records only the verified owner session identity in execution metadata', a
   assert.equal(persistedMetadata.ownerSessionId, 'active-session');
   assert.equal(Object.hasOwn(persistedMetadata, 'csrfToken'), false);
 });
+
+
+test('cancels before the next tool step when the owner session is revoked mid-execution', async () => {
+  let sessionChecks = 0;
+  let toolRuns = 0;
+  let observedReason = null;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test.owner-session-revocation', steps: [{ step: 1, tool: 'test.tool' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async args => {
+        const revoked = await args.isCancellationRequested();
+        observedReason = args.cancellationReason;
+        if (revoked) {
+          throw Object.assign(new Error('owner session revoked'), {
+            code: 'EXECUTION_CANCELLATION_REQUESTED'
+          });
+        }
+        toolRuns += 1;
+        throw new Error('tool should not run');
+      }
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async () => {},
+      checkpoint: async () => {},
+      persistEvents: async () => {}
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async () => {
+      sessionChecks += 1;
+      return sessionChecks === 1;
+    }
+  });
+
+  const result = await coordinator.execute('run task', {
+    ownerSessionContext: { sessionId: 'session-revoked-after-admission' }
+  });
+
+  assert.equal(result.type, 'execution_cancelled');
+  assert.equal(sessionChecks, 2);
+  assert.equal(toolRuns, 0);
+  assert.equal(observedReason, 'Owner session is no longer active');
+});
