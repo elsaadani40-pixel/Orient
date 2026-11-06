@@ -25,7 +25,8 @@ function fixture(overrides = {}) {
     workspaceId: 'workspace-a',
     operation: 'execution.get',
     operationId: IDS.operation,
-    requestId: IDS.request
+    requestId: IDS.request,
+    requestFingerprint: 'a'.repeat(64)
   };
   const authority = new OwnerSessionIdentityAuthority({
     ownerIdentity: {
