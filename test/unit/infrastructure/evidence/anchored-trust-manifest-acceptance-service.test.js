@@ -75,9 +75,9 @@ test('anchored acceptance restores a lost local version cache only from the exac
     f.service().accept({ manifest: first, principal: { id: 'owner' } }),
     error => error.code === 'EVIDENCE_TRUST_MANIFEST_ROLLBACK'
   );
-  const recovered = await f.service().accept({ manifest: second, principal: { id: 'owner' } });
+  const recovered = await f.service().recover({ principal: { id: 'owner' } });
   assert.equal(recovered.version, 2);
-  assert.equal(recovered.externallyAnchored, true);
+  assert.equal(recovered.recovered, true);
   assert.equal(f.versionStore.current().version, 2);
 });
 
@@ -123,4 +123,26 @@ test('anchored acceptance fails closed without authorization or independent hist
     versionStore: f.versionStore,
     authorize: async () => true
   }), /independently administered immutable trust history/);
+});
+
+
+test('trust cache recovery works after manifest expiry without reactivating expired trust', async () => {
+  const f = fixture();
+  const first = f.create(1);
+  await f.externalAnchorStore.append(first, { verificationTime: '2026-11-06T10:03:00.000Z' });
+  const expiredNow = '2027-01-01T00:00:00.000Z';
+  const service = new AnchoredTrustManifestAcceptanceService({
+    trustedRootKeys: { 'offline-root-1': { publicKey: Object.values(f.externalAnchorStore.trustedRootKeys)[0].publicKey } },
+    versionStore: f.versionStore,
+    externalAnchorStore: f.externalAnchorStore,
+    authorize: async () => true,
+    now: () => expiredNow
+  });
+  const recovered = await service.recover({ principal: { id: 'owner' } });
+  assert.equal(recovered.version, 1);
+  assert.equal(f.versionStore.current().version, 1);
+  await assert.rejects(
+    service.accept({ manifest: first, principal: { id: 'owner' } }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_SIGNATURE_INVALID'
+  );
 });
