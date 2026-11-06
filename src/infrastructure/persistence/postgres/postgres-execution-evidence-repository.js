@@ -44,7 +44,7 @@ class PostgresExecutionEvidenceRepository {
     this.now = now;
   }
 
-  async append(evidence, { principal } = {}) {
+  async append(evidence, { principal, anchor = null } = {}) {
     if (!principal || typeof principal.tenantId !== 'string' || !principal.tenantId.trim()) {
       fail('EVIDENCE_PRINCIPAL_REQUIRED', 'A verified tenant principal is required');
     }
@@ -68,6 +68,7 @@ class PostgresExecutionEvidenceRepository {
       );
       let expectedSequence = 1;
       let previousHash = null;
+      const verifiedChain = [];
       for (const row of chainResult.rows) {
         const current = rowToEnvelope(row);
         if (current.sequence !== expectedSequence || current.previousHash !== previousHash ||
@@ -75,8 +76,19 @@ class PostgresExecutionEvidenceRepository {
             !verifyEvidenceEnvelope(current, this.trustedKeys)) {
           fail('EVIDENCE_CHAIN_INVALID', 'Existing evidence chain failed verification before append');
         }
+        verifiedChain.push(current);
         previousHash = current.recordHash;
         expectedSequence += 1;
+      }
+      if (anchor) {
+        if (!verifyEvidenceAnchor(anchor, this.trustedAnchorKeys) ||
+            anchor.tenantId !== tenantId || anchor.executionId !== executionId) {
+          fail('EVIDENCE_ANCHOR_INVALID', 'A trusted external anchor for this tenant and execution is required');
+        }
+        const anchoredRecord = verifiedChain[anchor.sequence - 1];
+        if (!anchoredRecord || anchoredRecord.recordHash !== anchor.recordHash) {
+          fail('EVIDENCE_ANCHOR_MISMATCH', 'Persisted chain does not reach the supplied external anchor');
+        }
       }
 
       const existing = await client.query(
