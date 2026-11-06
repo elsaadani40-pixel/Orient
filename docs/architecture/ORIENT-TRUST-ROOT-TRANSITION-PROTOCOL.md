@@ -128,7 +128,7 @@ The expected bootstrap state must carry the complete historical set of used root
 
 The ledger is independent from the trust-manifest anchor ledger. A manifest version does not substitute for a root-transition sequence, and a transition does not silently rewrite an already anchored manifest.
 
-The transition payload binds the current manifest head. The implemented ledger append path resolves the current external manifest head and requires an exact version, digest, and active-root match before writing. During replay, any head advance between transitions must be verified against the external manifest-anchor store and attributed to the root that was active at that point. After a transition becomes effective, the first manifest signed by the new root must be the next contiguous manifest version. If the manifest head changes between transition preparation and acceptance, the transition is stale and must be prepared and signed again.
+The transition payload binds the current manifest head. The implemented ledger append path resolves the current external manifest head and requires an exact version, digest, and active-root match before writing. During replay, any head advance between transitions must be verified against the external manifest-anchor store, including every contiguous manifest after the previous activation boundary, and attributed to the root that was active at that point. A retired-root manifest cannot be hidden earlier in the history beneath a newer manifest signed by the active root. After a transition becomes effective, the first manifest signed by the new root must be the next contiguous manifest version. If the manifest head changes between transition preparation and acceptance, the transition is stale and must be prepared and signed again.
 
 ## State reconstruction and activation
 
@@ -164,7 +164,7 @@ The acceptance transaction compares the candidate manifest version against:
 - the durable local cache;
 - the manifest head bound by the latest effective root transition.
 
-When the root-transition ledger is configured, the candidate's `rootKeyId` must equal the effective root ID, and its version must be strictly greater than the transition-bound manifest head. The external manifest ledger still enforces contiguous versions and exact-content idempotency.
+When the root-transition ledger is configured, the candidate's `rootKeyId` must equal the effective root ID, and its version must be strictly greater than the transition-bound manifest head. The external manifest ledger still enforces contiguous versions and exact-content idempotency. In root-transition mode it also rejects any post-activation manifest signed by a root other than the active root, including historical entries before the current head.
 
 A new root can sign only a manifest version strictly after the transition's bound manifest head. An old root cannot sign new manifests after the transition becomes effective. Historical verification remains available with an explicitly historical API and cannot update trust state.
 
