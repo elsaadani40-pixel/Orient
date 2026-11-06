@@ -195,7 +195,7 @@ test('monotonic trust store rejects malformed persisted state', async () => {
 test('trust manifest acceptance rejects expired and future-issued manifests', async () => {
   const f = fixture();
   const store = memoryVersionStore();
-  const expired = f.create(1, { payload: { expiresAt: '2026-11-06T10:01:00.000Z' } });
+  const expired = f.create(1, { payload: { issuedAt: '2026-11-06T09:00:00.000Z', expiresAt: '2026-11-06T10:00:00.000Z' } });
   await assert.rejects(
     verifyAndAcceptTrustManifest(expired, {
       trustedRootKeys: f.trustedRootKeys,
