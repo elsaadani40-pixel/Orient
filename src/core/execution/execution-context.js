@@ -791,9 +791,21 @@ class ExecutionContext {
         ? snapshot.observations.map(observation => ({ ...observation }))
         : [];
 
+    const evidenceSchemaVersion = snapshot.evidenceSchemaVersion;
+    if (evidenceSchemaVersion !== undefined && evidenceSchemaVersion !== 1) {
+      const error = new Error('Unsupported execution evidence schema version');
+      error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+      throw error;
+    }
+
     for (const observation of context.observations) {
       if (!observation || typeof observation !== 'object') {
         throw new TypeError('snapshot contains an invalid observation');
+      }
+      if (evidenceSchemaVersion === 1 && !observation.evidence) {
+        const error = new Error('Versioned execution observation is missing evidence');
+        error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+        throw error;
       }
       if (observation.evidence !== undefined) {
         const evidence = observation.evidence;
@@ -857,6 +869,11 @@ class ExecutionContext {
       if (!observation || typeof observation !== 'object') {
         throw new TypeError('snapshot contains an invalid agent observation');
       }
+      if (evidenceSchemaVersion === 1 && !observation.evidence) {
+        const error = new Error('Versioned agent observation is missing evidence');
+        error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+        throw error;
+      }
       if (observation.evidence !== undefined) {
         const evidence = observation.evidence;
         if (
@@ -872,12 +889,40 @@ class ExecutionContext {
           throw error;
         }
       }
-      const canonicalEvidenceId = context.observations[index]?.evidence?.id;
-      if (observation.evidence && observation.evidence.id !== canonicalEvidenceId) {
+      const canonicalObservation = context.observations[index];
+      const canonicalEvidenceId = canonicalObservation?.evidence?.id;
+      if (
+        observation.evidence &&
+        observation.evidence.id !== canonicalEvidenceId
+      ) {
         const error = new Error('Execution and agent evidence records do not match');
         error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
         throw error;
       }
+      if (
+        evidenceSchemaVersion === 1 &&
+        (!canonicalObservation ||
+          typeof observation.id !== 'string' ||
+          observation.id.length === 0 ||
+          observation.id !== canonicalObservation.id ||
+          observation.step !== canonicalObservation.step ||
+          observation.tool !== canonicalObservation.tool ||
+          observation.success !== canonicalObservation.success ||
+          observation.timestamp !== canonicalObservation.timestamp)
+      ) {
+        const error = new Error('Execution and agent observations do not match');
+        error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+        throw error;
+      }
+    }
+
+    if (
+      evidenceSchemaVersion === 1 &&
+      agentState.observations.length !== context.observations.length
+    ) {
+      const error = new Error('Execution and agent observation counts do not match');
+      error.code = 'EXECUTION_EVIDENCE_INTEGRITY_FAILED';
+      throw error;
     }
 
     agentState.decisions =
@@ -933,6 +978,8 @@ class ExecutionContext {
 
       executionVersion:
         this.executionVersion,
+
+      evidenceSchemaVersion: 1,
 
       status:
         this.status,
