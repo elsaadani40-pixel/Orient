@@ -113,6 +113,20 @@ Unit coverage now verifies:
 The repository-binding milestone is implemented for every repository exposed by `PostgresPersistence`; remaining work is hosted-project verification of the actual runtime connection credential, grants/advisors, pooler behavior, GUC threat boundary, and an explicitly approved development migration. The repository CI now verifies the runtime login and pooled role reset against a real PostgreSQL 17 service. No Supabase schema or project setting is changed by this contract.
 
 
+## 10. Gateway row isolation by owner and session
+
+Migration version 12 strengthens both `gateway_challenges` and `gateway_idempotency` policies. Runtime access now requires all three transaction-local context values to match the row:
+
+- `tenant_id` matches `app.orient_tenant_id`;
+- `owner_id` matches `app.orient_owner_id`;
+- `session_id` matches `app.orient_session_id`.
+
+Both `USING` and `WITH CHECK` enforce the same scope. This prevents a runtime session from reading, changing, deleting, or inserting Gateway challenge/idempotency rows belonging to another owner or another session in the same tenant. The application repository continues to apply explicit owner/session predicates as defense in depth.
+
+The PostgreSQL integration suite seeds rows for two owners and two sessions within one tenant, then verifies that the runtime role can see only the exact owner/session pair, cannot update or delete the other rows, and cannot insert a row for another owner. These tests run against the real PostgreSQL service in CI.
+
+This remains subject to the documented trust boundary: a caller with arbitrary SQL access under the runtime credential can alter custom GUC values. The runtime credential must remain private to the trusted server; the RLS policies protect against missing predicates and accidental cross-scope repository access, not a compromised application process or arbitrary SQL execution.
+
 ## 9. Database role and RLS implementation
 
 The explicit provisioning command is `npm run db:roles` (`scripts/provision-postgres-roles.js`). It requires an administrative connection and two independently generated passwords supplied through environment variables; it never prints passwords.
