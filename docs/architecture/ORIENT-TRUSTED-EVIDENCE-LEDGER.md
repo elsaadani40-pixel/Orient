@@ -264,3 +264,20 @@ The first durable adapter is implemented in `src/infrastructure/evidence/postgre
 `src/infrastructure/evidence/trust-manifest-acceptance-service.js` implements the transport-neutral trust update operation. The host must authenticate the caller and provide a principal authorizer; the service itself does not accept a bearer token or trust caller-supplied role text. The authorizer must derive privileges from an authenticated identity outside ORIENT Runtime. The service verifies the root signature before advancing the separately administered monotonic store, limits canonical manifest size, and returns only `{ version, digest, accepted }`.
 
 This module is not yet a separately deployed service process or HTTP endpoint. Production deployment still requires an independently operated host, authenticated transport (for example mTLS), independent database credentials, secret management, rate limiting, monitoring, and recovery procedures. Do not expose the service directly to untrusted network clients without that host layer.
+
+
+### Independent trust-manifest history and recovery
+
+`ExternalTrustManifestAnchorStore` stores the complete root-signed manifest sequence in a separate immutable backend. Its backend contract requires strongly consistent `putIfAbsent`, `get`, and prefix `list`; the adapter verifies canonical bytes, root signatures, object-key/version agreement, contiguous versions beginning at 1, and nondecreasing issuance timestamps. It rejects missing versions, conflicting immutable writes, malformed objects, and invalid signatures. The adapter itself does not make a provider immutable: production must enforce create-only writes and deny overwrite/delete through independently administered provider policy and credentials.
+
+`AnchoredTrustManifestAcceptanceService` treats that external history as authoritative and the PostgreSQL monotonic version store as a recoverable cache:
+
+1. Authenticate and authorize the principal, bound the canonical manifest size, and verify its root signature, validity interval, and current root status.
+2. Read and verify the complete external history.
+3. Accept only the exact externally anchored head (for cache recovery) or the next contiguous version (for an update). Older versions and skipped versions fail closed.
+4. For a new version, append the signed manifest to the immutable external history before updating the local monotonic cache.
+5. If the local cache was lost, replaying the exact external head can rebuild it. Presenting an older, still-unexpired signed manifest cannot reset trust because its version is below the external head.
+
+This ordering is crash-recoverable: if the process stops after the external append but before the local cache update, retrying the exact same manifest is idempotent and completes the cache update. A cache that is ahead of the external history, or has a conflicting digest, remains a hard failure requiring operator recovery; the service never silently chooses one history.
+
+The external backend must be in a separate administrative and credential domain from Runtime and the PostgreSQL cache, with strongly consistent listing and create-only immutable retention. A backend administrator able to delete or roll back the external history can still defeat this protection. The first trust-manifest bootstrap (version 1) also remains a root-ceremony responsibility: pin root public keys out of band and preserve the initial accepted manifest in the external immutable store before relying on the system. Fake in-memory backend tests demonstrate adapter logic only; they are not proof of a real provider's immutability, consistency, retention, or recovery configuration. No hosted cloud resources are provisioned by this code.
