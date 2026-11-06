@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, gatewayIdentityRoutes = null, websiteHandler = null }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -308,6 +308,52 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         if (typeof ownerAuth.status === 'function' && ownerAuth.status().passwordChangeRequired &&
             !['/owner/logout'].includes(requestUrl.pathname)) {
           sendJson(res, 403, { ok: false, code: 'OWNER_PASSWORD_CHANGE_REQUIRED', message: 'يجب تغيير كلمة مرور المالك قبل المتابعة.' });
+          return;
+        }
+
+        if (req.method === 'POST' &&
+            ['/owner/gateway/challenges', '/owner/gateway/identity-token'].includes(requestUrl.pathname)) {
+          if (!gatewayIdentityRoutes) {
+            sendJson(res, 503, { ok: false, code: 'GATEWAY_IDENTITY_UNAVAILABLE', message: 'خدمة هوية Gateway غير مهيأة.' });
+            return;
+          }
+          if (!isSameOrigin(req) || !ownerAuth.verifyCsrf(ownerSession, req.headers['x-orient-csrf'])) {
+            authenticationOutcome = 'csrf_rejected';
+            sendJson(res, 403, { ok: false, code: 'OWNER_CSRF_REJECTED', message: 'تم رفض الطلب لأسباب أمنية.' });
+            return;
+          }
+          if (!String(req.headers['content-type'] || '').toLowerCase().includes('application/json')) {
+            sendJson(res, 415, { ok: false, code: 'JSON_REQUIRED', message: 'يلزم إرسال الطلب بصيغة JSON.' });
+            return;
+          }
+          let payload;
+          try {
+            payload = JSON.parse(await readBody(req, 8192) || '{}');
+          } catch (error) {
+            const tooLarge = error.code === 'REQUEST_TOO_LARGE';
+            sendJson(res, tooLarge ? 413 : 400, { ok: false, code: tooLarge ? 'REQUEST_TOO_LARGE' : 'INVALID_JSON', message: 'بيانات Gateway غير صالحة.' });
+            return;
+          }
+          try {
+            if (requestUrl.pathname === '/owner/gateway/challenges') {
+              const challenge = await gatewayIdentityRoutes.createChallenge({ ownerSession, operation: payload.operation });
+              sendJson(res, 201, { ok: true, challenge });
+            } else {
+              const identity = await gatewayIdentityRoutes.issueToken({
+                ownerSessionToken: ownerCookie,
+                challengeId: payload.challengeId,
+                operation: payload.operation,
+                operationId: payload.operationId,
+                requestId: payload.requestId
+              });
+              sendJson(res, 200, { ok: true, identity });
+            }
+          } catch (error) {
+            const status = Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500
+              ? error.statusCode
+              : (String(error.code || '').startsWith('IDENTITY_AUTH_') ? 403 : 400);
+            sendJson(res, status, { ok: false, code: error.code || 'GATEWAY_IDENTITY_REJECTED', message: 'تم رفض طلب هوية Gateway.' });
+          }
           return;
         }
 
