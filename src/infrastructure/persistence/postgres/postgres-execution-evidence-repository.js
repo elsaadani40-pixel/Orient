@@ -104,6 +104,7 @@ class PostgresExecutionEvidenceRepository {
   }
 
   async verifyExecution(executionId, { principal, anchor = null } = {}) {
+    if (anchor) fail('EVIDENCE_ANCHOR_VERIFIER_REQUIRED', 'External anchors require a separately trusted signature verifier');
     if (!principal || typeof principal.tenantId !== 'string' || !principal.tenantId.trim()) {
       fail('EVIDENCE_PRINCIPAL_REQUIRED', 'A verified tenant principal is required');
     }
@@ -140,22 +141,10 @@ class PostgresExecutionEvidenceRepository {
         expectedSequence += 1;
       }
 
-      if (anchor) {
-        if (anchor.tenantId !== principal.tenantId || anchor.executionId !== executionId ||
-            !Number.isSafeInteger(anchor.sequence) || anchor.sequence < 1 ||
-            typeof anchor.recordHash !== 'string') {
-          return { valid: false, anchored: false, code: 'EVIDENCE_ANCHOR_SCOPE_INVALID', verifiedThrough: records.length, records: records.length };
-        }
-        const anchoredRecord = records[anchor.sequence - 1];
-        if (!anchoredRecord || anchoredRecord.recordHash !== anchor.recordHash) {
-          return { valid: false, anchored: false, code: 'EVIDENCE_ANCHOR_MISMATCH', verifiedThrough: records.length, records: records.length };
-        }
-      }
-
       return {
         valid: true,
-        anchored: Boolean(anchor),
-        code: anchor ? 'EVIDENCE_CHAIN_VALID_AND_ANCHORED' : 'EVIDENCE_CHAIN_VALID_UNANCHORED',
+        anchored: false,
+        code: 'EVIDENCE_CHAIN_VALID_UNANCHORED',
         verifiedThrough: records.length,
         records: records.length,
         headHash: previousHash
