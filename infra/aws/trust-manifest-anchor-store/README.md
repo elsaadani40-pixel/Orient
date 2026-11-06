@@ -19,7 +19,7 @@ The Runtime account administrator must separately grant the role the matching id
 - `aws_region`: storage account region.
 - `bucket_name`: globally unique, dedicated bucket name.
 - `runtime_role_arn`: exact role ARN from the separate Runtime account.
-- `retention_days`: default COMPLIANCE retention in whole days (default 365).
+- `retention_days`: required default COMPLIANCE retention in whole days. There is deliberately no default because COMPLIANCE retention is difficult to reverse and can create long-lived storage costs.
 
 ## Review before apply
 
@@ -35,7 +35,7 @@ terraform plan \
   -var='aws_region=eu-central-1' \
   -var='bucket_name=replace-with-globally-unique-name' \
   -var='runtime_role_arn=arn:aws:iam::111122223333:role/orient-runtime-anchor-writer' \
-  -var='retention_days=365'
+  -var='retention_days=365' # example only; choose and approve the retention period first
 ```
 
 Review the plan and the target AWS account before running `terraform apply`. Applying provisions billable AWS resources; this repository change does not deploy anything.
