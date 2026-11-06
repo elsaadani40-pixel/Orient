@@ -1,7 +1,7 @@
 'use strict';
 
 const { canonicalJson, verifyEvidenceRecord } = require('../../../core/execution/evidence-record');
-const { signEvidenceEnvelope, verifyEvidenceEnvelope } = require('./trusted-evidence-cryptography');
+const { signEvidenceEnvelope, verifyEvidenceEnvelope, createEvidenceAnchor, verifyEvidenceAnchor } = require('./trusted-evidence-cryptography');
 
 function fail(code, message) {
   throw Object.assign(new Error(message), { code });
@@ -24,7 +24,7 @@ function rowToEnvelope(row) {
 }
 
 class PostgresExecutionEvidenceRepository {
-  constructor(db, { keyId, privateKey, trustedKeys, now = () => new Date() } = {}) {
+  constructor(db, { keyId, privateKey, trustedKeys, anchorSigning = null, trustedAnchorKeys = null, now = () => new Date() } = {}) {
     if (!db || typeof db.query !== 'function' || typeof db.transaction !== 'function' ||
         typeof db.withPrincipal !== 'function') {
       throw new TypeError('A scoped PostgresDatabase is required');
@@ -39,6 +39,8 @@ class PostgresExecutionEvidenceRepository {
     this.keyId = keyId;
     this.privateKey = privateKey;
     this.trustedKeys = trustedKeys;
+    this.anchorSigning = anchorSigning;
+    this.trustedAnchorKeys = trustedAnchorKeys;
     this.now = now;
   }
 
@@ -103,8 +105,24 @@ class PostgresExecutionEvidenceRepository {
     }));
   }
 
+  async createAnchor(executionId, { principal } = {}) {
+    if (!this.anchorSigning?.keyId || !this.anchorSigning?.privateKey) {
+      fail('EVIDENCE_ANCHOR_SIGNING_CONFIGURATION_REQUIRED', 'An independently managed external anchor signing key is required');
+    }
+    const verification = await this.verifyExecution(executionId, { principal });
+    if (!verification.valid || verification.records < 1 || !verification.headHash) {
+      fail('EVIDENCE_CHAIN_NOT_ANCHORABLE', 'A non-empty valid evidence chain is required before anchoring');
+    }
+    return createEvidenceAnchor({
+      tenantId: principal.tenantId,
+      executionId,
+      sequence: verification.verifiedThrough,
+      recordHash: verification.headHash,
+      anchoredAt: this.now().toISOString()
+    }, this.anchorSigning);
+  }
+
   async verifyExecution(executionId, { principal, anchor = null } = {}) {
-    if (anchor) fail('EVIDENCE_ANCHOR_VERIFIER_REQUIRED', 'External anchors require a separately trusted signature verifier');
     if (!principal || typeof principal.tenantId !== 'string' || !principal.tenantId.trim()) {
       fail('EVIDENCE_PRINCIPAL_REQUIRED', 'A verified tenant principal is required');
     }
@@ -141,9 +159,46 @@ class PostgresExecutionEvidenceRepository {
         expectedSequence += 1;
       }
 
+      if (anchor) {
+        if (!verifyEvidenceAnchor(anchor, this.trustedAnchorKeys)) {
+          return {
+            valid: false, anchored: false, headAnchored: false,
+            code: 'EVIDENCE_ANCHOR_SIGNATURE_INVALID',
+            verifiedThrough: records.length, records: records.length
+          };
+        }
+        if (anchor.tenantId !== principal.tenantId || anchor.executionId !== executionId) {
+          return {
+            valid: false, anchored: false, headAnchored: false,
+            code: 'EVIDENCE_ANCHOR_SCOPE_INVALID',
+            verifiedThrough: records.length, records: records.length
+          };
+        }
+        const anchoredRecord = records[anchor.sequence - 1];
+        if (!anchoredRecord || anchoredRecord.recordHash !== anchor.recordHash) {
+          return {
+            valid: false, anchored: false, headAnchored: false,
+            code: 'EVIDENCE_ANCHOR_MISMATCH',
+            verifiedThrough: records.length, records: records.length
+          };
+        }
+        const headAnchored = anchor.sequence === records.length;
+        return {
+          valid: true,
+          anchored: true,
+          headAnchored,
+          code: headAnchored ? 'EVIDENCE_CHAIN_VALID_AND_HEAD_ANCHORED' : 'EVIDENCE_CHAIN_VALID_ANCHORED_PREFIX',
+          verifiedThrough: records.length,
+          anchorSequence: anchor.sequence,
+          records: records.length,
+          headHash: previousHash
+        };
+      }
+
       return {
         valid: true,
         anchored: false,
+        headAnchored: false,
         code: 'EVIDENCE_CHAIN_VALID_UNANCHORED',
         verifiedThrough: records.length,
         records: records.length,
