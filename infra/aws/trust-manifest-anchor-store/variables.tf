@@ -22,7 +22,7 @@ variable "retention_days" {
   }
 }
 
-variable "runtime_role_arn" {
-  description = "Exact ARN of the runtime role, used by the bucket policy to deny destructive operations."
+variable "trust_store_service_role_arn" {
+  description = "Exact ARN of the dedicated trust-store service role. This must not be the ORIENT Runtime application role."
   type        = string
 }
