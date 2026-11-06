@@ -189,20 +189,23 @@ test('PostgreSQL checkpoint restores versioned ExecutionContext evidence after r
   assert.equal(snapshot.evidenceSchemaVersion, 1);
   const evidenceId = snapshot.observations[0].evidence.id;
 
-  const saved = await persistence.checkpoints.save(snapshot, {
-    reason: 'evidence_restart_test',
-    tenantId
-  });
-  assert.equal(saved.snapshot.observations[0].evidence.id, evidenceId);
-
   const restartedPool = new Pool({
     connectionString: process.env.DATABASE_URL,
     application_name: 'orient-evidence-restart-integration'
   });
   t.after(async () => {
-    await pool.query('DELETE FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
-    await restartedPool.end();
+    try {
+      await pool.query('DELETE FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2', [executionId, tenantId]);
+    } finally {
+      await restartedPool.end();
+    }
   });
+
+  const saved = await persistence.checkpoints.save(snapshot, {
+    reason: 'evidence_restart_test',
+    tenantId
+  });
+  assert.equal(saved.snapshot.observations[0].evidence.id, evidenceId);
 
   const restartedPersistence = new PostgresPersistence({ pool: restartedPool });
   const persistedCheckpoint = await restartedPersistence.checkpoints.findLatest(executionId, {
