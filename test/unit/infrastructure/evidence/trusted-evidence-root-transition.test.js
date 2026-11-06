@@ -243,6 +243,26 @@ test('emergency recovery rejects duplicate, unknown, revoked, and insufficient r
   assert.equal(f.verify(unknown, { recoveryPolicy: revokedPolicy }), null);
 });
 
+test('root transition rejects duplicate, sparse, and mismatched historical root state', () => {
+  const f = fixture();
+  const envelope = signRootTransition(f.payload(), {
+    currentRootKeyId: 'root-1',
+    currentRootPrivateKey: f.root.privateKey,
+    nextRootPrivateKey: f.next.privateKey
+  });
+  assert.equal(f.verify(envelope, {
+    expectedState: { ...f.expectedState, usedRootKeyIds: ['root-1', 'root-1'] }
+  }), null);
+  const sparse = [];
+  sparse.length = 1;
+  assert.equal(f.verify(envelope, {
+    expectedState: { ...f.expectedState, usedRootKeyIds: sparse }
+  }), null);
+  assert.equal(f.verify(envelope, {
+    expectedState: { ...f.expectedState, usedRootFingerprints: [] }
+  }), null);
+});
+
 test('root transition rejects malformed recovery policy, unsafe accessors, and invalid configuration bounds', () => {
   const f = fixture();
   assert.throws(() => recoveryPolicyDigest({ threshold: 0, authorities: [] }),
