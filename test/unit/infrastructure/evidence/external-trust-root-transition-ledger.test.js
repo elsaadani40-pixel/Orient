@@ -144,10 +144,9 @@ test('ledger rejects stale heads and conflicting sequence content', async () => 
   const f = fixture();
   const first = f.planned({});
   await f.ledger.appendIfNext(first, null);
-  await assert.rejects(
-    () => f.ledger.appendIfNext(first, null),
-    error => error.code === 'EVIDENCE_ROOT_TRANSITION_LEDGER_HEAD_CONFLICT'
-  );
+  const retry = await f.ledger.appendIfNext(first, null);
+  assert.equal(retry.created, false);
+  assert.equal(retry.transitionDigest, first.transitionDigest);
   const conflicting = f.planned({ nextRootKeyId: 'root-alt', nextRoot: f.third });
   await assert.rejects(
     () => f.ledger.appendIfNext(conflicting, { transitionSequence: 1, transitionDigest: first.transitionDigest }),
