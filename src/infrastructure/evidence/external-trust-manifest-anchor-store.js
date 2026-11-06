@@ -100,8 +100,9 @@ class ExternalTrustManifestAnchorStore {
         fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CORRUPT', 'Backend returned an entry outside the trust-manifest namespace');
       }
       const manifest = parseManifest(entry.value);
-      if (manifest.version <= version && (manifestKey(manifest.version) !== entry.key ||
-          !verifyTrustManifest(manifest, keys))) {
+      if (!Number.isSafeInteger(manifest.version) || manifest.version < 1 ||
+          manifestKey(manifest.version) !== entry.key ||
+          (manifest.version <= version && !verifyTrustManifest(manifest, keys))) {
         fail('EVIDENCE_TRUST_MANIFEST_ANCHOR_CORRUPT', 'Historical manifest failed key or signature verification');
       }
       return manifest;
