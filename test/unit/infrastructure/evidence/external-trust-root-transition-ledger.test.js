@@ -38,7 +38,7 @@ class MemoryBackend {
   }
 }
 
-function fixture({ revokedRootAt } = {}) {
+function fixture({ revokedRootAt, manifestHeadProvider, manifestHeadVerifier } = {}) {
   const root = pair();
   const next = pair();
   const third = pair();
@@ -73,6 +73,8 @@ function fixture({ revokedRootAt } = {}) {
     backend, initialState, trustedRootKeys, recoveryPolicy,
     clockSkewMs: 60_000,
     maxValidityMs: 24 * 60 * 60 * 1000,
+    manifestHeadProvider,
+    manifestHeadVerifier,
     now: () => now
   });
   const payload = ({
@@ -226,6 +228,62 @@ test('ledger supports sequential rotations and exact idempotent append retry', a
   const retry = await f.ledger.appendIfNext(second, head);
   assert.equal(retry.created, false);
   assert.equal(retry.transitionDigest, second.transitionDigest);
+});
+
+test('root transition replay binds later rotations to the exact external manifest head', async () => {
+  let currentHead = { version: 4, digest: 'a'.repeat(64) };
+  const anchored = new Map([['4:' + currentHead.digest, 'root-1']]);
+  const f = fixture({
+    manifestHeadProvider: async ({ expectedRootKeyId }) => ({
+      ...currentHead,
+      rootKeyId: expectedRootKeyId
+    }),
+    manifestHeadVerifier: async ({ version, digest, expectedRootKeyId }) =>
+      anchored.get(`${version}:${digest}`) === expectedRootKeyId
+  });
+  const first = f.planned({});
+  await f.ledger.appendIfNext(first, null);
+
+  currentHead = { version: 5, digest: 'b'.repeat(64) };
+  anchored.set('5:' + currentHead.digest, 'root-2');
+  const stalePayload = f.payload({
+    sequence: 2, previousDigest: first.transitionDigest, previousEpoch: 2,
+    previousRootKeyId: 'root-2',
+    previousRootFingerprint: publicKeyFingerprint(f.next.publicKey),
+    nextRoot: f.third, nextRootKeyId: 'root-3',
+    issuedAt: '2026-11-06T10:02:00.000Z',
+    effectiveAt: '2026-11-06T10:03:00.000Z'
+  });
+  const stale = signRootTransition(stalePayload, {
+    currentRootKeyId: 'root-2',
+    currentRootPrivateKey: f.next.privateKey,
+    nextRootPrivateKey: f.third.privateKey
+  });
+  await assert.rejects(
+    () => f.ledger.appendIfNext(stale, {
+      transitionSequence: 1, transitionDigest: first.transitionDigest
+    }),
+    error => error.code === 'EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_CONFLICT'
+  );
+
+  const nextPayload = {
+    ...stalePayload,
+    manifestHeadVersion: 5,
+    manifestHeadDigest: currentHead.digest
+  };
+  const second = signRootTransition(nextPayload, {
+    currentRootKeyId: 'root-2',
+    currentRootPrivateKey: f.next.privateKey,
+    nextRootPrivateKey: f.third.privateKey
+  });
+  const result = await f.ledger.appendIfNext(second, {
+    transitionSequence: 1, transitionDigest: first.transitionDigest
+  });
+  assert.equal(result.created, true);
+  const state = await f.ledger.readState();
+  assert.equal(state.manifestHeadVersion, 5);
+  assert.equal(state.manifestHeadDigest, currentHead.digest);
+  assert.equal(state.rootKeyId, 'root-3');
 });
 
 test('emergency recovery uses independent quorum when the previous root is already revoked', async () => {
