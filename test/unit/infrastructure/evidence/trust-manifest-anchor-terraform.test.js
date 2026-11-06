@@ -15,7 +15,7 @@ test('trust-manifest bucket grants access only to the dedicated trust-store serv
   assert.doesNotMatch(variables, /runtime_role_arn/);
   assert.match(main, /identifiers = \[var\.trust_store_service_role_arn\]/);
   assert.doesNotMatch(main, /var\.runtime_role_arn/);
-  assert.match(readme, /never the ORIENT application Runtime role/i);
+  assert.match(readme, /must not share Runtime credentials/i);
   assert.match(readme, /Do not use the Runtime application role/i);
 });
 
