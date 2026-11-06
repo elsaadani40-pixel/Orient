@@ -42,7 +42,7 @@ Review the plan and the target AWS account before running `terraform apply`. App
 
 ## Runtime adapter
 
-Construct `S3ObjectLockTrustManifestAnchorBackend` with an AWS SDK for JavaScript v3 S3 client, its `PutObjectCommand`, `GetObjectCommand`, and `ListObjectsV2Command` constructors, and the bucket name. Do not pass a Runtime-controlled retention duration: the bucket default is authoritative.
+Construct `S3ObjectLockTrustManifestAnchorBackend` with an AWS SDK for JavaScript v3 S3 client, its `PutObjectCommand`, `GetObjectCommand`, `ListObjectsV2Command`, `GetObjectLockConfigurationCommand`, and `GetBucketVersioningCommand` constructors, the bucket name, and `expectedRetentionDays` matching the approved Terraform input. Before any read, list, or write, the adapter verifies that versioning is enabled and that the bucket's default COMPLIANCE retention exactly matches the expected number of days. It caches that successful configuration check for the adapter lifetime and retries after a failed check. Do not pass a Runtime-controlled retention duration: the bucket default is authoritative, and the adapter sends no per-object retention headers.
 
 The adapter writes only under `orient/trust-manifests/v1/`, uses conditional `IfNoneMatch: '*'`, and has no overwrite or delete method. The external ledger verifies root signatures, canonical bytes, version ordering, and gaps after reading the stored history.
 
