@@ -150,6 +150,7 @@ class ExternalTrustRootTransitionLedger {
             version: envelope.payload.manifestHeadVersion,
             digest: envelope.payload.manifestHeadDigest,
             expectedRootKeyId: state.rootKeyId,
+            activeFromVersion: state.manifestHeadVersion,
             trustedRootKeys
           });
         } catch {
@@ -233,7 +234,8 @@ class ExternalTrustRootTransitionLedger {
       try {
         manifestHead = await this.manifestHeadProvider({
           trustedRootKeys: current.trustedRootKeys,
-          expectedRootKeyId: current.state.rootKeyId
+          expectedRootKeyId: current.state.rootKeyId,
+          activeFromVersion: current.state.manifestHeadVersion
         });
       } catch {
         fail('EVIDENCE_ROOT_TRANSITION_MANIFEST_HEAD_UNAVAILABLE', 'Current external manifest head could not be resolved');
