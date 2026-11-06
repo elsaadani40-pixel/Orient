@@ -206,3 +206,26 @@ At the reviewed schema version 12:
 - the current evidence record is content-addressed and stores a digest of the result, not the raw result, but it is not yet persisted in a separate signed ledger.
 
 These observations are based on branch source at the time this contract was written and must be rechecked before implementation if the branch head changes.
+
+
+## 12. Implementation status — branch work in progress
+
+The first implementation slice has been added on `feat/supabase-optional-cloud-architecture`:
+
+- Migration 13 creates `execution_evidence` with tenant/execution/sequence primary key, evidence uniqueness, bounded identifiers, hash/signature checks, RLS, and an append-only mutation trigger.
+- The migration explicitly revokes all runtime table grants before granting only SELECT and INSERT.
+- `scripts/provision-postgres-roles.js` includes the ledger in the owner-role table inventory.
+- `trusted-evidence-cryptography.js` signs record envelopes and external anchors with Ed25519 using distinct domain separators. Verification uses separately configured trusted public-key maps and validity/revocation timestamps.
+- `PostgresExecutionEvidenceRepository` validates the complete existing chain under an execution-scoped advisory transaction lock before each append; same-evidence retries return the existing verified envelope; concurrent appends allocate contiguous sequence numbers.
+- `createAnchor()` exports a separately signed anchor object. The caller must persist that object outside the PostgreSQL trust domain. The repository does not pretend an anchor stored in the same database is independent.
+- `verifyExecution()` distinguishes unanchored chains, anchored prefixes, and fully head-anchored chains. Appends can accept a previously exported anchor and fail closed if the persisted chain no longer reaches it.
+- Evidence signing and anchor signing are explicit constructor configuration. No ephemeral keypair is generated and no private key is persisted in the database or source tree.
+
+### Current implementation limits
+
+- The external anchor transport/storage adapter and its operational retention/backup policy are not implemented yet. The cryptographic export and verification contract exists, but an operator must place anchors in an independently administered store.
+- The first append implementation verifies the full execution chain before every write, which is intentionally conservative and O(n) per append. A later optimization must preserve verification against a trusted external anchor and must not silently trust an unverified database-local head.
+- Evidence signing keys and anchor signing keys are supplied by the host application. A production key-provider/rotation workflow and authenticated trust-manifest distribution remain integration requirements.
+- No hosted Supabase project has been changed. Migration 13 is only code in the branch until an explicitly authorized deployment runs it.
+
+These are implementation boundaries, not completed production guarantees. The ledger milestone remains open until real PostgreSQL 17 integration, key lifecycle tests, external anchor persistence/restore, full CI, and a reviewed deployment procedure are complete.
