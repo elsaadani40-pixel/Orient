@@ -59,6 +59,7 @@ test('issues a token only from the canonical live owner session and bound gatewa
     ownerId: IDS.owner,
     tenantId: 'tenant-a',
     workspaceId: 'workspace-a',
+    authSource: 'orient-owner-session',
     sessionId: IDS.session
   });
   assert.deepEqual(calls[0].scope, ['execution.read']);
