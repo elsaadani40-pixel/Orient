@@ -165,6 +165,23 @@ class ExternalTrustRootTransitionLedger {
 
   async appendIfNext(envelope, expectedHead = null) {
     const current = await this.readHistory();
+    const candidateSequence = envelope?.payload?.transitionSequence;
+    if (Number.isSafeInteger(candidateSequence) && candidateSequence >= 1 &&
+        candidateSequence <= current.state.transitionSequence) {
+      const existingValue = await this.backend.get(keyForSequence(candidateSequence));
+      if (typeof existingValue !== 'string') {
+        fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CORRUPT', 'A transition already in verified history but cannot be read back');
+      }
+      const existing = parseEnvelope(existingValue);
+      if (canonicalJson(existing) !== canonicalJson(envelope)) {
+        fail('EVIDENCE_ROOT_TRANSITION_LEDGER_CONFLICT', 'An immutable transition already exists at this sequence with different content');
+      }
+      return {
+        created: false,
+        transitionSequence: candidateSequence,
+        transitionDigest: existing.transitionDigest
+      };
+    }
     const actualHead = current.head;
     if (canonicalJson(actualHead) !== canonicalJson(expectedHead)) {
       fail('EVIDENCE_ROOT_TRANSITION_LEDGER_HEAD_CONFLICT', 'Expected transition head is stale; reload and prepare a new signed transition');
