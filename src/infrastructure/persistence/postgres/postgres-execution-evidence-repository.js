@@ -58,6 +58,27 @@ class PostgresExecutionEvidenceRepository {
       const lockScope = `tenant:${tenantId.length}:${tenantId}|execution:${executionId.length}:${executionId}`;
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [lockScope]);
 
+      const chainResult = await client.query(
+        `SELECT tenant_id, execution_id, sequence, evidence_id, previous_hash, record_hash,
+                key_id, signature, recorded_at, record_payload
+         FROM execution_evidence
+         WHERE tenant_id=$1 AND execution_id=$2
+         ORDER BY sequence ASC`,
+        [tenantId, executionId]
+      );
+      let expectedSequence = 1;
+      let previousHash = null;
+      for (const row of chainResult.rows) {
+        const current = rowToEnvelope(row);
+        if (current.sequence !== expectedSequence || current.previousHash !== previousHash ||
+            current.evidenceId !== current.evidence?.id ||
+            !verifyEvidenceEnvelope(current, this.trustedKeys)) {
+          fail('EVIDENCE_CHAIN_INVALID', 'Existing evidence chain failed verification before append');
+        }
+        previousHash = current.recordHash;
+        expectedSequence += 1;
+      }
+
       const existing = await client.query(
         `SELECT tenant_id, execution_id, sequence, evidence_id, previous_hash, record_hash,
                 key_id, signature, recorded_at, record_payload
@@ -75,16 +96,10 @@ class PostgresExecutionEvidenceRepository {
         return envelope;
       }
 
-      const latest = await client.query(
-        `SELECT sequence, record_hash FROM execution_evidence
-         WHERE tenant_id=$1 AND execution_id=$2
-         ORDER BY sequence DESC LIMIT 1`,
-        [tenantId, executionId]
-      );
-      const sequence = latest.rows.length ? Number(latest.rows[0].sequence) + 1 : 1;
-      const previousHash = latest.rows.length ? latest.rows[0].record_hash : null;
+      const sequence = expectedSequence;
+      const previousHashForAppend = previousHash;
       const signed = signEvidenceEnvelope(
-        { tenantId, executionId, sequence, evidence, previousHash },
+        { tenantId, executionId, sequence, evidence, previousHash: previousHashForAppend },
         { keyId: this.keyId, privateKey: this.privateKey, recordedAt: this.now().toISOString() }
       );
       const result = await client.query(
@@ -94,7 +109,7 @@ class PostgresExecutionEvidenceRepository {
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          RETURNING tenant_id, execution_id, sequence, evidence_id, previous_hash, record_hash,
                    key_id, signature, recorded_at, record_payload`,
-        [tenantId, executionId, sequence, evidence.id, previousHash, signed.recordHash,
+        [tenantId, executionId, sequence, evidence.id, previousHashForAppend, signed.recordHash,
           signed.keyId, signed.signature, signed.recordedAt, evidence]
       );
       const envelope = rowToEnvelope(result.rows[0]);
