@@ -187,9 +187,26 @@ test('versioned snapshots require complete matching evidence in context and Agen
   );
 
   const mismatchedAgentObservation = structuredClone(snapshot);
-  mismatchedAgentObservation.agentState.observations[0].id = 'different-observation';
+  mismatchedAgentObservation.agentState.observations[0] = {
+    ...mismatchedAgentObservation.agentState.observations[0],
+    id: 'different-observation'
+  };
   assert.throws(
     () => ExecutionContext.restore(mismatchedAgentObservation),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
+  const missingAgentObservations = structuredClone(snapshot);
+  delete missingAgentObservations.agentState.observations;
+  assert.throws(
+    () => ExecutionContext.restore(missingAgentObservations),
+    error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
+  );
+
+  const missingAgentState = structuredClone(snapshot);
+  delete missingAgentState.agentState;
+  assert.throws(
+    () => ExecutionContext.restore(missingAgentState),
     error => error.code === 'EXECUTION_EVIDENCE_INTEGRITY_FAILED'
   );
 
