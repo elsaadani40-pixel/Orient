@@ -1,0 +1,148 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const {
+  signTrustManifest,
+  verifyTrustManifest,
+  verifyAndAcceptTrustManifest
+} = require('../../../../src/infrastructure/evidence/trusted-evidence-trust-manifest');
+
+function fixture() {
+  const root = crypto.generateKeyPairSync('ed25519');
+  const signing = crypto.generateKeyPairSync('ed25519');
+  const rootPrivateKey = root.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  const rootPublicKey = root.publicKey.export({ type: 'spki', format: 'pem' });
+  const signingPublicKey = signing.publicKey.export({ type: 'spki', format: 'pem' });
+  const trustedRootKeys = { 'offline-root-1': { publicKey: rootPublicKey } };
+  const create = (version, overrides = {}) => signTrustManifest({
+    version,
+    issuedAt: `2026-11-06T10:0${version}:00.000Z`,
+    keys: {
+      'evidence-key-1': {
+        publicKey: signingPublicKey,
+        validFrom: '2026-11-06T09:00:00.000Z'
+      },
+      ...overrides.keys
+    },
+    ...overrides.payload
+  }, { rootKeyId: 'offline-root-1', rootPrivateKey });
+  return { create, trustedRootKeys, rootPrivateKey };
+}
+
+function memoryVersionStore(initial = null) {
+  let state = initial;
+  return {
+    async read() {
+      return state && { ...state };
+    },
+    async compareAndSet(expected, next) {
+      if (JSON.stringify(state) !== JSON.stringify(expected)) return false;
+      state = { ...next };
+      return true;
+    },
+    current() {
+      return state && { ...state };
+    }
+  };
+}
+
+test('root-signed trust manifest verifies and exposes its trusted evidence keys', () => {
+  const f = fixture();
+  const manifest = f.create(1);
+  const verified = verifyTrustManifest(manifest, f.trustedRootKeys);
+  assert.equal(verified.version, 1);
+  assert.equal(verified.keys['evidence-key-1'].publicKey.length > 0, true);
+  assert.match(verified.digest, /^[a-f0-9]{64}$/);
+});
+
+test('trust manifest rejects payload tampering, unknown roots, and noncanonical signatures', () => {
+  const f = fixture();
+  const manifest = f.create(1);
+  assert.equal(verifyTrustManifest({ ...manifest, version: 2 }, f.trustedRootKeys), null);
+  assert.equal(verifyTrustManifest(manifest, {}), null);
+  assert.equal(verifyTrustManifest({ ...manifest, signature: 'not-base64!' }, f.trustedRootKeys), null);
+  assert.equal(verifyTrustManifest({ ...manifest, unexpected: true }, f.trustedRootKeys), null);
+});
+
+test('trust manifest requires valid Ed25519 keys and canonical timestamps', () => {
+  const f = fixture();
+  assert.throws(() => signTrustManifest({
+    version: 1,
+    issuedAt: 'not-a-date',
+    keys: { 'evidence-key-1': { publicKey: 'invalid' } }
+  }, { rootKeyId: 'offline-root-1', rootPrivateKey: f.rootPrivateKey }),
+  error => error.code === 'EVIDENCE_TRUST_MANIFEST_TIMESTAMP_INVALID');
+});
+
+test('monotonic trust store accepts newer versions and rejects rollback', async () => {
+  const f = fixture();
+  const store = memoryVersionStore();
+  const first = f.create(1);
+  const second = f.create(2);
+  await verifyAndAcceptTrustManifest(first, { trustedRootKeys: f.trustedRootKeys, versionStore: store });
+  await verifyAndAcceptTrustManifest(second, { trustedRootKeys: f.trustedRootKeys, versionStore: store });
+  assert.equal(store.current().version, 2);
+  await assert.rejects(
+    verifyAndAcceptTrustManifest(first, { trustedRootKeys: f.trustedRootKeys, versionStore: store }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_ROLLBACK'
+  );
+});
+
+test('monotonic trust store permits exact retry but rejects same-version content replacement', async () => {
+  const f = fixture();
+  const store = memoryVersionStore();
+  const manifest = f.create(1);
+  const accepted = await verifyAndAcceptTrustManifest(manifest, {
+    trustedRootKeys: f.trustedRootKeys,
+    versionStore: store
+  });
+  const retry = await verifyAndAcceptTrustManifest(manifest, {
+    trustedRootKeys: f.trustedRootKeys,
+    versionStore: store
+  });
+  assert.equal(retry.digest, accepted.digest);
+
+  const other = signTrustManifest({
+    version: 1,
+    issuedAt: '2026-11-06T10:01:00.000Z',
+    keys: {}
+  }, { rootKeyId: 'offline-root-1', rootPrivateKey: f.rootPrivateKey });
+  await assert.rejects(
+    verifyAndAcceptTrustManifest(other, { trustedRootKeys: f.trustedRootKeys, versionStore: store }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_VERSION_CONFLICT'
+  );
+});
+
+test('monotonic trust store fails closed on missing store and concurrent state change', async () => {
+  const f = fixture();
+  const manifest = f.create(1);
+  await assert.rejects(
+    verifyAndAcceptTrustManifest(manifest, { trustedRootKeys: f.trustedRootKeys }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_STORE_REQUIRED'
+  );
+  const racingStore = {
+    async read() { return null; },
+    async compareAndSet() { return false; }
+  };
+  await assert.rejects(
+    verifyAndAcceptTrustManifest(manifest, {
+      trustedRootKeys: f.trustedRootKeys,
+      versionStore: racingStore
+    }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_STATE_RACE'
+  );
+});
+
+test('monotonic trust store rejects malformed persisted state', async () => {
+  const f = fixture();
+  const store = memoryVersionStore({ version: 0, digest: 'bad' });
+  await assert.rejects(
+    verifyAndAcceptTrustManifest(f.create(1), {
+      trustedRootKeys: f.trustedRootKeys,
+      versionStore: store
+    }),
+    error => error.code === 'EVIDENCE_TRUST_MANIFEST_STORE_INVALID'
+  );
+});
