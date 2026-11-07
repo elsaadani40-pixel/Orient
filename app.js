@@ -568,6 +568,8 @@ start().catch((error) => {
 });
 
 const shutdownInOrder = require('./src/core/runtime/shutdown-in-order');
+const createProductionShutdownStages =
+  require('./src/core/runtime/production-shutdown-stages');
 
 function shutdown(signal) {
   logger.info(
@@ -580,34 +582,16 @@ function shutdown(signal) {
   }, config.shutdownGraceMs);
   forceExit.unref();
 
-  void shutdownInOrder({
-    // server.close stops accepting new requests and resolves after active
-    // connections have drained; only then may Runtime and persistence stop.
-    closeIngress: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
-    stopObservations: () => eventStoreSubscriber.stop(),
-    // Production async workers remain disabled until safety gate #189 passes.
+  // This is the same composition exercised by the shutdown integration test.
+  // Production workers remain deliberately absent until safety gate #189 passes.
+  void shutdownInOrder(createProductionShutdownStages({
+    server,
+    eventStoreSubscriber,
     stopWorkers: async () => {},
-    shutdownRuntime: () => runtime.shutdown({ cancelQueued: false }),
-    closePersistence: () => (
-      typeof persistenceRuntime.close === 'function'
-        ? persistenceRuntime.close()
-        : Promise.resolve()
-    ),
-    onError(stage, error) {
-      const labels = {
-        'http-ingress': 'HTTP ingress shutdown failed',
-        observations: 'Event subscriber shutdown failed',
-        workers: 'Worker shutdown failed',
-        runtime: 'Runtime shutdown failed',
-        persistence: 'Persistence shutdown failed'
-      };
-      logger.error(labels[stage] || 'Shutdown stage failed', {
-        stage,
-        code: error?.code || 'SHUTDOWN_STAGE_FAILED',
-        message: error?.message || String(error)
-      });
-    }
-  }).then((failures) => {
+    runtime,
+    persistenceRuntime,
+    logger
+  })).then((failures) => {
     clearTimeout(forceExit);
     process.exit(failures.length > 0 ? 1 : 0);
   }).catch((error) => {
