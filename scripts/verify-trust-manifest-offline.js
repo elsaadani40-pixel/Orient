@@ -17,24 +17,23 @@ function readBoundedRegularFile(filePath, maxBytes, codePrefix) {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     fail(codePrefix + '_PATH_REQUIRED', 'A file path is required');
   }
+  if (typeof fs.constants.O_NOFOLLOW !== 'number') {
+    fail(codePrefix + '_UNSAFE_FILESYSTEM', 'Safe input-file reads are unsupported on this platform');
+  }
 
   const absolutePath = path.resolve(filePath);
   let descriptor;
   try {
-    const before = fs.lstatSync(absolutePath, { bigint: true });
-    if (before.isSymbolicLink() || !before.isFile() || before.size < 1 || before.size > maxBytes) {
-      fail(codePrefix + '_FILE_INVALID', 'Input must be a regular non-symlink file within the configured size limit');
-    }
-    const noFollow = fs.constants.O_NOFOLLOW || 0;
-    descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | noFollow);
-    const after = fs.fstatSync(descriptor, { bigint: true });
-    if (!after.isFile() || after.dev !== before.dev || after.ino !== before.ino ||
-        after.size < 1n || after.size > BigInt(maxBytes)) {
-      fail(codePrefix + '_FILE_CHANGED', 'Input file changed while it was being opened');
+    // Open first without following the final path component, then validate
+    // the opened descriptor. Avoid a separate lstat/open pathname race.
+    descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    if (!opened.isFile() || opened.size < 1n || opened.size > BigInt(maxBytes)) {
+      fail(codePrefix + '_FILE_INVALID', 'Input must be a regular file within the configured size limit');
     }
 
-    // Bound allocation and reading, then verify the opened inode again after
-    // EOF. A file can grow or be modified after the initial fstat().
+    // Bound allocation and reading, then verify the same inode and metadata
+    // after EOF. A file can grow or be modified after the initial fstat().
     const buffer = Buffer.alloc(maxBytes + 1);
     try {
       let total = 0;
@@ -46,9 +45,9 @@ function readBoundedRegularFile(filePath, maxBytes, codePrefix) {
       }
       const afterRead = fs.fstatSync(descriptor, { bigint: true });
       if (total < 1 || total > maxBytes || afterRead.size !== BigInt(total) ||
-          afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
-          afterRead.nlink !== after.nlink || afterRead.mtimeNs !== after.mtimeNs ||
-          afterRead.ctimeNs !== after.ctimeNs) {
+          afterRead.dev !== opened.dev || afterRead.ino !== opened.ino ||
+          afterRead.nlink !== opened.nlink || afterRead.mtimeNs !== opened.mtimeNs ||
+          afterRead.ctimeNs !== opened.ctimeNs) {
         fail(codePrefix + '_FILE_CHANGED', 'Input file changed or exceeded its size limit while being read');
       }
       return Buffer.from(buffer.subarray(0, total));
@@ -57,12 +56,14 @@ function readBoundedRegularFile(filePath, maxBytes, codePrefix) {
     }
   } catch (error) {
     if (error && error.code && error.code.startsWith(codePrefix + '_')) throw error;
+    if (error?.code === 'ELOOP') {
+      fail(codePrefix + '_FILE_INVALID', 'Input must not be a symbolic link');
+    }
     fail(codePrefix + '_FILE_UNREADABLE', 'Unable to safely read input file');
   } finally {
     if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
-
 function readManifest(filePath) {
   const bytes = readBoundedRegularFile(filePath, MAX_MANIFEST_BYTES, 'TRUST_VERIFY_MANIFEST');
   try {
