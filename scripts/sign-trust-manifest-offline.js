@@ -35,39 +35,30 @@ function readPrivateKeyFile(filePath, {
   if (isWithinDirectory(absoluteRepoRoot, absolutePath)) {
     fail('TRUST_SIGNER_KEY_MUST_BE_OUTSIDE_REPOSITORY', 'The offline root private key must be stored outside the repository');
   }
+  if (typeof fs.constants.O_NOFOLLOW !== 'number') {
+    fail('TRUST_SIGNER_KEY_UNSAFE_FILESYSTEM', 'Safe private-key reads are unsupported on this platform');
+  }
 
   let descriptor;
-  let keyBytes;
   let bounded;
   try {
-    const before = fs.lstatSync(absolutePath, { bigint: true });
-    if (before.isSymbolicLink() || !before.isFile()) {
-      fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private key must be a regular non-symlink file');
+    // Open first with O_NOFOLLOW, then validate and read the exact descriptor.
+    // A separate pathname lstat would introduce a check/open race.
+    descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    if (!opened.isFile() || opened.size < 1n ||
+        opened.size > BigInt(MAX_PRIVATE_KEY_BYTES) || opened.nlink !== 1n) {
+      fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file must be a regular single-link file within the size limit');
     }
-    if (before.size < 1 || before.size > MAX_PRIVATE_KEY_BYTES || before.nlink !== 1n) {
-      fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file has an invalid size or link count');
-    }
-    if (platform !== 'win32' && typeof process.getuid === 'function' && before.uid !== BigInt(process.getuid())) {
+    if (platform !== 'win32' && typeof process.getuid === 'function' && opened.uid !== BigInt(process.getuid())) {
       fail('TRUST_SIGNER_KEY_OWNER_INVALID', 'The offline root private-key file must be owned by the signing user');
     }
-    if (platform !== 'win32' && (before.mode & 0o077n) !== 0n) {
+    if (platform !== 'win32' && (opened.mode & 0o077n) !== 0n) {
       fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file must not be accessible by group or other users (chmod 600)');
     }
 
-    const noFollow = fs.constants.O_NOFOLLOW || 0;
-    descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | noFollow);
-    const after = fs.fstatSync(descriptor, { bigint: true });
-    if (!after.isFile() || after.dev !== before.dev || after.ino !== before.ino) {
-      fail('TRUST_SIGNER_KEY_FILE_CHANGED', 'The offline root private-key file changed while it was being opened');
-    }
-    if (after.size < 1 || after.size > MAX_PRIVATE_KEY_BYTES || after.nlink !== 1n ||
-        (platform !== 'win32' && typeof process.getuid === 'function' && after.uid !== BigInt(process.getuid())) ||
-        (platform !== 'win32' && (after.mode & 0o077n) !== 0n)) {
-      fail('TRUST_SIGNER_KEY_PERMISSIONS_INVALID', 'The offline root private-key file permissions or size changed while opening');
-    }
     // Never use readFileSync(fd) for secret material: a file can grow after
-    // the metadata check and cause an unbounded allocation. Read at most
-    // MAX_PRIVATE_KEY_BYTES + 1 bytes, then re-check the opened inode.
+    // fstat and cause an unbounded allocation. Read at most max + 1 bytes.
     bounded = Buffer.alloc(MAX_PRIVATE_KEY_BYTES + 1);
     let total = 0;
     while (total < bounded.length) {
@@ -83,45 +74,47 @@ function readPrivateKeyFile(filePath, {
     }
     const afterRead = fs.fstatSync(descriptor, { bigint: true });
     if (total < 1 || total > MAX_PRIVATE_KEY_BYTES || afterRead.size !== BigInt(total) ||
-        afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
-        afterRead.nlink !== 1n ||
+        afterRead.dev !== opened.dev || afterRead.ino !== opened.ino ||
+        afterRead.nlink !== opened.nlink || afterRead.mtimeNs !== opened.mtimeNs ||
+        afterRead.ctimeNs !== opened.ctimeNs ||
         (platform !== 'win32' && typeof process.getuid === 'function' && afterRead.uid !== BigInt(process.getuid())) ||
         (platform !== 'win32' && (afterRead.mode & 0o077n) !== 0n)) {
-      bounded.fill(0);
       fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private-key file changed or exceeded its size limit while reading');
     }
-    keyBytes = Buffer.from(bounded.subarray(0, total));
-    bounded.fill(0);
-    return keyBytes;
+    return Buffer.from(bounded.subarray(0, total));
   } catch (error) {
     if (error && error.code && error.code.startsWith('TRUST_SIGNER_')) throw error;
+    if (error?.code === 'ELOOP') {
+      fail('TRUST_SIGNER_KEY_FILE_INVALID', 'The offline root private key must not be a symbolic link');
+    }
     fail('TRUST_SIGNER_KEY_FILE_UNREADABLE', 'Unable to safely read the offline root private-key file');
   } finally {
     if (bounded) bounded.fill(0);
     if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
-
 function readManifestFile(filePath) {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     fail('TRUST_SIGNER_INPUT_REQUIRED', 'A manifest input file path is required');
   }
+  if (typeof fs.constants.O_NOFOLLOW !== 'number') {
+    fail('TRUST_SIGNER_INPUT_UNSAFE_FILESYSTEM', 'Safe manifest reads are unsupported on this platform');
+  }
+
   const absolutePath = path.resolve(filePath);
   let descriptor;
   let bytes;
+  let bounded;
   try {
-    const before = fs.lstatSync(absolutePath, { bigint: true });
-    if (before.isSymbolicLink() || !before.isFile() ||
-        before.size < 1n || before.size > BigInt(MAX_MANIFEST_BYTES)) {
-      fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must be a regular non-symlink file no larger than 1 MiB');
-    }
-    descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    // Open first without following the final path component; validate the
+    // opened inode rather than a pathname checked in a separate operation.
+    descriptor = fs.openSync(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     const opened = fs.fstatSync(descriptor, { bigint: true });
-    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino ||
-        opened.size < 1n || opened.size > BigInt(MAX_MANIFEST_BYTES)) {
-      fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input changed while it was being opened');
+    if (!opened.isFile() || opened.size < 1n ||
+        opened.size > BigInt(MAX_MANIFEST_BYTES)) {
+      fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must be a regular file no larger than 1 MiB');
     }
-    const bounded = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
+    bounded = Buffer.alloc(MAX_MANIFEST_BYTES + 1);
     let total = 0;
     while (total < bounded.length) {
       const read = fs.readSync(descriptor, bounded, total,
@@ -131,13 +124,12 @@ function readManifestFile(filePath) {
     }
     const afterRead = fs.fstatSync(descriptor, { bigint: true });
     if (total < 1 || total > MAX_MANIFEST_BYTES || afterRead.size !== BigInt(total) ||
-        afterRead.dev !== before.dev || afterRead.ino !== before.ino ||
-        afterRead.mtimeNs !== opened.mtimeNs || afterRead.ctimeNs !== opened.ctimeNs) {
-      bounded.fill(0);
+        afterRead.dev !== opened.dev || afterRead.ino !== opened.ino ||
+        afterRead.nlink !== opened.nlink || afterRead.mtimeNs !== opened.mtimeNs ||
+        afterRead.ctimeNs !== opened.ctimeNs) {
       fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input changed or exceeded its size limit while reading');
     }
     bytes = Buffer.from(bounded.subarray(0, total));
-    bounded.fill(0);
     try {
       return JSON.parse(bytes.toString('utf8'));
     } catch {
@@ -145,13 +137,16 @@ function readManifestFile(filePath) {
     }
   } catch (error) {
     if (error && error.code && error.code.startsWith('TRUST_SIGNER_')) throw error;
+    if (error?.code === 'ELOOP') {
+      fail('TRUST_SIGNER_INPUT_INVALID', 'The trust manifest input must not be a symbolic link');
+    }
     fail('TRUST_SIGNER_INPUT_UNREADABLE', 'Unable to safely read the trust manifest input file');
   } finally {
     if (bytes) bytes.fill(0);
+    if (bounded) bounded.fill(0);
     if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
-
 function writeCreateOnly(filePath, content) {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     fail('TRUST_SIGNER_OUTPUT_REQUIRED', 'A signed manifest output file path is required');
