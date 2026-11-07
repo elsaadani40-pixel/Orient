@@ -245,3 +245,50 @@ test('owner auth verifies session identity only while that session is active', a
   assert.equal(auth.isActiveSession(second.sessionId), false, 'session expires at its expiry boundary');
   assert.equal(auth.sessions.size, 0, 'expired sessions are pruned');
 });
+
+
+test('owner auth rejects malformed and duplicate persisted IP failure records', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-failure-state-'));
+  const stateFile = path.join(directory, 'state.json');
+  const password = 'a-strong-owner-password-2026';
+  const validFailure = {
+    ip: '192.0.2.200',
+    count: 1,
+    windowStartedAt: 1000,
+    blockedUntil: 0
+  };
+  const invalidCases = [
+    { name: 'empty IP', failures: [{ ...validFailure, ip: '' }] },
+    { name: 'oversized IP', failures: [{ ...validFailure, ip: 'x'.repeat(65) }] },
+    { name: 'zero failure count', failures: [{ ...validFailure, count: 0 }] },
+    { name: 'excessive failure count', failures: [{ ...validFailure, count: 100001 }] },
+    { name: 'future window start', failures: [{ ...validFailure, windowStartedAt: 1501 }] },
+    { name: 'negative window start', failures: [{ ...validFailure, windowStartedAt: -1 }] },
+    { name: 'negative block expiry', failures: [{ ...validFailure, blockedUntil: -1 }] },
+    { name: 'block expiry beyond lockout horizon', failures: [{ ...validFailure, blockedUntil: 11501 }] },
+    { name: 'duplicate IP entries', failures: [validFailure, { ...validFailure, count: 2 }] }
+  ];
+
+  try {
+    for (const scenario of invalidCases) {
+      fs.writeFileSync(stateFile, JSON.stringify({
+        version: 1,
+        sessions: [],
+        failures: scenario.failures
+      }), { mode: 0o600 });
+
+      assert.throws(
+        () => new OwnerAuthService({
+          password,
+          stateFile,
+          lockoutMs: 10000,
+          now: () => 1500
+        }),
+        error => error.code === 'OWNER_AUTH_STATE_CORRUPT',
+        scenario.name
+      );
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
