@@ -186,10 +186,9 @@ class ProjectOperationReceiptStore {
       }
       if (error.code === 'PROJECT_OPERATION_RECEIPT_CORRUPT' ||
           error.code === 'PROJECT_OPERATION_RECEIPT_UNSAFE_FILESYSTEM') throw error;
-      const invalid = new Error('Project operation receipt could not be read safely');
-      invalid.code = 'PROJECT_OPERATION_RECEIPT_CORRUPT';
-      invalid.cause = error;
-      throw invalid;
+      // Preserve operational failures (EACCES, EIO, EMFILE, etc.) rather than
+      // misreporting them as corrupt receipt data.
+      throw error;
     } finally {
       if (descriptor !== undefined) {
         try { fs.closeSync(descriptor); } catch {}
