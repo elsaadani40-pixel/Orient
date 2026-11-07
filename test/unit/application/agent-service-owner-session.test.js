@@ -45,7 +45,7 @@ test('forwards the server-authenticated owner context into runtime execution', a
     tenantId: 'tenant-a',
     persistence: {
       idempotency: {
-        begin: async () => ({ created: true, key: 'idempotency-key' }),
+        begin: async args => ({ created: true, key: 'idempotency-key', record: { executionId: args.executionId } }),
         complete: async () => {},
         fail: async () => {}
       }
@@ -57,7 +57,8 @@ test('forwards the server-authenticated owner context into runtime execution', a
     execute: async (goal, options) => {
       assert.equal(goal, 'run a task');
       forwardedContext = options.ownerSessionContext;
-      return { execution: { executionId: 'execution-owner-session' } };
+      assert.match(options.executionId, /^[0-9a-f-]{36}$/i);
+      return { execution: { executionId: options.executionId } };
     },
     getExecutionStatus: async executionId => ({
       executionId,
@@ -74,5 +75,5 @@ test('forwards the server-authenticated owner context into runtime execution', a
   });
 
   assert.strictEqual(forwardedContext, ownerSessionContext);
-  assert.equal(result.task.id, 'execution-owner-session');
+  assert.match(result.task.id, /^[0-9a-f-]{36}$/i);
 });
