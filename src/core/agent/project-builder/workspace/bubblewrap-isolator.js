@@ -324,16 +324,18 @@ class BubblewrapIsolator {
   terminate(child) {
     if (child?.orientUnsandboxed === true) {
       if (this.platform === 'win32') {
-        try { child.kill('SIGTERM'); } catch {}
         return new Promise(resolve => {
           let killer;
           const systemRoot = this.environment?.SystemRoot || this.environment?.WINDIR;
           if (!systemRoot || !Number.isInteger(child.pid) || child.pid <= 0) {
+            try { child.kill('SIGTERM'); } catch {}
             resolve(false);
             return;
           }
           const taskkillPath = path.win32.join(systemRoot, 'System32', 'taskkill.exe');
           try {
+            // Kill the tree while its root process still exists; terminating the
+            // parent first can make descendants undiscoverable to taskkill /T.
             killer = this.spawnProcess(taskkillPath, [
               '/PID', String(child.pid), '/T', '/F'
             ], {
@@ -346,11 +348,20 @@ class BubblewrapIsolator {
               }
             });
           } catch {
+            try { child.kill('SIGTERM'); } catch {}
             resolve(false);
             return;
           }
-          killer.once('error', () => resolve(false));
-          killer.once('close', code => resolve(code === 0));
+          killer.once('error', () => {
+            try { child.kill('SIGTERM'); } catch {}
+            resolve(false);
+          });
+          killer.once('close', code => {
+            if (code !== 0) {
+              try { child.kill('SIGTERM'); } catch {}
+            }
+            resolve(code === 0);
+          });
         });
       }
 
