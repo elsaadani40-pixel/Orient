@@ -95,3 +95,64 @@ test('mission event idempotency never returns another tenant event', t => {
   assert.deepEqual(repository.findByAggregateId('tenant-b-mission', { tenantId: 'tenant-b' }), []);
   assert.equal(repository.findByAggregateId('tenant-a-mission', { tenantId: 'tenant-a' })[0].type, 'tenant-a.secret');
 });
+
+
+test('append rejects event-id collisions owned by another tenant', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-append-tenant-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  repository.append({
+    id: 'shared-append-id',
+    type: 'tenant-a.event',
+    data: {}
+  }, { tenantId: 'tenant-a' });
+
+  assert.throws(
+    () => repository.append({
+      id: 'shared-append-id',
+      type: 'tenant-b.event',
+      data: {}
+    }, { tenantId: 'tenant-b' }),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+  assert.equal(repository.findAll({ tenantId: 'tenant-a' })[0].type, 'tenant-a.event');
+  assert.deepEqual(repository.findAll({ tenantId: 'tenant-b' }), []);
+});
+
+test('appendMany rejects event-id collisions owned by another tenant atomically', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-append-many-tenant-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  repository.appendMany([{
+    id: 'shared-batch-id',
+    type: 'tenant-a.event',
+    data: {}
+  }], { tenantId: 'tenant-a' });
+
+  assert.throws(
+    () => repository.appendMany([
+      { id: 'tenant-b-new-id', type: 'tenant-b.new', data: {} },
+      { id: 'shared-batch-id', type: 'tenant-b.collision', data: {} }
+    ], { tenantId: 'tenant-b' }),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+  assert.deepEqual(repository.findAll({ tenantId: 'tenant-b' }), []);
+  assert.deepEqual(repository.findAll({ tenantId: 'tenant-a' }).map(event => event.type), ['tenant-a.event']);
+});
+
+test('appendMany rejects duplicate ids crossing tenants within one batch', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-batch-collision-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  assert.throws(
+    () => repository.appendMany([
+      { id: 'same-batch-id', type: 'tenant-a.event', data: { tenantId: 'tenant-a' } },
+      { id: 'same-batch-id', type: 'tenant-b.event', data: { tenantId: 'tenant-b' } }
+    ]),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+  assert.equal(repository.count(), 0);
+});
