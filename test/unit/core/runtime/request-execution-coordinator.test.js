@@ -617,6 +617,81 @@ test('resume fails closed before tool execution when a pending approval has no d
 });
 
 
+test('resume rejects a caller-supplied approval id without a durable approved decision', async () => {
+  const ExecutionContext = require('../../../../src/core/execution/execution-context');
+  const context = new ExecutionContext({
+    requestId: 'request-forged-approval',
+    input: 'perform guarded write',
+    executionId: 'execution-forged-approval',
+    tenantId: 'tenant-a'
+  });
+  context.start();
+  context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
+  context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+  context.setPlan({
+    intent: 'test.forged-approval',
+    steps: [{ step: 1, tool: 'danger.write', input: {}, dependsOn: null }]
+  });
+  context.metadata.planRevision = 1;
+  context.metadata.pendingStepInputs = { 1: { approvalRequired: true } };
+  context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+
+  let executionAttempts = 0;
+  let leaseReleases = 0;
+  let reusableLookupCalls = 0;
+  let approvalLookupArgs = null;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {
+      run: async () => { executionAttempts += 1; }
+    },
+    recoveryCoordinator: { fail: async () => { throw new Error('recovery must not run'); } },
+    persistence: {
+      executions: { findById: async () => null },
+      checkpoints: {
+        findLatest: async () => ({
+          checkpointId: 'checkpoint-forged-approval',
+          sequence: 3,
+          snapshot: context.snapshot(),
+          snapshotSha256: null
+        }),
+        acquireResumeLease: async () => ({ leaseId: 'lease-forged-approval' }),
+        renewResumeLease: async () => ({ leaseId: 'lease-forged-approval' }),
+        releaseResumeLease: async () => { leaseReleases += 1; }
+      }
+    },
+    persistenceCoordinator: {},
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    approvalService: {
+      getApprovedForExecution: async args => {
+        approvalLookupArgs = args;
+        return null;
+      },
+      findReusable: async () => { reusableLookupCalls += 1; return null; }
+    },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  await assert.rejects(
+    coordinator.resume('execution-forged-approval', {
+      approval: { approvalId: 'caller-supplied-unverified-id' }
+    }),
+    error => error.code === 'APPROVAL_NOT_APPROVED'
+  );
+
+  assert.deepEqual(approvalLookupArgs, {
+    approvalId: 'caller-supplied-unverified-id',
+    executionId: 'execution-forged-approval',
+    tenantId: 'tenant-a'
+  });
+  assert.equal(executionAttempts, 0, 'unverified approval must never reach tool execution');
+  assert.equal(reusableLookupCalls, 0, 'explicit approval IDs must be verified, not replaced by a reusable lookup');
+  assert.equal(leaseReleases, 1, 'the resume lease must be released after rejecting an unverified approval');
+});
+
+
 test('rejects an inactive owner session before creating a durable execution', async () => {
   let persisted = false;
   let planned = false;
