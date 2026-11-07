@@ -156,3 +156,35 @@ test('appendMany rejects duplicate ids crossing tenants within one batch', t => 
   );
   assert.equal(repository.count(), 0);
 });
+
+
+test('append reports a stable tenant mismatch code for caller-supplied tenant metadata', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-append-mismatch-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  assert.throws(
+    () => repository.append({
+      id: 'mismatched-append',
+      type: 'tenant-b.event',
+      data: { tenantId: 'tenant-b' }
+    }, { tenantId: 'tenant-a' }),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+  assert.equal(repository.count(), 0);
+});
+
+test('appendMany reports a stable tenant mismatch code before writing any event', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-many-mismatch-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  assert.throws(
+    () => repository.appendMany([
+      { id: 'valid-event', type: 'tenant-a.event', data: {} },
+      { id: 'mismatched-event', type: 'tenant-b.event', data: { tenantId: 'tenant-b' } }
+    ], { tenantId: 'tenant-a' }),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+  assert.equal(repository.count(), 0);
+});
