@@ -14,6 +14,21 @@ function digest(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+const MAX_INTENT_BYTES = 4 * 1024;
+const MAX_RECEIPT_BYTES = 1024 * 1024;
+
+function readBoundedFile(fd, maxBytes, code, label) {
+  const buffer = Buffer.allocUnsafe(maxBytes + 1);
+  let total = 0;
+  while (total < buffer.length) {
+    const count = fs.readSync(fd, buffer, total, buffer.length - total, null);
+    if (count === 0) break;
+    total += count;
+  }
+  if (total > maxBytes) fail(label + ' exceeds its maximum permitted size', code);
+  return buffer.subarray(0, total).toString('utf8');
+}
+
 function validIdentity(value) {
   return value && typeof value.operationId === 'string' &&
     value.operationId.length > 0 && value.operationId.length <= 256 &&
@@ -103,7 +118,10 @@ class ProjectOperationReceiptStore {
       if (!openedStats.isFile()) {
         fail('Project operation intent is not a regular file', 'PROJECT_OPERATION_INTENT_CORRUPT');
       }
-      intent = JSON.parse(fs.readFileSync(fd, 'utf8'));
+      if (openedStats.size > MAX_INTENT_BYTES) {
+        fail('Project operation intent exceeds its maximum permitted size', 'PROJECT_OPERATION_INTENT_CORRUPT');
+      }
+      intent = JSON.parse(readBoundedFile(fd, MAX_INTENT_BYTES, 'PROJECT_OPERATION_INTENT_CORRUPT', 'Project operation intent'));
     } catch (error) {
       if (error.code === 'ENOENT') return null;
       if (error.code === 'ELOOP') {
@@ -199,7 +217,10 @@ class ProjectOperationReceiptStore {
       if (!openedStats.isFile()) {
         fail('Project operation receipt is not a regular file', 'PROJECT_OPERATION_RECEIPT_CORRUPT');
       }
-      raw = fs.readFileSync(descriptor, 'utf8');
+      if (openedStats.size > MAX_RECEIPT_BYTES) {
+        fail('Project operation receipt exceeds its maximum permitted size', 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+      }
+      raw = readBoundedFile(descriptor, MAX_RECEIPT_BYTES, 'PROJECT_OPERATION_RECEIPT_CORRUPT', 'Project operation receipt');
     } catch (error) {
       if (error.code === 'ENOENT') return null;
       if (error.code === 'ELOOP') {

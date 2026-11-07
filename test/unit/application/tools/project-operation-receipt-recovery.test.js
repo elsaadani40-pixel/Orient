@@ -287,6 +287,19 @@ test('a receipted operation ID is not replayed when the workspace has drifted', 
 });
 
 
+
+test('intent and receipt reads reject oversized files with bounded descriptor reads', async () => {
+  await withFixture(async ({ store }) => {
+    const intentIdentity = { operationId: 'oversized-intent', tenantId: 'tenant-a' };
+    fsSync.writeFileSync(store.intentPath(intentIdentity.operationId, intentIdentity.tenantId), 'x'.repeat(4 * 1024 + 1), { mode: 0o600 });
+    assert.throws(() => store.readIntent(intentIdentity), error => error?.code === 'PROJECT_OPERATION_INTENT_CORRUPT');
+
+    const receiptIdentity = { operationId: 'oversized-receipt', tenantId: 'tenant-a' };
+    fsSync.writeFileSync(store.receiptPath(receiptIdentity.operationId, receiptIdentity.tenantId), 'x'.repeat(1024 * 1024 + 1), { mode: 0o600 });
+    assert.throws(() => store.read(receiptIdentity), error => error?.code === 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+  });
+});
+
 test('receipt reads reject symbolic links without following them', async () => {
   await withFixture(async ({ store }) => {
     if (typeof require('node:fs').constants.O_NOFOLLOW !== 'number') {
