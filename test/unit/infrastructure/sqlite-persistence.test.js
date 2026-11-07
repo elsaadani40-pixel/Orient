@@ -159,7 +159,7 @@ test('SQLite checkpoint sequencing remains monotonic and schema migration marker
   first.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 2 });
 
   const migrationRows = first.db.query('SELECT version FROM schema_migrations ORDER BY version ASC;');
-  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1]);
+  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1, 2]);
   assert.equal(first.checkpoints.findLatest('exec-seq-1').sequence, 2);
 
   const second = new SqlitePersistence({ filePath });
@@ -185,4 +185,96 @@ test('sqlite transactions roll back all statements after an injected failure', (
 
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
   db.close();
+});
+
+test('SQLite mission events allocate tenant-scoped aggregate sequences and reject identity reuse', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-mission-events-'));
+  const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+  try {
+    const firstTimestamp = '2026-11-07T12:00:00.000Z';
+    const first = persistence.events.appendMissionEvent({
+      id: 'mission-event-1', aggregateId: 'workflow-shared', executionId: 'workflow-shared',
+      type: 'workflow.created', timestamp: firstTimestamp, data: { tenantId: 'tenant-a' }
+    }, { tenantId: 'tenant-a' });
+    const second = persistence.events.appendMissionEvent({
+      id: 'mission-event-2', aggregateId: 'workflow-shared', executionId: 'workflow-shared',
+      type: 'workflow.state.changed', data: { tenantId: 'tenant-a' }
+    }, { tenantId: 'tenant-a' });
+    const replay = persistence.events.appendMissionEvent({
+      id: 'mission-event-1', aggregateId: 'workflow-shared', executionId: 'workflow-shared',
+      type: 'workflow.created', timestamp: firstTimestamp, data: { tenantId: 'tenant-a' }
+    }, { tenantId: 'tenant-a' });
+    const isolated = persistence.events.appendMissionEvent({
+      id: 'mission-event-b1', aggregateId: 'workflow-shared', executionId: 'workflow-shared',
+      type: 'workflow.created', data: { tenantId: 'tenant-b' }
+    }, { tenantId: 'tenant-b' });
+
+    assert.equal(first.sequence, 1);
+    assert.equal(second.sequence, 2);
+    assert.equal(replay.sequence, 1);
+    assert.throws(
+      () => persistence.events.appendMissionEvent({
+        id: 'mission-event-1', aggregateId: 'workflow-shared', executionId: 'workflow-shared',
+        type: 'workflow.step.failed', timestamp: firstTimestamp, data: { tenantId: 'tenant-a' }
+      }, { tenantId: 'tenant-a' }),
+      error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+    );
+    assert.equal(isolated.sequence, 1);
+    assert.deepEqual(
+      persistence.events.findByAggregateId('workflow-shared', { tenantId: 'tenant-a' }).map(event => event.sequence),
+      [1, 2]
+    );
+    assert.deepEqual(
+      persistence.events.findByAggregateId('workflow-shared', { tenantId: 'tenant-b' }).map(event => event.sequence),
+      [1]
+    );
+    assert.throws(
+      () => persistence.events.appendMissionEvent({
+        id: 'mission-event-1', aggregateId: 'workflow-shared', type: 'workflow.created',
+        data: { tenantId: 'tenant-b' }
+      }, { tenantId: 'tenant-b' }),
+      error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+    );
+    assert.throws(
+      () => persistence.events.appendMany([
+        { id: 'batch-shared-id', type: 'test', data: { tenantId: 'tenant-a' } },
+        { id: 'batch-shared-id', type: 'test', data: { tenantId: 'tenant-b' } }
+      ]),
+      error => error.code === 'EVENT_TENANT_MISMATCH'
+    );
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite pending publication lookup is bounded and tenant-scoped', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-pending-outbox-'));
+  const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+  try {
+    persistence.workflows.save({
+      workflowId: 'pending-a', tenantId: 'tenant-a', state: 'WAITING',
+      updatedAt: '2026-11-07T10:00:00.000Z',
+      metadata: { approvalBlocked: true, pendingPublications: [{ eventId: 'event-a' }] }
+    }, 'tenant-a');
+    persistence.workflows.save({
+      workflowId: 'pending-b', tenantId: 'tenant-b', state: 'WAITING',
+      updatedAt: '2026-11-07T10:00:01.000Z',
+      metadata: { approvalBlocked: true, pendingPublications: [{ eventId: 'event-b' }] }
+    }, 'tenant-b');
+    persistence.workflows.save({
+      workflowId: 'no-pending', tenantId: 'tenant-a', state: 'WAITING',
+      updatedAt: '2026-11-07T10:00:02.000Z',
+      metadata: { approvalBlocked: true, pendingPublications: [] }
+    }, 'tenant-a');
+    const pending = persistence.workflows.findPendingPublications({ tenantId: 'tenant-a', limit: 1 });
+    assert.deepEqual(pending.map(item => item.workflowId), ['pending-a']);
+    const ack = persistence.workflows.acknowledgePendingPublications('pending-a', 'tenant-a', ['event-a']);
+    assert.equal(ack.acknowledged, 1);
+    assert.equal(ack.revision, 1);
+    assert.deepEqual(persistence.workflows.findPendingPublications({ tenantId: 'tenant-a' }), []);
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

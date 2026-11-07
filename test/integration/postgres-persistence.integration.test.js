@@ -14,7 +14,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -905,5 +905,76 @@ test('PostgreSQL owner work profile persists validated partial updates and isola
     );
   } finally {
     await pool.query('DELETE FROM owner_work_profiles WHERE owner_id = ANY($1::text[])', [[ownerId, otherOwnerId]]);
+  }
+});
+
+test('PostgreSQL mission events allocate concurrent tenant-scoped aggregate sequences and replay idempotently', async () => {
+  const aggregateId = 'mission-pg-concurrency-' + Date.now();
+  const tenantA = 'mission-tenant-a-' + Date.now();
+  const tenantB = 'mission-tenant-b-' + Date.now();
+  try {
+    const writes = await Promise.all(Array.from({ length: 8 }, (_, index) =>
+      persistence.events.appendMissionEvent({
+        id: aggregateId + '-event-' + index,
+        aggregateId,
+        executionId: aggregateId,
+        type: index === 0 ? 'workflow.created' : 'workflow.state.changed',
+        timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+        data: { tenantId: tenantA, index }
+      }, { tenantId: tenantA })
+    ));
+    assert.deepEqual(writes.map(event => event.sequence).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8]);
+
+    const replay = await persistence.events.appendMissionEvent({
+      id: aggregateId + '-event-0', aggregateId, executionId: aggregateId,
+      type: 'workflow.created', timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, 0)).toISOString(), data: { tenantId: tenantA, index: 0 }
+    }, { tenantId: tenantA });
+    assert.equal(replay.sequence, writes.find(event => event.id === aggregateId + '-event-0').sequence);
+
+    const isolated = await persistence.events.appendMissionEvent({
+      id: aggregateId + '-tenant-b-event', aggregateId, executionId: aggregateId,
+      type: 'workflow.created', data: { tenantId: tenantB }
+    }, { tenantId: tenantB });
+    assert.equal(isolated.sequence, 1);
+    assert.deepEqual(
+      (await persistence.events.findByAggregateId(aggregateId, { tenantId: tenantA })).map(event => event.sequence),
+      [1, 2, 3, 4, 5, 6, 7, 8]
+    );
+    assert.deepEqual(
+      (await persistence.events.findByAggregateId(aggregateId, { tenantId: tenantB })).map(event => event.sequence),
+      [1]
+    );
+    await assert.rejects(
+      () => persistence.events.appendMissionEvent({
+        id: aggregateId + '-event-0', aggregateId, type: 'workflow.created',
+        data: { tenantId: tenantB }
+      }, { tenantId: tenantB }),
+      error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+    );
+  } finally {
+    await pool.query('DELETE FROM events WHERE aggregate_id=$1 AND tenant_id = ANY($2::text[])', [aggregateId, [tenantA, tenantB]]);
+  }
+});
+
+test('PostgreSQL pending publication lookup is indexed and tenant-scoped on a real server', async () => {
+  const workflowId = 'pending-publication-' + Date.now();
+  const tenantId = 'tenant-pending-publication-' + Date.now();
+  try {
+    await persistence.workflows.save({
+      workflowId, tenantId, state: 'WAITING', updatedAt: new Date().toISOString(),
+      metadata: { approvalBlocked: true, pendingPublications: [{ eventId: workflowId + '-event' }] },
+      toJSON() { return this; }
+    }, tenantId);
+    const pending = await persistence.workflows.findPendingPublications({ tenantId, limit: 5 });
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].workflowId, workflowId);
+    assert.equal(pending[0].metadata.pendingPublications[0].eventId, workflowId + '-event');
+    assert.deepEqual(await persistence.workflows.findPendingPublications({ tenantId: tenantId + '-other', limit: 5 }), []);
+    const ack = await persistence.workflows.acknowledgePendingPublications(workflowId, tenantId, [workflowId + '-event']);
+    assert.equal(ack.acknowledged, 1);
+    assert.equal(ack.revision, 1);
+    assert.deepEqual(await persistence.workflows.findPendingPublications({ tenantId, limit: 5 }), []);
+  } finally {
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
   }
 });

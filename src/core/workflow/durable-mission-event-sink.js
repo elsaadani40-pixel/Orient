@@ -1,9 +1,11 @@
 const crypto = require('crypto');
 
 const TYPE_MAP = Object.freeze({
+  'workflow.state.changed': 'workflow.state.changed',
   'workflow.step.started': 'workflow.step.running',
   'workflow.step.completed': 'workflow.step.completed',
   'workflow.step.failed': 'workflow.step.failed',
+  'workflow.approval.required': 'workflow.approval.required',
   'workflow.retry.scheduled': 'workflow.step.retry',
   'workflow.recovered': 'workflow.recovered',
   'workflow.compensation.started': 'workflow.compensation.started',
@@ -23,29 +25,29 @@ class DurableMissionEventSink {
     this.clock = clock;
   }
 
-  _event(instance, type, data = {}) {
+  _event(instance, type, data = {}, eventId = null, timestamp = null) {
     return {
-      id: crypto.randomUUID(),
+      id: eventId || crypto.randomUUID(),
       aggregateId: instance.workflowId,
       executionId: instance.workflowId,
       type,
-      timestamp: new Date(this.clock()).toISOString(),
+      timestamp: timestamp || new Date(this.clock()).toISOString(),
       data: { ...data, tenantId: instance.tenantId || this.tenantId }
     };
   }
 
-  append(instance, type, data = {}, { persist = true } = {}) {
-    const event = this._event(instance, type, data);
+  async append(instance, type, data = {}, { persist = true, eventId = null, timestamp = null } = {}) {
+    const event = this._event(instance, type, data, eventId, timestamp);
     let persisted;
     try {
-      persisted = this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
+      persisted = await this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
     } catch (error) {
       error.code = error.code || 'MISSION_EVENT_PERSISTENCE_FAILED';
       throw error;
     }
     if (persist && this.workflowRepository?.save) {
       try {
-        this.workflowRepository.save(instance);
+        await this.workflowRepository.save(instance);
       } catch (error) {
         error.code = error.code || 'MISSION_STATE_PERSISTENCE_FAILED_AFTER_EVENT';
         error.missionEventId = persisted.id;
@@ -56,7 +58,7 @@ class DurableMissionEventSink {
     return persisted;
   }
 
-  recordCreated(instance) {
+  async recordCreated(instance) {
     return this.append(instance, 'workflow.created', {
       workflowId: instance.workflowId,
       tenantId: instance.tenantId,
@@ -67,11 +69,11 @@ class DurableMissionEventSink {
     }, { persist: false });
   }
 
-  recordState(instance, from, to) {
+  async recordState(instance, from, to) {
     return this.append(instance, 'workflow.state.changed', { from, to });
   }
 
-  recordWorkerEvent(instance, event) {
+  async recordWorkerEvent(instance, event, { persist = true } = {}) {
     const type = TYPE_MAP[event?.type];
     if (!type) return null;
     const payload = event.payload || {};
@@ -86,11 +88,11 @@ class DurableMissionEventSink {
       ...(type === 'workflow.step.running' ? {
         attempt: instance.steps[payload.stepId]?.attempts ?? payload.attempt ?? 0
       } : {})
-    });
+    }, { eventId: event.eventId || null, timestamp: event.timestamp || null, persist });
   }
 
-  reconstruct(workflowId, tenantId = this.tenantId) {
-    const events = this.eventRepository.findByAggregateId(workflowId, { tenantId });
+  async reconstruct(workflowId, tenantId = this.tenantId) {
+    const events = await this.eventRepository.findByAggregateId(workflowId, { tenantId });
     if (!events.length) return null;
     const Projection = require('./mission-event-projection');
     return new Projection({ clock: this.clock }).rebuild(events);

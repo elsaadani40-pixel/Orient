@@ -44,6 +44,54 @@ class SqliteWorkflowRepository {
     return this.db.query(sql, tenantId ? [tenantId] : []).map(row => JSON.parse(row.payload));
   }
 
+  findPendingPublications({ tenantId = null, limit = 100 } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 500)) : 100;
+    const clauses = [
+      "json_extract(payload, '$.metadata.approvalBlocked') = 1",
+      "json_array_length(COALESCE(json_extract(payload, '$.metadata.pendingPublications'), '[]')) > 0"
+    ];
+    const params = [];
+    if (tenantId) { clauses.push('tenant_id = ?'); params.push(tenantId); }
+    params.push(boundedLimit);
+    const rows = this.db.query(
+      'SELECT payload FROM workflows WHERE ' + clauses.join(' AND ') + ' ORDER BY updated_at ASC LIMIT ?',
+      params
+    );
+    return rows.map(row => JSON.parse(row.payload));
+  }
+
+  acknowledgePendingPublications(workflowId, tenantId, eventIds = []) {
+    if (!workflowId || !tenantId || !Array.isArray(eventIds) || eventIds.some(id => typeof id !== 'string' || !id)) {
+      throw new TypeError('workflowId, tenantId, and eventIds are required');
+    }
+    const row = this.db.query(
+      'SELECT payload FROM workflows WHERE workflow_id=? AND tenant_id=? LIMIT 1',
+      [workflowId, tenantId]
+    )[0];
+    if (!row) throw Object.assign(new Error('Workflow not found for outbox acknowledgement'), { code: 'WORKFLOW_NOT_FOUND' });
+    const current = JSON.parse(row.payload);
+    const pending = Array.isArray(current.metadata?.pendingPublications) ? current.metadata.pendingPublications : [];
+    const acknowledged = new Set(eventIds);
+    const remaining = pending.filter(event => !acknowledged.has(event.eventId));
+    const count = pending.length - remaining.length;
+    if (!count) return { acknowledged: 0, pending: remaining, revision: Number(current.checkpoint?.revision || 0), lastSavedAt: current.checkpoint?.lastSavedAt || null };
+    const lastSavedAt = new Date().toISOString();
+    const revision = Number(current.checkpoint?.revision || 0) + 1;
+    const updated = {
+      ...current,
+      metadata: { ...current.metadata, pendingPublications: remaining },
+      checkpoint: { revision, lastSavedAt }
+    };
+    const result = this.db.run(
+      'UPDATE workflows SET payload=?,updated_at=? WHERE workflow_id=? AND tenant_id=? AND payload=?',
+      [JSON.stringify(updated), lastSavedAt, workflowId, tenantId, row.payload]
+    );
+    if (Number(result.changes) !== 1) {
+      throw Object.assign(new Error('Workflow outbox acknowledgement raced with another writer'), { code: 'WORKFLOW_OUTBOX_ACK_CONFLICT' });
+    }
+    return { acknowledged: count, pending: remaining, revision, lastSavedAt };
+  }
+
   delete(workflowId, tenantId = null) {
     const found = this.findById(workflowId, tenantId);
     if (!found) return false;
