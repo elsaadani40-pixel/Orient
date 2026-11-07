@@ -45,6 +45,8 @@ function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLang
   });
   const ids = ['lang', 'menu', 'navlinks', 'authAction'];
   const elements = Object.fromEntries(ids.map(id => [id, { ...element(), id }]));
+  elements.menu.attributes['aria-expanded'] = 'false';
+  elements.menu.attributes['aria-controls'] = 'navlinks';
   const document = {
     body: { classList: { toggle() {} } },
     documentElement: { lang: '', dir: '' },
@@ -107,7 +109,7 @@ test('mobile navigation exposes expanded state and closes on Escape with focus r
   const keydown = app.listeners.get('document:keydown');
 
   assert.equal(menu.attributes['aria-expanded'], 'false');
-  assert.equal(menu.attributes['aria-controls'], undefined);
+  assert.equal(menu.attributes['aria-controls'], 'navlinks');
   assert.equal(nav.classList.contains('open'), false);
   assert.equal(typeof click, 'function');
   assert.equal(typeof keydown, 'function');
