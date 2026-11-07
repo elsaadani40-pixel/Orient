@@ -516,3 +516,135 @@ test('mission event append rejects caller-supplied tenant metadata that conflict
   assert.deepEqual(repository.findByAggregateId('mission-tenant-mismatch', { tenantId: 'tenant-a' }), []);
   assert.deepEqual(repository.findByAggregateId('mission-tenant-mismatch', { tenantId: 'tenant-b' }), []);
 });
+
+
+test('event repository accepts the minimum positive integer lock timeout', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-min-lock-timeout-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 1 });
+  assert.equal(repository.lockTimeoutMs, 1);
+  assert.equal(repository.withLock(() => 'acquired'), 'acquired');
+});
+
+test('event repository lock deadline waits until the configured timeout instead of expiring immediately', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-lock-deadline-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 3 });
+  fs.mkdirSync(repository.lockPath);
+  fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify({
+    token: 'foreign-owner',
+    pid: process.pid,
+    hostname: 'another-host',
+    acquiredAt: new Date(0).toISOString()
+  }));
+  const originalNow = Date.now;
+  const originalWait = Atomics.wait;
+  let waits = 0;
+  let now = 1000;
+  try {
+    Date.now = () => ++now;
+    Atomics.wait = () => { waits += 1; };
+    assert.throws(
+      () => repository.withLock(() => 'must-not-run'),
+      error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.equal(waits, 2, 'the positive timeout must permit waiting before the deadline');
+  } finally {
+    Date.now = originalNow;
+    Atomics.wait = originalWait;
+  }
+});
+
+test('event repository never probes PID zero when evaluating a lock owner', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-pid-zero-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 5 });
+  fs.mkdirSync(repository.lockPath);
+  fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify({
+    token: 'zero-pid-owner',
+    pid: 0,
+    hostname: os.hostname(),
+    acquiredAt: new Date(0).toISOString()
+  }));
+  const originalKill = process.kill;
+  let calls = 0;
+  try {
+    process.kill = () => { calls += 1; throw new Error('PID zero must not be probed'); };
+    assert.throws(
+      () => repository.withLock(() => 'must-not-run'),
+      error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.equal(calls, 0);
+  } finally {
+    process.kill = originalKill;
+  }
+});
+
+test('event repository propagates unexpected process-liveness errors without reclaiming the lock', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-kill-error-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 20 });
+  const owner = {
+    token: 'owner-with-unknown-liveness',
+    pid: 2147483645,
+    hostname: os.hostname(),
+    acquiredAt: new Date(0).toISOString()
+  };
+  fs.mkdirSync(repository.lockPath);
+  fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify(owner));
+  const originalKill = process.kill;
+  try {
+    process.kill = (pid, signal) => {
+      if (pid === owner.pid && signal === 0) throw Object.assign(new Error('I/O failure'), { code: 'EIO' });
+      return originalKill.call(process, pid, signal);
+    };
+    assert.throws(
+      () => repository.withLock(() => 'must-not-run'),
+      error => error.code === 'EIO'
+    );
+    assert.equal(fs.existsSync(repository.lockPath), true);
+  } finally {
+    process.kill = originalKill;
+  }
+});
+
+test('event repository propagates owner metadata read failures other than missing or malformed files', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-owner-read-error-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 20 });
+  fs.mkdirSync(repository.lockPath);
+  const ownerPath = path.join(repository.lockPath, 'owner.json');
+  const originalRead = fs.readFileSync;
+  try {
+    fs.readFileSync = function (target, ...args) {
+      if (target === ownerPath) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return originalRead.call(this, target, ...args);
+    };
+    assert.throws(
+      () => repository.withLock(() => 'must-not-run'),
+      error => error.code === 'EACCES'
+    );
+  } finally {
+    fs.readFileSync = originalRead;
+  }
+});
+
+test('event repository does not remove a replacement lock during release', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-release-replacement-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+  const replacementOwner = {
+    token: 'replacement-during-release',
+    pid: process.pid,
+    hostname: os.hostname(),
+    acquiredAt: new Date().toISOString()
+  };
+  assert.equal(repository.withLock(() => {
+    fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify(replacementOwner));
+    return 'operation-finished';
+  }), 'operation-finished');
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(repository.lockPath, 'owner.json'), 'utf8')),
+    replacementOwner
+  );
+});
