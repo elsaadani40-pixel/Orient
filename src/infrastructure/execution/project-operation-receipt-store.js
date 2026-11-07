@@ -3,7 +3,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const os = require('node:os');
 
 function fail(message, code) {
   const error = new Error(message);
@@ -165,23 +164,36 @@ class ProjectOperationReceiptStore {
   // identity check would introduce a time-of-check/time-of-use race.
   read({ operationId, tenantId }) {
     const filePath = this.receiptPath(operationId, tenantId);
-    let fileStats;
-    try {
-      fileStats = fs.lstatSync(filePath);
-    } catch (error) {
-      if (error.code === 'ENOENT') return null;
-      throw error;
-    }
-    if (!fileStats.isFile() || fileStats.isSymbolicLink()) {
-      fail('Project operation receipt is not a regular file', 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+    if (typeof fs.constants.O_NOFOLLOW !== 'number') {
+      fail('Safe receipt-file reads are unsupported on this platform', 'PROJECT_OPERATION_RECEIPT_UNSAFE_FILESYSTEM');
     }
 
+    let descriptor;
     let raw;
     try {
-      raw = fs.readFileSync(filePath, 'utf8');
+      // Open once without following symlinks, then validate and read that exact
+      // file descriptor. A pathname replacement cannot redirect this read.
+      descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const openedStats = fs.fstatSync(descriptor);
+      if (!openedStats.isFile()) {
+        fail('Project operation receipt is not a regular file', 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+      }
+      raw = fs.readFileSync(descriptor, 'utf8');
     } catch (error) {
       if (error.code === 'ENOENT') return null;
-      throw error;
+      if (error.code === 'ELOOP') {
+        fail('Project operation receipt must not be a symbolic link', 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+      }
+      if (error.code === 'PROJECT_OPERATION_RECEIPT_CORRUPT' ||
+          error.code === 'PROJECT_OPERATION_RECEIPT_UNSAFE_FILESYSTEM') throw error;
+      const invalid = new Error('Project operation receipt could not be read safely');
+      invalid.code = 'PROJECT_OPERATION_RECEIPT_CORRUPT';
+      invalid.cause = error;
+      throw invalid;
+    } finally {
+      if (descriptor !== undefined) {
+        try { fs.closeSync(descriptor); } catch {}
+      }
     }
 
     let receipt;
@@ -226,54 +238,33 @@ class ProjectOperationReceiptStore {
     const filePath = this.receiptPath(operationId, tenantId);
     const lockPath = filePath + '.lock';
     const token = crypto.randomUUID();
-    let lockFd;
+    const ownerPath = path.join(lockPath, 'owner.json');
     let acquired = false;
 
-    for (let attempt = 0; attempt < 2 && !acquired; attempt += 1) {
+    try {
+      // A directory is the atomic lock primitive. Unlike check-then-unlink of
+      // a lock file, rmdir succeeds only while this exact directory is empty.
+      fs.mkdirSync(lockPath, 0o700);
+      const ownerFd = fs.openSync(ownerPath, 'wx', 0o600);
       try {
-        lockFd = fs.openSync(lockPath, 'wx', 0o600);
-        fs.writeFileSync(lockFd, JSON.stringify({
+        fs.writeFileSync(ownerFd, JSON.stringify({
           token,
           pid: process.pid,
-          hostname: os.hostname(),
           acquiredAt: new Date().toISOString()
         }) + '\n', 'utf8');
-        fs.fsyncSync(lockFd);
-        fs.closeSync(lockFd);
-        lockFd = undefined;
-        syncDirectory(this.directory);
-        acquired = true;
-      } catch (error) {
-        if (lockFd !== undefined) {
-          try { fs.closeSync(lockFd); } catch {}
-          lockFd = undefined;
-        }
-        if (error.code !== 'EEXIST') throw error;
-
-        let current;
-        try { current = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch {}
-        let staleLocalOwner = false;
-        if (current?.hostname === os.hostname() &&
-            Number.isInteger(current.pid) && current.pid > 0) {
-          try {
-            process.kill(current.pid, 0);
-          } catch (probeError) {
-            if (probeError.code === 'ESRCH') staleLocalOwner = true;
-            else if (probeError.code !== 'EPERM') throw probeError;
-          }
-        }
-        if (!staleLocalOwner || attempt > 0) {
-          fail('Project operation receipt is locked; refusing concurrent write', 'PROJECT_OPERATION_RECEIPT_LOCKED');
-        }
-        const quarantine = lockPath + '.stale.' + crypto.randomUUID();
-        try {
-          fs.renameSync(lockPath, quarantine);
-          try { fs.unlinkSync(quarantine); } catch {}
-          syncDirectory(this.directory);
-        } catch (renameError) {
-          if (renameError.code !== 'ENOENT') throw renameError;
-        }
+        fs.fsyncSync(ownerFd);
+      } finally {
+        fs.closeSync(ownerFd);
       }
+      syncDirectory(this.directory);
+      acquired = true;
+    } catch (error) {
+      if (error.code === 'EEXIST' || error.code === 'ENOTEMPTY') {
+        fail('Project operation receipt is locked; refusing unsafe stale-lock reclamation', 'PROJECT_OPERATION_RECEIPT_LOCKED');
+      }
+      // An incompletely initialized lock is deliberately retained. Removing
+      // it by pathname after an initialization error could delete a successor.
+      throw error;
     }
     if (!acquired) {
       fail('Project operation receipt lock could not be acquired', 'PROJECT_OPERATION_RECEIPT_LOCKED');
@@ -318,9 +309,12 @@ class ProjectOperationReceiptStore {
       return receipt;
     } finally {
       let current;
-      try { current = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch {}
+      try { current = JSON.parse(fs.readFileSync(ownerPath, 'utf8')); } catch {}
       if (current?.token === token) {
-        fs.unlinkSync(lockPath);
+        // Keep the directory present until the final atomic rmdir. This avoids
+        // unlinking a replacement owner's lock after a pathname race.
+        fs.unlinkSync(ownerPath);
+        fs.rmdirSync(lockPath);
         syncDirectory(this.directory);
       }
     }

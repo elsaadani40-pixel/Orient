@@ -284,3 +284,79 @@ test('a receipted operation ID is not replayed when the workspace has drifted', 
     );
   });
 });
+
+
+test('receipt reads reject symbolic links without following them', async () => {
+  await withFixture(async ({ store }) => {
+    if (typeof require('node:fs').constants.O_NOFOLLOW !== 'number') {
+      assert.throws(
+        () => store.read({ operationId: 'symlink-receipt', tenantId: 'tenant-a' }),
+        error => error?.code === 'PROJECT_OPERATION_RECEIPT_UNSAFE_FILESYSTEM'
+      );
+      return;
+    }
+
+    const context = { operationId: 'symlink-receipt', tenantId: 'tenant-a' };
+    const receipt = {
+      version: 1,
+      ...context,
+      workspaceId: 'a'.repeat(64),
+      changeSetHash: 'b'.repeat(64),
+      recordedAt: new Date().toISOString(),
+      result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+    };
+    const receiptPath = store.receiptPath(context.operationId, context.tenantId);
+    const targetPath = receiptPath + '.target';
+    await fs.writeFile(targetPath, JSON.stringify(receipt), { mode: 0o600 });
+    await fs.symlink(targetPath, receiptPath);
+
+    assert.throws(
+      () => store.read(context),
+      error => error?.code === 'PROJECT_OPERATION_RECEIPT_CORRUPT'
+    );
+  });
+});
+
+test('legacy or stale lock paths fail closed and are never renamed or removed', async () => {
+  await withFixture(async ({ store }) => {
+    const context = { operationId: 'stale-lock-no-reclaim', tenantId: 'tenant-a' };
+    const lockPath = store.receiptPath(context.operationId, context.tenantId) + '.lock';
+    const staleMetadata = JSON.stringify({
+      token: 'stale-owner-token',
+      pid: 2147483647,
+      hostname: 'same-host',
+      acquiredAt: new Date(0).toISOString()
+    });
+    await fs.writeFile(lockPath, staleMetadata, { mode: 0o600 });
+
+    assert.throws(
+      () => store.write({
+        ...context,
+        workspaceId: 'a'.repeat(64),
+        changeSetHash: 'b'.repeat(64),
+        result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+      }),
+      error => error?.code === 'PROJECT_OPERATION_RECEIPT_LOCKED'
+    );
+    assert.equal(await fs.readFile(lockPath, 'utf8'), staleMetadata);
+    assert.deepEqual(
+      (await fs.readdir(path.dirname(lockPath))).filter(name => name.includes('.stale.')),
+      []
+    );
+  });
+});
+
+test('successful receipt writes release only their owned directory lock', async () => {
+  await withFixture(async ({ store }) => {
+    const context = { operationId: 'directory-lock-release', tenantId: 'tenant-a' };
+    const lockPath = store.receiptPath(context.operationId, context.tenantId) + '.lock';
+    const receipt = store.write({
+      ...context,
+      workspaceId: 'a'.repeat(64),
+      changeSetHash: 'b'.repeat(64),
+      result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+    });
+    assert.equal(receipt.operationId, context.operationId);
+    await assert.rejects(fs.stat(lockPath), error => error?.code === 'ENOENT');
+  });
+});
