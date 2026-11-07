@@ -329,7 +329,8 @@ class BubblewrapIsolator {
           let killer;
           const systemRoot = this.environment?.SystemRoot || this.environment?.WINDIR;
           if (!systemRoot || !Number.isInteger(child.pid) || child.pid <= 0) {
-            return Promise.resolve(false);
+            resolve(false);
+            return;
           }
           const taskkillPath = path.win32.join(systemRoot, 'System32', 'taskkill.exe');
           try {
