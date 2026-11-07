@@ -258,3 +258,22 @@ test('command runner fails closed when a systemd command has no verified initial
     return true;
   });
 });
+
+test('command runner reports unsandboxed opt-in without claiming OS resource enforcement', async () => {
+  const child = fakeChild();
+  child.orientUnsandboxed = true;
+  child.orientResourceLimitMode = 'unsandboxed-opt-in';
+  child.orientResourceLimitsVerified = false;
+  const runner = new CommandRunner({
+    policy: createPolicy(),
+    isolator: { spawn: () => child }
+  });
+
+  const execution = runner.run('node');
+  child.emit('close', 0, null);
+  const result = await execution;
+
+  assert.equal(result.code, 0);
+  assert.equal(result.resourceLimitMode, 'unsandboxed-opt-in');
+  assert.equal(result.resourceLimitsVerified, false);
+});
