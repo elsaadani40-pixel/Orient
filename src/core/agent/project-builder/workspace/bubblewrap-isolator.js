@@ -327,8 +327,13 @@ class BubblewrapIsolator {
         try { child.kill('SIGTERM'); } catch {}
         return new Promise(resolve => {
           let killer;
+          const systemRoot = this.environment?.SystemRoot || this.environment?.WINDIR;
+          if (!systemRoot || !Number.isInteger(child.pid) || child.pid <= 0) {
+            return Promise.resolve(false);
+          }
+          const taskkillPath = path.win32.join(systemRoot, 'System32', 'taskkill.exe');
           try {
-            killer = this.spawnProcess('taskkill.exe', [
+            killer = this.spawnProcess(taskkillPath, [
               '/PID', String(child.pid), '/T', '/F'
             ], {
               shell: false,
@@ -336,7 +341,7 @@ class BubblewrapIsolator {
               stdio: 'ignore',
               env: {
                 PATH: this.environment?.PATH || this.environment?.Path || '',
-                ...(this.environment?.SystemRoot ? { SystemRoot: this.environment.SystemRoot } : {})
+                SystemRoot: systemRoot
               }
             });
           } catch {
