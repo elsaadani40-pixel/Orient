@@ -360,3 +360,26 @@ test('successful receipt writes release only their owned directory lock', async 
     await assert.rejects(fs.stat(lockPath), error => error?.code === 'ENOENT');
   });
 });
+
+
+test('receipt reads preserve filesystem I/O errors instead of misclassifying them as corruption', async () => {
+  await withFixture(async ({ store }) => {
+    const syncFs = require('node:fs');
+    const context = { operationId: 'receipt-io-error', tenantId: 'tenant-a' };
+    const receiptPath = store.receiptPath(context.operationId, context.tenantId);
+    const originalOpenSync = syncFs.openSync;
+    const expected = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    syncFs.openSync = function (filePath, ...args) {
+      if (filePath === receiptPath) throw expected;
+      return originalOpenSync.call(this, filePath, ...args);
+    };
+    try {
+      assert.throws(
+        () => store.read(context),
+        error => error === expected && error.code === 'EACCES'
+      );
+    } finally {
+      syncFs.openSync = originalOpenSync;
+    }
+  });
+});
