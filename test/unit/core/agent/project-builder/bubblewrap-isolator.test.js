@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 
 const BubblewrapIsolator = require('../../../../../src/core/agent/project-builder/workspace/bubblewrap-isolator');
 const CommandRunner = require('../../../../../src/core/agent/project-builder/workspace/command-runner');
@@ -169,4 +170,27 @@ test('CommandRunner preserves the stable no-sandbox error from its isolator', as
     runner.run('node'),
     error => error.code === 'ORIENT_E_NO_SANDBOX'
   );
+});
+
+test('Windows unsandboxed termination requests the complete process tree be killed', async () => {
+  const child = new EventEmitter();
+  child.pid = 4321;
+  let childKillSignal = null;
+  child.kill = signal => { childKillSignal = signal; return true; };
+  const killer = new EventEmitter();
+  let killerInvocation = null;
+  const isolator = new BubblewrapIsolator({
+    platform: 'win32',
+    env: { PATH: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows' },
+    spawnProcess(...args) { killerInvocation = args; return killer; }
+  });
+  child.orientUnsandboxed = true;
+
+  const termination = isolator.terminate(child);
+  assert.equal(childKillSignal, 'SIGTERM');
+  assert.equal(killerInvocation[0], 'taskkill.exe');
+  assert.deepEqual(killerInvocation[1], ['/PID', '4321', '/T', '/F']);
+  assert.equal(killerInvocation[2].shell, false);
+  killer.emit('close', 0);
+  assert.equal(await termination, true);
 });
