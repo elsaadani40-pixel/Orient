@@ -363,3 +363,39 @@ test('task creation keeps admission recoverable until the durable execution reco
   assert.equal(retry.task.status, 'completed');
   assert.equal(fixture.executions, 1);
 });
+
+
+test('approval-required task stays recoverable until its durable execution row is visible', async () => {
+  const fixture = createRuntime({
+    status: 'awaiting_approval',
+    persistExecution: false,
+    execute: async (_goal, options) => {
+      throw Object.assign(new Error('Owner approval is required'), {
+        code: 'APPROVAL_REQUIRED',
+        executionContext: { executionId: options.executionId }
+      });
+    }
+  });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'wait for approval execution durability', idempotencyKey: 'request-key-approval-durable-visibility-01' }),
+    error => error.code === 'TASK_EXECUTION_NOT_DURABLE' && error.statusCode === 503
+  );
+  const [record] = [...fixture.records.values()];
+  assert.equal(record.status, 'running');
+  assert.equal(fixture.executions, 1);
+
+  fixture.persistedExecutions.set(record.executionId, {
+    executionId: record.executionId,
+    metadata: { tenantId: 'tenant-test' }
+  });
+
+  const retry = await fixture.service.createTask({
+    goal: 'wait for approval execution durability',
+    idempotencyKey: 'request-key-approval-durable-visibility-01'
+  });
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.task.id, record.executionId);
+  assert.equal(retry.task.status, 'awaiting_approval');
+  assert.equal(fixture.executions, 1);
+});
