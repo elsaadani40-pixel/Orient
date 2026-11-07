@@ -14,9 +14,22 @@ permissions:
 
 jobs:
   mutation:
-    name: Targeted mutation testing (Node 22)
+    name: Mutation — ${{ matrix.name }} (Node 22)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: owner-auth
+            mutate: src/core/security/owner-auth-service.js
+            test: test/unit/core/security/owner-auth-service.test.js
+          - name: execution-coordinator
+            mutate: src/core/runtime/request-execution-coordinator.js
+            test: test/unit/core/runtime/request-execution-coordinator.test.js
+          - name: event-repository
+            mutate: src/infrastructure/persistence/json/event.repository.js
+            test: test/unit/infrastructure/event-repository.test.js
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -30,20 +43,31 @@ jobs:
       - name: Install locked application dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Run targeted StrykerJS mutation analysis
+      - name: Run isolated StrykerJS mutation analysis
         shell: bash
+        env:
+          MUTATE_FILE: ${{ matrix.mutate }}
+          TEST_FILE: ${{ matrix.test }}
         run: |
           set -euo pipefail
-          mkdir -p artifacts
-          npx --yes --package=@stryker-mutator/core@10.1.1 stryker run 2>&1 | tee artifacts/stryker.log
+          mkdir -p artifacts reports
+          node <<'NODE'
+          const fs = require('node:fs');
+          const config = JSON.parse(fs.readFileSync('stryker.config.json', 'utf8'));
+          config.mutate = [process.env.MUTATE_FILE];
+          config.commandRunner.command = `node --test --test-timeout=120000 ${process.env.TEST_FILE}`;
+          config.concurrency = 1;
+          fs.writeFileSync('stryker.matrix.config.json', JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+          NODE
+          npx --yes --package=@stryker-mutator/core@10.1.1 stryker run --configFile stryker.matrix.config.json 2>&1 | tee "artifacts/stryker-${{ matrix.name }}.log"
 
       - name: Upload mutation evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: orient-stryker-mutation-evidence
+          name: orient-stryker-${{ matrix.name }}-evidence
           path: |
-            artifacts/stryker.log
+            artifacts/stryker-${{ matrix.name }}.log
             reports/**
           if-no-files-found: warn
           retention-days: 30
