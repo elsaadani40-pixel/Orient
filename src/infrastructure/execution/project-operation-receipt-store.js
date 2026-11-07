@@ -36,7 +36,7 @@ function syncDirectory(directory) {
 /**
  * Durable, tenant-scoped receipts for verified project changes.
  * The receipt directory belongs to application data, never to the workspace.
- * Writers use exclusive locks; stale local-owner locks are quarantined only when the process is gone.
+ * Writers use exclusive directory locks; stale locks fail closed and require operator recovery.
  */
 class ProjectOperationReceiptStore {
   constructor({ directory } = {}) {
@@ -55,10 +55,31 @@ class ProjectOperationReceiptStore {
 
   ensureDirectory() {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    const stats = fs.lstatSync(this.directory);
+    const stats = fs.lstatSync(this.directory, { bigint: true });
+    const parentDirectory = path.dirname(this.directory);
+    const parentStats = fs.lstatSync(parentDirectory, { bigint: true });
     if (!stats.isDirectory() || stats.isSymbolicLink() ||
+        !parentStats.isDirectory() || parentStats.isSymbolicLink() ||
         fs.realpathSync(this.directory) !== this.directory) {
       fail('Operation receipt directory is not a real, canonical directory', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID');
+    }
+
+    // The directory itself contains receipt data and lock capabilities. Keep
+    // it private to the current user so other UIDs cannot add files, replace
+    // lock directories, or race pathname-based cleanup. Its parent must not
+    // be group/world writable unless the sticky bit protects directory names
+    // (for example, a private child under /tmp).
+    if (process.platform !== 'win32' && typeof process.getuid === 'function') {
+      if (stats.uid !== BigInt(process.getuid())) {
+        fail('Operation receipt directory must be owned by the application user', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_OWNER_INVALID');
+      }
+      if ((stats.mode & 0o077n) !== 0n) {
+        fail('Operation receipt directory must not be accessible by group or other users (chmod 700)', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_PERMISSIONS_INVALID');
+      }
+      const parentMode = parentStats.mode & 0o7777n;
+      if ((parentMode & 0o022n) !== 0n && (parentMode & 0o1000n) === 0n) {
+        fail('Operation receipt directory parent is writable by other users without sticky-bit protection', 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED');
+      }
     }
   }
 
