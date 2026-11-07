@@ -1053,6 +1053,7 @@ test('PostgreSQL approval outbox replays a committed event after worker restart 
     const paused = await persistence.workflows.findById(workflowId, tenantId);
     assert.equal(paused.state, 'WAITING');
     assert.equal(paused.metadata.pendingPublications.length, 2);
+    assert.equal(paused.checkpoint.revision, 0);
 
     const restartedWorker = new AsyncWorkflowWorker({
       scheduler, workerId: 'worker-pg-outbox-restarted', eventSink, executor, tenantId
@@ -1064,7 +1065,7 @@ test('PostgreSQL approval outbox replays a committed event after worker restart 
     assert.equal(persistedEvents.filter(event => event.type === 'workflow.approval.required').length, 1);
     const acknowledged = await persistence.workflows.findById(workflowId, tenantId);
     assert.deepEqual(acknowledged.metadata.pendingPublications, []);
-    assert.equal(acknowledged.checkpoint.revision, 2);
+    assert.equal(acknowledged.checkpoint.revision, 1);
   } finally {
     await pool.query('DELETE FROM events WHERE tenant_id=$1 AND aggregate_id=$2', [tenantId, workflowId]);
     await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
