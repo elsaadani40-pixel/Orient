@@ -280,6 +280,18 @@ class JsonMemoryRepository {
       }
 
       if (stale) {
+        // A legitimate owner can release its lock and a new contender can
+        // publish a replacement between readOwner() and process.kill(). Do not
+        // report the replacement as stale: verify that the lock path still
+        // names the same owner before failing closed.
+        const currentOwner = readOwner(this.lockPath);
+        if (!currentOwner ||
+            currentOwner.token !== existingOwner.token ||
+            currentOwner.pid !== existingOwner.pid ||
+            currentOwner.hostname !== existingOwner.hostname) {
+          continue;
+        }
+
         // Reclaiming by rename is not ownership-safe: the lock path may be
         // replaced after readOwner() and before renameSync(). The rename could
         // therefore move a different, live owner's lock. Fail closed instead;
