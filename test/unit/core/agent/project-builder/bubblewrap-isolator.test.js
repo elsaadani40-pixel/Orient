@@ -72,6 +72,84 @@ for (const platform of ['darwin', 'win32']) {
   });
 }
 
+test('explicit non-Linux opt-in starts only the allowlisted executable without a shell', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-unsandboxed-opt-in-'));
+  const calls = [];
+  const child = { pid: 1234, kill() { return true; } };
+  const isolator = new BubblewrapIsolator({
+    platform: 'darwin',
+    env: { PATH: '/trusted/bin', ORIENT_ALLOW_UNSANDBOXED: '1', PRIVATE_TOKEN: 'must-not-leak' },
+    spawnProcess(...args) { calls.push(args); return child; }
+  });
+
+  try {
+    const result = isolator.spawn({
+      executable: '/trusted/bin/node',
+      args: ['-e', 'process.exit(0)'],
+      workspaceRoot: root,
+      cwd: root,
+      environment: { ORIENT_TEST: '1' },
+      timeoutMs: 1000,
+      resourceLimits: { maxProcesses: 2 }
+    });
+
+    assert.equal(result, child);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], '/trusted/bin/node');
+    assert.deepEqual(calls[0][1], ['-e', 'process.exit(0)']);
+    assert.equal(calls[0][2].shell, false);
+    assert.equal(calls[0][2].cwd, root);
+    assert.deepEqual(calls[0][2].env, { PATH: '/trusted/bin', ORIENT_TEST: '1' });
+    assert.equal(child.orientUnsandboxed, true);
+    assert.equal(child.orientResourceLimitsVerified, false);
+    assert.equal(child.orientResourceLimitMode, 'unsandboxed-opt-in');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('non-Linux opt-in still rejects a working directory outside the workspace', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-unsandboxed-root-'));
+  let spawnCalls = 0;
+  const isolator = new BubblewrapIsolator({
+    platform: 'win32',
+    env: { PATH: 'C:\\trusted\\bin', ORIENT_ALLOW_UNSANDBOXED: '1' },
+    spawnProcess() { spawnCalls += 1; return {}; }
+  });
+
+  try {
+    assert.throws(
+      () => isolator.spawn({
+        executable: 'node',
+        workspaceRoot: root,
+        cwd: process.cwd()
+      }),
+      /working directory escapes isolated workspace/
+    );
+    assert.equal(spawnCalls, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux ignores the non-Linux unsandboxed opt-in', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-linux-opt-in-'));
+  const isolator = new BubblewrapIsolator({
+    platform: 'linux',
+    env: { ORIENT_ALLOW_UNSANDBOXED: '1' }
+  });
+
+  try {
+    assert.ok(isolator.buildArgs({
+      executable: '/usr/bin/node',
+      workspaceRoot: root,
+      cwd: root
+    }).includes('--unshare-all'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('CommandRunner preserves the stable no-sandbox error from its isolator', async () => {
   const isolator = new BubblewrapIsolator({ platform: 'win32' });
   const runner = new CommandRunner({
