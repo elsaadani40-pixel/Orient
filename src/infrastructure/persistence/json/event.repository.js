@@ -179,7 +179,12 @@ class EventRepository {
     if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
     return this.withLock(() => {
       const events = this.read();
-      if (!events.some(event => event.id === normalized.id)) {
+      const existing = events.find(event => event.id === normalized.id);
+      const effectiveTenantId = normalized.data?.tenantId || tenantId;
+      if (existing && !this.belongsToTenant(existing, effectiveTenantId)) {
+        throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
+      }
+      if (!existing) {
         events.push(normalized);
         this.write(events);
       }
@@ -205,12 +210,21 @@ class EventRepository {
 
     return this.withLock(() => {
       const current = this.read();
-      const existingIds = new Set(current.map(event => event.id));
-      const unique = normalized.filter(event => {
-        if (existingIds.has(event.id)) return false;
-        existingIds.add(event.id);
-        return true;
-      });
+      const existingById = new Map(current.map(event => [event.id, event]));
+      const incomingById = new Map();
+      const unique = [];
+      for (const event of normalized) {
+        const effectiveTenantId = event.data?.tenantId || tenantId;
+        const existing = existingById.get(event.id) || incomingById.get(event.id);
+        if (existing) {
+          if (!this.belongsToTenant(existing, effectiveTenantId)) {
+            throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
+          }
+          continue;
+        }
+        incomingById.set(event.id, event);
+        unique.push(event);
+      }
       if (unique.length) {
         current.push(...unique);
         this.write(current);
