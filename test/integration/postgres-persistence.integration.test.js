@@ -1,11 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
+const crypto = require('node:crypto');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
+const WorkflowDefinition = require('../../src/core/workflow/workflow-definition');
+const WorkflowInstance = require('../../src/core/workflow/workflow-instance');
+const AsyncWorkflowWorker = require('../../src/core/workflow/async-workflow-worker');
+const DurableMissionEventSink = require('../../src/core/workflow/durable-mission-event-sink');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
@@ -976,5 +981,92 @@ test('PostgreSQL pending publication lookup is indexed and tenant-scoped on a re
     assert.deepEqual(await persistence.workflows.findPendingPublications({ tenantId, limit: 5 }), []);
   } finally {
     await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  }
+});
+
+
+test('PostgreSQL approval outbox replays a committed event after worker restart exactly once', async () => {
+  await persistence.initialize();
+  const tenantId = 'tenant-pg-outbox-' + crypto.randomUUID();
+  const workflowId = 'workflow-pg-outbox-' + crypto.randomUUID();
+  const instance = new WorkflowInstance({
+    workflowId,
+    tenantId,
+    definition: new WorkflowDefinition({
+      id: 'approval-outbox-pg',
+      version: 1,
+      name: 'PostgreSQL approval outbox recovery',
+      steps: [{ id: 'write', tool: 'sensitive.write' }]
+    })
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+
+  const sink = new DurableMissionEventSink({
+    eventRepository: persistence.events,
+    workflowRepository: persistence.workflows,
+    tenantId
+  });
+  let leaseCalls = 0;
+  let crashAfterWaitingCommit = true;
+  const scheduler = {
+    tenantId,
+    leaseDurationMs: 5000,
+    workflowRepository: persistence.workflows,
+    async persistAsync(value) {
+      return persistence.workflows.save(value, tenantId);
+    },
+    async leaseAsync() {
+      leaseCalls += 1;
+      return leaseCalls === 1
+        ? { instance, leaseId: 'lease-' + workflowId, workerId: 'worker-pg-outbox', fencingToken: undefined, previousState: 'QUEUED', cancelled: false }
+        : null;
+    },
+    async renewAsync() {},
+    async assertCurrentAsync() {},
+    async releaseAsync() {}
+  };
+  const eventSink = async (event, workflow, options) => {
+    const receipt = await sink.recordWorkerEvent(workflow, event, options);
+    if (event.type === 'workflow.state.changed' && event.payload.to === 'WAITING' && crashAfterWaitingCommit) {
+      crashAfterWaitingCommit = false;
+      throw new Error('simulated process crash after PostgreSQL event commit');
+    }
+    return receipt;
+  };
+  const executor = async () => {
+    throw Object.assign(new Error('approval required'), {
+      code: 'APPROVAL_REQUIRED',
+      executionContext: {
+        executionId: 'execution-' + workflowId,
+        approvalId: 'approval-' + workflowId
+      }
+    });
+  };
+
+  try {
+    const firstWorker = new AsyncWorkflowWorker({
+      scheduler, workerId: 'worker-pg-outbox', eventSink, executor, tenantId
+    });
+    await assert.rejects(firstWorker.tick(), /simulated process crash after PostgreSQL event commit/);
+
+    const paused = await persistence.workflows.findById(workflowId, tenantId);
+    assert.equal(paused.state, 'WAITING');
+    assert.equal(paused.metadata.pendingPublications.length, 2);
+
+    const restartedWorker = new AsyncWorkflowWorker({
+      scheduler, workerId: 'worker-pg-outbox-restarted', eventSink, executor, tenantId
+    });
+    assert.equal(await restartedWorker.tick(), null);
+
+    const persistedEvents = await persistence.events.findByAggregateId(workflowId, { tenantId });
+    assert.equal(persistedEvents.filter(event => event.type === 'workflow.state.changed' && event.data.to === 'WAITING').length, 1);
+    assert.equal(persistedEvents.filter(event => event.type === 'workflow.approval.required').length, 1);
+    const acknowledged = await persistence.workflows.findById(workflowId, tenantId);
+    assert.deepEqual(acknowledged.metadata.pendingPublications, []);
+    assert.equal(acknowledged.checkpoint.revision, 2);
+  } finally {
+    await pool.query('DELETE FROM events WHERE tenant_id=$1 AND aggregate_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
   }
 });
