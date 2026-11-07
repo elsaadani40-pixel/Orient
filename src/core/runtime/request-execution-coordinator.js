@@ -218,20 +218,30 @@ class RequestExecutionCoordinator {
       throw setExecutionAdmission(error, 'rejected');
     }
 
-    let context = new ExecutionContext({
-      requestId,
-      executionId,
-      input: text,
-      tenantId: this.tenantId,
-      userId: this.userId,
-      workspaceId: this.workspaceId,
-      metadata: ownerSessionContext ? { ownerSessionId: ownerSessionContext.sessionId } : {}
-    });
+    let context;
+    try {
+      context = new ExecutionContext({
+        requestId,
+        executionId,
+        input: text,
+        tenantId: this.tenantId,
+        userId: this.userId,
+        workspaceId: this.workspaceId,
+        metadata: ownerSessionContext ? { ownerSessionId: ownerSessionContext.sessionId } : {}
+      });
 
-    context.start();
-    context.record('goal.created', context.goal.snapshot());
-    context.metadata.tenantQuota = this.quotaPolicy.toJSON();
-    context.record('request.understood', { inputLength: text.length });
+      context.start();
+      context.record('goal.created', context.goal.snapshot());
+      context.metadata.tenantQuota = this.quotaPolicy.toJSON();
+      context.record('request.understood', { inputLength: text.length });
+    } catch (error) {
+      // Context construction and initial in-memory validation happen before
+      // the durable execution insert, so this is a proven pre-admission reject.
+      throw setExecutionAdmission(error, 'rejected');
+    }
+
+    // Insert failures are intentionally left unclassified: a storage adapter
+    // may have committed before surfacing an I/O error.
     await this.persistenceCoordinator.persistExecution(context, 'insert');
 
     try {
