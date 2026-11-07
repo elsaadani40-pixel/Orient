@@ -238,7 +238,7 @@ class ProjectOperationReceiptStore {
     const filePath = this.receiptPath(operationId, tenantId);
     const lockPath = filePath + '.lock';
     const token = crypto.randomUUID();
-    const ownerPath = path.join(lockPath, 'owner.json');
+    const ownerPath = path.join(lockPath, 'owner.' + token + '.json');
     let acquired = false;
 
     try {
@@ -308,14 +308,15 @@ class ProjectOperationReceiptStore {
       }
       return receipt;
     } finally {
-      let current;
-      try { current = JSON.parse(fs.readFileSync(ownerPath, 'utf8')); } catch {}
-      if (current?.token === token) {
-        // Keep the directory present until the final atomic rmdir. This avoids
-        // unlinking a replacement owner's lock after a pathname race.
+      // The unguessable per-acquisition marker path is the ownership
+      // capability. A replacement lock has a different marker name, so this
+      // cleanup can never unlink that successor's owner file.
+      try {
         fs.unlinkSync(ownerPath);
         fs.rmdirSync(lockPath);
         syncDirectory(this.directory);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
       }
     }
   }
