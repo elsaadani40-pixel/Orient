@@ -76,7 +76,8 @@ test('authenticated dashboard request completes a harmless mission through the r
     persistence,
     tenantId: 'tenant-owner-runtime',
     agentRegistry,
-    approvalDecisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId)
+    approvalDecisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId),
+    ownerSessionAuthorizer: sessionId => ownerAuth.isActiveSession(sessionId)
   });
   const server = createServer({
     memoryRoutes: { home() {}, add() {}, delete() {} },
@@ -273,7 +274,10 @@ test('authenticated dashboard request completes a harmless mission through the r
   const taskResponse = await fetch(origin + '/api/v1/tasks', {
     method: 'POST',
     headers: taskHeaders,
-    body: JSON.stringify({ goal: 'افحص المشروع' })
+    body: JSON.stringify({
+      goal: 'افحص المشروع',
+      ownerSessionContext: { sessionId: 'attacker-forged-session' }
+    })
   });
   assert.equal(taskResponse.status, 201);
   const created = await taskResponse.json();
@@ -281,6 +285,36 @@ test('authenticated dashboard request completes a harmless mission through the r
   assert.equal(created.replayed, false);
   assert.ok(created.task.id);
   assert.equal(created.task.status, 'completed');
+  const authenticatedOwner = ownerAuth.authenticate(cookie.slice(cookie.indexOf('=') + 1));
+  assert.ok(authenticatedOwner?.sessionId);
+  const durableTask = await persistence.executions.findById(created.task.id, {
+    tenantId: 'tenant-owner-runtime'
+  });
+  assert.equal(durableTask.metadata.ownerSessionId, authenticatedOwner.sessionId);
+  assert.notEqual(durableTask.metadata.ownerSessionId, 'attacker-forged-session');
+ 
+  const legacyExecutionResponse = await fetch(origin + '/agent', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Origin: origin,
+      Cookie: cookie
+    },
+    body: JSON.stringify({
+      input: 'افحص المشروع',
+      ownerSessionContext: { sessionId: 'legacy-forged-session' }
+    })
+  });
+  assert.equal(legacyExecutionResponse.status, 200);
+  const legacyExecutionResult = await legacyExecutionResponse.json();
+  assert.ok(legacyExecutionResult.execution?.executionId);
+  const legacyDurableExecution = await persistence.executions.findById(
+    legacyExecutionResult.execution.executionId,
+    { tenantId: 'tenant-owner-runtime' }
+  );
+  assert.equal(legacyDurableExecution.metadata.ownerSessionId, authenticatedOwner.sessionId);
+  assert.notEqual(legacyDurableExecution.metadata.ownerSessionId, 'legacy-forged-session');
+
 
   const replayResponse = await fetch(origin + '/api/v1/tasks', {
     method: 'POST',

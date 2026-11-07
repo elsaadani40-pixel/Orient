@@ -5,7 +5,7 @@ class AgentService {
     this.runtime = runtime;
   }
 
-  async createTask({ goal, idempotencyKey } = {}) {
+  async createTask({ goal, idempotencyKey, ownerSessionContext = null } = {}) {
     const clean = typeof goal === 'string' ? goal.trim() : '';
     if (!clean) {
       throw new AppError('الهدف مطلوب', 400, 'TASK_GOAL_REQUIRED');
@@ -15,6 +15,13 @@ class AgentService {
     }
     if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8 || idempotencyKey.length > 200) {
       throw new AppError('مفتاح منع التكرار غير صالح', 400, 'IDEMPOTENCY_KEY_REQUIRED');
+    }
+
+    if (ownerSessionContext !== null) {
+      if (typeof this.runtime.assertOwnerSessionContext !== 'function') {
+        throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
+      }
+      await this.runtime.assertOwnerSessionContext(ownerSessionContext);
     }
 
     const repository = this.runtime.persistence?.idempotency;
@@ -55,7 +62,7 @@ class AgentService {
     try {
       let result;
       try {
-        result = await this.execute(clean);
+        result = await this.execute(clean, { ownerSessionContext });
       } catch (error) {
         // Approval-required executions have a durable ID and are paused, not failed.
         // Accept the task without retrying the high-risk side effect.
@@ -180,7 +187,14 @@ class AgentService {
     return { text: null, status: 'pending' };
   }
 
-  execute(input) {
+  assertOwnerSessionContext(ownerSessionContext) {
+    if (typeof this.runtime.assertOwnerSessionContext !== 'function') {
+      throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
+    }
+    return this.runtime.assertOwnerSessionContext(ownerSessionContext);
+  }
+
+  execute(input, options = {}) {
     const clean = String(input || '').trim();
 
     if (!clean) {
@@ -199,7 +213,7 @@ class AgentService {
       );
     }
 
-    return this.runtime.execute(clean);
+    return this.runtime.execute(clean, options);
   }
 
   listExecutionSummaries(options = {}) {
@@ -226,8 +240,8 @@ class AgentService {
     return this.runtime.getExecutionApprovals(executionId);
   }
 
-  resumeExecution(executionId, options = {}) {
-    return this.runtime.resume(executionId, options);
+  resumeExecution(executionId, options = {}, ownerSessionContext = null) {
+    return this.runtime.resume(executionId, options, ownerSessionContext);
   }
 
   cancelExecution(executionId, options = {}) {

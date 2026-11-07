@@ -392,7 +392,8 @@ const runtime =
     agentRegistry,
     agentInvocationService,
     capabilityGovernance,
-    approvalDecisionAuthorizer: ({ actorId }) => ownerAuthService.isActiveSession(actorId)
+    approvalDecisionAuthorizer: ({ actorId }) => ownerAuthService.isActiveSession(actorId),
+    ownerSessionAuthorizer: sessionId => ownerAuthService.isActiveSession(sessionId)
   });
 
 const agentService =

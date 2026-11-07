@@ -611,3 +611,163 @@ test('resume fails closed before tool execution when a pending approval has no d
   assert.equal(recoveryFailures, 0, 'missing approval must not convert a waiting execution into a failed execution');
   assert.equal(leaseReleases, 1, 'the resume lease must be released after fail-closed rejection');
 });
+
+
+test('rejects an inactive owner session before creating a durable execution', async () => {
+  let persisted = false;
+  let planned = false;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: { plan: async () => { planned = true; } },
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: {},
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async () => { persisted = true; }
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async () => false
+  });
+
+  await assert.rejects(
+    coordinator.execute('run task', {
+      ownerSessionContext: { sessionId: 'revoked-session' }
+    }),
+    error => error.code === 'OWNER_SESSION_REJECTED'
+  );
+
+  assert.equal(persisted, false);
+  assert.equal(planned, false);
+});
+
+test('records only the verified owner session identity in execution metadata', async () => {
+  let persistedMetadata = null;
+  let authorizedSessionId = null;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: {},
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async context => {
+        persistedMetadata = { ...context.metadata };
+        throw new Error('stop after metadata assertion');
+      }
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async sessionId => {
+      authorizedSessionId = sessionId;
+      return sessionId === 'active-session';
+    }
+  });
+
+  await assert.rejects(
+    coordinator.execute('run task', {
+      ownerSessionContext: { sessionId: 'active-session' }
+    }),
+    /stop after metadata assertion/
+  );
+
+  assert.equal(authorizedSessionId, 'active-session');
+  assert.equal(persistedMetadata.ownerSessionId, 'active-session');
+  assert.equal(Object.hasOwn(persistedMetadata, 'csrfToken'), false);
+});
+
+
+test('cancels before the next tool step when the owner session is revoked mid-execution', async () => {
+  let sessionChecks = 0;
+  let toolRuns = 0;
+  let observedReason = null;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test.owner-session-revocation', steps: [{ step: 1, tool: 'test.tool' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async args => {
+        const revoked = await args.isCancellationRequested();
+        observedReason = args.cancellationReason;
+        if (revoked) {
+          throw Object.assign(new Error('owner session revoked'), {
+            code: 'EXECUTION_CANCELLATION_REQUESTED'
+          });
+        }
+        toolRuns += 1;
+        throw new Error('tool should not run');
+      }
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async () => {},
+      checkpoint: async () => {},
+      persistEvents: async () => {}
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async () => {
+      sessionChecks += 1;
+      return sessionChecks === 1;
+    }
+  });
+
+  const result = await coordinator.execute('run task', {
+    ownerSessionContext: { sessionId: 'session-revoked-after-admission' }
+  });
+
+  assert.equal(result.type, 'execution_cancelled');
+  assert.equal(sessionChecks, 2);
+  assert.equal(toolRuns, 0);
+  assert.equal(observedReason, 'Owner session is no longer active');
+});
+
+
+test('rejects a revoked owner session before loading a resumable checkpoint', async () => {
+  let checkpointReads = 0;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: {},
+    persistence: {
+      checkpoints: {
+        findLatest: async () => {
+          checkpointReads += 1;
+          return null;
+        }
+      }
+    },
+    persistenceCoordinator: {},
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async () => false
+  });
+
+  await assert.rejects(
+    coordinator.resume('execution-pending-approval', {
+      ownerSessionContext: { sessionId: 'revoked-before-resume' }
+    }),
+    error => error.code === 'OWNER_SESSION_REJECTED'
+  );
+
+  assert.equal(checkpointReads, 0);
+});

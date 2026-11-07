@@ -3,7 +3,7 @@ const { createRuntimeResponseV1, MAX_ASSISTANT_TEXT_CHARS } = require('../contra
 
 function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated = null } = {}) {
   return {
-    async createTask(req, res, body) {
+    async createTask(req, res, body, ownerSessionContext = null) {
       let payload;
       try {
         payload = typeof body === 'string' ? JSON.parse(body || '{}') : body;
@@ -17,7 +17,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       const idempotencyKey = req.headers?.['idempotency-key'] || payload.idempotencyKey;
       const result = await agentService.createTask({
         goal: payload.goal,
-        idempotencyKey
+        idempotencyKey,
+        ownerSessionContext
       });
       if (typeof onTaskCreated === 'function' && typeof result.task?.id === 'string' &&
           typeof req?.ownerChatMessageId === 'string') {
@@ -430,7 +431,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async resume(req, res, executionId, body) {
+    async resume(req, res, executionId, body, ownerSessionContext = null) {
       let options = {};
 
       if (body) {
@@ -448,8 +449,11 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         }
       }
 
+      if (ownerSessionContext !== null) {
+        await agentService.assertOwnerSessionContext(ownerSessionContext);
+      }
       const result =
-        await agentService.resumeExecution(executionId, options || {});
+        await agentService.resumeExecution(executionId, options || {}, ownerSessionContext);
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -479,7 +483,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async execute(req, res, body) {
+    async execute(req, res, body, ownerSessionContext = null) {
       let input = '';
 
       const contentType =
@@ -508,7 +512,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }
 
       const result =
-        await agentService.execute(input);
+        await agentService.execute(input, { ownerSessionContext });
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',

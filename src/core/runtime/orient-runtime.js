@@ -42,7 +42,8 @@ class OrientRuntime {
     agentRegistry = null,
     agentInvocationService = null,
     capabilityGovernance = null,
-    approvalDecisionAuthorizer = null
+    approvalDecisionAuthorizer = null,
+    ownerSessionAuthorizer = null
   }) {
     if (!toolRegistry) {
       throw new TypeError(
@@ -205,7 +206,8 @@ class OrientRuntime {
       tenantId: this.tenantId,
       userId: this.userId,
       workspaceId: this.workspaceId,
-      maxInputChars: this.maxInputChars
+      maxInputChars: this.maxInputChars,
+      ownerSessionAuthorizer
     });
 
     this.name =
@@ -243,6 +245,10 @@ class OrientRuntime {
     return this.workflowExecutionCoordinator.execute(input, options);
   }
 
+  async assertOwnerSessionContext(ownerSessionContext) {
+    return this.requestExecutionCoordinator.assertOwnerSessionContext(ownerSessionContext);
+  }
+
   async execute(input, options = {}) {
     return this.requestExecutionCoordinator.execute(input, options);
   }
@@ -255,9 +261,12 @@ class OrientRuntime {
     return workflow.metadata?.approvalId === approvalId;
   }
 
-  async resume(executionId, options = {}) {
+  async resume(executionId, options = {}, ownerSessionContext = null) {
     try {
-      const result = await this.requestExecutionCoordinator.resume(executionId, options);
+      const result = await this.requestExecutionCoordinator.resume(executionId, {
+        ...options,
+        ownerSessionContext
+      });
       await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result);
       return result;
     } catch (error) {

@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const ExecutionContext = require('../execution/execution-context');
 const AgentState = require('../agent/state/agent-state');
+const AppError = require('../errors/AppError');
 
 function createApprovalSummary(tool, input) {
   if (tool !== 'project.execute_change') {
@@ -56,6 +57,7 @@ class RequestExecutionCoordinator {
     workspaceId,
     maxInputChars,
     approvalService = null,
+    ownerSessionAuthorizer = null,
     resumeLeaseDurationMs = 30000
   }) {
     if (!agentOrchestrator) throw new TypeError('agentOrchestrator is required');
@@ -75,6 +77,7 @@ class RequestExecutionCoordinator {
     this.workspaceId = workspaceId || 'local';
     this.maxInputChars = maxInputChars;
     this.approvalService = approvalService;
+    this.ownerSessionAuthorizer = ownerSessionAuthorizer;
     this.resumeLeaseDurationMs = resumeLeaseDurationMs;
   }
 
@@ -167,7 +170,22 @@ class RequestExecutionCoordinator {
     };
   }
 
-  async execute(input, { approval = null, approvals = {} } = {}) {
+  async assertOwnerSessionContext(ownerSessionContext) {
+    if (ownerSessionContext === null || ownerSessionContext === undefined) return true;
+    const sessionId = ownerSessionContext && typeof ownerSessionContext.sessionId === 'string'
+      ? ownerSessionContext.sessionId
+      : '';
+    const authorized = sessionId && typeof this.ownerSessionAuthorizer === 'function'
+      ? await this.ownerSessionAuthorizer(sessionId) === true
+      : false;
+    if (!authorized) {
+      throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
+    }
+    return true;
+  }
+
+  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+    await this.assertOwnerSessionContext(ownerSessionContext);
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
 
@@ -189,7 +207,8 @@ class RequestExecutionCoordinator {
       input: text,
       tenantId: this.tenantId,
       userId: this.userId,
-      workspaceId: this.workspaceId
+      workspaceId: this.workspaceId,
+      metadata: ownerSessionContext ? { ownerSessionId: ownerSessionContext.sessionId } : {}
     });
 
     context.start();
@@ -213,8 +232,19 @@ class RequestExecutionCoordinator {
         requestId,
         input: text,
         tenantId: this.tenantId,
-        isCancellationRequested: () => this.isCancellationRequested(context.executionId),
-        cancellationReason: 'Execution cancellation requested'
+        isCancellationRequested: async () => {
+          if (ownerSessionContext !== null) {
+            try {
+              await this.assertOwnerSessionContext(ownerSessionContext);
+            } catch (_) {
+              return true;
+            }
+          }
+          return this.isCancellationRequested(context.executionId);
+        },
+        cancellationReason: ownerSessionContext !== null
+          ? 'Owner session is no longer active'
+          : 'Execution cancellation requested'
       });
 
       const { plan, loopResult, replanningDecision } = executionResult;
@@ -427,7 +457,8 @@ class RequestExecutionCoordinator {
     };
   }
 
-  async resume(executionId, { approval = null, approvals = {} } = {}) {
+  async resume(executionId, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+    await this.assertOwnerSessionContext(ownerSessionContext);
     if (!this.persistence?.checkpoints?.findLatest) {
       throw Object.assign(new Error('Durable checkpoint storage is required for resume'), {
         code: 'CHECKPOINT_STORAGE_REQUIRED'
@@ -648,8 +679,19 @@ class RequestExecutionCoordinator {
         agentId: context.metadata?.agentId || 'ORIENT_RUNTIME',
         resumed: true,
         renewResumeLease: heartbeat ? heartbeat.renew : null,
-        isCancellationRequested: () => this.isCancellationRequested(context.executionId),
-        cancellationReason: context.cancellationReason || 'Execution cancellation requested'
+        isCancellationRequested: async () => {
+          if (ownerSessionContext !== null) {
+            try {
+              await this.assertOwnerSessionContext(ownerSessionContext);
+            } catch (_) {
+              return true;
+            }
+          }
+          return this.isCancellationRequested(context.executionId);
+        },
+        cancellationReason: ownerSessionContext !== null
+          ? 'Owner session is no longer active'
+          : context.cancellationReason || 'Execution cancellation requested'
         });
       } finally {
         if (heartbeat) await heartbeat.stop();
