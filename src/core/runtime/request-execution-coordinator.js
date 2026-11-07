@@ -184,7 +184,7 @@ class RequestExecutionCoordinator {
     return true;
   }
 
-  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null, executionId = null } = {}) {
     await this.assertOwnerSessionContext(ownerSessionContext);
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
@@ -204,6 +204,7 @@ class RequestExecutionCoordinator {
 
     let context = new ExecutionContext({
       requestId,
+      executionId,
       input: text,
       tenantId: this.tenantId,
       userId: this.userId,

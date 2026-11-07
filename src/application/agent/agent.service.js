@@ -35,8 +35,12 @@ class AgentService {
     const digest = crypto.createHash('sha256').update(idempotencyKey, 'utf8').digest('hex');
     const requestDigest = crypto.createHash('sha256').update(clean, 'utf8').digest('hex');
     const operationId = 'api-v1-task-create:' + tenantId + ':' + digest;
+    // Reserve the canonical Runtime ID before the idempotency record is written.
+    // A retry can then reconcile the exact execution if the first process stops
+    // after durable execution creation but before idempotency completion.
+    const executionId = crypto.randomUUID();
     const begun = await repository.begin({
-      executionId: crypto.randomUUID(),
+      executionId,
       step: 1,
       tool: 'api.v1.tasks.create:' + requestDigest,
       planRevision: 1,
@@ -51,6 +55,50 @@ class AgentService {
       if (begun.record?.status === 'completed' && begun.record.result) {
         return { task: begun.record.result, replayed: true };
       }
+
+      const reservedExecutionId = begun.record?.executionId;
+      if (begun.record?.status === 'running' &&
+          typeof reservedExecutionId === 'string' &&
+          typeof this.runtime.persistence?.executions?.findById === 'function') {
+        const persistedExecution = await this.runtime.persistence.executions.findById(
+          reservedExecutionId,
+          { tenantId }
+        );
+        if (persistedExecution) {
+          const persistedTenantId = persistedExecution.metadata?.tenantId;
+          if (persistedExecution.executionId !== reservedExecutionId ||
+              (tenantId !== 'local' && persistedTenantId !== tenantId) ||
+              (tenantId === 'local' && persistedTenantId && persistedTenantId !== 'local')) {
+            throw new AppError(
+              'Recovered execution identity or tenant does not match the idempotency reservation',
+              502,
+              'TASK_EXECUTION_ID_MISMATCH'
+            );
+          }
+          const execution = await this.getExecutionStatus(reservedExecutionId);
+          if (!execution || execution.executionId !== reservedExecutionId) {
+            throw new AppError(
+              'Recovered execution status does not match the idempotency reservation',
+              502,
+              'TASK_EXECUTION_ID_MISMATCH'
+            );
+          }
+          const task = {
+            id: execution.executionId,
+            status: execution.status,
+            currentStep: execution.currentStep ?? null,
+            createdAt: execution.startedAt || null,
+            updatedAt: execution.updatedAt || null,
+            completedAt: execution.completedAt || null,
+            cancellationRequested: Boolean(execution.cancellationRequested),
+            agentLifecycle: execution.agentLifecycle || null,
+            version: 1
+          };
+          await repository.complete(begun.key, task, { tenantId });
+          return { task, replayed: true };
+        }
+      }
+
       throw new AppError(
         'هذا الطلب قيد التنفيذ أو استُخدم مفتاحه مع طلب سابق غير مكتمل',
         409,
@@ -58,11 +106,19 @@ class AgentService {
       );
     }
 
+    if (begun.record?.executionId !== executionId) {
+      throw new AppError(
+        'Idempotency reservation did not retain the canonical execution ID',
+        502,
+        'TASK_EXECUTION_ID_MISMATCH'
+      );
+    }
+
     let task;
     try {
       let result;
       try {
-        result = await this.execute(clean, { ownerSessionContext });
+        result = await this.execute(clean, { ownerSessionContext, executionId });
       } catch (error) {
         // Approval-required executions have a durable ID and are paused, not failed.
         // Accept the task without retrying the high-risk side effect.
@@ -70,14 +126,35 @@ class AgentService {
           ? error.executionContext?.executionId
           : null;
         if (typeof approvalExecutionId !== 'string' || !approvalExecutionId) throw error;
+        if (approvalExecutionId !== executionId) {
+          throw new AppError(
+            'Runtime returned an approval execution ID that does not match the reserved task ID',
+            502,
+            'TASK_EXECUTION_ID_MISMATCH'
+          );
+        }
         result = { execution: { executionId: approvalExecutionId }, awaitingApproval: true };
       }
-      const executionId = result?.execution?.executionId || result?.executionId;
-      if (typeof executionId !== 'string' || !executionId) {
+      const actualExecutionId = result?.execution?.executionId || result?.executionId;
+      if (typeof actualExecutionId !== 'string' || !actualExecutionId) {
         throw new AppError('لم يُرجع Runtime معرّف مهمة قابلًا للتحقق', 502, 'TASK_EXECUTION_ID_MISSING');
+      }
+      if (actualExecutionId !== executionId) {
+        throw new AppError(
+          'Runtime returned an execution ID that does not match the reserved task ID',
+          502,
+          'TASK_EXECUTION_ID_MISMATCH'
+        );
       }
 
       const execution = await this.getExecutionStatus(executionId);
+      if (!execution || execution.executionId !== executionId) {
+        throw new AppError(
+          'Persisted execution identity does not match the reserved task ID',
+          502,
+          'TASK_EXECUTION_ID_MISMATCH'
+        );
+      }
       task = {
         id: execution.executionId,
         status: execution.status,
