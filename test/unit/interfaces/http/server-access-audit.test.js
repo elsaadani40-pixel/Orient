@@ -49,3 +49,45 @@ test('HTTP server records bounded access metadata without query strings', async 
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 });
+
+test('unsandboxed opt-in marker is present on website-delegated responses', async () => {
+  const server = createServer({
+    memoryRoutes: { home() {}, add() {}, delete() {} },
+    agentRoutes: {},
+    unsandboxedExecution: true,
+    websiteHandler(_req, res) {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('website');
+    }
+  });
+
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await get(server.address().port, '/');
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body, 'website');
+    assert.equal(response.headers['x-orient-unsandboxed'], 'true');
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test('unsandboxed marker is absent when explicit opt-in is disabled', async () => {
+  const server = createServer({
+    memoryRoutes: {
+      home(_req, res) { res.writeHead(200); res.end('ok'); },
+      add() {},
+      delete() {}
+    },
+    agentRoutes: {}
+  });
+
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await get(server.address().port, '/memory');
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['x-orient-unsandboxed'], undefined);
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
