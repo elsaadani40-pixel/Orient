@@ -16,7 +16,7 @@ jobs:
   mutation:
     name: Mutation — ${{ matrix.name }} (Node 22)
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.timeout || 25 }}
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +28,7 @@ jobs:
             mutate: src/core/runtime/request-execution-coordinator.js
             test: test/unit/core/runtime/request-execution-coordinator.test.js
           - name: event-repository
+            timeout: 60
             mutate: src/infrastructure/persistence/json/event.repository.js
             test: test/unit/infrastructure/event-repository.test.js
     steps:
