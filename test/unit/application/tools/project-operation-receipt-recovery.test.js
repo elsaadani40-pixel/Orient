@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -283,4 +284,159 @@ test('a receipted operation ID is not replayed when the workspace has drifted', 
       'a repeated operation must not overwrite workspace drift'
     );
   });
+});
+
+
+
+test('intent and receipt reads reject oversized files with bounded descriptor reads', async () => {
+  await withFixture(async ({ store }) => {
+    const intentIdentity = { operationId: 'oversized-intent', tenantId: 'tenant-a' };
+    fsSync.writeFileSync(store.intentPath(intentIdentity.operationId, intentIdentity.tenantId), 'x'.repeat(4 * 1024 + 1), { mode: 0o600 });
+    assert.throws(() => store.readIntent(intentIdentity), error => error?.code === 'PROJECT_OPERATION_INTENT_CORRUPT');
+
+    const receiptIdentity = { operationId: 'oversized-receipt', tenantId: 'tenant-a' };
+    fsSync.writeFileSync(store.receiptPath(receiptIdentity.operationId, receiptIdentity.tenantId), 'x'.repeat(1024 * 1024 + 1), { mode: 0o600 });
+    assert.throws(() => store.read(receiptIdentity), error => error?.code === 'PROJECT_OPERATION_RECEIPT_CORRUPT');
+  });
+});
+
+test('receipt reads reject symbolic links without following them', async () => {
+  await withFixture(async ({ store }) => {
+    if (typeof require('node:fs').constants.O_NOFOLLOW !== 'number') {
+      assert.throws(
+        () => store.read({ operationId: 'symlink-receipt', tenantId: 'tenant-a' }),
+        error => error?.code === 'PROJECT_OPERATION_RECEIPT_UNSAFE_FILESYSTEM'
+      );
+      return;
+    }
+
+    const context = { operationId: 'symlink-receipt', tenantId: 'tenant-a' };
+    const receipt = {
+      version: 1,
+      ...context,
+      workspaceId: 'a'.repeat(64),
+      changeSetHash: 'b'.repeat(64),
+      recordedAt: new Date().toISOString(),
+      result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+    };
+    const receiptPath = store.receiptPath(context.operationId, context.tenantId);
+    const targetPath = receiptPath + '.target';
+    await fs.writeFile(targetPath, JSON.stringify(receipt), { mode: 0o600 });
+    await fs.symlink(targetPath, receiptPath);
+
+    assert.throws(
+      () => store.read(context),
+      error => error?.code === 'PROJECT_OPERATION_RECEIPT_CORRUPT'
+    );
+  });
+});
+
+test('legacy or stale lock paths fail closed and are never renamed or removed', async () => {
+  await withFixture(async ({ store }) => {
+    const context = { operationId: 'stale-lock-no-reclaim', tenantId: 'tenant-a' };
+    const lockPath = store.receiptPath(context.operationId, context.tenantId) + '.lock';
+    const staleMetadata = JSON.stringify({
+      token: 'stale-owner-token',
+      pid: 2147483647,
+      hostname: 'same-host',
+      acquiredAt: new Date(0).toISOString()
+    });
+    await fs.writeFile(lockPath, staleMetadata, { mode: 0o600 });
+
+    assert.throws(
+      () => store.write({
+        ...context,
+        workspaceId: 'a'.repeat(64),
+        changeSetHash: 'b'.repeat(64),
+        result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+      }),
+      error => error?.code === 'PROJECT_OPERATION_RECEIPT_LOCKED'
+    );
+    assert.equal(await fs.readFile(lockPath, 'utf8'), staleMetadata);
+    assert.deepEqual(
+      (await fs.readdir(path.dirname(lockPath))).filter(name => name.includes('.stale.')),
+      []
+    );
+  });
+});
+
+test('successful receipt writes release only their owned directory lock', async () => {
+  await withFixture(async ({ store }) => {
+    const context = { operationId: 'directory-lock-release', tenantId: 'tenant-a' };
+    const lockPath = store.receiptPath(context.operationId, context.tenantId) + '.lock';
+    const receipt = store.write({
+      ...context,
+      workspaceId: 'a'.repeat(64),
+      changeSetHash: 'b'.repeat(64),
+      result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+    });
+    assert.equal(receipt.operationId, context.operationId);
+    await assert.rejects(fs.stat(lockPath), error => error?.code === 'ENOENT');
+  });
+});
+
+
+test('receipt reads preserve filesystem I/O errors instead of misclassifying them as corruption', async () => {
+  await withFixture(async ({ store }) => {
+    const syncFs = require('node:fs');
+    const context = { operationId: 'receipt-io-error', tenantId: 'tenant-a' };
+    const receiptPath = store.receiptPath(context.operationId, context.tenantId);
+    const originalOpenSync = syncFs.openSync;
+    const expected = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    syncFs.openSync = function (filePath, ...args) {
+      if (filePath === receiptPath) throw expected;
+      return originalOpenSync.call(this, filePath, ...args);
+    };
+    try {
+      assert.throws(
+        () => store.read(context),
+        error => error === expected && error.code === 'EACCES'
+      );
+    } finally {
+      syncFs.openSync = originalOpenSync;
+    }
+  });
+});
+
+
+test('receipt storage rejects directories and parents that allow untrusted lock-path replacement', async t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX ownership and directory-mode checks are not available on this platform');
+    return;
+  }
+
+  const parent = fsSync.mkdtempSync(path.join(os.tmpdir(), 'orient-receipt-directory-policy-'));
+  const directory = path.join(parent, 'receipts');
+  const validWrite = {
+    operationId: 'private-directory-policy',
+    tenantId: 'tenant-a',
+    workspaceId: 'a'.repeat(64),
+    changeSetHash: 'b'.repeat(64),
+    result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+  };
+
+  try {
+    fsSync.mkdirSync(directory, { mode: 0o700 });
+    fsSync.chmodSync(directory, 0o755);
+    const exposedDirectoryStore = new ProjectOperationReceiptStore({ directory });
+
+    assert.throws(
+      () => exposedDirectoryStore.write(validWrite),
+      error => error.code === 'PROJECT_OPERATION_RECEIPT_DIRECTORY_PERMISSIONS_INVALID'
+    );
+
+    fsSync.chmodSync(directory, 0o700);
+    fsSync.chmodSync(parent, 0o777);
+    const untrustedParentStore = new ProjectOperationReceiptStore({
+      directory: path.join(parent, 'other-receipts')
+    });
+
+    assert.throws(
+      () => untrustedParentStore.write({ ...validWrite, operationId: 'untrusted-parent-policy' }),
+      error => error.code === 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED'
+    );
+  } finally {
+    fsSync.chmodSync(parent, 0o700);
+    fsSync.rmSync(parent, { recursive: true, force: true });
+  }
 });
