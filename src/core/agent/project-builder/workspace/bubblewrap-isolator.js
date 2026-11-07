@@ -365,14 +365,16 @@ class BubblewrapIsolator {
         });
       }
 
+      if (!Number.isInteger(child.pid) || child.pid <= 0) {
+        try { child.kill('SIGTERM'); } catch {}
+        return Promise.resolve(false);
+      }
       try {
         process.kill(-child.pid, 'SIGTERM');
       } catch (error) {
-        if (error.code === 'ESRCH') {
-          try { child.kill('SIGTERM'); } catch {}
-        } else {
-          try { child.kill('SIGTERM'); } catch {}
-        }
+        if (error.code === 'ESRCH') return Promise.resolve(true);
+        try { child.kill('SIGTERM'); } catch {}
+        return Promise.resolve(false);
       }
       const timer = setTimeout(() => {
         try { process.kill(-child.pid, 'SIGKILL'); } catch {}
