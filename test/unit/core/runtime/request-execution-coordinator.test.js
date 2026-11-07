@@ -1,8 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const RequestExecutionCoordinator = require('../../../../src/core/runtime/request-execution-coordinator');
 const AgentState = require('../../../../src/core/agent/state/agent-state');
+const CheckpointRepository = require('../../../../src/infrastructure/persistence/json/checkpoint.repository');
 
 test('preserves plan identity validation and response classification', () => {
   const coordinator = new RequestExecutionCoordinator({
@@ -770,4 +774,79 @@ test('rejects a revoked owner session before loading a resumable checkpoint', as
   );
 
   assert.equal(checkpointReads, 0);
+});
+
+
+test("resume does not release a replacement worker's lease after losing ownership", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-resume-lease-race-'));
+  try {
+    const executionId = 'execution-replaced-lease';
+    const tenantId = 'tenant-a';
+    const context = new (require('../../../../src/core/execution/execution-context'))({
+      requestId: 'request-replaced-lease',
+      input: 'resume with a replaced lease',
+      executionId,
+      tenantId
+    });
+    context.start();
+    context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
+    context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+    context.setPlan({
+      intent: 'test.replaced-lease',
+      steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }]
+    });
+    context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+
+    const checkpoints = new CheckpointRepository(path.join(root, 'checkpoints.json'));
+    checkpoints.save(context.snapshot(), { tenantId });
+    let replacementLease = null;
+    const coordinator = new RequestExecutionCoordinator({
+      agentOrchestrator: {},
+      agentExecutionCoordinator: {
+        run: async ({ renewResumeLease }) => {
+          // Simulate expiry and a new worker acquiring the same execution
+          // before this worker's heartbeat attempts to renew its old lease.
+          checkpoints.withLock(() => {
+            const records = checkpoints.read();
+            const lease = records[executionId].resumeLease;
+            lease.expiresAtMs = Date.now() - 1;
+            lease.expiresAt = new Date(Date.now() - 1).toISOString();
+            checkpoints.write(records);
+          });
+          replacementLease = checkpoints.acquireResumeLease(executionId, {
+            tenantId,
+            leaseDurationMs: 30000
+          });
+          await renewResumeLease();
+        }
+      },
+      recoveryCoordinator: { fail: async () => { throw new Error('recovery must not run after lease loss'); } },
+      persistence: {
+        executions: { findById: async () => null },
+        checkpoints
+      },
+      persistenceCoordinator: {},
+      quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+      quotaPolicy: { toJSON: () => ({}) },
+      tenantId,
+      maxInputChars: 1000,
+      resumeLeaseDurationMs: 30000
+    });
+
+    await assert.rejects(
+      coordinator.resume(executionId),
+      error => error.code === 'CHECKPOINT_RESUME_LEASE_LOST'
+    );
+
+    assert.ok(replacementLease?.leaseId);
+    assert.notEqual(replacementLease.leaseId, undefined);
+    const durableCheckpoint = checkpoints.findLatest(executionId, { tenantId });
+    assert.equal(
+      durableCheckpoint.resumeLease.leaseId,
+      replacementLease.leaseId,
+      'the old worker must not delete the newer worker lease'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
