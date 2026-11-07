@@ -195,10 +195,13 @@ test('event query helpers preserve tenant boundaries for execution, goal, and ty
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const repository = new EventRepository(path.join(directory, 'events.json'));
 
-  repository.appendMany([
-    { id: 'tenant-a-query', executionId: 'shared-execution', goalId: 'shared-goal', type: 'shared.type', data: {} },
-    { id: 'tenant-b-query', executionId: 'shared-execution', goalId: 'shared-goal', type: 'shared.type', data: {} }
-  ], { tenantId: 'tenant-a' });
+  repository.append({
+    id: 'tenant-a-query',
+    executionId: 'shared-execution',
+    goalId: 'shared-goal',
+    type: 'shared.type',
+    data: {}
+  }, { tenantId: 'tenant-a' });
   repository.append({
     id: 'tenant-b-query',
     executionId: 'shared-execution',
