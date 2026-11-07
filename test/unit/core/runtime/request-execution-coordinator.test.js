@@ -55,6 +55,7 @@ test('rejects oversized request before orchestration', async () => {
 
   const result = await coordinator.execute('abcd');
   assert.equal(result.code, 'INPUT_TOO_LARGE');
+  assert.equal(result.executionAdmission, 'rejected');
   assert.equal(orchestrated, false);
 });
 
@@ -770,4 +771,81 @@ test('rejects a revoked owner session before loading a resumable checkpoint', as
   );
 
   assert.equal(checkpointReads, 0);
+});
+
+
+test('Runtime admission evidence overrides a frozen downstream rejection marker after durable insert', async () => {
+  const downstreamError = Object.freeze(Object.assign(new Error('tool failed after admission'), {
+    code: 'TOOL_FAILED',
+    executionAdmission: 'rejected'
+  }));
+  let insertCalls = 0;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async () => { throw downstreamError; }
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: {},
+    persistenceCoordinator: {
+      persistExecution: async (_context, operation) => {
+        if (operation === 'insert') insertCalls += 1;
+      },
+      persistEvents: async () => {}
+    },
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  await assert.rejects(
+    coordinator.execute('run a task'),
+    error => {
+      assert.equal(error.code, 'TOOL_FAILED');
+      assert.equal(error.executionAdmission, 'accepted');
+      assert.notStrictEqual(error, downstreamError);
+      return true;
+    }
+  );
+  assert.equal(insertCalls, 1);
+});
+
+test('Runtime preflight evidence overrides a frozen downstream acceptance marker', async () => {
+  const quotaError = Object.freeze(Object.assign(new Error('tenant quota rejected'), {
+    code: 'TENANT_QUOTA_EXCEEDED',
+    executionAdmission: 'accepted'
+  }));
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: {},
+    persistence: {},
+    persistenceCoordinator: {},
+    quotaService: {
+      assertTenant: () => { throw quotaError; },
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  await assert.rejects(
+    coordinator.execute('run a task'),
+    error => {
+      assert.equal(error.code, 'TENANT_QUOTA_EXCEEDED');
+      assert.equal(error.executionAdmission, 'rejected');
+      assert.notStrictEqual(error, quotaError);
+      return true;
+    }
+  );
 });
