@@ -490,8 +490,9 @@ async function start() {
   if (unsandboxedExecution) {
     console.warn(
       'WARNING: ORIENT OS sandbox isolation is disabled by explicit opt-in. ' +
-      'WorkspacePolicy and command allowlists remain enforced, but OS-level ' +
-      'resource limits and process isolation are not provided. Unset ' +
+      'WorkspacePolicy and command allowlists still gate ORIENT tool access, ' +
+      'but direct processes can access host resources available to the ORIENT OS account; ' +
+      'OS filesystem/network isolation and OS resource limits are not provided. Unset ' +
       'ORIENT_ALLOW_UNSANDBOXED to restore fail-closed behavior.'
     );
   }
