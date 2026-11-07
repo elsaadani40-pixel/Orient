@@ -194,3 +194,38 @@ test('Windows unsandboxed termination requests the complete process tree be kill
   killer.emit('close', 0);
   assert.equal(await termination, true);
 });
+
+test('POSIX unsandboxed opt-in terminates the detached process group', {
+  skip: process.platform === 'win32'
+}, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-unsandboxed-process-group-'));
+  const isolator = new BubblewrapIsolator({
+    platform: 'darwin',
+    env: { PATH: process.env.PATH || '', ORIENT_ALLOW_UNSANDBOXED: '1' }
+  });
+
+  try {
+    const child = isolator.spawn({
+      executable: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      workspaceRoot: root,
+      cwd: root,
+      environment: {},
+      timeoutMs: 5000
+    });
+    const closed = new Promise(resolve => {
+      child.once('close', (code, signal) => resolve({ code, signal }));
+    });
+    assert.equal(await isolator.terminate(child), true);
+    let timer;
+    const outcome = await Promise.race([
+      closed,
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); })
+    ]);
+    clearTimeout(timer);
+    assert.ok(outcome, 'the detached command process must exit after termination');
+    assert.equal(outcome.signal, 'SIGTERM');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
