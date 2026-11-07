@@ -1,0 +1,95 @@
+name: ORIENT — Security Evidence (Mutation + Fuzzing)
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: orient-security-evidence-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Targeted mutation testing (Node 22)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          check-latest: true
+
+      - name: Install locked application dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run targeted StrykerJS mutation analysis
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npx --yes --package=@stryker-mutator/core@10.1.1 stryker run 2>&1 | tee artifacts/stryker.log
+
+      - name: Upload mutation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orient-stryker-mutation-evidence
+          path: |
+            artifacts/stryker.log
+            reports/**
+          if-no-files-found: warn
+          retention-days: 30
+
+  fuzz:
+    name: Coverage-guided security fuzzing (Node 22)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          check-latest: true
+
+      - name: Install locked application dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install pinned Jazzer.js and run corpus regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/jazzer
+          npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/owner-auth.fuzz.js --sync --mode=regression corpus/owner-auth 2>&1 | tee artifacts/jazzer/owner-auth-regression.log
+          npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/event-normalize.fuzz.js --sync --mode=regression corpus/event-normalize 2>&1 | tee artifacts/jazzer/event-normalize-regression.log
+
+      - name: Run bounded fuzz campaigns
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/owner-auth.fuzz.js --sync corpus/owner-auth -- -max_total_time=45 -print_final_stats=1 2>&1 | tee artifacts/jazzer/owner-auth-fuzz.log
+          npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/event-normalize.fuzz.js --sync corpus/event-normalize -- -max_total_time=45 -print_final_stats=1 2>&1 | tee artifacts/jazzer/event-normalize-fuzz.log
+
+      - name: Upload fuzzing evidence and corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orient-jazzer-fuzz-evidence
+          path: |
+            artifacts/jazzer/**
+            corpus/**
+            crash-*
+            leak-*
+            timeout-*
+          if-no-files-found: warn
+          retention-days: 30
