@@ -187,12 +187,32 @@ test('Windows unsandboxed termination requests the complete process tree be kill
   child.orientUnsandboxed = true;
 
   const termination = isolator.terminate(child);
-  assert.equal(childKillSignal, 'SIGTERM');
+  assert.equal(childKillSignal, null, 'do not terminate the parent before taskkill can discover descendants');
   assert.equal(killerInvocation[0], 'C:\\Windows\\System32\\taskkill.exe');
   assert.deepEqual(killerInvocation[1], ['/PID', '4321', '/T', '/F']);
   assert.equal(killerInvocation[2].shell, false);
   killer.emit('close', 0);
   assert.equal(await termination, true);
+  assert.equal(childKillSignal, null);
+});
+
+test('Windows unsandboxed termination falls back to the parent when taskkill fails', async () => {
+  const child = new EventEmitter();
+  child.pid = 4322;
+  let childKillSignal = null;
+  child.kill = signal => { childKillSignal = signal; return true; };
+  const killer = new EventEmitter();
+  const isolator = new BubblewrapIsolator({
+    platform: 'win32',
+    env: { PATH: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows' },
+    spawnProcess() { return killer; }
+  });
+  child.orientUnsandboxed = true;
+
+  const termination = isolator.terminate(child);
+  killer.emit('close', 1);
+  assert.equal(await termination, false);
+  assert.equal(childKillSignal, 'SIGTERM');
 });
 
 test('POSIX unsandboxed opt-in terminates the detached process group', {
