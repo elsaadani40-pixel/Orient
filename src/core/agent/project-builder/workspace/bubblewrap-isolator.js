@@ -100,20 +100,21 @@ class BubblewrapIsolator {
     platform = process.platform,
     systemdRunPath = process.env.ORIENT_SYSTEMD_RUN_PATH || 'systemd-run',
     systemctlPath = process.env.ORIENT_SYSTEMCTL_PATH || 'systemctl',
-    readFileSync = fs.readFileSync
+    readFileSync = fs.readFileSync,
+    env = process.env
   } = {}) {
     this.spawnProcess = spawnProcess;
     this.platform = platform;
     this.systemdRunPath = systemdRunPath;
     this.systemctlPath = systemctlPath;
     this.readFileSync = readFileSync;
+    this.environment = env;
+    this.allowUnsandboxed = platform !== 'linux' &&
+      ['darwin', 'win32'].includes(platform) &&
+      env?.ORIENT_ALLOW_UNSANDBOXED === '1';
   }
 
-  buildArgs({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
-    if (this.platform !== 'linux') {
-      throw noSandboxError();
-    }
-
+  _resolveWorkspaceDirectories(workspaceRoot, cwd) {
     const root = fs.realpathSync.native(workspaceRoot);
     const workingDirectory = fs.realpathSync.native(cwd);
     const relativeCwd = path.relative(root, workingDirectory);
@@ -124,6 +125,49 @@ class BubblewrapIsolator {
     ) {
       throw new Error('Command working directory escapes isolated workspace');
     }
+    return { root, workingDirectory, relativeCwd };
+  }
+
+  _spawnUnsandboxed({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
+    const { workingDirectory } = this._resolveWorkspaceDirectories(workspaceRoot, cwd);
+    for (const [key] of Object.entries(environment)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        throw new Error(`Invalid sandbox environment variable name: ${key}`);
+      }
+    }
+
+    // Do not inherit the host process environment wholesale. Only PATH and the
+    // Windows loader roots are required by the direct-execution compatibility path.
+    const childEnvironment = {
+      PATH: this.environment?.PATH || this.environment?.Path || ''
+    };
+    if (this.platform === 'win32') {
+      for (const key of ['SystemRoot', 'WINDIR']) {
+        if (typeof this.environment?.[key] === 'string') childEnvironment[key] = this.environment[key];
+      }
+    }
+    Object.assign(childEnvironment, environment);
+
+    const child = this.spawnProcess(executable, args.map(String), {
+      cwd: workingDirectory,
+      shell: false,
+      windowsHide: true,
+      detached: this.platform !== 'win32',
+      env: childEnvironment
+    });
+    child.orientUnsandboxed = true;
+    child.orientResourceLimitsVerified = false;
+    child.orientResourceLimitMode = 'unsandboxed-opt-in';
+    return child;
+  }
+
+  buildArgs({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
+    if (this.platform !== 'linux') {
+      throw noSandboxError();
+    }
+
+    const { root, workingDirectory, relativeCwd } =
+      this._resolveWorkspaceDirectories(workspaceRoot, cwd);
 
     const argsForSandbox = [
       '--die-with-parent',
@@ -228,6 +272,11 @@ class BubblewrapIsolator {
     resourceLimits = {}
   }) {
     if (this.platform !== 'linux') {
+      if (this.allowUnsandboxed) {
+        return this._spawnUnsandboxed({
+          executable, args, workspaceRoot, cwd, environment
+        });
+      }
       throw noSandboxError();
     }
 
@@ -274,6 +323,48 @@ class BubblewrapIsolator {
   }
 
   terminate(child) {
+    if (child?.orientUnsandboxed === true) {
+      if (this.platform === 'win32') {
+        try { child.kill('SIGTERM'); } catch {}
+        return new Promise(resolve => {
+          let killer;
+          try {
+            killer = this.spawnProcess('taskkill.exe', [
+              '/PID', String(child.pid), '/T', '/F'
+            ], {
+              shell: false,
+              windowsHide: true,
+              stdio: 'ignore',
+              env: {
+                PATH: this.environment?.PATH || this.environment?.Path || '',
+                ...(this.environment?.SystemRoot ? { SystemRoot: this.environment.SystemRoot } : {})
+              }
+            });
+          } catch {
+            resolve(false);
+            return;
+          }
+          killer.once('error', () => resolve(false));
+          killer.once('close', code => resolve(code === 0));
+        });
+      }
+
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch (error) {
+        if (error.code === 'ESRCH') {
+          try { child.kill('SIGTERM'); } catch {}
+        } else {
+          try { child.kill('SIGTERM'); } catch {}
+        }
+      }
+      const timer = setTimeout(() => {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+      }, 100);
+      timer.unref?.();
+      return Promise.resolve(true);
+    }
+
     if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
 
     const unitName = child.orientResourceUnitName;
@@ -340,6 +431,7 @@ class BubblewrapIsolator {
     })().catch(() => false);
   }
   cleanup(child) {
+    if (child?.orientUnsandboxed === true) return Promise.resolve(true);
     if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
 
     const unitName = child.orientResourceUnitName;
