@@ -6,10 +6,41 @@ const AgentState = require('../agent/state/agent-state');
 const AppError = require('../errors/AppError');
 
 function setExecutionAdmission(error, state) {
-  if (error && (typeof error === 'object' || typeof error === 'function')) {
-    try { error.executionAdmission = state; } catch (_) {}
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) {
+    const wrapped = new Error(String(error));
+    wrapped.executionAdmission = state;
+    return wrapped;
   }
-  return error;
+
+  // Never mutate a downstream error in place: it may be frozen, and a tool
+  // could have supplied a forged admission marker. Clone its own descriptors
+  // (preserving AppError prototypes, code/status, stack and approval context),
+  // then authoritatively replace the marker at this Runtime boundary.
+  try {
+    const wrapped = Object.create(Object.getPrototypeOf(error));
+    for (const key of Reflect.ownKeys(error)) {
+      if (key === 'executionAdmission') continue;
+      const descriptor = Object.getOwnPropertyDescriptor(error, key);
+      if (descriptor) Object.defineProperty(wrapped, key, descriptor);
+    }
+    Object.defineProperty(wrapped, 'executionAdmission', {
+      value: state,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+    return wrapped;
+  } catch (_) {
+    const wrapped = new Error(error.message || String(error));
+    wrapped.name = error.name || 'Error';
+    for (const key of ['code', 'status', 'executionContext']) {
+      try { if (error[key] !== undefined) wrapped[key] = error[key]; } catch (_) {}
+    }
+    wrapped.stack = error.stack || wrapped.stack;
+    wrapped.cause = error;
+    wrapped.executionAdmission = state;
+    return wrapped;
+  }
 }
 
 function createApprovalSummary(tool, input) {
@@ -324,8 +355,8 @@ class RequestExecutionCoordinator {
         replanning: replanningDecision.toJSON(),
         execution: context.snapshot()
       };
-    } catch (error) {
-      setExecutionAdmission(error, 'accepted');
+    } catch (caughtError) {
+      const error = setExecutionAdmission(caughtError, 'accepted');
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
@@ -401,7 +432,7 @@ class RequestExecutionCoordinator {
             });
             await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issue_failed');
             await this.persistenceCoordinator.persistEvents(context);
-            throw issueError;
+            throw setExecutionAdmission(issueError, 'accepted');
           }
         }
         throw error;
