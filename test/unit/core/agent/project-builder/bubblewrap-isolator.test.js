@@ -35,7 +35,7 @@ test('Linux isolator creates a private network and exposes workspace as the only
 
 for (const platform of ['darwin', 'win32']) {
   test(`unsupported platform ${platform} returns the stable no-sandbox error`, () => {
-    const isolator = new BubblewrapIsolator({ platform });
+    const isolator = new BubblewrapIsolator({ platform, env: {} });
     assert.throws(
       () => isolator.buildArgs({
         executable: 'node',
@@ -54,6 +54,7 @@ for (const platform of ['darwin', 'win32']) {
     let spawnCalls = 0;
     const isolator = new BubblewrapIsolator({
       platform,
+      env: {},
       spawnProcess() {
         spawnCalls += 1;
         throw new Error('spawn must not be called');
@@ -151,7 +152,7 @@ test('Linux ignores the non-Linux unsandboxed opt-in', () => {
 });
 
 test('CommandRunner preserves the stable no-sandbox error from its isolator', async () => {
-  const isolator = new BubblewrapIsolator({ platform: 'win32' });
+  const isolator = new BubblewrapIsolator({ platform: 'win32', env: {} });
   const runner = new CommandRunner({
     policy: {
       allowedRoot: process.cwd(),
