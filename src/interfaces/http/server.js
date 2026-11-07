@@ -74,7 +74,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null, unsandboxedExecution = false }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -85,6 +85,9 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
     let authenticationOutcome = 'not_evaluated';
 
     res.setHeader('X-Request-ID', requestId);
+    if (unsandboxedExecution === true) {
+      res.setHeader('X-ORIENT-Unsandboxed', 'true');
+    }
     res.on('finish', () => {
       if (!accessAudit || typeof accessAudit.record !== 'function') return;
       const event = createAccessAuditEvent({
