@@ -235,3 +235,52 @@ test('memory repository reports malformed JSON instead of returning an empty sto
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('memory repository retries when a stale-owner observation races with lock replacement', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-memory-lock-replacement-race-'));
+  const file = path.join(dir, 'memories.json');
+  const repo = new JsonMemoryRepository(file, { lockTimeoutMs: 250 });
+  const originalKill = process.kill;
+  let replaced = false;
+  let released = false;
+
+  try {
+    fs.writeFileSync(repo.lockPath, JSON.stringify({
+      token: 'old-owner',
+      pid: 2147483647,
+      hostname: os.hostname(),
+      acquiredAt: new Date(0).toISOString()
+    }));
+
+    process.kill = function(pid, signal) {
+      if (!replaced) {
+        replaced = true;
+        fs.unlinkSync(repo.lockPath);
+        fs.writeFileSync(repo.lockPath, JSON.stringify({
+          token: 'replacement-owner',
+          pid: process.pid,
+          hostname: os.hostname(),
+          acquiredAt: new Date().toISOString()
+        }));
+        const error = new Error('simulated owner exit after lock replacement');
+        error.code = 'ESRCH';
+        throw error;
+      }
+      if (!released) {
+        released = true;
+        fs.unlinkSync(repo.lockPath);
+        return true;
+      }
+      return originalKill.call(process, pid, signal);
+    };
+
+    assert.equal(repo.withLock(() => 'acquired-after-retry'), 'acquired-after-retry');
+    assert.equal(replaced, true);
+    assert.equal(released, true);
+    assert.equal(fs.existsSync(repo.lockPath), false);
+  } finally {
+    process.kill = originalKill;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
