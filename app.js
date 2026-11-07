@@ -2,9 +2,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const config = require('./src/core/config');
 const logger = require('./src/core/logging/logger');
+const { isUnsandboxedExecutionEnabled } =
+  require('./src/core/agent/project-builder/workspace/unsandboxed-execution-policy');
 
-const unsandboxedExecution = ['darwin', 'win32'].includes(process.platform) &&
-  process.env.ORIENT_ALLOW_UNSANDBOXED === '1';
+const unsandboxedExecution = isUnsandboxedExecutionEnabled();
 
 const JsonMemoryRepository =
   require('./src/infrastructure/memory/json-memory.repository');
