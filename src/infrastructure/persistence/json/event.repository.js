@@ -233,16 +233,35 @@ class EventRepository {
     return this.findAll({ tenantId }).filter(event => event.goalId === goalId);
   }
 
+  belongsToTenant(event, tenantId) {
+    if (!tenantId) return true;
+    const eventTenantId = event?.data?.tenantId || null;
+    return tenantId === 'local'
+      ? !eventTenantId || eventTenantId === 'local'
+      : eventTenantId === tenantId;
+  }
+
   appendMissionEvent(event, { tenantId = null } = {}) {
     if (!event?.aggregateId) throw new TypeError('aggregateId is required');
     return this.withLock(() => {
       const current = this.read();
-      const existing = current.find(item => item.id === event.id);
-      if (existing) return existing;
       const normalized = this.normalize({ ...event });
-      if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
+      if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) {
+        throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
+      }
       if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
-      const aggregateEvents = current.filter(item => item.aggregateId === normalized.aggregateId);
+
+      const existing = current.find(item => item.id === normalized.id);
+      if (existing) {
+        if (!this.belongsToTenant(existing, tenantId)) {
+          throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
+        }
+        return existing;
+      }
+
+      const aggregateEvents = current.filter(item =>
+        item.aggregateId === normalized.aggregateId && this.belongsToTenant(item, tenantId)
+      );
       const expected = aggregateEvents.length ? Math.max(...aggregateEvents.map(item => Number(item.sequence) || 0)) + 1 : 1;
       if (normalized.sequence != null && normalized.sequence !== expected) {
         const error = new Error('Mission event sequence conflict');
