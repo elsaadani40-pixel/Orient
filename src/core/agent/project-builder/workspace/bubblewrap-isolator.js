@@ -8,6 +8,7 @@ const {
   normalizeResourceLimits,
   buildSystemdRunArgs
 } = require('./resource-limit-policy');
+const { isUnsandboxedExecutionEnabled } = require('./unsandboxed-execution-policy');
 
 const SYSTEM_MOUNTS = [
   '/usr',
@@ -109,9 +110,7 @@ class BubblewrapIsolator {
     this.systemctlPath = systemctlPath;
     this.readFileSync = readFileSync;
     this.environment = env;
-    this.allowUnsandboxed = platform !== 'linux' &&
-      ['darwin', 'win32'].includes(platform) &&
-      env?.ORIENT_ALLOW_UNSANDBOXED === '1';
+    this.allowUnsandboxed = isUnsandboxedExecutionEnabled({ platform, env });
   }
 
   _resolveWorkspaceDirectories(workspaceRoot, cwd) {
