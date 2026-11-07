@@ -2,6 +2,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const config = require('./src/core/config');
 const logger = require('./src/core/logging/logger');
+const { isUnsandboxedExecutionEnabled } =
+  require('./src/core/agent/project-builder/workspace/unsandboxed-execution-policy');
+
+const unsandboxedExecution = isUnsandboxedExecutionEnabled();
 
 const JsonMemoryRepository =
   require('./src/infrastructure/memory/json-memory.repository');
@@ -478,10 +482,20 @@ const server =
         await persistOwnerFinalAnswer(message.taskId);
       }
     },
-    websiteHandler: website.handler
+    websiteHandler: website.handler,
+    unsandboxedExecution
   });
 
 async function start() {
+  if (unsandboxedExecution) {
+    console.warn(
+      'WARNING: ORIENT OS sandbox isolation is disabled by explicit opt-in. ' +
+      'WorkspacePolicy and command allowlists still gate ORIENT tool access, ' +
+      'but direct processes can access host resources available to the ORIENT OS account; ' +
+      'OS filesystem/network isolation and OS resource limits are not provided. Unset ' +
+      'ORIENT_ALLOW_UNSANDBOXED to restore fail-closed behavior.'
+    );
+  }
   if (typeof persistenceRuntime.initialize === 'function') {
     await persistenceRuntime.initialize();
   }

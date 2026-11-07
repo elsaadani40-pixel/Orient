@@ -8,6 +8,7 @@ const {
   normalizeResourceLimits,
   buildSystemdRunArgs
 } = require('./resource-limit-policy');
+const { isUnsandboxedExecutionEnabled } = require('./unsandboxed-execution-policy');
 
 const SYSTEM_MOUNTS = [
   '/usr',
@@ -87,12 +88,12 @@ process.exit(Number.isInteger(result.status)?result.status:1);
 `;
 
 /**
- * Linux-only isolation for untrusted Project Builder commands.
+ * OS isolation for untrusted Project Builder commands.
  *
- * Bubblewrap remains the mandatory filesystem/network boundary. A transient
- * systemd user service places bwrap and all descendants into a cgroup before
- * the untrusted executable starts. There is deliberately no direct-spawn,
- * non-cgroup, or unsandboxed fallback.
+ * Linux always requires Bubblewrap plus a transient systemd cgroup service.
+ * macOS and Windows remain fail-closed by default; direct execution is allowed
+ * only through ORIENT_ALLOW_UNSANDBOXED=1 and is explicitly marked as lacking
+ * OS isolation and OS-enforced resource limits. There is no silent fallback.
  */
 class BubblewrapIsolator {
   constructor({
@@ -100,20 +101,19 @@ class BubblewrapIsolator {
     platform = process.platform,
     systemdRunPath = process.env.ORIENT_SYSTEMD_RUN_PATH || 'systemd-run',
     systemctlPath = process.env.ORIENT_SYSTEMCTL_PATH || 'systemctl',
-    readFileSync = fs.readFileSync
+    readFileSync = fs.readFileSync,
+    env = process.env
   } = {}) {
     this.spawnProcess = spawnProcess;
     this.platform = platform;
     this.systemdRunPath = systemdRunPath;
     this.systemctlPath = systemctlPath;
     this.readFileSync = readFileSync;
+    this.environment = env;
+    this.allowUnsandboxed = isUnsandboxedExecutionEnabled({ platform, env });
   }
 
-  buildArgs({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
-    if (this.platform !== 'linux') {
-      throw noSandboxError();
-    }
-
+  _resolveWorkspaceDirectories(workspaceRoot, cwd) {
     const root = fs.realpathSync.native(workspaceRoot);
     const workingDirectory = fs.realpathSync.native(cwd);
     const relativeCwd = path.relative(root, workingDirectory);
@@ -124,6 +124,49 @@ class BubblewrapIsolator {
     ) {
       throw new Error('Command working directory escapes isolated workspace');
     }
+    return { root, workingDirectory, relativeCwd };
+  }
+
+  _spawnUnsandboxed({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
+    const { workingDirectory } = this._resolveWorkspaceDirectories(workspaceRoot, cwd);
+    for (const [key] of Object.entries(environment)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        throw new Error(`Invalid sandbox environment variable name: ${key}`);
+      }
+    }
+
+    // Do not inherit the host process environment wholesale. Only PATH and the
+    // Windows loader roots are required by the direct-execution compatibility path.
+    const childEnvironment = {
+      PATH: this.environment?.PATH || this.environment?.Path || ''
+    };
+    if (this.platform === 'win32') {
+      for (const key of ['SystemRoot', 'WINDIR']) {
+        if (typeof this.environment?.[key] === 'string') childEnvironment[key] = this.environment[key];
+      }
+    }
+    Object.assign(childEnvironment, environment);
+
+    const child = this.spawnProcess(executable, args.map(String), {
+      cwd: workingDirectory,
+      shell: false,
+      windowsHide: true,
+      detached: this.platform !== 'win32',
+      env: childEnvironment
+    });
+    child.orientUnsandboxed = true;
+    child.orientResourceLimitsVerified = false;
+    child.orientResourceLimitMode = 'unsandboxed-opt-in';
+    return child;
+  }
+
+  buildArgs({ executable, args = [], workspaceRoot, cwd, environment = {} }) {
+    if (this.platform !== 'linux') {
+      throw noSandboxError();
+    }
+
+    const { root, workingDirectory, relativeCwd } =
+      this._resolveWorkspaceDirectories(workspaceRoot, cwd);
 
     const argsForSandbox = [
       '--die-with-parent',
@@ -228,6 +271,11 @@ class BubblewrapIsolator {
     resourceLimits = {}
   }) {
     if (this.platform !== 'linux') {
+      if (this.allowUnsandboxed) {
+        return this._spawnUnsandboxed({
+          executable, args, workspaceRoot, cwd, environment
+        });
+      }
       throw noSandboxError();
     }
 
@@ -274,6 +322,67 @@ class BubblewrapIsolator {
   }
 
   terminate(child) {
+    if (child?.orientUnsandboxed === true) {
+      if (this.platform === 'win32') {
+        return new Promise(resolve => {
+          let killer;
+          const systemRoot = this.environment?.SystemRoot || this.environment?.WINDIR;
+          if (!systemRoot || !Number.isInteger(child.pid) || child.pid <= 0) {
+            try { child.kill('SIGTERM'); } catch {}
+            resolve(false);
+            return;
+          }
+          const taskkillPath = path.win32.join(systemRoot, 'System32', 'taskkill.exe');
+          try {
+            // Kill the tree while its root process still exists; terminating the
+            // parent first can make descendants undiscoverable to taskkill /T.
+            killer = this.spawnProcess(taskkillPath, [
+              '/PID', String(child.pid), '/T', '/F'
+            ], {
+              shell: false,
+              windowsHide: true,
+              stdio: 'ignore',
+              env: {
+                PATH: this.environment?.PATH || this.environment?.Path || '',
+                SystemRoot: systemRoot
+              }
+            });
+          } catch {
+            try { child.kill('SIGTERM'); } catch {}
+            resolve(false);
+            return;
+          }
+          killer.once('error', () => {
+            try { child.kill('SIGTERM'); } catch {}
+            resolve(false);
+          });
+          killer.once('close', code => {
+            if (code !== 0) {
+              try { child.kill('SIGTERM'); } catch {}
+            }
+            resolve(code === 0);
+          });
+        });
+      }
+
+      if (!Number.isInteger(child.pid) || child.pid <= 0) {
+        try { child.kill('SIGTERM'); } catch {}
+        return Promise.resolve(false);
+      }
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch (error) {
+        if (error.code === 'ESRCH') return Promise.resolve(true);
+        try { child.kill('SIGTERM'); } catch {}
+        return Promise.resolve(false);
+      }
+      const timer = setTimeout(() => {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+      }, 100);
+      timer.unref?.();
+      return Promise.resolve(true);
+    }
+
     if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
 
     const unitName = child.orientResourceUnitName;
@@ -340,6 +449,7 @@ class BubblewrapIsolator {
     })().catch(() => false);
   }
   cleanup(child) {
+    if (child?.orientUnsandboxed === true) return Promise.resolve(true);
     if (!child || !child.orientResourceUnitName) return Promise.resolve(false);
 
     const unitName = child.orientResourceUnitName;

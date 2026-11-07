@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 
 const BubblewrapIsolator = require('../../../../../src/core/agent/project-builder/workspace/bubblewrap-isolator');
 const CommandRunner = require('../../../../../src/core/agent/project-builder/workspace/command-runner');
@@ -35,7 +36,7 @@ test('Linux isolator creates a private network and exposes workspace as the only
 
 for (const platform of ['darwin', 'win32']) {
   test(`unsupported platform ${platform} returns the stable no-sandbox error`, () => {
-    const isolator = new BubblewrapIsolator({ platform });
+    const isolator = new BubblewrapIsolator({ platform, env: {} });
     assert.throws(
       () => isolator.buildArgs({
         executable: 'node',
@@ -54,6 +55,7 @@ for (const platform of ['darwin', 'win32']) {
     let spawnCalls = 0;
     const isolator = new BubblewrapIsolator({
       platform,
+      env: {},
       spawnProcess() {
         spawnCalls += 1;
         throw new Error('spawn must not be called');
@@ -72,8 +74,86 @@ for (const platform of ['darwin', 'win32']) {
   });
 }
 
+test('explicit non-Linux opt-in starts only the allowlisted executable without a shell', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-unsandboxed-opt-in-'));
+  const calls = [];
+  const child = { pid: 1234, kill() { return true; } };
+  const isolator = new BubblewrapIsolator({
+    platform: 'darwin',
+    env: { PATH: '/trusted/bin', ORIENT_ALLOW_UNSANDBOXED: '1', PRIVATE_TOKEN: 'must-not-leak' },
+    spawnProcess(...args) { calls.push(args); return child; }
+  });
+
+  try {
+    const result = isolator.spawn({
+      executable: '/trusted/bin/node',
+      args: ['-e', 'process.exit(0)'],
+      workspaceRoot: root,
+      cwd: root,
+      environment: { ORIENT_TEST: '1' },
+      timeoutMs: 1000,
+      resourceLimits: { maxProcesses: 2 }
+    });
+
+    assert.equal(result, child);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], '/trusted/bin/node');
+    assert.deepEqual(calls[0][1], ['-e', 'process.exit(0)']);
+    assert.equal(calls[0][2].shell, false);
+    assert.equal(calls[0][2].cwd, root);
+    assert.deepEqual(calls[0][2].env, { PATH: '/trusted/bin', ORIENT_TEST: '1' });
+    assert.equal(child.orientUnsandboxed, true);
+    assert.equal(child.orientResourceLimitsVerified, false);
+    assert.equal(child.orientResourceLimitMode, 'unsandboxed-opt-in');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('non-Linux opt-in still rejects a working directory outside the workspace', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-unsandboxed-root-'));
+  let spawnCalls = 0;
+  const isolator = new BubblewrapIsolator({
+    platform: 'win32',
+    env: { PATH: 'C:\\trusted\\bin', ORIENT_ALLOW_UNSANDBOXED: '1' },
+    spawnProcess() { spawnCalls += 1; return {}; }
+  });
+
+  try {
+    assert.throws(
+      () => isolator.spawn({
+        executable: 'node',
+        workspaceRoot: root,
+        cwd: process.cwd()
+      }),
+      /working directory escapes isolated workspace/
+    );
+    assert.equal(spawnCalls, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux ignores the non-Linux unsandboxed opt-in', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-linux-opt-in-'));
+  const isolator = new BubblewrapIsolator({
+    platform: 'linux',
+    env: { ORIENT_ALLOW_UNSANDBOXED: '1' }
+  });
+
+  try {
+    assert.ok(isolator.buildArgs({
+      executable: '/usr/bin/node',
+      workspaceRoot: root,
+      cwd: root
+    }).includes('--unshare-all'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('CommandRunner preserves the stable no-sandbox error from its isolator', async () => {
-  const isolator = new BubblewrapIsolator({ platform: 'win32' });
+  const isolator = new BubblewrapIsolator({ platform: 'win32', env: {} });
   const runner = new CommandRunner({
     policy: {
       allowedRoot: process.cwd(),
@@ -90,4 +170,82 @@ test('CommandRunner preserves the stable no-sandbox error from its isolator', as
     runner.run('node'),
     error => error.code === 'ORIENT_E_NO_SANDBOX'
   );
+});
+
+test('Windows unsandboxed termination requests the complete process tree be killed', async () => {
+  const child = new EventEmitter();
+  child.pid = 4321;
+  let childKillSignal = null;
+  child.kill = signal => { childKillSignal = signal; return true; };
+  const killer = new EventEmitter();
+  let killerInvocation = null;
+  const isolator = new BubblewrapIsolator({
+    platform: 'win32',
+    env: { PATH: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows' },
+    spawnProcess(...args) { killerInvocation = args; return killer; }
+  });
+  child.orientUnsandboxed = true;
+
+  const termination = isolator.terminate(child);
+  assert.equal(childKillSignal, null, 'do not terminate the parent before taskkill can discover descendants');
+  assert.equal(killerInvocation[0], 'C:\\Windows\\System32\\taskkill.exe');
+  assert.deepEqual(killerInvocation[1], ['/PID', '4321', '/T', '/F']);
+  assert.equal(killerInvocation[2].shell, false);
+  killer.emit('close', 0);
+  assert.equal(await termination, true);
+  assert.equal(childKillSignal, null);
+});
+
+test('Windows unsandboxed termination falls back to the parent when taskkill fails', async () => {
+  const child = new EventEmitter();
+  child.pid = 4322;
+  let childKillSignal = null;
+  child.kill = signal => { childKillSignal = signal; return true; };
+  const killer = new EventEmitter();
+  const isolator = new BubblewrapIsolator({
+    platform: 'win32',
+    env: { PATH: 'C:\\Windows\\System32', SystemRoot: 'C:\\Windows' },
+    spawnProcess() { return killer; }
+  });
+  child.orientUnsandboxed = true;
+
+  const termination = isolator.terminate(child);
+  killer.emit('close', 1);
+  assert.equal(await termination, false);
+  assert.equal(childKillSignal, 'SIGTERM');
+});
+
+test('POSIX unsandboxed opt-in terminates the detached process group', {
+  skip: process.platform === 'win32'
+}, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-unsandboxed-process-group-'));
+  const isolator = new BubblewrapIsolator({
+    platform: 'darwin',
+    env: { PATH: process.env.PATH || '', ORIENT_ALLOW_UNSANDBOXED: '1' }
+  });
+
+  try {
+    const child = isolator.spawn({
+      executable: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      workspaceRoot: root,
+      cwd: root,
+      environment: {},
+      timeoutMs: 5000
+    });
+    const closed = new Promise(resolve => {
+      child.once('close', (code, signal) => resolve({ code, signal }));
+    });
+    assert.equal(await isolator.terminate(child), true);
+    let timer;
+    const outcome = await Promise.race([
+      closed,
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); })
+    ]);
+    clearTimeout(timer);
+    assert.ok(outcome, 'the detached command process must exit after termination');
+    assert.equal(outcome.signal, 'SIGTERM');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
