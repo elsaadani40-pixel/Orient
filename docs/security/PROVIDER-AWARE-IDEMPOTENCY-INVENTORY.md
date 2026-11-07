@@ -16,6 +16,12 @@
 | Model provider (`OllamaProvider`) | Model inference request; network activity depends on configured endpoint | Not a business side-effect idempotency mechanism | Production routing sets `allowRemote: false`; do not treat model request retries as provider-side-effect guarantees | `app.js`, `src/infrastructure/model/ollama.provider.js` |
 | Async workflow worker | Can execute scheduled steps and retry failures if enabled | Generic worker retry classifier is not proof of provider idempotency | **Not started or wired in production** while issue #189 remains open; production task handling stays synchronous | `src/core/workflow/async-workflow-worker-service.js`, `src/core/workflow/async-workflow-worker.js`, `app.js` |
 
+## Memory backend selection boundary
+
+- JSON is the default memory backend. When `persistenceMode === 'sqlite'` and the SQLite adapter exposes memory, audit, and transaction-coordinator repositories, `app.js` selects those repositories for `MemoryService`.
+- When `persistenceMode === 'postgres'`, the current `app.js` composition does **not** select a PostgreSQL memory repository; it falls back to the JSON memory repository and JSON audit file. The PostgreSQL adapter's existence does not mean memory data is stored in PostgreSQL.
+- PR #312 contains a proposed async MemoryService + PostgreSQL/SQLite unification, but it is stale, overlaps PR #319/#188, and has not been merged. Treat PostgreSQL memory persistence as not implemented in current production composition until a decomposed, exact-head-validated slice lands.
+
 ## Evidence currently present
 
 - Memory reconciliation tests cover committed `memory.add` and `memory.delete` receipts, process exit after the mutation/audit transaction commits but before execution completion is recorded, repeated deletion reconciliation, target/payload mismatch, missing receipt, missing transaction coordinator, and tenant-scoped receipt lookup.
