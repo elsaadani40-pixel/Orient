@@ -188,3 +188,131 @@ test('appendMany reports a stable tenant mismatch code before writing any event'
   );
   assert.equal(repository.count(), 0);
 });
+
+
+test('event query helpers preserve tenant boundaries for execution, goal, and type lookups', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-query-tenants-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  repository.appendMany([
+    { id: 'tenant-a-query', executionId: 'shared-execution', goalId: 'shared-goal', type: 'shared.type', data: {} },
+    { id: 'tenant-b-query', executionId: 'shared-execution', goalId: 'shared-goal', type: 'shared.type', data: {} }
+  ], { tenantId: 'tenant-a' });
+  repository.append({
+    id: 'tenant-b-query',
+    executionId: 'shared-execution',
+    goalId: 'shared-goal',
+    type: 'shared.type',
+    data: {}
+  }, { tenantId: 'tenant-b' });
+
+  assert.deepEqual(
+    repository.findByExecutionId('shared-execution', { tenantId: 'tenant-a' }).map(event => event.id),
+    ['tenant-a-query']
+  );
+  assert.deepEqual(
+    repository.findByExecutionId('shared-execution', { tenantId: 'tenant-b' }).map(event => event.id),
+    ['tenant-b-query']
+  );
+  assert.deepEqual(
+    repository.findByGoalId('shared-goal', { tenantId: 'tenant-a' }).map(event => event.id),
+    ['tenant-a-query']
+  );
+  assert.deepEqual(
+    repository.findByGoalId('shared-goal', { tenantId: 'tenant-b' }).map(event => event.id),
+    ['tenant-b-query']
+  );
+  assert.deepEqual(
+    repository.findByType('shared.type', { tenantId: 'tenant-a' }).map(event => event.id),
+    ['tenant-a-query']
+  );
+  assert.deepEqual(
+    repository.findByType('shared.type', { tenantId: 'tenant-b' }).map(event => event.id),
+    ['tenant-b-query']
+  );
+  assert.deepEqual(repository.findByExecutionId('', { tenantId: 'tenant-a' }), []);
+  assert.deepEqual(repository.findByGoalId(null, { tenantId: 'tenant-a' }), []);
+  assert.deepEqual(repository.findByType('', { tenantId: 'tenant-a' }), []);
+});
+
+test('event repository reclaims a stale lock only after confirming the recorded owner is gone', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-stale-lock-'));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 100 });
+  const stalePid = 2147483647;
+  const originalKill = process.kill;
+  try {
+    fs.mkdirSync(repository.lockPath);
+    fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify({
+      token: 'stale-owner-token',
+      pid: stalePid,
+      hostname: os.hostname(),
+      acquiredAt: new Date(0).toISOString()
+    }));
+
+    process.kill = function (pid, signal) {
+      if (pid === stalePid && signal === 0) {
+        throw Object.assign(new Error('simulated process is gone'), { code: 'ESRCH' });
+      }
+      return originalKill.call(process, pid, signal);
+    };
+
+    assert.equal(repository.withLock(() => 'acquired-after-stale-recovery'), 'acquired-after-stale-recovery');
+    assert.equal(fs.existsSync(repository.lockPath), false);
+    assert.deepEqual(
+      fs.readdirSync(directory).filter(name => name.includes('.stale.')),
+      []
+    );
+  } finally {
+    process.kill = originalKill;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('event repository preserves a replacement lock when stale-owner observation races with replacement', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-lock-replacement-'));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 50 });
+  const stalePid = 2147483647;
+  const originalKill = process.kill;
+  let replaced = false;
+  const replacementOwner = {
+    token: 'replacement-owner-token',
+    pid: process.pid,
+    hostname: os.hostname(),
+    acquiredAt: new Date().toISOString()
+  };
+
+  try {
+    fs.mkdirSync(repository.lockPath);
+    fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify({
+      token: 'stale-owner-token',
+      pid: stalePid,
+      hostname: os.hostname(),
+      acquiredAt: new Date(0).toISOString()
+    }));
+
+    process.kill = function (pid, signal) {
+      if (pid === stalePid && signal === 0 && !replaced) {
+        replaced = true;
+        fs.rmSync(repository.lockPath, { recursive: true, force: true });
+        fs.mkdirSync(repository.lockPath);
+        fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify(replacementOwner));
+        throw Object.assign(new Error('old owner disappeared after replacement'), { code: 'ESRCH' });
+      }
+      return originalKill.call(process, pid, signal);
+    };
+
+    assert.throws(
+      () => repository.withLock(() => 'must-not-steal-replacement-lock'),
+      error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.equal(replaced, true);
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(repository.lockPath, 'owner.json'), 'utf8')),
+      replacementOwner
+    );
+  } finally {
+    process.kill = originalKill;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
