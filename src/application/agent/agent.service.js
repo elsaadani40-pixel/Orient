@@ -182,17 +182,25 @@ class AgentService {
     const executions = this.runtime.persistence?.executions;
     if (typeof executions?.findById === 'function') {
       const persistedExecution = await executions.findById(executionId, { tenantId });
-      if (persistedExecution) {
-        const persistedTenantId = persistedExecution.metadata?.tenantId;
-        if (persistedExecution.executionId !== executionId ||
-            (tenantId !== 'local' && persistedTenantId !== tenantId) ||
-            (tenantId === 'local' && persistedTenantId && persistedTenantId !== 'local')) {
-          throw new AppError(
-            'Persisted execution identity or tenant does not match the idempotency reservation',
-            502,
-            'TASK_EXECUTION_ID_MISMATCH'
-          );
-        }
+      if (!persistedExecution) {
+        // A missing read is an unknown/possibly delayed durable write, not proof
+        // of pre-admission rejection. Keep the idempotency reservation running;
+        // a retry can reconcile once the tenant-scoped execution becomes visible.
+        throw new AppError(
+          'Runtime accepted the task but its durable execution record is not yet observable',
+          503,
+          'TASK_EXECUTION_NOT_DURABLE'
+        );
+      }
+      const persistedTenantId = persistedExecution.metadata?.tenantId;
+      if (persistedExecution.executionId !== executionId ||
+          (tenantId !== 'local' && persistedTenantId !== tenantId) ||
+          (tenantId === 'local' && persistedTenantId && persistedTenantId !== 'local')) {
+        throw new AppError(
+          'Persisted execution identity or tenant does not match the idempotency reservation',
+          502,
+          'TASK_EXECUTION_ID_MISMATCH'
+        );
       }
     }
 

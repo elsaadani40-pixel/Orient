@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const AgentService = require('../../../../src/application/agent/agent.service');
 
-function createRuntime({ execute, status = 'completed', statusExecutionId, failFirstComplete = false, failFirstStatusLookup = false, persistedTenantId = 'tenant-test' } = {}) {
+function createRuntime({ execute, status = 'completed', statusExecutionId, failFirstComplete = false, failFirstStatusLookup = false, persistedTenantId = 'tenant-test', persistExecution = true } = {}) {
   const records = new Map();
   const persistedExecutions = new Map();
   let executions = 0;
@@ -56,10 +56,12 @@ function createRuntime({ execute, status = 'completed', statusExecutionId, failF
     async execute(goal, options = {}) {
       executions += 1;
       if (execute) return execute(goal, options, persistedExecutions);
-      persistedExecutions.set(options.executionId, {
-        executionId: options.executionId,
-        metadata: { tenantId: persistedTenantId }
-      });
+      if (persistExecution) {
+        persistedExecutions.set(options.executionId, {
+          executionId: options.executionId,
+          metadata: { tenantId: persistedTenantId }
+        });
+      }
       return { execution: { executionId: options.executionId } };
     },
     async getExecutionStatus(id) {
@@ -332,5 +334,32 @@ test('tenant-mismatched durable execution is rejected and remains non-replayable
     fixture.service.createTask({ goal: 'reject cross-tenant execution', idempotencyKey: 'request-key-tenant-mismatch-01' }),
     error => error.code === 'TASK_EXECUTION_ID_MISMATCH'
   );
+  assert.equal(fixture.executions, 1);
+});
+
+
+test('task creation keeps admission recoverable until the durable execution record is observable', async () => {
+  const fixture = createRuntime({ persistExecution: false });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'wait for durable execution visibility', idempotencyKey: 'request-key-durable-visibility-01' }),
+    error => error.code === 'TASK_EXECUTION_NOT_DURABLE' && error.statusCode === 503
+  );
+  const [record] = [...fixture.records.values()];
+  assert.equal(record.status, 'running');
+  assert.equal(fixture.executions, 1);
+
+  fixture.persistedExecutions.set(record.executionId, {
+    executionId: record.executionId,
+    metadata: { tenantId: 'tenant-test' }
+  });
+
+  const retry = await fixture.service.createTask({
+    goal: 'wait for durable execution visibility',
+    idempotencyKey: 'request-key-durable-visibility-01'
+  });
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.task.id, record.executionId);
+  assert.equal(retry.task.status, 'completed');
   assert.equal(fixture.executions, 1);
 });
