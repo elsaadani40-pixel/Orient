@@ -543,7 +543,13 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 400, { ok: false, code: 'APPROVAL_ID_REQUIRED', message: 'معرّف الموافقة غير صالح.' });
             return;
           }
-          await agentRoutes.resume(req, res, ownerResumeMatch[1], { approval: { approvalId } });
+          await agentRoutes.resume(
+            req,
+            res,
+            ownerResumeMatch[1],
+            { approval: { approvalId } },
+            { sessionId: ownerSession.sessionId }
+          );
           return;
         }
 
