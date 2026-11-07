@@ -307,6 +307,10 @@ class RequestExecutionCoordinator {
 
       if (error?.code === 'APPROVAL_REQUIRED') {
         const approvalContext = error.executionContext || {};
+        if (approvalContext.tenantId !== undefined && approvalContext.tenantId !== null &&
+            approvalContext.tenantId !== context.tenantId) {
+          throw new AppError('Approval tenant does not match the active execution tenant', 403, 'APPROVAL_TENANT_MISMATCH');
+        }
         const step = Number(approvalContext.step);
         const planRevision = Number(approvalContext.planRevision || 1);
         const tool = typeof approvalContext.tool === 'string' ? approvalContext.tool : null;
