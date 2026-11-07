@@ -88,12 +88,12 @@ process.exit(Number.isInteger(result.status)?result.status:1);
 `;
 
 /**
- * Linux-only isolation for untrusted Project Builder commands.
+ * OS isolation for untrusted Project Builder commands.
  *
- * Bubblewrap remains the mandatory filesystem/network boundary. A transient
- * systemd user service places bwrap and all descendants into a cgroup before
- * the untrusted executable starts. There is deliberately no direct-spawn,
- * non-cgroup, or unsandboxed fallback.
+ * Linux always requires Bubblewrap plus a transient systemd cgroup service.
+ * macOS and Windows remain fail-closed by default; direct execution is allowed
+ * only through ORIENT_ALLOW_UNSANDBOXED=1 and is explicitly marked as lacking
+ * OS isolation and OS-enforced resource limits. There is no silent fallback.
  */
 class BubblewrapIsolator {
   constructor({
