@@ -59,7 +59,7 @@ jobs:
           config.concurrency = 1;
           fs.writeFileSync('stryker.matrix.config.json', JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
           NODE
-          npx --yes --package=@stryker-mutator/core@10.1.1 stryker run --configFile stryker.matrix.config.json 2>&1 | tee "artifacts/stryker-${{ matrix.name }}.log"
+          npx --yes --package=@stryker-mutator/core@10.1.1 stryker run stryker.matrix.config.json 2>&1 | tee "artifacts/stryker-${{ matrix.name }}.log"
 
       - name: Upload mutation evidence
         if: always()
