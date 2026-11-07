@@ -319,3 +319,134 @@ test('event repository preserves a replacement lock when stale-owner observation
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('event repository validates lock timeout and treats blank storage as empty', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-storage-boundaries-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'events.json');
+
+  assert.throws(() => new EventRepository(file, { lockTimeoutMs: 0 }), TypeError);
+  assert.throws(() => new EventRepository(file, { lockTimeoutMs: 1.5 }), TypeError);
+
+  const repository = new EventRepository(file);
+  fs.writeFileSync(file, '  \n\t');
+  assert.deepEqual(repository.read(), []);
+  fs.writeFileSync(file, '{}');
+  assert.throws(() => repository.read(), /Event storage read failed/);
+});
+
+test('event repository never reclaims a lock with malformed or unverifiable owner metadata', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-unverifiable-lock-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 12 });
+
+  fs.mkdirSync(repository.lockPath);
+  fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), '{invalid-json');
+  assert.throws(
+    () => repository.withLock(() => 'must-not-run'),
+    error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+  );
+  assert.equal(fs.existsSync(repository.lockPath), true);
+
+  fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify({
+    token: 'foreign-host-owner',
+    pid: process.pid,
+    hostname: 'different-host',
+    acquiredAt: new Date(0).toISOString()
+  }));
+  let killCalls = 0;
+  const originalKill = process.kill;
+  try {
+    process.kill = function (...args) {
+      killCalls += 1;
+      return originalKill.apply(process, args);
+    };
+    assert.throws(
+      () => repository.withLock(() => 'must-not-run'),
+      error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.equal(killCalls, 0, 'a foreign-host PID must never be probed locally');
+    assert.equal(fs.existsSync(repository.lockPath), true);
+  } finally {
+    process.kill = originalKill;
+  }
+});
+
+test('event repository preserves a lock when process liveness cannot be determined', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-eperm-lock-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 12 });
+  const ownerPid = 2147483646;
+  fs.mkdirSync(repository.lockPath);
+  fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify({
+    token: 'permission-denied-owner',
+    pid: ownerPid,
+    hostname: os.hostname(),
+    acquiredAt: new Date(0).toISOString()
+  }));
+  const originalKill = process.kill;
+  try {
+    process.kill = function (pid, signal) {
+      if (pid === ownerPid && signal === 0) {
+        throw Object.assign(new Error('permission denied while probing owner'), { code: 'EPERM' });
+      }
+      return originalKill.call(process, pid, signal);
+    };
+    assert.throws(
+      () => repository.withLock(() => 'must-not-run'),
+      error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.equal(fs.existsSync(repository.lockPath), true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(repository.lockPath, 'owner.json'), 'utf8')).token, 'permission-denied-owner');
+  } finally {
+    process.kill = originalKill;
+  }
+});
+
+test('mission event sequence conflicts fail without appending or advancing the aggregate', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-sequence-conflict-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  repository.appendMissionEvent({
+    id: 'mission-sequence-1',
+    aggregateId: 'mission-sequence',
+    sequence: 1,
+    type: 'mission.started',
+    data: {}
+  }, { tenantId: 'tenant-a' });
+
+  assert.throws(
+    () => repository.appendMissionEvent({
+      id: 'mission-sequence-3',
+      aggregateId: 'mission-sequence',
+      sequence: 3,
+      type: 'mission.progressed',
+      data: {}
+    }, { tenantId: 'tenant-a' }),
+    error => error.code === 'MISSION_EVENT_SEQUENCE_CONFLICT'
+  );
+  assert.deepEqual(repository.findByAggregateId('mission-sequence', { tenantId: 'tenant-a' }).map(event => event.sequence), [1]);
+
+  const second = repository.appendMissionEvent({
+    id: 'mission-sequence-2',
+    aggregateId: 'mission-sequence',
+    sequence: 2,
+    type: 'mission.progressed',
+    data: {}
+  }, { tenantId: 'tenant-a' });
+  assert.equal(second.sequence, 2);
+  assert.deepEqual(repository.findByAggregateId('mission-sequence', { tenantId: 'tenant-a' }).map(event => event.sequence), [1, 2]);
+});
+
+test('event repository rejects malformed append inputs before writing', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-invalid-input-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  assert.throws(() => repository.append(null), TypeError);
+  assert.throws(() => repository.appendMany({},), TypeError);
+  assert.throws(() => repository.appendMany([{ id: 'valid-before-invalid', type: 'ok' }, null]), TypeError);
+  assert.equal(repository.count(), 0);
+});

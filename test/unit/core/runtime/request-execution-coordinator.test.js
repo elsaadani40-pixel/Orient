@@ -850,3 +850,78 @@ test("resume does not release a replacement worker's lease after losing ownershi
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('approval challenge exposes a bounded, verifiable project-change summary', async () => {
+  const crypto = require('node:crypto');
+  let issuedInput = null;
+  const proposals = Array.from({ length: 11 }, (_, index) => ({
+    action: index === 0 ? 'update' : index === 1 ? 'create' : 'delete',
+    path: index === 0 ? 'x'.repeat(600) : `src/file-${index}.js`,
+    content: index === 0 ? 'line one\nline two' : index === 1 ? 'z'.repeat(32001) : '',
+    expectedContentSha256: 'a'.repeat(80)
+  }));
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'project.execute_change', steps: [{ step: 1, tool: 'project.execute_change' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'project.execute_change' }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async ({ context }) => {
+        throw Object.assign(new Error('approval required'), {
+          code: 'APPROVAL_REQUIRED',
+          executionContext: {
+            executionId: context.executionId,
+            step: 1,
+            planRevision: 1,
+            tool: 'project.execute_change',
+            capability: 'workspace.write',
+            tenantId: 'tenant-a',
+            input: { proposals }
+          }
+        });
+      }
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async () => ({}),
+      checkpoint: async () => ({}),
+      persistEvents: async () => []
+    },
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    approvalService: {
+      issue: async args => {
+        issuedInput = args;
+        return { approvalId: 'approval-summary-test' };
+      }
+    },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  await assert.rejects(
+    coordinator.execute('apply a project change'),
+    error => error.code === 'APPROVAL_REQUIRED'
+  );
+
+  const summary = issuedInput.metadata.approvalSummary;
+  assert.equal(summary.kind, 'file_change');
+  assert.equal(summary.changeCount, 11);
+  assert.equal(summary.changes.length, 10);
+  assert.equal(summary.changes[0].action, 'update');
+  assert.equal(summary.changes[0].path.length, 512);
+  assert.equal(summary.changes[0].expectedContentSha256.length, 64);
+  assert.equal(summary.changes[0].proposedContentSha256, crypto.createHash('sha256').update('line one\nline two', 'utf8').digest('hex'));
+  assert.equal(summary.changes[0].contentBytes, Buffer.byteLength('line one\nline two', 'utf8'));
+  assert.equal(summary.changes[0].lineCount, 2);
+  assert.equal(summary.changes[0].contentTruncated, false);
+  assert.equal(summary.changes[1].action, 'create');
+  assert.equal(summary.changes[1].proposedContent.length, 32000);
+  assert.equal(summary.changes[1].contentTruncated, true);
+  assert.equal(summary.changes[2].action, 'invalid');
+  assert.match(summary.reviewNotice, /expected current-file SHA-256/);
+});
