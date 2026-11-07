@@ -4,11 +4,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const AgentService = require('../../../../src/application/agent/agent.service');
 
-function createRuntime({ execute, status = 'completed', statusExecutionId, failFirstComplete = false } = {}) {
+function createRuntime({ execute, status = 'completed', statusExecutionId, failFirstComplete = false, failFirstStatusLookup = false, persistedTenantId = 'tenant-test' } = {}) {
   const records = new Map();
   const persistedExecutions = new Map();
   let executions = 0;
   let completeCalls = 0;
+  let statusLookups = 0;
   const idempotency = {
     async begin(args) {
       const existing = records.get(args.operationId);
@@ -57,11 +58,13 @@ function createRuntime({ execute, status = 'completed', statusExecutionId, failF
       if (execute) return execute(goal, options, persistedExecutions);
       persistedExecutions.set(options.executionId, {
         executionId: options.executionId,
-        metadata: { tenantId: 'tenant-test' }
+        metadata: { tenantId: persistedTenantId }
       });
       return { execution: { executionId: options.executionId } };
     },
     async getExecutionStatus(id) {
+      statusLookups += 1;
+      if (failFirstStatusLookup && statusLookups === 1) throw new Error('simulated transient status read failure');
       return {
         executionId: statusExecutionId || id,
         status,
@@ -79,6 +82,7 @@ function createRuntime({ execute, status = 'completed', statusExecutionId, failF
     service: new AgentService(runtime),
     records,
     get executions() { return executions; },
+    get statusLookups() { return statusLookups; },
     persistedExecutions
   };
 }
@@ -145,7 +149,7 @@ test('unified task creation requires durable idempotency storage', async () => {
 
 test('runtime failures are persisted as failed idempotency records and cannot replay execution', async () => {
   const fixture = createRuntime({
-    execute: async () => { throw Object.assign(new Error('runtime unavailable'), { code: 'RUNTIME_UNAVAILABLE' }); }
+    execute: async () => { throw Object.assign(new Error('runtime unavailable'), { code: 'RUNTIME_UNAVAILABLE', executionAdmission: 'rejected' }); }
   });
   await assert.rejects(
     fixture.service.createTask({ goal: 'a task', idempotencyKey: 'request-key-0005' }),
@@ -238,5 +242,95 @@ test('task retry reconciles an execution persisted before idempotency completion
   assert.equal(retry.replayed, true);
   assert.equal(retry.task.status, 'completed');
   assert.match(retry.task.id, /^[0-9a-f-]{36}$/i);
+  assert.equal(fixture.executions, 1);
+});
+
+
+test('transient status lookup failure after Runtime admission remains recoverable without a second execute', async () => {
+  const fixture = createRuntime({ failFirstStatusLookup: true });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'recover after status read failure', idempotencyKey: 'request-key-status-recovery-01' }),
+    /simulated transient status read failure/
+  );
+  const record = [...fixture.records.values()][0];
+  assert.equal(record.status, 'running');
+
+  const retry = await fixture.service.createTask({
+    goal: 'recover after status read failure',
+    idempotencyKey: 'request-key-status-recovery-01'
+  });
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.task.status, 'completed');
+  assert.equal(fixture.executions, 1);
+});
+
+test('approval pause survives transient status lookup failure and never repeats the high-risk action', async () => {
+  const fixture = createRuntime({
+    status: 'awaiting_approval',
+    failFirstStatusLookup: true,
+    execute: async (_goal, options, persistedExecutions) => {
+      persistedExecutions.set(options.executionId, {
+        executionId: options.executionId,
+        metadata: { tenantId: 'tenant-test' }
+      });
+      throw Object.assign(new Error('Owner approval is required'), {
+        code: 'APPROVAL_REQUIRED',
+        executionContext: { executionId: options.executionId }
+      });
+    }
+  });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'pause for owner approval', idempotencyKey: 'request-key-approval-recovery-02' }),
+    /simulated transient status read failure/
+  );
+  assert.equal([...fixture.records.values()][0].status, 'running');
+
+  const retry = await fixture.service.createTask({
+    goal: 'pause for owner approval',
+    idempotencyKey: 'request-key-approval-recovery-02'
+  });
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.task.status, 'awaiting_approval');
+  assert.equal(fixture.executions, 1);
+});
+
+test('unclassified Runtime error after durable admission is reconciled rather than terminalized', async () => {
+  const fixture = createRuntime({
+    execute: async (_goal, options, persistedExecutions) => {
+      persistedExecutions.set(options.executionId, {
+        executionId: options.executionId,
+        metadata: { tenantId: 'tenant-test' }
+      });
+      throw Object.assign(new Error('response lost after durable admission'), { code: 'RUNTIME_RESPONSE_LOST' });
+    }
+  });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'recover uncertain Runtime admission', idempotencyKey: 'request-key-unknown-admission-01' }),
+    error => error.code === 'RUNTIME_RESPONSE_LOST'
+  );
+  assert.equal([...fixture.records.values()][0].status, 'running');
+
+  const retry = await fixture.service.createTask({
+    goal: 'recover uncertain Runtime admission',
+    idempotencyKey: 'request-key-unknown-admission-01'
+  });
+  assert.equal(retry.replayed, true);
+  assert.equal(fixture.executions, 1);
+});
+
+test('tenant-mismatched durable execution is rejected and remains non-replayable', async () => {
+  const fixture = createRuntime({ persistedTenantId: 'tenant-other' });
+
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'reject cross-tenant execution', idempotencyKey: 'request-key-tenant-mismatch-01' }),
+    error => error.code === 'TASK_EXECUTION_ID_MISMATCH'
+  );
+  await assert.rejects(
+    fixture.service.createTask({ goal: 'reject cross-tenant execution', idempotencyKey: 'request-key-tenant-mismatch-01' }),
+    error => error.code === 'TASK_EXECUTION_ID_MISMATCH'
+  );
   assert.equal(fixture.executions, 1);
 });

@@ -114,18 +114,17 @@ class AgentService {
       );
     }
 
-    let task;
+    let result;
     try {
-      let result;
-      try {
-        result = await this.execute(clean, { ownerSessionContext, executionId });
-      } catch (error) {
-        // Approval-required executions have a durable ID and are paused, not failed.
-        // Accept the task without retrying the high-risk side effect.
-        const approvalExecutionId = error?.code === 'APPROVAL_REQUIRED'
-          ? error.executionContext?.executionId
-          : null;
-        if (typeof approvalExecutionId !== 'string' || !approvalExecutionId) throw error;
+      result = await this.execute(clean, { ownerSessionContext, executionId });
+    } catch (error) {
+      // Runtime explicitly marks only failures proven to occur before durable
+      // admission as rejected. Any unmarked error has an unknown outcome and
+      // must keep the reservation recoverable.
+      const approvalExecutionId = error?.code === 'APPROVAL_REQUIRED'
+        ? error.executionContext?.executionId
+        : null;
+      if (typeof approvalExecutionId === 'string' && approvalExecutionId) {
         if (approvalExecutionId !== executionId) {
           throw new AppError(
             'Runtime returned an approval execution ID that does not match the reserved task ID',
@@ -134,50 +133,90 @@ class AgentService {
           );
         }
         result = { execution: { executionId: approvalExecutionId }, awaitingApproval: true };
+      } else {
+        if (error?.executionAdmission === 'rejected') {
+          try {
+            await repository.fail(begun.key, {
+              code: error?.code || 'TASK_CREATION_REJECTED',
+              message: error?.message || 'Task creation was rejected before admission'
+            }, { tenantId });
+          } catch (_) {
+            // Preserve the authoritative rejection; a still-running reservation
+            // is safer than allowing an uncertain retry to execute twice.
+          }
+        }
+        throw error;
       }
-      const actualExecutionId = result?.execution?.executionId || result?.executionId;
-      if (typeof actualExecutionId !== 'string' || !actualExecutionId) {
-        throw new AppError('لم يُرجع Runtime معرّف مهمة قابلًا للتحقق', 502, 'TASK_EXECUTION_ID_MISSING');
-      }
-      if (actualExecutionId !== executionId) {
-        throw new AppError(
-          'Runtime returned an execution ID that does not match the reserved task ID',
-          502,
-          'TASK_EXECUTION_ID_MISMATCH'
-        );
-      }
+    }
 
-      const execution = await this.getExecutionStatus(executionId);
-      if (!execution || execution.executionId !== executionId) {
-        throw new AppError(
-          'Persisted execution identity does not match the reserved task ID',
-          502,
-          'TASK_EXECUTION_ID_MISMATCH'
-        );
-      }
-      task = {
-        id: execution.executionId,
-        status: execution.status,
-        currentStep: execution.currentStep ?? null,
-        createdAt: execution.startedAt || null,
-        updatedAt: execution.updatedAt || null,
-        completedAt: execution.completedAt || null,
-        cancellationRequested: Boolean(execution.cancellationRequested),
-        agentLifecycle: execution.agentLifecycle || null,
-        version: 1
-      };
-    } catch (error) {
+    if (result?.executionAdmission === 'rejected') {
+      const rejection = new AppError(
+        result.message || 'Runtime rejected the task before durable admission',
+        400,
+        result.code || 'TASK_ADMISSION_REJECTED'
+      );
+      rejection.executionAdmission = 'rejected';
       try {
         await repository.fail(begun.key, {
-          code: error?.code || 'TASK_CREATION_FAILED',
-          message: error?.message || 'Task creation failed'
+          code: rejection.code,
+          message: rejection.message
         }, { tenantId });
-      } catch (_) {
-        // Preserve the original runtime error; the durable running record still
-        // prevents a retry from silently executing the same key a second time.
-      }
-      throw error;
+      } catch (_) {}
+      throw rejection;
     }
+
+    const actualExecutionId = result?.execution?.executionId || result?.executionId;
+    if (typeof actualExecutionId !== 'string' || !actualExecutionId) {
+      throw new AppError('لم يُرجع Runtime معرّف مهمة قابلًا للتحقق', 502, 'TASK_EXECUTION_ID_MISSING');
+    }
+    if (actualExecutionId !== executionId) {
+      throw new AppError(
+        'Runtime returned an execution ID that does not match the reserved task ID',
+        502,
+        'TASK_EXECUTION_ID_MISMATCH'
+      );
+    }
+
+    // Validate the durable tenant-scoped identity when the adapter exposes it.
+    // Missing/temporarily unavailable status is not evidence of rejection.
+    const executions = this.runtime.persistence?.executions;
+    if (typeof executions?.findById === 'function') {
+      const persistedExecution = await executions.findById(executionId, { tenantId });
+      if (persistedExecution) {
+        const persistedTenantId = persistedExecution.metadata?.tenantId;
+        if (persistedExecution.executionId !== executionId ||
+            (tenantId !== 'local' && persistedTenantId !== tenantId) ||
+            (tenantId === 'local' && persistedTenantId && persistedTenantId !== 'local')) {
+          throw new AppError(
+            'Persisted execution identity or tenant does not match the idempotency reservation',
+            502,
+            'TASK_EXECUTION_ID_MISMATCH'
+          );
+        }
+      }
+    }
+
+    // Status lookup is deliberately outside the Runtime admission catch path.
+    // A transient read failure must not terminalize a possibly durable execution.
+    const execution = await this.getExecutionStatus(executionId);
+    if (!execution || execution.executionId !== executionId) {
+      throw new AppError(
+        'Persisted execution status does not match the reserved task ID',
+        502,
+        'TASK_EXECUTION_ID_MISMATCH'
+      );
+    }
+    const task = {
+      id: execution.executionId,
+      status: execution.status,
+      currentStep: execution.currentStep ?? null,
+      createdAt: execution.startedAt || null,
+      updatedAt: execution.updatedAt || null,
+      completedAt: execution.completedAt || null,
+      cancellationRequested: Boolean(execution.cancellationRequested),
+      agentLifecycle: execution.agentLifecycle || null,
+      version: 1
+    };
 
     await repository.complete(begun.key, task, { tenantId });
     return { task, replayed: false };

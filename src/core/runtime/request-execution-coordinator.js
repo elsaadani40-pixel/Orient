@@ -5,6 +5,13 @@ const ExecutionContext = require('../execution/execution-context');
 const AgentState = require('../agent/state/agent-state');
 const AppError = require('../errors/AppError');
 
+function setExecutionAdmission(error, state) {
+  if (error && (typeof error === 'object' || typeof error === 'function')) {
+    try { error.executionAdmission = state; } catch (_) {}
+  }
+  return error;
+}
+
 function createApprovalSummary(tool, input) {
   if (tool !== 'project.execute_change') {
     return { kind: 'tool_action', tool: String(tool || 'unknown').slice(0, 120) };
@@ -185,22 +192,31 @@ class RequestExecutionCoordinator {
   }
 
   async execute(input, { approval = null, approvals = {}, ownerSessionContext = null, executionId = null } = {}) {
-    await this.assertOwnerSessionContext(ownerSessionContext);
+    try {
+      await this.assertOwnerSessionContext(ownerSessionContext);
+    } catch (error) {
+      throw setExecutionAdmission(error, 'rejected');
+    }
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
 
-    if (!text) return { requestId, type: 'error', message: 'لم يتم إرسال طلب.' };
+    if (!text) return { requestId, type: 'error', code: 'AGENT_INPUT_REQUIRED', message: 'لم يتم إرسال طلب.', executionAdmission: 'rejected' };
     if (text.length > this.maxInputChars) {
       return {
         requestId,
         type: 'error',
         code: 'INPUT_TOO_LARGE',
-        message: 'حجم الطلب يتجاوز الحد المسموح.'
+        message: 'حجم الطلب يتجاوز الحد المسموح.',
+        executionAdmission: 'rejected'
       };
     }
 
-    this.quotaService.assertTenant(this.tenantId);
-    this.quotaService.assertInputSize(text);
+    try {
+      this.quotaService.assertTenant(this.tenantId);
+      this.quotaService.assertInputSize(text);
+    } catch (error) {
+      throw setExecutionAdmission(error, 'rejected');
+    }
 
     let context = new ExecutionContext({
       requestId,
@@ -299,6 +315,7 @@ class RequestExecutionCoordinator {
         execution: context.snapshot()
       };
     } catch (error) {
+      setExecutionAdmission(error, 'accepted');
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
