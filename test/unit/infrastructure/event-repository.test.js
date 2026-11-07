@@ -450,3 +450,69 @@ test('event repository rejects malformed append inputs before writing', t => {
   assert.throws(() => repository.appendMany([{ id: 'valid-before-invalid', type: 'ok' }, null]), TypeError);
   assert.equal(repository.count(), 0);
 });
+
+
+test('stale-lock recovery preserves a replacement owner with the same PID and hostname but a different token', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-lock-same-pid-replacement-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 20 });
+  const originalKill = process.kill;
+  const replacementOwner = {
+    token: 'replacement-token-same-process',
+    pid: process.pid,
+    hostname: os.hostname(),
+    acquiredAt: new Date().toISOString()
+  };
+  let replaced = false;
+
+  fs.mkdirSync(repository.lockPath);
+  fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify({
+    token: 'original-token',
+    pid: process.pid,
+    hostname: os.hostname(),
+    acquiredAt: new Date(0).toISOString()
+  }));
+
+  try {
+    process.kill = function (pid, signal) {
+      if (pid === process.pid && signal === 0 && !replaced) {
+        replaced = true;
+        fs.rmSync(repository.lockPath, { recursive: true, force: true });
+        fs.mkdirSync(repository.lockPath);
+        fs.writeFileSync(path.join(repository.lockPath, 'owner.json'), JSON.stringify(replacementOwner));
+        throw Object.assign(new Error('simulated owner observation raced with replacement'), { code: 'ESRCH' });
+      }
+      return originalKill.call(process, pid, signal);
+    };
+
+    assert.throws(
+      () => repository.withLock(() => 'must-not-steal-replacement-lock'),
+      error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.equal(replaced, true);
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(repository.lockPath, 'owner.json'), 'utf8')),
+      replacementOwner
+    );
+  } finally {
+    process.kill = originalKill;
+  }
+});
+
+test('mission event append rejects caller-supplied tenant metadata that conflicts with its tenant scope', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-mission-tenant-mismatch-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  assert.throws(
+    () => repository.appendMissionEvent({
+      id: 'mission-tenant-mismatch',
+      aggregateId: 'mission-tenant-mismatch',
+      type: 'tenant-b.secret',
+      data: { tenantId: 'tenant-b' }
+    }, { tenantId: 'tenant-a' }),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+  assert.deepEqual(repository.findByAggregateId('mission-tenant-mismatch', { tenantId: 'tenant-a' }), []);
+  assert.deepEqual(repository.findByAggregateId('mission-tenant-mismatch', { tenantId: 'tenant-b' }), []);
+});
