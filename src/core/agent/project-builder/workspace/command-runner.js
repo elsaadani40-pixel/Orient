@@ -268,9 +268,12 @@ class CommandRunner {
             stdout,
             stderr,
             truncated: false,
-            resourceLimitMode: child.orientResourceUnitName ? 'systemd-user-service-cgroup-v2' : 'custom-isolator',
+            resourceLimitMode: child.orientResourceLimitMode ||
+              (child.orientResourceUnitName ? 'systemd-user-service-cgroup-v2' : 'custom-isolator'),
             resourceLimitStatus: executionStatus,
-            resourceLimitsVerified: limitsVerified,
+            resourceLimitsVerified: child.orientUnsandboxed === true
+              ? false
+              : (child.orientResourceLimitsVerified === true || limitsVerified),
             failureCode
           });
         });
