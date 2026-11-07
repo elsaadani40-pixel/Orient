@@ -376,6 +376,49 @@ test('successful receipt writes release only their owned directory lock', async 
 });
 
 
+test('intent reads preserve filesystem I/O errors instead of misclassifying them as corruption', async () => {
+  await withFixture(async ({ store }) => {
+    const syncFs = require('node:fs');
+    const context = {
+      operationId: 'intent-io-error',
+      tenantId: 'tenant-a',
+      workspaceId: 'a'.repeat(64),
+      changeSetHash: 'b'.repeat(64)
+    };
+    store.beginIntent(context);
+    const intentPath = store.intentPath(context.operationId, context.tenantId);
+    const originalOpenSync = syncFs.openSync;
+    const originalReadSync = syncFs.readSync;
+    const openError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    syncFs.openSync = function (filePath, ...args) {
+      if (filePath === intentPath) throw openError;
+      return originalOpenSync.call(this, filePath, ...args);
+    };
+    try {
+      assert.throws(
+        () => store.readIntent(context),
+        error => error === openError && error.code === 'EACCES'
+      );
+    } finally {
+      syncFs.openSync = originalOpenSync;
+    }
+
+    const readError = Object.assign(new Error('storage I/O failure'), { code: 'EIO' });
+    syncFs.readSync = function (...args) {
+      throw readError;
+    };
+    try {
+      assert.throws(
+        () => store.readIntent(context),
+        error => error === readError && error.code === 'EIO'
+      );
+    } finally {
+      syncFs.readSync = originalReadSync;
+    }
+  });
+});
+
+
 test('receipt reads preserve filesystem I/O errors instead of misclassifying them as corruption', async () => {
   await withFixture(async ({ store }) => {
     const syncFs = require('node:fs');

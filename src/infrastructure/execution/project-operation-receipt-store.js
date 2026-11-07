@@ -129,10 +129,15 @@ class ProjectOperationReceiptStore {
       }
       if (error.code === 'PROJECT_OPERATION_INTENT_UNSAFE_FILESYSTEM' ||
           error.code === 'PROJECT_OPERATION_INTENT_CORRUPT') throw error;
-      const invalid = new Error('Project operation intent is not valid or could not be read safely');
-      invalid.code = 'PROJECT_OPERATION_INTENT_CORRUPT';
-      invalid.cause = error;
-      throw invalid;
+      if (error instanceof SyntaxError) {
+        const corrupt = new Error('Project operation intent is not valid JSON');
+        corrupt.code = 'PROJECT_OPERATION_INTENT_CORRUPT';
+        corrupt.cause = error;
+        throw corrupt;
+      }
+      // Preserve filesystem failures (EACCES, EIO, EMFILE, etc.) so callers
+      // can distinguish unavailable storage from corrupt intent evidence.
+      throw error;
     } finally {
       if (fd !== undefined) {
         try { fs.closeSync(fd); } catch {}
