@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -382,4 +383,47 @@ test('receipt reads preserve filesystem I/O errors instead of misclassifying the
       syncFs.openSync = originalOpenSync;
     }
   });
+});
+
+
+test('receipt storage rejects directories and parents that allow untrusted lock-path replacement', async t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX ownership and directory-mode checks are not available on this platform');
+    return;
+  }
+
+  const parent = fsSync.mkdtempSync(path.join(os.tmpdir(), 'orient-receipt-directory-policy-'));
+  const directory = path.join(parent, 'receipts');
+  const validWrite = {
+    operationId: 'private-directory-policy',
+    tenantId: 'tenant-a',
+    workspaceId: 'a'.repeat(64),
+    changeSetHash: 'b'.repeat(64),
+    result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+  };
+
+  try {
+    fsSync.mkdirSync(directory, { mode: 0o700 });
+    fsSync.chmodSync(directory, 0o755);
+    const exposedDirectoryStore = new ProjectOperationReceiptStore({ directory });
+
+    assert.throws(
+      () => exposedDirectoryStore.write(validWrite),
+      error => error.code === 'PROJECT_OPERATION_RECEIPT_DIRECTORY_PERMISSIONS_INVALID'
+    );
+
+    fsSync.chmodSync(directory, 0o700);
+    fsSync.chmodSync(parent, 0o777);
+    const untrustedParentStore = new ProjectOperationReceiptStore({
+      directory: path.join(parent, 'other-receipts')
+    });
+
+    assert.throws(
+      () => untrustedParentStore.write({ ...validWrite, operationId: 'untrusted-parent-policy' }),
+      error => error.code === 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED'
+    );
+  } finally {
+    fsSync.chmodSync(parent, 0o700);
+    fsSync.rmSync(parent, { recursive: true, force: true });
+  }
 });
