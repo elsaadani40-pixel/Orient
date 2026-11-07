@@ -175,7 +175,7 @@ class EventRepository {
 
   append(event, { tenantId = null } = {}) {
     const normalized = this.normalize(event);
-    if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
+    if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
     if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
     return this.withLock(() => {
       const events = this.read();
@@ -203,7 +203,7 @@ class EventRepository {
 
     const normalized = events.map(event => {
       const item = this.normalize(event);
-      if (tenantId && item.data?.tenantId && item.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
+      if (tenantId && item.data?.tenantId && item.data.tenantId !== tenantId) throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
       if (tenantId && !item.data?.tenantId) item.data.tenantId = tenantId;
       return item;
     });
