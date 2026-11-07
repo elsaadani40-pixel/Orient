@@ -188,7 +188,7 @@ test('Windows unsandboxed termination requests the complete process tree be kill
 
   const termination = isolator.terminate(child);
   assert.equal(childKillSignal, 'SIGTERM');
-  assert.equal(killerInvocation[0], 'taskkill.exe');
+  assert.equal(killerInvocation[0], 'C:\\Windows\\System32\\taskkill.exe');
   assert.deepEqual(killerInvocation[1], ['/PID', '4321', '/T', '/F']);
   assert.equal(killerInvocation[2].shell, false);
   killer.emit('close', 0);
