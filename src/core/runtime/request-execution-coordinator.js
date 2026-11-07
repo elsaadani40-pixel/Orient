@@ -748,7 +748,6 @@ class RequestExecutionCoordinator {
         execution: context.snapshot()
       };
     } catch (error) {
-      try {
       // Lease loss is a concurrency-control failure, not an execution failure.
       // Preserve the resumable checkpoint rather than committing a terminal
       // failure after another worker may have acquired ownership.
@@ -756,6 +755,9 @@ class RequestExecutionCoordinator {
           error?.code === 'CHECKPOINT_RESUME_LEASE_LOST' ||
           error?.code === 'APPROVAL_NOT_APPROVED' ||
           error?.code === 'APPROVAL_EXPIRED') {
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
         throw error;
       }
 
@@ -763,6 +765,9 @@ class RequestExecutionCoordinator {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
         await this.persistenceCoordinator.persistEvents(context);
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
         return { resumed: false, reason: 'execution_cancelled', execution: context.snapshot() };
       }
 
@@ -773,6 +778,9 @@ class RequestExecutionCoordinator {
         activeSnapshot
       );
       if (cancellationBeforeRecovery) {
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
         return {
           resumed: false,
           reason: 'execution_cancelled',
@@ -794,6 +802,9 @@ class RequestExecutionCoordinator {
         activeSnapshot
       );
       if (cancellationAfterRecovery) {
+        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        }
         return {
           resumed: false,
           reason: 'execution_cancelled',
@@ -801,14 +812,10 @@ class RequestExecutionCoordinator {
         };
       }
 
-      throw error;
-      } finally {
-        // Release only the lease acquired by this resume attempt, even if
-        // cancellation reconciliation or recovery itself fails.
-        if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
-        }
+      if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
+        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
       }
+      throw error;
     }
   }
 }
