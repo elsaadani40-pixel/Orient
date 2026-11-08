@@ -10,7 +10,8 @@ test('role provisioning creates four separated roles and revokes broad future de
     async query(sql, values = []) {
       statements.push({ sql, values });
       if (sql === 'SELECT 1 FROM pg_roles WHERE rolname = $1') return { rowCount: 0, rows: [] };
-      if (sql.includes('FROM pg_auth_members')) return { rowCount: 0, rows: [] };
+      if (sql.includes('pg_has_role(session_user')) return { rows: [{ admin_is_owner_member: true, migrator_is_owner_member: true, migrator_is_runtime_member: false, runtime_is_runtime_member: true, runtime_is_owner_member: false }] };
+      if (sql.includes('SELECT rolname, rolsuper FROM pg_roles')) return { rows: [{ rolname: 'postgres', rolsuper: true }] };
       if (sql.includes('FROM pg_tables')) return { rowCount: 0, rows: [{ tablename: 'executions' }] };
       if (sql.includes('FROM information_schema.sequences')) return { rowCount: 0, rows: [] };
       return { rowCount: 0, rows: [] };
