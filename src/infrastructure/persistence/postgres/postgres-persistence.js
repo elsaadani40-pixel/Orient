@@ -256,29 +256,40 @@ class PostgresEventRepository {
   async findByExecutionId(id, { tenantId = null, limit = null, persistencePrincipal = null } = {}) {
     const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Event principal', async client => {
-      const values = [];
-      let where = 'e.execution_id=$1';
-      values.push(id);
-      if (effectiveTenant) {
-        values.push(effectiveTenant);
-        where += ' AND e.tenant_id=$' + values.length;
-      }
-      if (persistencePrincipal) {
-        values.push(persistencePrincipal.ownerId);
-        where += ' AND EXISTS (SELECT 1 FROM executions x WHERE x.execution_id=e.execution_id AND x.tenant_id=e.tenant_id AND x.payload->>\'userId\'=$' + values.length + ')';
-      }
-      if (Number.isInteger(limit) && limit > 0) {
-        values.push(Math.min(limit, 200));
+      const boundedLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : null;
+      if (!persistencePrincipal) {
+        if (boundedLimit) {
+          const result = await client.query(
+            effectiveTenant
+              ? 'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp DESC,event_id DESC LIMIT $3) recent ORDER BY timestamp ASC,event_id ASC'
+              : 'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE execution_id=$1 ORDER BY timestamp DESC,event_id DESC LIMIT $2) recent ORDER BY timestamp ASC,event_id ASC',
+            effectiveTenant ? [effectiveTenant, id, boundedLimit] : [id, boundedLimit]
+          );
+          return result.rows.map(row => row.payload);
+        }
         const result = await client.query(
-          'SELECT payload FROM (SELECT e.payload,e.timestamp,e.event_id FROM events e WHERE ' + where +
-          ' ORDER BY e.timestamp DESC,e.event_id DESC LIMIT $' + values.length +
-          ') recent ORDER BY timestamp ASC,event_id ASC',
+          effectiveTenant
+            ? 'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp ASC,event_id ASC'
+            : 'SELECT payload FROM events WHERE execution_id=$1 ORDER BY timestamp ASC,event_id ASC',
+          effectiveTenant ? [effectiveTenant, id] : [id]
+        );
+        return result.rows.map(row => row.payload);
+      }
+
+      const values = [effectiveTenant, id, persistencePrincipal.ownerId];
+      const ownerClause = " AND EXISTS (SELECT 1 FROM executions x WHERE x.execution_id=events.execution_id AND x.tenant_id=events.tenant_id AND x.payload->>'userId'=$3)";
+      if (boundedLimit) {
+        values.push(boundedLimit);
+        const result = await client.query(
+          'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE tenant_id=$1 AND execution_id=$2' +
+          ownerClause + ' ORDER BY timestamp DESC,event_id DESC LIMIT $4) recent ORDER BY timestamp ASC,event_id ASC',
           values
         );
         return result.rows.map(row => row.payload);
       }
       const result = await client.query(
-        'SELECT e.payload FROM events e WHERE ' + where + ' ORDER BY e.timestamp ASC,e.event_id ASC',
+        'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2' +
+        ownerClause + ' ORDER BY timestamp ASC,event_id ASC',
         values
       );
       return result.rows.map(row => row.payload);
