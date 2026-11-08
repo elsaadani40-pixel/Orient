@@ -828,6 +828,11 @@ class PostgresWorkflowRepository {
              AND NOT EXISTS (
                SELECT 1 FROM workflow_leases
                WHERE tenant_id=$2 AND workflow_id=$1 AND expires_at > clock_timestamp()
+             )
+             AND EXISTS (
+               SELECT 1 FROM worker_nodes
+               WHERE tenant_id=$2 AND worker_id=$6 AND session_id=$7
+                 AND status='READY' AND expires_at > clock_timestamp()
              )`,
           [item.workflowId,effectiveTenant,item.state,item.updatedAt || new Date().toISOString(),item,principal.workerId,principal.sessionId]
         );
@@ -892,6 +897,11 @@ class PostgresWorkflowRepository {
                WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$6
                  AND worker_id=$7 AND worker_session_id=$8
                  AND fencing_token=$9 AND expires_at > clock_timestamp()
+             )
+             AND EXISTS (
+               SELECT 1 FROM worker_nodes
+               WHERE tenant_id=$2 AND worker_id=$7 AND session_id=$8
+                 AND status='READY' AND expires_at > clock_timestamp()
              )`,
           [item.workflowId,effectiveTenant,item.state,item.updatedAt || new Date().toISOString(),item,principal.leaseId,principal.workerId,principal.sessionId,fencingToken]
         );
