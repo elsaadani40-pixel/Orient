@@ -5,7 +5,7 @@ class ExecutionPersistenceCoordinator {
     this.persistedEventOffsets = persistedEventOffsets || new WeakMap();
   }
 
-  persistEvents(context) {
+  persistEvents(context, persistencePrincipal = null) {
     if (!this.persistence?.events || !context) return [];
 
     const events = Array.isArray(context.events) ? context.events : [];
@@ -19,10 +19,10 @@ class ExecutionPersistenceCoordinator {
       }
     }));
 
-    return this.persistence.events.appendMany(scopedEvents, { tenantId: this.tenantId });
+    return this.persistence.events.appendMany(scopedEvents, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
   }
 
-  async persistExecution(context, mode = 'update') {
+  async persistExecution(context, mode = 'update', persistencePrincipal = null) {
     if (!this.persistence?.executions) return null;
 
     const snapshot = context.snapshot();
@@ -34,20 +34,20 @@ class ExecutionPersistenceCoordinator {
     }
 
     if (mode === 'insert') {
-      return this.persistence.executions.insert(snapshot, { tenantId: this.tenantId });
+      return this.persistence.executions.insert(snapshot, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
     }
 
     return this.persistence.executions.update(
       snapshot.executionId,
       snapshot,
-      { tenantId: this.tenantId }
+      { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) }
     );
   }
 
-  async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
+  async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint', persistencePrincipal = null) {
     if (!context) throw new TypeError('context is required');
 
-    const snapshot = (await this.persistExecution(context, mode)) || context.snapshot();
+    const snapshot = (await this.persistExecution(context, mode, persistencePrincipal)) || context.snapshot();
     const events = Array.isArray(context.events) ? context.events : [];
     let offset = this.persistedEventOffsets.get(context) || 0;
 
@@ -65,7 +65,7 @@ class ExecutionPersistenceCoordinator {
     if (pendingEvents.length && this.persistence?.events?.appendMany) {
       persistedEvents = await this.persistence.events.appendMany(
         pendingEvents,
-        { tenantId: this.tenantId }
+        { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) }
       );
     }
 
@@ -75,7 +75,7 @@ class ExecutionPersistenceCoordinator {
     if (this.persistence?.checkpoints?.save) {
       durableCheckpoint = this.persistence.checkpoints.save(
         snapshot,
-        { reason, tenantId: this.tenantId }
+        { reason, tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) }
       );
     }
 
