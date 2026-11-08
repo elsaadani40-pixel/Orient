@@ -1062,95 +1062,137 @@ class PostgresApprovalRepository {
     };
   }
 
-  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null } = {}) {
+  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId) return [];
-    const clauses = ['execution_id=$1'];
-    const values = [String(executionId)];
-    if (tenantId) { values.push(tenantId); clauses.push(`tenant_id=$${values.length}`); }
-    if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
-    if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
-    if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
-    const result = await this.db.query(`SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`, values);
-    return result.rows.map(row => this.mapRow(row));
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const clauses = ['a.execution_id=$1'];
+      const values = [String(executionId)];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        clauses.push(`e.payload->>'userId'=$${values.length}`);
+      }
+      if (step !== null) { values.push(Number(step)); clauses.push(`a.step=$${values.length}`); }
+      if (tool !== null) { values.push(tool); clauses.push(`a.tool=$${values.length}`); }
+      if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`a.plan_revision=$${values.length}`); }
+      const join = persistencePrincipal ? ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id' : '';
+      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at DESC`, values);
+      return result.rows.map(row => this.mapRow(row));
+    });
   }
-
-  async findPending({ tenantId = null, limit = 100, now = Date.now() } = {}) {
+  async findPending({ tenantId = null, limit = 100, now = Date.now(), persistencePrincipal = null } = {}) {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
     const nowIso = new Date(now).toISOString();
-    const result = tenantId
-      ? await this.db.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [tenantId, nowIso, boundedLimit])
-      : await this.db.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
-    return result.rows.map(row => this.mapRow(row));
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [];
+      const clauses = ['a.used=FALSE', 'a.expires_at>$1', "NOT (COALESCE(a.metadata, '{}'::jsonb) ? 'decision')"];
+      values.push(nowIso);
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        clauses.push(`e.payload->>'userId'=$${values.length}`);
+      }
+      values.push(boundedLimit);
+      const join = persistencePrincipal ? ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id' : '';
+      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at ASC, a.approval_id ASC LIMIT $${values.length}`, values);
+      return result.rows.map(row => this.mapRow(row));
+    });
   }
-
-  async save(approval, { tenantId = null } = {}) {
+  async save(approval, { tenantId = null, persistencePrincipal = null } = {}) {
     const effectiveTenant = tenantOrLocal(approval.tenantId || approval.metadata?.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Approval');
-    await this.db.query(
-      `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
-    );
-    return { ...approval, tenantId: effectiveTenant };
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (persistencePrincipal) {
+        const owner = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [approval.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!owner.rows.length) throw Object.assign(new Error('Approval execution is not owned by the persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+      }
+      await client.query(
+        `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
+      );
+      return { ...approval, tenantId: effectiveTenant };
+    });
   }
-
-  async findById(approvalId, { tenantId = null } = {}) {
-    const result = await this.db.query(
-      tenantId ? 'SELECT * FROM approvals WHERE approval_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT * FROM approvals WHERE approval_id=$1 LIMIT 1',
-      tenantId ? [approvalId, tenantId] : [approvalId]
-    );
-    if (!result.rows.length) return null;
-    const row = result.rows[0];
-    return this.mapRow(row);
+  async findById(approvalId, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [approvalId];
+      let where = 'a.approval_id=$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND a.tenant_id=$${values.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND e.payload->>'userId'=$${values.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${where} LIMIT 1`, values);
+      return result.rows.length ? this.mapRow(result.rows[0]) : null;
+    });
   }
-
-  async consume(approvalId, usedAt, tenantId = null) {
-    const result = await this.db.query(
-      tenantId
-        ? 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND tenant_id=$3 AND used=FALSE AND expires_at>$1'
-        : 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND used=FALSE AND expires_at>$1',
-      tenantId ? [usedAt, approvalId, tenantId] : [usedAt, approvalId]
-    );
-    return result.rowCount === 1;
+  async consume(approvalId, usedAt, tenantId = null, { persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [usedAt, approvalId];
+      let where = 'approval_id=$2 AND used=FALSE AND expires_at>$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const result = await client.query(`UPDATE approvals SET used=TRUE,used_at=$1 WHERE ${where}`, values);
+      return result.rowCount === 1;
+    });
   }
-
-  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now()) {
-    if (typeof approvalId !== 'string' || !approvalId.trim()) {
-      throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
-    }
-    if (!decision || !['approved', 'rejected'].includes(decision.status) ||
-        typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
-        typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) {
-      throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
-    }
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now(), persistencePrincipal = null) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    if (!decision || !['approved', 'rejected'].includes(decision.status) || typeof decision.actorId !== 'string' || !decision.actorId.trim() || typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
     const nowMs = typeof now === 'function' ? now() : now;
     if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
     const nowIso = new Date(nowMs).toISOString();
-    const current = await this.findById(approvalId, { tenantId });
-    if (!current) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
-    if (current.decision) {
-      if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
-      throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
-    }
-    if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
-    const expiry = current.expiresAt instanceof Date ? current.expiresAt.getTime() : Date.parse(current.expiresAt);
-    if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
-    const values = [JSON.stringify(decision), approvalId, nowIso];
-    let tenantClause = '';
-    if (tenantId) { values.push(tenantId); tenantClause = ' AND tenant_id=$4'; }
-    const updated = await this.db.query(
-      "UPDATE approvals SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')" + tenantClause + ' RETURNING *',
-      values
-    );
-    if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
-    const latest = await this.findById(approvalId, { tenantId });
-    if (latest?.decision?.status === decision.status && latest?.decision?.actorId === decision.actorId) return latest;
-    if (latest?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
-    if (latest?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
-    throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const selectValues = [approvalId];
+      let selectWhere = 'a.approval_id=$1';
+      if (effectiveTenant) { selectValues.push(effectiveTenant); selectWhere += ` AND a.tenant_id=$${selectValues.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        selectValues.push(persistencePrincipal.ownerId);
+        selectWhere += ` AND e.payload->>'userId'=$${selectValues.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const selected = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      if (!selected.rows.length) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+      const current = this.mapRow(selected.rows[0]);
+      if (current.decision) {
+        if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+        throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      const expiry = Date.parse(current.expiresAt);
+      if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+      const values = [JSON.stringify(decision), approvalId, nowIso];
+      let where = "approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')";
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const updated = await client.query(`UPDATE approvals SET metadata=COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE ${where} RETURNING *`, values);
+      if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
+      const latest = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      const record = latest.rows[0] ? this.mapRow(latest.rows[0]) : null;
+      if (record?.decision?.status === decision.status && record?.decision?.actorId === decision.actorId) return record;
+      if (record?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      if (record?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+    });
   }
-
-
   async count({ tenantId = null } = {}) {
     const result = tenantId
       ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])
