@@ -94,6 +94,7 @@ test('binds task idempotency lifecycle to the same authenticated persistence pri
   const received = [];
   const runtime = {
     tenantId: 'tenant-a',
+    userId: 'owner-a',
     persistence: {
       idempotency: {
         begin: async args => {
