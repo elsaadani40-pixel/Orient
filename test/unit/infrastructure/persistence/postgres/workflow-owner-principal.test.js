@@ -2,8 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { PostgresWorkflowRepository } = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
-const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
+const { PostgresWorkflowRepository } = require('../../../../../src/infrastructure/persistence/postgres/postgres-persistence');
+const { createPersistencePrincipal } = require('../../../../../src/core/security/persistence-principal');
 
 function fixture(responses = []) {
   const calls = [];
