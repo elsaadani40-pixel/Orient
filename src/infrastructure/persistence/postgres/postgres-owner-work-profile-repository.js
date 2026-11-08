@@ -48,7 +48,7 @@ class PostgresOwnerWorkProfileRepository {
       const saved = await client.query(
         `INSERT INTO owner_work_profiles(owner_id, mode, working_preferences, updated_at)
          VALUES($1,$2,$3,$4)
-         ON CONFLICT(owner_id) DO UPDATE SET
+         ON CONFLICT(tenant_id, owner_id) DO UPDATE SET
            mode=EXCLUDED.mode,
            working_preferences=EXCLUDED.working_preferences,
            updated_at=EXCLUDED.updated_at

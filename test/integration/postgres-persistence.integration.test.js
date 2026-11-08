@@ -14,7 +14,85 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+
+test('PostgreSQL v9 upgrades populated v8 owner tables without losing rows and isolates tenant keys', async () => {
+  const { MIGRATIONS } = require('../../src/infrastructure/persistence/postgres/postgres-database');
+  const migration = MIGRATIONS.find(item => item.version === 9);
+  assert.ok(migration, 'version 9 migration must be registered');
+
+  const client = await pool.connect();
+  const schema = 'orient_v9_upgrade_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+  const quotedSchema = '"' + schema.replace(/"/g, '""') + '"';
+  try {
+    await client.query('CREATE SCHEMA ' + quotedSchema);
+    await client.query('SET search_path TO ' + quotedSchema);
+    await client.query(`
+      CREATE TABLE owner_chat_messages (
+        owner_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('user','assistant')),
+        content TEXT NOT NULL CHECK (length(content) BETWEEN 1 AND 20000),
+        created_at TIMESTAMPTZ NOT NULL,
+        task_id TEXT,
+        PRIMARY KEY (owner_id, message_id)
+      );
+      CREATE INDEX idx_owner_chat_messages_order
+        ON owner_chat_messages(owner_id, created_at, message_id);
+      CREATE INDEX idx_owner_chat_messages_task
+        ON owner_chat_messages(owner_id, task_id) WHERE task_id IS NOT NULL;
+      CREATE TABLE owner_work_profiles (
+        owner_id TEXT PRIMARY KEY,
+        mode TEXT NOT NULL CHECK (mode IN ('standard','read-only-audit','plan-only')),
+        working_preferences TEXT NOT NULL CHECK (length(working_preferences) <= 4000),
+        updated_at TIMESTAMPTZ NOT NULL
+      );
+      INSERT INTO owner_chat_messages(owner_id,message_id,role,content,created_at)
+      VALUES ('owner-a','message-a','user','preserve this row',NOW());
+      INSERT INTO owner_work_profiles(owner_id,mode,working_preferences,updated_at)
+      VALUES ('owner-a','plan-only','preserve this profile',NOW());
+    `);
+
+    await client.query(migration.sql);
+
+    const preservedMessage = await client.query(
+      'SELECT tenant_id, owner_id, message_id, content FROM owner_chat_messages WHERE owner_id=$1 AND message_id=$2',
+      ['owner-a', 'message-a']
+    );
+    assert.equal(preservedMessage.rows.length, 1);
+    assert.equal(preservedMessage.rows[0].tenant_id, 'local');
+    assert.equal(preservedMessage.rows[0].content, 'preserve this row');
+
+    const preservedProfile = await client.query(
+      'SELECT tenant_id, owner_id, mode, working_preferences FROM owner_work_profiles WHERE owner_id=$1',
+      ['owner-a']
+    );
+    assert.equal(preservedProfile.rows.length, 1);
+    assert.equal(preservedProfile.rows[0].tenant_id, 'local');
+    assert.equal(preservedProfile.rows[0].mode, 'plan-only');
+    assert.equal(preservedProfile.rows[0].working_preferences, 'preserve this profile');
+
+    await client.query(
+      `INSERT INTO owner_chat_messages(tenant_id,owner_id,message_id,role,content,created_at)
+       VALUES ('tenant-b','owner-a','message-a','user','other tenant row',NOW())`
+    );
+    await client.query(
+      `INSERT INTO owner_work_profiles(tenant_id,owner_id,mode,working_preferences,updated_at)
+       VALUES ('tenant-b','owner-a','standard','other tenant profile',NOW())`
+    );
+    const isolated = await client.query(
+      'SELECT tenant_id, content FROM owner_chat_messages WHERE owner_id=$1 AND message_id=$2 ORDER BY tenant_id',
+      ['owner-a', 'message-a']
+    );
+    assert.deepEqual(isolated.rows.map(row => row.tenant_id), ['local', 'tenant-b']);
+    assert.equal(isolated.rows[1].content, 'other tenant row');
+  } finally {
+    await client.query('RESET search_path').catch(() => {});
+    await client.query('DROP SCHEMA IF EXISTS ' + quotedSchema + ' CASCADE').catch(() => {});
+    client.release();
+  }
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
