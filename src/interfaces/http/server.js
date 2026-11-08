@@ -813,7 +813,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           res,
           decodeURIComponent(executionResumeMatch[1]),
           body,
-          ownerSession ? { sessionId: ownerSession.sessionId } : null
+          ownerSession ? { sessionId: ownerSession.sessionId } : null,
+          ownerPersistencePrincipal
         );
         return;
       }
