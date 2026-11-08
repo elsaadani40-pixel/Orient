@@ -24,3 +24,43 @@ test('scheduler passes the active lease-bound worker principal into workflow per
   assert.equal(calls[0].tenantId,'tenant-a');
   assert.equal(calls[0].options.workerPrincipal,principal);
 });
+
+
+test('scheduler clears stale fencing metadata only after it successfully releases the durable lease',async()=>{
+  const saves=[];
+  const scheduler=new AsyncWorkflowScheduler({
+    tenantId:'tenant-a',
+    workflowRepository:{async save(instance,tenantId,options){saves.push({instance,tenantId,options});return instance;}}
+  });
+  const instance={workflowId:'workflow-release',tenantId:'tenant-a',state:'WAITING',metadata:{fencingToken:23}};
+  const principal=createWorkerPersistencePrincipal({
+    tenantId:'tenant-a',workerId:'worker-a',sessionId:'session-a',capabilities:[],
+    workflowId:'workflow-release',leaseId:'lease-release',fencingToken:23
+  });
+  scheduler.active.set(instance.workflowId,{instance,leaseId:'lease-release',fencingToken:23,workerPrincipal:principal});
+  scheduler.leaseStore.release=async()=>({released:true});
+  assert.equal(await scheduler.releaseAsync(instance.workflowId,'lease-release'),true);
+  assert.equal('fencingToken' in instance.metadata,false);
+  assert.equal(scheduler.active.has(instance.workflowId),false);
+  assert.equal(saves.length,1);
+  assert.equal(saves[0].options.workerPrincipal,null);
+});
+
+test('scheduler preserves fencing metadata when durable lease release reports lost ownership',async()=>{
+  const saves=[];
+  const scheduler=new AsyncWorkflowScheduler({
+    tenantId:'tenant-a',
+    workflowRepository:{async save(instance,tenantId,options){saves.push({instance,tenantId,options});return instance;}}
+  });
+  const instance={workflowId:'workflow-stale-release',tenantId:'tenant-a',state:'WAITING',metadata:{fencingToken:29}};
+  const principal=createWorkerPersistencePrincipal({
+    tenantId:'tenant-a',workerId:'worker-a',sessionId:'session-a',capabilities:[],
+    workflowId:'workflow-stale-release',leaseId:'lease-stale',fencingToken:29
+  });
+  scheduler.active.set(instance.workflowId,{instance,leaseId:'lease-stale',fencingToken:29,workerPrincipal:principal});
+  scheduler.leaseStore.release=async()=>({released:false});
+  assert.equal(await scheduler.releaseAsync(instance.workflowId,'lease-stale'),false);
+  assert.equal(instance.metadata.fencingToken,29);
+  assert.equal(scheduler.active.has(instance.workflowId),false);
+  assert.equal(saves.length,0);
+});
