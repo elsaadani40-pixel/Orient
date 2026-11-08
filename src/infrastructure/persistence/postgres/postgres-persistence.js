@@ -921,7 +921,15 @@ class PostgresWorkflowRepository {
     }
     const result = await this.db.query(
       `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
-       VALUES($1,$2,$3,$4,$5)
+       SELECT $1,$2,$3,$4,$5
+       WHERE NOT EXISTS (
+         SELECT 1 FROM workflow_leases
+         WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp()
+       )
+         AND NOT EXISTS (
+           SELECT 1 FROM workflow_dispatch_claims
+           WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp()
+         )
        ON CONFLICT(workflow_id) DO UPDATE SET
          tenant_id=EXCLUDED.tenant_id,state=EXCLUDED.state,
          updated_at=EXCLUDED.updated_at,payload=EXCLUDED.payload
