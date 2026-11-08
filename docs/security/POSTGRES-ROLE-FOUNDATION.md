@@ -24,7 +24,7 @@ npm run db:roles
 
 Use a trusted administrative connection only from a protected operator environment. Do not put connection strings or passwords in source control, client bundles, issue comments, or chat. Store credentials in the database host's secret manager.
 
-The script provisions roles and transfers ownership of known ORIENT tables/sequences. It uses a temporary membership grant to the invoking administrator so PostgreSQL can transfer existing objects to `orient_owner`; that membership is revoked before the transaction commits. Role creation, grants, ownership changes, and default-privilege changes are in one transaction.
+The script provisions roles and transfers ownership of known ORIENT tables/sequences. The invoking administrator must already own the existing ORIENT persistence objects (or be a superuser), and must have sufficient ADMIN OPTION to grant the two intended role memberships. `CREATEROLE` alone is not assumed to be sufficient. The script verifies the resulting memberships because PostgreSQL may emit warnings rather than hard errors when a grant is not authorized; any missing membership aborts and rolls back the transaction.
 
 ## Important limitations
 
@@ -35,6 +35,6 @@ The script provisions roles and transfers ownership of known ORIENT tables/seque
 - It has not been run against the hosted Supabase project.
 - It is not approval to run `npm run db:roles` against production.
 
-Before operational use, validate the provisioning script against PostgreSQL 17 with both a superuser and a managed non-superuser administrator, then verify the resulting role attributes, memberships, object owners, grants, and default privileges. Follow with explicit RLS policy migrations and transaction-local tenant/owner/session context. Only then wire and enable the runtime login.
+Before operational use, validate the provisioning script against PostgreSQL 17 with both a superuser and a managed non-superuser administrator. The non-superuser test must demonstrate that unsupported membership grants fail closed with no partial roles left behind. Verify the resulting role attributes, memberships, object owners, grants, and default privileges. Follow with explicit RLS policy migrations and transaction-local tenant/owner/session context. Only then wire and enable the runtime login.
 
 A successful role provisioning run alone does not establish tenant isolation or production readiness.
