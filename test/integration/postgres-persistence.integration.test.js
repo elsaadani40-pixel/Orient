@@ -46,7 +46,7 @@ test('PostgreSQL workflow repository enforces owner isolation for reads and writ
   const ownerB = makeOwnerPrincipal(tenantId, 'owner-b');
   const instance = {
     workflowId, tenantId, userId: 'owner-a', workspaceId: 'workspace-a',
-    state: 'WAITING', updatedAt: new Date().toISOString(), metadata: {},
+    state: 'WAITING', updatedAt: new Date().toISOString(), metadata: { approvalBlocked: true, approvalExecutionId: workflowId },
     toJSON() { return { ...this }; }
   };
   try {
@@ -54,6 +54,9 @@ test('PostgreSQL workflow repository enforces owner isolation for reads and writ
     assert.equal((await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerA })).userId, 'owner-a');
     assert.equal(await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerB }), null);
     assert.deepEqual(await persistence.workflows.findAll({ tenantId, persistencePrincipal: ownerB }), []);
+    assert.equal((await persistence.workflows.findByApprovalExecutionId({
+      executionId: workflowId, tenantId, persistencePrincipal: ownerA
+    })).workflowId, workflowId);
     assert.equal(await persistence.workflows.findByApprovalExecutionId({
       executionId: workflowId, tenantId, persistencePrincipal: ownerB
     }), null);
