@@ -408,7 +408,8 @@ class RequestExecutionCoordinator {
       const cancellationAfterRecovery = await this.reconcileCancellationAfterFailure(
         context,
         context.executionId,
-        activeSnapshot
+        activeSnapshot,
+        persistencePrincipal
       );
       if (cancellationAfterRecovery) {
         return {
