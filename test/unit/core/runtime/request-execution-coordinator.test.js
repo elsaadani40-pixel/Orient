@@ -828,3 +828,71 @@ test('rejects approval challenges that claim a tenant different from the active 
   assert.equal(checkpointCalls, 0, 'mismatched approval metadata must be rejected before checkpointing');
   assert.equal(eventPersistenceCalls, 0, 'mismatched approval metadata must be rejected before event persistence');
 });
+
+
+test('preserves the owner persistence principal when cancellation wins after failure recovery', async () => {
+  const principal = Object.freeze({
+    kind: 'owner', tenantId: 'tenant-a', ownerId: 'owner-a',
+    sessionId: 'session-a', issuedAt: Date.now()
+  });
+  let lookupCount = 0;
+  const lookupOptions = [];
+  const persistCalls = [];
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test.recovery-cancellation', steps: [{ step: 1, tool: 'test.tool' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async () => { throw Object.assign(new Error('tool failed'), { code: 'TOOL_FAILED' }); }
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: {
+      executions: {
+        findById: async (_id, options) => {
+          lookupOptions.push(options);
+          lookupCount += 1;
+          if (lookupCount === 1) return null;
+          return {
+            executionId: 'execution-owner-recovery-race',
+            tenantId: 'tenant-a',
+            userId: 'owner-a',
+            status: 'cancelled',
+            cancellationRequested: true,
+            cancellationReason: 'owner requested cancellation'
+          };
+        }
+      }
+    },
+    persistenceCoordinator: {
+      persistExecution: async (_context, mode, receivedPrincipal) => {
+        persistCalls.push(['execution', mode, receivedPrincipal]);
+        return { status: 'cancelled', cancellationRequested: true };
+      },
+      persistEvents: async (_context, receivedPrincipal) => {
+        persistCalls.push(['events', receivedPrincipal]);
+        return [];
+      },
+      checkpoint: async (_context, _mode, _reason, receivedPrincipal) => {
+        persistCalls.push(['checkpoint', receivedPrincipal]);
+        return {};
+      }
+    },
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    userId: 'owner-a',
+    workspaceId: 'workspace-a',
+    maxInputChars: 1000
+  });
+
+  const result = await coordinator.execute('run task', { persistencePrincipal: principal });
+
+  assert.equal(result.type, 'execution_cancelled');
+  assert.equal(lookupCount, 2);
+  assert.strictEqual(lookupOptions[1].persistencePrincipal, principal);
+  assert.deepEqual(persistCalls.map(call => call[0]), ['execution', 'events', 'checkpoint']);
+  for (const call of persistCalls) assert.strictEqual(call[call.length - 1], principal);
+});
