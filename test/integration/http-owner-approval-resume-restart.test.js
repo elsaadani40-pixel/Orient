@@ -85,6 +85,7 @@ function createRuntime(root, persistence, ownerAuth) {
     approvalService: approvals,
     persistence,
     tenantId: TENANT,
+    userId: 'owner',
     agentRegistry: registry,
     approvalDecisionAuthorizer: ({ actorId }) => ownerAuth?.isActiveSession(actorId) === true,
     ownerSessionAuthorizer: sessionId => ownerAuth?.isActiveSession(sessionId) === true  });
