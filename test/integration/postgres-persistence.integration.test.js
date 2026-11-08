@@ -1071,7 +1071,7 @@ test('PostgreSQL principal transaction context is isolated across concurrent poo
 });
 
 
-test('PostgreSQL approval lifecycle isolates two owners and serializes competing decisions', async () => {
+test('PostgreSQL approval lifecycle isolates two owners and serializes competing decisions', async t => {
   const tenantId = 'tenant-owner-approval-' + randomUUID();
   const ownerA = 'owner-a-' + randomUUID();
   const ownerB = 'owner-b-' + randomUUID();
@@ -1081,6 +1081,15 @@ test('PostgreSQL approval lifecycle isolates two owners and serializes competing
   const principalB = makeOwnerPrincipal(tenantId, ownerB);
   const approvalAId = 'approval-owner-a-' + randomUUID();
   const approvalBId = 'approval-owner-b-' + randomUUID();
+
+  t.after(async () => {
+    await pool.query('DELETE FROM approvals WHERE tenant_id=$1 AND approval_id = ANY($2::text[])', [
+      tenantId, [approvalAId, approvalBId]
+    ]);
+    await pool.query('DELETE FROM executions WHERE tenant_id=$1 AND execution_id = ANY($2::text[])', [
+      tenantId, [executionA, executionB]
+    ]);
+  });
 
   await persistence.executions.insert({
     executionId: executionA,
@@ -1187,10 +1196,4 @@ test('PostgreSQL approval lifecycle isolates two owners and serializes competing
   );
   assert.equal(wrongOwnerConsume, false);
 
-  await pool.query('DELETE FROM approvals WHERE tenant_id=$1 AND approval_id = ANY($2::text[])', [
-    tenantId, [approvalAId, approvalBId]
-  ]);
-  await pool.query('DELETE FROM executions WHERE tenant_id=$1 AND execution_id = ANY($2::text[])', [
-    tenantId, [executionA, executionB]
-  ]);
 });
