@@ -35,6 +35,6 @@ The script provisions roles and transfers ownership of known ORIENT tables/seque
 - It has not been run against the hosted Supabase project.
 - It is not approval to run `npm run db:roles` against production.
 
-Before operational use, validate the provisioning script against PostgreSQL 17 with both a superuser and a managed non-superuser administrator. The non-superuser test must demonstrate that unsupported membership grants fail closed with no partial roles left behind. Verify the resulting role attributes, memberships, object owners, grants, and default privileges. Follow with explicit RLS policy migrations and transaction-local tenant/owner/session context. Only then wire and enable the runtime login.
+Before operational use, validate the provisioning script against PostgreSQL 17 with both a superuser and a managed non-superuser administrator. The non-superuser test must demonstrate successful provisioning when the administrator owns all existing ORIENT objects and can establish the intended memberships, plus fail-closed behavior when object ownership or required memberships are unavailable. Verify the resulting role attributes, memberships, object owners, grants, and default privileges. Follow with explicit RLS policy migrations and transaction-local tenant/owner/session context. Only then wire and enable the runtime login.
 
 A successful role provisioning run alone does not establish tenant isolation or production readiness.
