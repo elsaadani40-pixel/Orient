@@ -558,6 +558,17 @@ class PostgresCheckpointRepository {
     const createdAt = new Date().toISOString();
 
     const persist = async client => {
+      if (persistencePrincipal) {
+        const ownerExecution = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [snapshot.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!ownerExecution.rows.length) {
+          throw Object.assign(new Error('Checkpoint execution is not owned by the persistence principal'), {
+            code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+          });
+        }
+      }
       const collision = await client.query(
         'SELECT tenant_id FROM checkpoints WHERE execution_id=$1 AND tenant_id<>$2 LIMIT 1 FOR UPDATE',
         [snapshot.executionId,effectiveTenant]
@@ -579,17 +590,6 @@ class PostgresCheckpointRepository {
          RETURNING execution_id,tenant_id,sequence,checkpoint_id,reason,created_at,snapshot,snapshot_sha256`,
         [snapshot.executionId,effectiveTenant,sequence,checkpointId,reason,createdAt,snapshotCopy,digest]
       );
-      if (persistencePrincipal) {
-        const ownerExecution = await client.query(
-          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
-          [snapshot.executionId, effectiveTenant, persistencePrincipal.ownerId]
-        );
-        if (!ownerExecution.rows.length) {
-          throw Object.assign(new Error('Checkpoint execution is not owned by the persistence principal'), {
-            code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
-          });
-        }
-      }
       return result.rows[0];
     };
     const persisted = persistencePrincipal
