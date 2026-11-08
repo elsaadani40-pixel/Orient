@@ -1088,17 +1088,22 @@ class PostgresApprovalRepository {
     const nowIso = new Date(now).toISOString();
     const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
-      const values = [];
-      const clauses = ['a.used=FALSE', 'a.expires_at>$1', "NOT (COALESCE(a.metadata, '{}'::jsonb) ? 'decision')"];
-      values.push(nowIso);
-      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
-      if (persistencePrincipal) {
-        values.push(persistencePrincipal.ownerId);
-        clauses.push(`e.payload->>'userId'=$${values.length}`);
+      if (!persistencePrincipal) {
+        const result = effectiveTenant
+          ? await client.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [effectiveTenant, nowIso, boundedLimit])
+          : await client.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
+        return result.rows.map(row => this.mapRow(row));
       }
+      const values = [nowIso];
+      const clauses = ['a.used=FALSE', 'a.expires_at>$1', "NOT (COALESCE(a.metadata, '{}'::jsonb) ? 'decision')"];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      values.push(persistencePrincipal.ownerId);
+      clauses.push(`e.payload->>'userId'=$${values.length}`);
       values.push(boundedLimit);
-      const join = persistencePrincipal ? ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id' : '';
-      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at ASC, a.approval_id ASC LIMIT $${values.length}`, values);
+      const result = await client.query(
+        `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at ASC, a.approval_id ASC LIMIT $${values.length}`,
+        values
+      );
       return result.rows.map(row => this.mapRow(row));
     });
   }
