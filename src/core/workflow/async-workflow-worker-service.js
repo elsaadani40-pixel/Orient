@@ -130,6 +130,12 @@ class AsyncWorkflowWorkerService {
         if (!worker || typeof worker.tick !== 'function') {
           throw new TypeError('workerFactory must return a worker with tick()');
         }
+        if ((worker.workerId && worker.workerId !== this.workerId) ||
+            (worker.workerPrincipal && worker.workerPrincipal !== this.workerPrincipal)) {
+          throw Object.assign(new Error('Worker factory returned a different worker identity'), {
+            code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+          });
+        }
 
         return await worker.tick();
       } catch (error) {
