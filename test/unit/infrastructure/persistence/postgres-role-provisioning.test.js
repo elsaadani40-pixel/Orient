@@ -30,6 +30,8 @@ test('role provisioning creates four separated roles and revokes broad future de
   assert.ok(sql.some(statement => statement.includes('CREATE ROLE orient_migrator LOGIN NOINHERIT')));
   assert.ok(sql.some(statement => statement.includes('CREATE ROLE orient_runtime_login LOGIN INHERIT')));
   assert.ok(sql.includes('GRANT orient_owner TO orient_migrator'));
+  assert.ok(sql.includes('GRANT orient_owner TO CURRENT_USER'));
+  assert.ok(sql.includes('REVOKE orient_owner FROM CURRENT_USER'));
   assert.ok(sql.includes('GRANT orient_runtime TO orient_runtime_login'));
   assert.ok(sql.includes('ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public REVOKE ALL ON TABLES FROM orient_runtime'));
   assert.ok(sql.includes('ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public REVOKE ALL ON SEQUENCES FROM orient_runtime'));
