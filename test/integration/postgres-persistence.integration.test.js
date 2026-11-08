@@ -1,11 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
+const crypto = require('node:crypto');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
 const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
+const WorkflowDefinition = require('../../src/core/workflow/workflow-definition');
+const WorkflowInstance = require('../../src/core/workflow/workflow-instance');
+const AsyncWorkflowWorker = require('../../src/core/workflow/async-workflow-worker');
+const DurableMissionEventSink = require('../../src/core/workflow/durable-mission-event-sink');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
@@ -14,7 +19,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
 test('PostgreSQL idempotency keys are tenant-scoped on a real server', async () => {
@@ -905,5 +910,164 @@ test('PostgreSQL owner work profile persists validated partial updates and isola
     );
   } finally {
     await pool.query('DELETE FROM owner_work_profiles WHERE owner_id = ANY($1::text[])', [[ownerId, otherOwnerId]]);
+  }
+});
+
+test('PostgreSQL mission events allocate concurrent tenant-scoped aggregate sequences and replay idempotently', async () => {
+  const aggregateId = 'mission-pg-concurrency-' + Date.now();
+  const tenantA = 'mission-tenant-a-' + Date.now();
+  const tenantB = 'mission-tenant-b-' + Date.now();
+  try {
+    const writes = await Promise.all(Array.from({ length: 8 }, (_, index) =>
+      persistence.events.appendMissionEvent({
+        id: aggregateId + '-event-' + index,
+        aggregateId,
+        executionId: aggregateId,
+        type: index === 0 ? 'workflow.created' : 'workflow.state.changed',
+        timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+        data: { tenantId: tenantA, index }
+      }, { tenantId: tenantA })
+    ));
+    assert.deepEqual(writes.map(event => event.sequence).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8]);
+
+    const replay = await persistence.events.appendMissionEvent({
+      id: aggregateId + '-event-0', aggregateId, executionId: aggregateId,
+      type: 'workflow.created', timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, 0)).toISOString(), data: { tenantId: tenantA, index: 0 }
+    }, { tenantId: tenantA });
+    assert.equal(replay.sequence, writes.find(event => event.id === aggregateId + '-event-0').sequence);
+
+    const isolated = await persistence.events.appendMissionEvent({
+      id: aggregateId + '-tenant-b-event', aggregateId, executionId: aggregateId,
+      type: 'workflow.created', data: { tenantId: tenantB }
+    }, { tenantId: tenantB });
+    assert.equal(isolated.sequence, 1);
+    assert.deepEqual(
+      (await persistence.events.findByAggregateId(aggregateId, { tenantId: tenantA })).map(event => event.sequence),
+      [1, 2, 3, 4, 5, 6, 7, 8]
+    );
+    assert.deepEqual(
+      (await persistence.events.findByAggregateId(aggregateId, { tenantId: tenantB })).map(event => event.sequence),
+      [1]
+    );
+    await assert.rejects(
+      () => persistence.events.appendMissionEvent({
+        id: aggregateId + '-event-0', aggregateId, type: 'workflow.created',
+        data: { tenantId: tenantB }
+      }, { tenantId: tenantB }),
+      error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+    );
+  } finally {
+    await pool.query('DELETE FROM events WHERE aggregate_id=$1 AND tenant_id = ANY($2::text[])', [aggregateId, [tenantA, tenantB]]);
+  }
+});
+
+test('PostgreSQL pending publication lookup is indexed and tenant-scoped on a real server', async () => {
+  const workflowId = 'pending-publication-' + Date.now();
+  const tenantId = 'tenant-pending-publication-' + Date.now();
+  try {
+    await persistence.workflows.save({
+      workflowId, tenantId, state: 'WAITING', updatedAt: new Date().toISOString(),
+      metadata: { approvalBlocked: true, pendingPublications: [{ eventId: workflowId + '-event' }] },
+      toJSON() { return this; }
+    }, tenantId);
+    const pending = await persistence.workflows.findPendingPublications({ tenantId, limit: 5 });
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].workflowId, workflowId);
+    assert.equal(pending[0].metadata.pendingPublications[0].eventId, workflowId + '-event');
+    assert.deepEqual(await persistence.workflows.findPendingPublications({ tenantId: tenantId + '-other', limit: 5 }), []);
+    const ack = await persistence.workflows.acknowledgePendingPublications(workflowId, tenantId, [workflowId + '-event']);
+    assert.equal(ack.acknowledged, 1);
+    assert.equal(ack.revision, 1);
+    assert.deepEqual(await persistence.workflows.findPendingPublications({ tenantId, limit: 5 }), []);
+  } finally {
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  }
+});
+
+
+test('PostgreSQL approval outbox replays a committed event after worker restart exactly once', async () => {
+  await persistence.initialize();
+  const tenantId = 'tenant-pg-outbox-' + crypto.randomUUID();
+  const workflowId = 'workflow-pg-outbox-' + crypto.randomUUID();
+  const instance = new WorkflowInstance({
+    workflowId,
+    tenantId,
+    definition: new WorkflowDefinition({
+      id: 'approval-outbox-pg',
+      version: 1,
+      name: 'PostgreSQL approval outbox recovery',
+      steps: [{ id: 'write', tool: 'sensitive.write' }]
+    })
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+
+  const sink = new DurableMissionEventSink({
+    eventRepository: persistence.events,
+    workflowRepository: persistence.workflows,
+    tenantId
+  });
+  let leaseCalls = 0;
+  let crashAfterWaitingCommit = true;
+  const scheduler = {
+    tenantId,
+    leaseDurationMs: 5000,
+    workflowRepository: persistence.workflows,
+    async persistAsync(value) {
+      return persistence.workflows.save(value, tenantId);
+    },
+    async leaseAsync() {
+      leaseCalls += 1;
+      return leaseCalls === 1
+        ? { instance, leaseId: 'lease-' + workflowId, workerId: 'worker-pg-outbox', fencingToken: undefined, previousState: 'QUEUED', cancelled: false }
+        : null;
+    },
+    async renewAsync() {},
+    async assertCurrentAsync() {},
+    async releaseAsync() {}
+  };
+  const eventSink = async (event, workflow, options) => {
+    const receipt = await sink.recordWorkerEvent(workflow, event, options);
+    if (event.type === 'workflow.state.changed' && event.payload.to === 'WAITING' && crashAfterWaitingCommit) {
+      crashAfterWaitingCommit = false;
+      throw new Error('simulated process crash after PostgreSQL event commit');
+    }
+    return receipt;
+  };
+  const executor = async () => {
+    throw Object.assign(new Error('approval required'), {
+      code: 'APPROVAL_REQUIRED',
+      executionContext: {
+        executionId: 'execution-' + workflowId,
+        approvalId: 'approval-' + workflowId
+      }
+    });
+  };
+
+  try {
+    const firstWorker = new AsyncWorkflowWorker({
+      scheduler, workerId: 'worker-pg-outbox', eventSink, executor, tenantId
+    });
+    await assert.rejects(firstWorker.tick(), /simulated process crash after PostgreSQL event commit/);
+
+    const paused = await persistence.workflows.findById(workflowId, tenantId);
+    assert.equal(paused.state, 'WAITING');
+    assert.equal(paused.metadata.pendingPublications.length, 2);
+    assert.equal(paused.checkpoint.revision, 0);
+
+    const restartedWorker = new AsyncWorkflowWorker({
+      scheduler, workerId: 'worker-pg-outbox-restarted', eventSink, executor, tenantId
+    });
+    assert.equal(await restartedWorker.tick(), null);
+
+    const persistedEvents = await persistence.events.findByAggregateId(workflowId, { tenantId });
+    assert.equal(persistedEvents.filter(event => event.type === 'workflow.state.changed' && event.data.to === 'WAITING').length, 1);
+    assert.equal(persistedEvents.filter(event => event.type === 'workflow.approval.required').length, 1);
+    const acknowledged = await persistence.workflows.findById(workflowId, tenantId);
+    assert.deepEqual(acknowledged.metadata.pendingPublications, []);
+    assert.equal(acknowledged.checkpoint.revision, 1);
+  } finally {
+    await pool.query('DELETE FROM events WHERE tenant_id=$1 AND aggregate_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
   }
 });

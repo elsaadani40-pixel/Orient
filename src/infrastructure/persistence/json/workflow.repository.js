@@ -234,6 +234,47 @@ class WorkflowRepository {
     return this.read().filter(item => !tenantId || item.tenantId === tenantId);
   }
 
+  findPendingPublications({ tenantId = null, limit = 100 } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 500)) : 100;
+    return this.read().filter(item =>
+      (!tenantId || (item.tenantId || 'local') === tenantId) &&
+      item.metadata?.approvalBlocked === true &&
+      Array.isArray(item.metadata?.pendingPublications) &&
+      item.metadata.pendingPublications.length > 0
+    ).slice(0, boundedLimit);
+  }
+
+  acknowledgePendingPublications(workflowId, tenantId, eventIds = []) {
+    if (!workflowId || !tenantId || !Array.isArray(eventIds) || eventIds.some(id => typeof id !== 'string' || !id)) {
+      throw new TypeError('workflowId, tenantId, and eventIds are required');
+    }
+    const acknowledged = new Set(eventIds);
+    return this.withLock(() => {
+      const items = this.read();
+      const index = items.findIndex(item => item.workflowId === workflowId);
+      if (index < 0) throw Object.assign(new Error('Workflow not found for outbox acknowledgement'), { code: 'WORKFLOW_NOT_FOUND' });
+      const current = items[index];
+      if ((current.tenantId || 'local') !== tenantId) {
+        throw Object.assign(new Error('Workflow tenant mismatch during outbox acknowledgement'), { code: 'WORKFLOW_TENANT_MISMATCH' });
+      }
+      const pending = Array.isArray(current.metadata?.pendingPublications) ? current.metadata.pendingPublications : [];
+      const remaining = pending.filter(event => !acknowledged.has(event.eventId));
+      const count = pending.length - remaining.length;
+      if (!count) return { acknowledged: 0, pending: remaining, revision: Number(current.checkpoint?.revision || 0), lastSavedAt: current.checkpoint?.lastSavedAt || null };
+      const lastSavedAt = new Date().toISOString();
+      const revision = Number(current.checkpoint?.revision || 0) + 1;
+      const updated = {
+        ...current,
+        metadata: { ...current.metadata, pendingPublications: remaining },
+        checkpoint: { revision, lastSavedAt }
+      };
+      const next = [...items];
+      next[index] = updated;
+      this.write(next);
+      return { acknowledged: count, pending: remaining, revision, lastSavedAt };
+    });
+  }
+
   delete(workflowId, tenantId = null) {
     return this.withLock(() => {
       const items = this.read();

@@ -45,7 +45,7 @@ test('PostgresPersistence exposes every durable repository without opening a dat
 });
 
 test('Postgres event writes bind tenant identity as a parameter', async () => {
-  const db = fakeDb([{ rows: [], rowCount: 1 }]);
+  const db = fakeDb([{ rows: [{ payload: { id: 'event-1', data: { tenantId: 'tenant-a' } } }], rowCount: 1 }]);
   const repo = new PostgresEventRepository(db);
   const event = await repo.append({
     id: 'event-1',
@@ -234,4 +234,106 @@ test('Postgres approval repository supports durable tenant-scoped execution and 
   assert.equal(pending[0].approvalId, 'approval-1');
   assert.match(db.calls[1].text, /tenant_id=\$1 AND used=FALSE AND expires_at>\$2.*LIMIT \$3/);
   assert.deepEqual(db.calls[1].values, ['tenant-a', '2026-10-10T10:00:00.000Z', 10]);
+});
+
+test('Postgres mission event append locks tenant aggregate and commits its sequence', async () => {
+  const persisted = {
+    id: 'mission-pg-1', aggregateId: 'workflow-1', executionId: 'workflow-1',
+    sequence: 4, type: 'workflow.approval.required',
+    timestamp: '2026-11-07T10:00:00.000Z', data: { tenantId: 'tenant-a' }
+  };
+  const db = fakeDb([
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ next_sequence: '4' }], rowCount: 1 },
+    { rows: [{ payload: persisted }], rowCount: 1 }
+  ]);
+  const repo = new PostgresEventRepository(db);
+  const result = await repo.appendMissionEvent({
+    id: 'mission-pg-1', aggregateId: 'workflow-1', executionId: 'workflow-1',
+    type: 'workflow.approval.required', timestamp: persisted.timestamp, data: { tenantId: 'tenant-a' }
+  }, { tenantId: 'tenant-a' });
+
+  assert.equal(result.sequence, 4);
+  assert.match(db.calls[0].text, /pg_advisory_xact_lock\(hashtext\(\$1\), hashtext\(\$2\)\)/);
+  assert.deepEqual(db.calls[0].values, ['tenant-a', 'workflow-1']);
+  assert.match(db.calls[1].text, /WHERE event_id=\$1 LIMIT 1/);
+  assert.match(db.calls[2].text, /MAX\(sequence\).*tenant_id=\$1 AND aggregate_id=\$2/);
+  assert.deepEqual(db.calls[2].values, ['tenant-a', 'workflow-1']);
+  assert.match(db.calls[3].text, /aggregate_id,sequence,type/);
+  assert.equal(db.calls[3].values[5], 4);
+});
+
+test('Postgres mission event replay rejects event identity reuse across tenants', async () => {
+  const db = fakeDb([
+    { rows: [], rowCount: 0 },
+    { rows: [{ tenant_id: 'tenant-a', aggregate_id: 'workflow-1', payload: { id: 'same-id' } }], rowCount: 1 }
+  ]);
+  const repo = new PostgresEventRepository(db);
+  await assert.rejects(
+    () => repo.appendMissionEvent({
+      id: 'same-id', aggregateId: 'workflow-1', type: 'workflow.created', data: { tenantId: 'tenant-b' }
+    }, { tenantId: 'tenant-b' }),
+    error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+  );
+});
+
+test('Postgres pending publication lookup is bounded and tenant-scoped', async () => {
+  const pending = { workflowId: 'pending-1', tenantId: 'tenant-a', metadata: { approvalBlocked: true, pendingPublications: [{ eventId: 'event-1' }] } };
+  const db = fakeDb([{ rows: [{ payload: pending }], rowCount: 1 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  const result = await repo.findPendingPublications({ tenantId: 'tenant-a', limit: 7 });
+  assert.deepEqual(result, [pending]);
+  assert.match(db.calls[0].text, /tenant_id=\$1.*approvalBlocked.*jsonb_array_length.*LIMIT \$2/);
+  assert.deepEqual(db.calls[0].values, ['tenant-a', 7]);
+});
+
+test('Postgres outbox acknowledgement locks and clears only matching pending event IDs', async () => {
+  const payload = {
+    workflowId: 'wf-outbox', tenantId: 'tenant-a',
+    metadata: { approvalBlocked: true, pendingPublications: [{ eventId: 'event-1' }, { eventId: 'event-2' }] }
+  };
+  const db = fakeDb([
+    { rows: [{ payload }], rowCount: 1 },
+    { rows: [], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowRepository(db);
+  const result = await repo.acknowledgePendingPublications('wf-outbox', 'tenant-a', ['event-1']);
+  assert.equal(result.acknowledged, 1);
+  assert.equal(result.revision, 1);
+  assert.deepEqual(result.pending, [{ eventId: 'event-2' }]);
+  assert.match(db.calls[0].text, /FOR UPDATE/);
+  assert.match(db.calls[1].text, /UPDATE workflows SET payload=\$3/);
+  assert.deepEqual(db.calls[1].values[2].metadata.pendingPublications, [{ eventId: 'event-2' }]);
+});
+
+test('Postgres mission event replay rejects changed payload under the same stable ID', async () => {
+  const db = fakeDb([
+    { rows: [], rowCount: 0 },
+    { rows: [{
+      tenant_id: 'tenant-a', aggregate_id: 'workflow-1',
+      payload: { id: 'same-id', type: 'workflow.created', executionId: 'workflow-1', goalId: null, timestamp: '2026-11-07T10:00:00.000Z', data: { tenantId: 'tenant-a', value: 'original' } }
+    }], rowCount: 1 }
+  ]);
+  const repo = new PostgresEventRepository(db);
+  await assert.rejects(
+    () => repo.appendMissionEvent({
+      id: 'same-id', aggregateId: 'workflow-1', executionId: 'workflow-1',
+      type: 'workflow.created', timestamp: '2026-11-07T10:00:00.000Z',
+      data: { tenantId: 'tenant-a', value: 'changed' }
+    }, { tenantId: 'tenant-a' }),
+    error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+  );
+});
+
+test('Postgres worker claims exclude approval-blocked snapshots from the dispatch queue', async () => {
+  const db = fakeDb([
+    { rows: [], rowCount: 0 },
+    { rows: [{ workflow_id: 'workflow-ready' }], rowCount: 1 },
+    { rows: [{ payload: { workflowId: 'workflow-ready', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowRepository(db);
+  const claimed = await repo.claimQueued({ tenantId: 'tenant-a', workerId: 'worker-a', limit: 5 });
+  assert.equal(claimed.length, 1);
+  assert.match(db.calls[1].text, /approvalBlocked.*<> 'true'/);
 });

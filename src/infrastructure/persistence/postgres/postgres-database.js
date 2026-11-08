@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, appli
 CREATE TABLE IF NOT EXISTS executions (execution_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, payload JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_executions_tenant_updated ON executions(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_executions_tenant_goal ON executions(tenant_id, ((payload->>'goalId')));
-CREATE TABLE IF NOT EXISTS events (event_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, execution_id TEXT, goal_id TEXT, type TEXT NOT NULL, timestamp TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS events (event_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, execution_id TEXT, goal_id TEXT, aggregate_id TEXT, sequence BIGINT, type TEXT NOT NULL, timestamp TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_events_tenant_execution ON events(tenant_id, execution_id);
 CREATE INDEX IF NOT EXISTS idx_events_tenant_goal ON events(tenant_id, goal_id);
 CREATE INDEX IF NOT EXISTS idx_events_tenant_type ON events(tenant_id, type);
@@ -122,6 +122,31 @@ const MIGRATIONS = [
       updated_at TIMESTAMPTZ NOT NULL
     );
   `},
+  {version:9,sql:`
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS aggregate_id TEXT;
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS sequence BIGINT;
+    UPDATE events
+      SET tenant_id = COALESCE(payload->'data'->>'tenantId', tenant_id, 'local'),
+          aggregate_id = COALESCE(payload->>'aggregateId', payload->>'workflowId')
+      WHERE aggregate_id IS NULL;
+    WITH ranked AS (
+      SELECT event_id, ROW_NUMBER() OVER (
+        PARTITION BY tenant_id, aggregate_id ORDER BY timestamp ASC, event_id ASC
+      ) AS next_sequence
+      FROM events WHERE aggregate_id IS NOT NULL
+    )
+    UPDATE events e SET sequence = ranked.next_sequence
+      FROM ranked WHERE ranked.event_id=e.event_id AND e.sequence IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_events_tenant_aggregate
+      ON events(tenant_id, aggregate_id, sequence);
+    CREATE INDEX IF NOT EXISTS idx_workflows_pending_publications
+      ON workflows(tenant_id, updated_at)
+      WHERE payload->'metadata'->>'approvalBlocked'='true'
+        AND jsonb_array_length(COALESCE(payload->'metadata'->'pendingPublications','[]'::jsonb))>0;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_tenant_aggregate_sequence
+      ON events(tenant_id, aggregate_id, sequence)
+      WHERE aggregate_id IS NOT NULL AND sequence IS NOT NULL;
+  `},
 
 ];
 class PostgresDatabase {
@@ -141,7 +166,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8)',[1,2,3,4,5,6,7,8]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9)',[1,2,3,4,5,6,7,8,9]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);

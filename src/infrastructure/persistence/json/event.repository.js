@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { isDeepStrictEqual } = require('node:util');
 
 class EventRepository {
   constructor(filePath, { lockTimeoutMs = 30000 } = {}) {
@@ -269,6 +270,14 @@ class EventRepository {
       if (existing) {
         if (!this.belongsToTenant(existing, tenantId)) {
           throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
+        }
+        if (existing.aggregateId !== normalized.aggregateId ||
+            existing.type !== normalized.type ||
+            existing.executionId !== normalized.executionId ||
+            existing.goalId !== normalized.goalId ||
+            existing.timestamp !== normalized.timestamp ||
+            !isDeepStrictEqual(existing.data || {}, normalized.data || {})) {
+          throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
         }
         return existing;
       }
