@@ -20,6 +20,14 @@ test('ORIENT website includes Arabic RTL switching and responsive layouts', () =
   assert.match(html, /@media\(max-width:560px\)/);
 });
 
+test('ORIENT website mobile navigation exposes accessible state and keyboard behavior', () => {
+  assert.match(html, /id="menu"[^>]*aria-expanded="false"[^>]*aria-controls="navlinks"/);
+  assert.ok(html.includes('function setMenuOpen(open)'));
+  assert.ok(html.includes("menu.setAttribute('aria-expanded',String(open))"));
+  assert.ok(html.includes("nav.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>setMenuOpen(false)))"));
+  assert.ok(html.includes("e.key==='Escape'"));
+  assert.ok(html.includes('setMenuOpen(false);menu.focus()'));
+});
 test('ORIENT website respects reduced-motion preferences', () => {
   assert.match(html, /prefers-reduced-motion:reduce/);
   assert.match(html, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
