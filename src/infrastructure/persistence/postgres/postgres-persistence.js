@@ -630,7 +630,7 @@ class PostgresCheckpointRepository {
     return this.toModel(row);
   }
 
-  async acquireResumeLease(executionId, { tenantId = null, leaseDurationMs = 30000 } = {}) {
+  async acquireResumeLease(executionId, { tenantId = null, leaseDurationMs = 30000, persistencePrincipal = null } = {}) {
     if (!executionId) throw new TypeError('executionId is required');
     if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
       throw new TypeError('leaseDurationMs must be a positive integer');
@@ -638,25 +638,80 @@ class PostgresCheckpointRepository {
 
     const effectiveTenant = tenantOrLocal(tenantId);
     const leaseId = crypto.randomUUID();
-    const result = await this.db.query(
-      `INSERT INTO execution_resume_leases(execution_id,tenant_id,lease_id,acquired_at,expires_at)
-       SELECT c.execution_id,c.tenant_id,$3,NOW(),NOW()+($4::double precision * INTERVAL '1 millisecond')
-       FROM checkpoints c
-       WHERE c.execution_id=$1 AND c.tenant_id=$2
-       ORDER BY c.sequence DESC
-       LIMIT 1
-       ON CONFLICT (execution_id) DO UPDATE SET
-         tenant_id=EXCLUDED.tenant_id,
-         lease_id=EXCLUDED.lease_id,
-         acquired_at=EXCLUDED.acquired_at,
-         expires_at=EXCLUDED.expires_at
-       WHERE execution_resume_leases.tenant_id=EXCLUDED.tenant_id
-         AND execution_resume_leases.expires_at <= NOW()
-       RETURNING lease_id,acquired_at,expires_at`,
-      [executionId, effectiveTenant, leaseId, leaseDurationMs]
-    );
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Resume lease principal', async client => {
+      const ownerClause = persistencePrincipal ? " AND c.snapshot->>'userId'=$5" : '';
+      const insertValues = [executionId, effectiveTenant, leaseId, leaseDurationMs];
+      if (persistencePrincipal) insertValues.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `INSERT INTO execution_resume_leases(execution_id,tenant_id,lease_id,acquired_at,expires_at)
+         SELECT c.execution_id,c.tenant_id,$3,NOW(),NOW()+($4::double precision * INTERVAL '1 millisecond')
+         FROM checkpoints c
+         WHERE c.execution_id=$1 AND c.tenant_id=$2${ownerClause}
+         ORDER BY c.sequence DESC
+         LIMIT 1
+         ON CONFLICT (execution_id) DO UPDATE SET
+           tenant_id=EXCLUDED.tenant_id,
+           lease_id=EXCLUDED.lease_id,
+           acquired_at=EXCLUDED.acquired_at,
+           expires_at=EXCLUDED.expires_at
+         WHERE execution_resume_leases.tenant_id=EXCLUDED.tenant_id
+           AND execution_resume_leases.expires_at <= NOW()
+         RETURNING lease_id,acquired_at,expires_at`,
+        insertValues
+      );
 
-    if (result.rows.length) {
+      if (result.rows.length) {
+        const row = result.rows[0];
+        return {
+          leaseId: row.lease_id,
+          acquiredAt: new Date(row.acquired_at).toISOString(),
+          expiresAt: new Date(row.expires_at).toISOString(),
+          expiresAtMs: new Date(row.expires_at).getTime()
+        };
+      }
+
+      const checkpointValues = persistencePrincipal
+        ? [executionId, effectiveTenant, persistencePrincipal.ownerId]
+        : [executionId, effectiveTenant];
+      const checkpointOwnerClause = persistencePrincipal ? " AND snapshot->>'userId'=$3" : '';
+      const checkpoint = await client.query(
+        'SELECT 1 FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2' + checkpointOwnerClause + ' LIMIT 1',
+        checkpointValues
+      );
+      if (!checkpoint.rows.length) return null;
+
+      const existing = await client.query(
+        'SELECT tenant_id,expires_at FROM execution_resume_leases WHERE execution_id=$1 LIMIT 1',
+        [executionId]
+      );
+      if (existing.rows.length && existing.rows[0].tenant_id !== effectiveTenant) return null;
+
+      const error = new Error('Execution resume lease is already held');
+      error.code = 'CHECKPOINT_RESUME_LEASE_HELD';
+      throw error;
+    });
+  }
+
+  async renewResumeLease(executionId, leaseId, { tenantId = null, leaseDurationMs = 30000, persistencePrincipal = null } = {}) {
+    if (!executionId || !leaseId) return null;
+    if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
+      throw new TypeError('leaseDurationMs must be a positive integer');
+    }
+    const effectiveTenant = tenantOrLocal(tenantId);
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Resume lease principal', async client => {
+      const ownerClause = persistencePrincipal
+        ? " AND EXISTS (SELECT 1 FROM checkpoints c WHERE c.execution_id=execution_resume_leases.execution_id AND c.tenant_id=execution_resume_leases.tenant_id AND c.snapshot->>'userId'=$5)"
+        : '';
+      const values = [executionId, effectiveTenant, leaseId, leaseDurationMs];
+      if (persistencePrincipal) values.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `UPDATE execution_resume_leases
+         SET expires_at=NOW()+($4::double precision * INTERVAL '1 millisecond')
+         WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3 AND expires_at>NOW()${ownerClause}
+         RETURNING lease_id,acquired_at,expires_at`,
+        values
+      );
+      if (!result.rows.length) return null;
       const row = result.rows[0];
       return {
         leaseId: row.lease_id,
@@ -664,56 +719,24 @@ class PostgresCheckpointRepository {
         expiresAt: new Date(row.expires_at).toISOString(),
         expiresAtMs: new Date(row.expires_at).getTime()
       };
-    }
-
-    const checkpoint = await this.db.query(
-      'SELECT 1 FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2 LIMIT 1',
-      [executionId, effectiveTenant]
-    );
-    if (!checkpoint.rows.length) return null;
-
-    const existing = await this.db.query(
-      'SELECT tenant_id,expires_at FROM execution_resume_leases WHERE execution_id=$1 LIMIT 1',
-      [executionId]
-    );
-    if (existing.rows.length && existing.rows[0].tenant_id !== effectiveTenant) return null;
-
-    const error = new Error('Execution resume lease is already held');
-    error.code = 'CHECKPOINT_RESUME_LEASE_HELD';
-    throw error;
+    });
   }
 
-  async renewResumeLease(executionId, leaseId, { tenantId = null, leaseDurationMs = 30000 } = {}) {
-    if (!executionId || !leaseId) return null;
-    if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
-      throw new TypeError('leaseDurationMs must be a positive integer');
-    }
-    const effectiveTenant = tenantOrLocal(tenantId);
-    const result = await this.db.query(
-      `UPDATE execution_resume_leases
-       SET expires_at=NOW()+($4::double precision * INTERVAL '1 millisecond')
-       WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3 AND expires_at>NOW()
-       RETURNING lease_id,acquired_at,expires_at`,
-      [executionId, effectiveTenant, leaseId, leaseDurationMs]
-    );
-    if (!result.rows.length) return null;
-    const row = result.rows[0];
-    return {
-      leaseId: row.lease_id,
-      acquiredAt: new Date(row.acquired_at).toISOString(),
-      expiresAt: new Date(row.expires_at).toISOString(),
-      expiresAtMs: new Date(row.expires_at).getTime()
-    };
-  }
-
-  async releaseResumeLease(executionId, leaseId, { tenantId = null } = {}) {
+  async releaseResumeLease(executionId, leaseId, { tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId || !leaseId) return false;
     const effectiveTenant = tenantOrLocal(tenantId);
-    const result = await this.db.query(
-      'DELETE FROM execution_resume_leases WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3',
-      [executionId, effectiveTenant, leaseId]
-    );
-    return result.rowCount === 1;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Resume lease principal', async client => {
+      const ownerClause = persistencePrincipal
+        ? " AND EXISTS (SELECT 1 FROM checkpoints c WHERE c.execution_id=execution_resume_leases.execution_id AND c.tenant_id=execution_resume_leases.tenant_id AND c.snapshot->>'userId'=$4)"
+        : '';
+      const values = [executionId, effectiveTenant, leaseId];
+      if (persistencePrincipal) values.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        'DELETE FROM execution_resume_leases WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3' + ownerClause,
+        values
+      );
+      return result.rowCount === 1;
+    });
   }
 
   async delete(executionId, { tenantId = null } = {}) {
