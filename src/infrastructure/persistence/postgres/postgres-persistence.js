@@ -1033,16 +1033,1752 @@ class PostgresWorkflowRepository {
       if (effectiveTenant) { values.push(effectiveTenant); where += ' AND tenant_id=
     if (!executionId) return null;
     const values = [String(executionId)];
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
+    let tenantClause = '';
+    if (effectiveTenant) {
+      values.push(effectiveTenant);
+      tenantClause = ' AND tenant_id=
+      const result = await client.query(
+        "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
+        "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
+        ' ORDER BY updated_at DESC LIMIT 1',
+        values
+      );
+      return result.rows.length ? result.rows[0].payload : null;
+    });
+  }
+
+  async findAll({ tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
+      const values = [];
+      let where = '';
+      if (effectiveTenant) { values.push(effectiveTenant); where = 'WHERE tenant_id=
+
+  async delete(workflowId, tenantId = null) {
+    const result = await this.db.query(
+      tenantId ? 'DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2' : 'DELETE FROM workflows WHERE workflow_id=$1',
+      tenantId ? [workflowId, tenantId] : [workflowId]
+    );
+    return result.rowCount === 1;
+  }
+
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM workflows WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM workflows');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresWorkflowLeaseRepository {
+  constructor(db) { this.db = db; }
+
+  assertWorkerPrincipal(principal, tenantId, workerId = null, { requireLease = false } = {}) {
+    const identity = assertWorkerPersistencePrincipal(principal, { requireLease });
+    const tenant = tenantOrLocal(tenantId);
+    if (identity.tenantId !== tenant || (workerId && identity.workerId !== workerId)) {
+      throw Object.assign(new Error('Worker principal does not match workflow lease identity'), {
+        code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+      throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), {
+        code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED'
+      });
+    }
+    return identity;
+  }
+
+  async assertRegisteredWorkerSession(client, principal) {
+    const result = await client.query(
+      `SELECT 1 FROM worker_nodes
+       WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+         AND status='READY' AND expires_at > NOW()
+       FOR UPDATE`,
+      [principal.tenantId, principal.workerId, principal.sessionId]
+    );
+    if (result.rowCount !== 1) {
+      throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+    }
+    return true;
+  }
+
+  async tryAcquire(lease, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId);
+    const acquiredAt = new Date(lease.acquiredAt).toISOString();
+    const expiresAt = new Date(lease.expiresAt).toISOString();
+
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const workflow = await client.query(
+        'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [lease.workflowId, effectiveTenant]
+      );
+      if (!workflow.rows.length) {
+        throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+      }
+      const workflowState = workflow.rows[0].state;
+      const workflowPayload = workflow.rows[0].payload || {};
+      if (workflowPayload.cancelRequested || workflowState === 'CANCELLED') {
+        throw Object.assign(new Error('Workflow cancellation was requested'), { code: 'WORKFLOW_CANCELLATION_REQUESTED' });
+      }
+      if (['COMPLETED','FAILED'].includes(workflowState)) {
+        throw Object.assign(new Error('Workflow is terminal'), { code: 'WORKFLOW_TERMINAL' });
+      }
+      await client.query(
+        'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= $3',
+        [lease.workflowId, effectiveTenant, acquiredAt]
+      );
+      const result = await client.query(
+        `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT(workflow_id) DO NOTHING
+         RETURNING fencing_token`,
+        [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,principal.sessionId,acquiredAt,expiresAt,lease]
+      );
+      if (result.rowCount !== 1) return null;
+      return { ...lease, workerSessionId: principal.sessionId, fencingToken: Number(result.rows[0].fencing_token) };
+    });
+  }
+
+  async save(lease, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId, { requireLease: true });
+    if (principal.workflowId !== lease.workflowId || principal.leaseId !== lease.leaseId ||
+        Number(principal.fencingToken) !== Number(lease.fencingToken)) {
+      throw Object.assign(new Error('Lease principal does not match the lease payload'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1,payload=$2
+         WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
+           AND worker_session_id=$7 AND fencing_token=$8 AND expires_at > NOW()`,
+        [new Date(lease.expiresAt).toISOString(),lease,lease.workflowId,effectiveTenant,lease.leaseId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      if (result.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow lease is no longer owned by this worker session'), { code: 'WORKFLOW_LEASE_NOT_OWNER' });
+      }
+      return { ...lease };
+    });
+  }
+
+  async renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match renewal request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1::timestamptz,
+           payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
+         WHERE workflow_id=$2 AND tenant_id=$3 AND lease_id=$4 AND worker_id=$5
+           AND worker_session_id=$6 AND fencing_token=$7 AND expires_at > $8`,
+        [new Date(expiresAt).toISOString(),workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async assertCurrent(workflowId, leaseId, fencingToken, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId ||
+        Number(principal.fencingToken) !== Number(fencingToken)) return false;
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `SELECT 1 FROM workflow_leases
+         WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
+           AND worker_session_id=$5 AND fencing_token=$6 AND expires_at > $7 LIMIT 1`,
+        [workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async findByWorkflowId(workflowId, tenantId = null) {
+    const result = await this.db.query(
+      tenantId ? 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 LIMIT 1',
+      tenantId ? [workflowId, tenantId] : [workflowId]
+    );
+    return result.rows.length ? { ...result.rows[0].payload, workerSessionId: result.rows[0].worker_session_id, fencingToken: Number(result.rows[0].fencing_token), expiresAt: new Date(result.rows[0].expires_at).getTime(), acquiredAt: new Date(result.rows[0].acquired_at).getTime() } : null;
+  }
+
+  async findAll({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE tenant_id=$1 ORDER BY acquired_at ASC', [tenantId])
+      : await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases ORDER BY acquired_at ASC');
+    return result.rows.map(row => ({ ...row.payload, workerSessionId: row.worker_session_id, fencingToken: Number(row.fencing_token), expiresAt: new Date(row.expires_at).getTime(), acquiredAt: new Date(row.acquired_at).getTime() }));
+  }
+
+  async delete(workflowId, leaseId, tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match release request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
+         AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
+        [workflowId,leaseId,principal.tenantId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async deleteExpired(workflowId, leaseId, now = Date.now(), tenantId = null) {
+    const result = await this.db.query(
+      tenantId
+        ? 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3 AND expires_at <= $4'
+        : 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND expires_at <= $3',
+      tenantId
+        ? [workflowId, leaseId, tenantId, new Date(now).toISOString()]
+        : [workflowId, leaseId, new Date(now).toISOString()]
+    );
+    return result.rowCount === 1;
+  }
+
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM workflow_leases');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresApprovalRepository {
+  constructor(db) { this.db = db; }
+
+  mapRow(row) {
+    return {
+      approvalId: row.approval_id, executionId: row.execution_id, step: Number(row.step),
+      planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
+      scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
+      used: Boolean(row.used), usedAt: row.used_at || undefined,
+      metadata: row.metadata, decision: row.metadata?.decision || null, tenantId: row.tenant_id
+    };
+  }
+
+  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null, persistencePrincipal = null } = {}) {
+    if (!executionId) return [];
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [String(executionId)];
+      const clauses = ['execution_id=$1'];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`tenant_id=$${values.length}`); }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        clauses.push(`e.payload->>'userId'=$${values.length}`);
+      }
+      if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
+      if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
+      if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
+      const query = persistencePrincipal
+        ? `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.map(clause => clause.replace(/^(execution_id|tenant_id|step|tool|plan_revision)=/, 'a.$1=')).join(' AND ')} ORDER BY a.issued_at DESC`
+        : `SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`;
+      const result = await client.query(query, values);
+      return result.rows.map(row => this.mapRow(row));
+    });
+  }
+  async findPending({ tenantId = null, limit = 100, now = Date.now(), persistencePrincipal = null } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
+    const nowIso = new Date(now).toISOString();
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (!persistencePrincipal) {
+        const result = effectiveTenant
+          ? await client.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [effectiveTenant, nowIso, boundedLimit])
+          : await client.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
+        return result.rows.map(row => this.mapRow(row));
+      }
+      const values = [nowIso];
+      const clauses = ['a.used=FALSE', 'a.expires_at>$1', "NOT (COALESCE(a.metadata, '{}'::jsonb) ? 'decision')"];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      values.push(persistencePrincipal.ownerId);
+      clauses.push(`e.payload->>'userId'=$${values.length}`);
+      values.push(boundedLimit);
+      const result = await client.query(
+        `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at ASC, a.approval_id ASC LIMIT $${values.length}`,
+        values
+      );
+      return result.rows.map(row => this.mapRow(row));
+    });
+  }
+  async save(approval, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(approval.tenantId || approval.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Approval');
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (persistencePrincipal) {
+        const owner = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [approval.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!owner.rows.length) throw Object.assign(new Error('Approval execution is not owned by the persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+      }
+      await client.query(
+        `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
+      );
+      return { ...approval, tenantId: effectiveTenant };
+    });
+  }
+  async findById(approvalId, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [approvalId];
+      let where = 'a.approval_id=$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND a.tenant_id=$${values.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND e.payload->>'userId'=$${values.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${where} LIMIT 1`, values);
+      return result.rows.length ? this.mapRow(result.rows[0]) : null;
+    });
+  }
+  async consume(approvalId, usedAt, tenantId = null, { persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [usedAt, approvalId];
+      let where = 'approval_id=$2 AND used=FALSE AND expires_at>$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const result = await client.query(`UPDATE approvals SET used=TRUE,used_at=$1 WHERE ${where}`, values);
+      return result.rowCount === 1;
+    });
+  }
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now(), persistencePrincipal = null) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    if (!decision || !['approved', 'rejected'].includes(decision.status) || typeof decision.actorId !== 'string' || !decision.actorId.trim() || typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
+    const nowMs = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
+    const nowIso = new Date(nowMs).toISOString();
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const selectValues = [approvalId];
+      let selectWhere = 'a.approval_id=$1';
+      if (effectiveTenant) { selectValues.push(effectiveTenant); selectWhere += ` AND a.tenant_id=$${selectValues.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        selectValues.push(persistencePrincipal.ownerId);
+        selectWhere += ` AND e.payload->>'userId'=$${selectValues.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const selected = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      if (!selected.rows.length) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+      const current = this.mapRow(selected.rows[0]);
+      if (current.decision) {
+        if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+        throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      const expiry = Date.parse(current.expiresAt);
+      if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+      const values = [JSON.stringify(decision), approvalId, nowIso];
+      let where = "approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')";
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const updated = await client.query(`UPDATE approvals SET metadata=COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE ${where} RETURNING *`, values);
+      if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
+      const latest = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      const record = latest.rows[0] ? this.mapRow(latest.rows[0]) : null;
+      if (record?.decision?.status === decision.status && record?.decision?.actorId === decision.actorId) return record;
+      if (record?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      if (record?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+    });
+  }
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM approvals');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresPersistence {
+  constructor({ pool, schema } = {}) {
+    this.isAsync = true;
+    this.db = pool instanceof PostgresDatabase ? pool : new PostgresDatabase({ pool, schema });
+    this.executions = new PostgresExecutionRepository(this.db);
+    this.events = new PostgresEventRepository(this.db);
+    this.idempotency = new PostgresIdempotencyRepository(this.db);
+    this.checkpoints = new PostgresCheckpointRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+    this.workflows = new PostgresWorkflowRepository(this.db, this.workers);
+    this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
+    this.approvals = new PostgresApprovalRepository(this.db);
+    this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
+    this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
+    this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+  }
+
+  initialize() {
+    return this.db.initialize();
+  }
+
+  health() {
+    return {
+      adapter: 'postgres',
+      ready: true,
+      repositories: {
+        executions: true,
+        events: true,
+        idempotency: true,
+        checkpoints: true,
+        workflows: true,
+        workflowLeases: true,
+        approvals: true,
+        tenantQuotas: true,
+        ownerChat: true,
+        ownerProfile: true,
+        workers: true
+      }
+    };
+  }
+}
+
+module.exports = {
+  PostgresPersistence,
+  PostgresExecutionRepository,
+  PostgresEventRepository,
+  PostgresIdempotencyRepository,
+  PostgresCheckpointRepository,
+  PostgresWorkflowRepository,
+  PostgresWorkflowLeaseRepository,
+  PostgresApprovalRepository,
+  PostgresWorkerRegistryRepository,
+  PostgresOwnerChatConversationRepository,
+  PostgresOwnerWorkProfileRepository
+};
+ + values.length; }
+      if (persistencePrincipal) { values.push(persistencePrincipal.ownerId); where += " AND payload->>'userId'=$" + values.length; }
+      const result = await client.query('SELECT payload FROM workflows WHERE ' + where + ' LIMIT 1', values);
+      return result.rows.length ? result.rows[0].payload : null;
+    });
+  }
+
+  async findByApprovalExecutionId({ executionId, tenantId = null, persistencePrincipal = null } = {}) {
+    if (!executionId) return null;
+    const values = [String(executionId)];
     let tenantClause = '';
     if (tenantId) {
       values.push(tenantId);
       tenantClause = ' AND tenant_id=$' + values.length;
     }
+    const result = await this.db.query(
+      "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
+      "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
+      ' ORDER BY updated_at DESC LIMIT 1',
+      values
+    );
+    return result.rows.length ? result.rows[0].payload : null;
+  }
+
+  async findAll({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT payload FROM workflows WHERE tenant_id=$1 ORDER BY updated_at DESC', [tenantId])
+      : await this.db.query('SELECT payload FROM workflows ORDER BY updated_at DESC');
+    return result.rows.map(row => row.payload);
+  }
+
+  async delete(workflowId, tenantId = null) {
+    const result = await this.db.query(
+      tenantId ? 'DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2' : 'DELETE FROM workflows WHERE workflow_id=$1',
+      tenantId ? [workflowId, tenantId] : [workflowId]
+    );
+    return result.rowCount === 1;
+  }
+
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM workflows WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM workflows');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresWorkflowLeaseRepository {
+  constructor(db) { this.db = db; }
+
+  assertWorkerPrincipal(principal, tenantId, workerId = null, { requireLease = false } = {}) {
+    const identity = assertWorkerPersistencePrincipal(principal, { requireLease });
+    const tenant = tenantOrLocal(tenantId);
+    if (identity.tenantId !== tenant || (workerId && identity.workerId !== workerId)) {
+      throw Object.assign(new Error('Worker principal does not match workflow lease identity'), {
+        code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+      throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), {
+        code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED'
+      });
+    }
+    return identity;
+  }
+
+  async assertRegisteredWorkerSession(client, principal) {
+    const result = await client.query(
+      `SELECT 1 FROM worker_nodes
+       WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+         AND status='READY' AND expires_at > NOW()
+       FOR UPDATE`,
+      [principal.tenantId, principal.workerId, principal.sessionId]
+    );
+    if (result.rowCount !== 1) {
+      throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+    }
+    return true;
+  }
+
+  async tryAcquire(lease, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId);
+    const acquiredAt = new Date(lease.acquiredAt).toISOString();
+    const expiresAt = new Date(lease.expiresAt).toISOString();
+
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const workflow = await client.query(
+        'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [lease.workflowId, effectiveTenant]
+      );
+      if (!workflow.rows.length) {
+        throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+      }
+      const workflowState = workflow.rows[0].state;
+      const workflowPayload = workflow.rows[0].payload || {};
+      if (workflowPayload.cancelRequested || workflowState === 'CANCELLED') {
+        throw Object.assign(new Error('Workflow cancellation was requested'), { code: 'WORKFLOW_CANCELLATION_REQUESTED' });
+      }
+      if (['COMPLETED','FAILED'].includes(workflowState)) {
+        throw Object.assign(new Error('Workflow is terminal'), { code: 'WORKFLOW_TERMINAL' });
+      }
+      await client.query(
+        'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= $3',
+        [lease.workflowId, effectiveTenant, acquiredAt]
+      );
+      const result = await client.query(
+        `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT(workflow_id) DO NOTHING
+         RETURNING fencing_token`,
+        [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,principal.sessionId,acquiredAt,expiresAt,lease]
+      );
+      if (result.rowCount !== 1) return null;
+      return { ...lease, workerSessionId: principal.sessionId, fencingToken: Number(result.rows[0].fencing_token) };
+    });
+  }
+
+  async save(lease, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId, { requireLease: true });
+    if (principal.workflowId !== lease.workflowId || principal.leaseId !== lease.leaseId ||
+        Number(principal.fencingToken) !== Number(lease.fencingToken)) {
+      throw Object.assign(new Error('Lease principal does not match the lease payload'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1,payload=$2
+         WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
+           AND worker_session_id=$7 AND fencing_token=$8 AND expires_at > NOW()`,
+        [new Date(lease.expiresAt).toISOString(),lease,lease.workflowId,effectiveTenant,lease.leaseId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      if (result.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow lease is no longer owned by this worker session'), { code: 'WORKFLOW_LEASE_NOT_OWNER' });
+      }
+      return { ...lease };
+    });
+  }
+
+  async renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match renewal request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1::timestamptz,
+           payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
+         WHERE workflow_id=$2 AND tenant_id=$3 AND lease_id=$4 AND worker_id=$5
+           AND worker_session_id=$6 AND fencing_token=$7 AND expires_at > $8`,
+        [new Date(expiresAt).toISOString(),workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async assertCurrent(workflowId, leaseId, fencingToken, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId ||
+        Number(principal.fencingToken) !== Number(fencingToken)) return false;
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `SELECT 1 FROM workflow_leases
+         WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
+           AND worker_session_id=$5 AND fencing_token=$6 AND expires_at > $7 LIMIT 1`,
+        [workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async findByWorkflowId(workflowId, tenantId = null) {
+    const result = await this.db.query(
+      tenantId ? 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 LIMIT 1',
+      tenantId ? [workflowId, tenantId] : [workflowId]
+    );
+    return result.rows.length ? { ...result.rows[0].payload, workerSessionId: result.rows[0].worker_session_id, fencingToken: Number(result.rows[0].fencing_token), expiresAt: new Date(result.rows[0].expires_at).getTime(), acquiredAt: new Date(result.rows[0].acquired_at).getTime() } : null;
+  }
+
+  async findAll({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE tenant_id=$1 ORDER BY acquired_at ASC', [tenantId])
+      : await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases ORDER BY acquired_at ASC');
+    return result.rows.map(row => ({ ...row.payload, workerSessionId: row.worker_session_id, fencingToken: Number(row.fencing_token), expiresAt: new Date(row.expires_at).getTime(), acquiredAt: new Date(row.acquired_at).getTime() }));
+  }
+
+  async delete(workflowId, leaseId, tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match release request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
+         AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
+        [workflowId,leaseId,principal.tenantId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async deleteExpired(workflowId, leaseId, now = Date.now(), tenantId = null) {
+    const result = await this.db.query(
+      tenantId
+        ? 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3 AND expires_at <= $4'
+        : 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND expires_at <= $3',
+      tenantId
+        ? [workflowId, leaseId, tenantId, new Date(now).toISOString()]
+        : [workflowId, leaseId, new Date(now).toISOString()]
+    );
+    return result.rowCount === 1;
+  }
+
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM workflow_leases');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresApprovalRepository {
+  constructor(db) { this.db = db; }
+
+  mapRow(row) {
+    return {
+      approvalId: row.approval_id, executionId: row.execution_id, step: Number(row.step),
+      planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
+      scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
+      used: Boolean(row.used), usedAt: row.used_at || undefined,
+      metadata: row.metadata, decision: row.metadata?.decision || null, tenantId: row.tenant_id
+    };
+  }
+
+  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null, persistencePrincipal = null } = {}) {
+    if (!executionId) return [];
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [String(executionId)];
+      const clauses = ['execution_id=$1'];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`tenant_id=$${values.length}`); }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        clauses.push(`e.payload->>'userId'=$${values.length}`);
+      }
+      if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
+      if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
+      if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
+      const query = persistencePrincipal
+        ? `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.map(clause => clause.replace(/^(execution_id|tenant_id|step|tool|plan_revision)=/, 'a.$1=')).join(' AND ')} ORDER BY a.issued_at DESC`
+        : `SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`;
+      const result = await client.query(query, values);
+      return result.rows.map(row => this.mapRow(row));
+    });
+  }
+  async findPending({ tenantId = null, limit = 100, now = Date.now(), persistencePrincipal = null } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
+    const nowIso = new Date(now).toISOString();
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (!persistencePrincipal) {
+        const result = effectiveTenant
+          ? await client.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [effectiveTenant, nowIso, boundedLimit])
+          : await client.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
+        return result.rows.map(row => this.mapRow(row));
+      }
+      const values = [nowIso];
+      const clauses = ['a.used=FALSE', 'a.expires_at>$1', "NOT (COALESCE(a.metadata, '{}'::jsonb) ? 'decision')"];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      values.push(persistencePrincipal.ownerId);
+      clauses.push(`e.payload->>'userId'=$${values.length}`);
+      values.push(boundedLimit);
+      const result = await client.query(
+        `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at ASC, a.approval_id ASC LIMIT $${values.length}`,
+        values
+      );
+      return result.rows.map(row => this.mapRow(row));
+    });
+  }
+  async save(approval, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(approval.tenantId || approval.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Approval');
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (persistencePrincipal) {
+        const owner = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [approval.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!owner.rows.length) throw Object.assign(new Error('Approval execution is not owned by the persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+      }
+      await client.query(
+        `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
+      );
+      return { ...approval, tenantId: effectiveTenant };
+    });
+  }
+  async findById(approvalId, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [approvalId];
+      let where = 'a.approval_id=$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND a.tenant_id=$${values.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND e.payload->>'userId'=$${values.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${where} LIMIT 1`, values);
+      return result.rows.length ? this.mapRow(result.rows[0]) : null;
+    });
+  }
+  async consume(approvalId, usedAt, tenantId = null, { persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [usedAt, approvalId];
+      let where = 'approval_id=$2 AND used=FALSE AND expires_at>$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const result = await client.query(`UPDATE approvals SET used=TRUE,used_at=$1 WHERE ${where}`, values);
+      return result.rowCount === 1;
+    });
+  }
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now(), persistencePrincipal = null) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    if (!decision || !['approved', 'rejected'].includes(decision.status) || typeof decision.actorId !== 'string' || !decision.actorId.trim() || typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
+    const nowMs = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
+    const nowIso = new Date(nowMs).toISOString();
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const selectValues = [approvalId];
+      let selectWhere = 'a.approval_id=$1';
+      if (effectiveTenant) { selectValues.push(effectiveTenant); selectWhere += ` AND a.tenant_id=$${selectValues.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        selectValues.push(persistencePrincipal.ownerId);
+        selectWhere += ` AND e.payload->>'userId'=$${selectValues.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const selected = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      if (!selected.rows.length) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+      const current = this.mapRow(selected.rows[0]);
+      if (current.decision) {
+        if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+        throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      const expiry = Date.parse(current.expiresAt);
+      if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+      const values = [JSON.stringify(decision), approvalId, nowIso];
+      let where = "approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')";
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const updated = await client.query(`UPDATE approvals SET metadata=COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE ${where} RETURNING *`, values);
+      if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
+      const latest = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      const record = latest.rows[0] ? this.mapRow(latest.rows[0]) : null;
+      if (record?.decision?.status === decision.status && record?.decision?.actorId === decision.actorId) return record;
+      if (record?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      if (record?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+    });
+  }
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM approvals');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresPersistence {
+  constructor({ pool, schema } = {}) {
+    this.isAsync = true;
+    this.db = pool instanceof PostgresDatabase ? pool : new PostgresDatabase({ pool, schema });
+    this.executions = new PostgresExecutionRepository(this.db);
+    this.events = new PostgresEventRepository(this.db);
+    this.idempotency = new PostgresIdempotencyRepository(this.db);
+    this.checkpoints = new PostgresCheckpointRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+    this.workflows = new PostgresWorkflowRepository(this.db, this.workers);
+    this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
+    this.approvals = new PostgresApprovalRepository(this.db);
+    this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
+    this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
+    this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+  }
+
+  initialize() {
+    return this.db.initialize();
+  }
+
+  health() {
+    return {
+      adapter: 'postgres',
+      ready: true,
+      repositories: {
+        executions: true,
+        events: true,
+        idempotency: true,
+        checkpoints: true,
+        workflows: true,
+        workflowLeases: true,
+        approvals: true,
+        tenantQuotas: true,
+        ownerChat: true,
+        ownerProfile: true,
+        workers: true
+      }
+    };
+  }
+}
+
+module.exports = {
+  PostgresPersistence,
+  PostgresExecutionRepository,
+  PostgresEventRepository,
+  PostgresIdempotencyRepository,
+  PostgresCheckpointRepository,
+  PostgresWorkflowRepository,
+  PostgresWorkflowLeaseRepository,
+  PostgresApprovalRepository,
+  PostgresWorkerRegistryRepository,
+  PostgresOwnerChatConversationRepository,
+  PostgresOwnerWorkProfileRepository
+};
+ + values.length; }
+      if (persistencePrincipal) { values.push(persistencePrincipal.ownerId); where += (where ? ' AND ' : 'WHERE ') + "payload->>'userId'=$" + values.length; }
+      const result = await client.query('SELECT payload FROM workflows ' + where + ' ORDER BY updated_at DESC', values);
+      return result.rows.map(row => row.payload);
+    });
+  }
+
+  async delete(workflowId, tenantId = null) {
+    const result = await this.db.query(
+      tenantId ? 'DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2' : 'DELETE FROM workflows WHERE workflow_id=$1',
+      tenantId ? [workflowId, tenantId] : [workflowId]
+    );
+    return result.rowCount === 1;
+  }
+
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM workflows WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM workflows');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresWorkflowLeaseRepository {
+  constructor(db) { this.db = db; }
+
+  assertWorkerPrincipal(principal, tenantId, workerId = null, { requireLease = false } = {}) {
+    const identity = assertWorkerPersistencePrincipal(principal, { requireLease });
+    const tenant = tenantOrLocal(tenantId);
+    if (identity.tenantId !== tenant || (workerId && identity.workerId !== workerId)) {
+      throw Object.assign(new Error('Worker principal does not match workflow lease identity'), {
+        code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+      throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), {
+        code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED'
+      });
+    }
+    return identity;
+  }
+
+  async assertRegisteredWorkerSession(client, principal) {
+    const result = await client.query(
+      `SELECT 1 FROM worker_nodes
+       WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+         AND status='READY' AND expires_at > NOW()
+       FOR UPDATE`,
+      [principal.tenantId, principal.workerId, principal.sessionId]
+    );
+    if (result.rowCount !== 1) {
+      throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+    }
+    return true;
+  }
+
+  async tryAcquire(lease, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId);
+    const acquiredAt = new Date(lease.acquiredAt).toISOString();
+    const expiresAt = new Date(lease.expiresAt).toISOString();
+
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const workflow = await client.query(
+        'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [lease.workflowId, effectiveTenant]
+      );
+      if (!workflow.rows.length) {
+        throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+      }
+      const workflowState = workflow.rows[0].state;
+      const workflowPayload = workflow.rows[0].payload || {};
+      if (workflowPayload.cancelRequested || workflowState === 'CANCELLED') {
+        throw Object.assign(new Error('Workflow cancellation was requested'), { code: 'WORKFLOW_CANCELLATION_REQUESTED' });
+      }
+      if (['COMPLETED','FAILED'].includes(workflowState)) {
+        throw Object.assign(new Error('Workflow is terminal'), { code: 'WORKFLOW_TERMINAL' });
+      }
+      await client.query(
+        'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= $3',
+        [lease.workflowId, effectiveTenant, acquiredAt]
+      );
+      const result = await client.query(
+        `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT(workflow_id) DO NOTHING
+         RETURNING fencing_token`,
+        [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,principal.sessionId,acquiredAt,expiresAt,lease]
+      );
+      if (result.rowCount !== 1) return null;
+      return { ...lease, workerSessionId: principal.sessionId, fencingToken: Number(result.rows[0].fencing_token) };
+    });
+  }
+
+  async save(lease, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId, { requireLease: true });
+    if (principal.workflowId !== lease.workflowId || principal.leaseId !== lease.leaseId ||
+        Number(principal.fencingToken) !== Number(lease.fencingToken)) {
+      throw Object.assign(new Error('Lease principal does not match the lease payload'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1,payload=$2
+         WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
+           AND worker_session_id=$7 AND fencing_token=$8 AND expires_at > NOW()`,
+        [new Date(lease.expiresAt).toISOString(),lease,lease.workflowId,effectiveTenant,lease.leaseId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      if (result.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow lease is no longer owned by this worker session'), { code: 'WORKFLOW_LEASE_NOT_OWNER' });
+      }
+      return { ...lease };
+    });
+  }
+
+  async renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match renewal request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1::timestamptz,
+           payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
+         WHERE workflow_id=$2 AND tenant_id=$3 AND lease_id=$4 AND worker_id=$5
+           AND worker_session_id=$6 AND fencing_token=$7 AND expires_at > $8`,
+        [new Date(expiresAt).toISOString(),workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async assertCurrent(workflowId, leaseId, fencingToken, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId ||
+        Number(principal.fencingToken) !== Number(fencingToken)) return false;
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `SELECT 1 FROM workflow_leases
+         WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
+           AND worker_session_id=$5 AND fencing_token=$6 AND expires_at > $7 LIMIT 1`,
+        [workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async findByWorkflowId(workflowId, tenantId = null) {
+    const result = await this.db.query(
+      tenantId ? 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 LIMIT 1',
+      tenantId ? [workflowId, tenantId] : [workflowId]
+    );
+    return result.rows.length ? { ...result.rows[0].payload, workerSessionId: result.rows[0].worker_session_id, fencingToken: Number(result.rows[0].fencing_token), expiresAt: new Date(result.rows[0].expires_at).getTime(), acquiredAt: new Date(result.rows[0].acquired_at).getTime() } : null;
+  }
+
+  async findAll({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE tenant_id=$1 ORDER BY acquired_at ASC', [tenantId])
+      : await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases ORDER BY acquired_at ASC');
+    return result.rows.map(row => ({ ...row.payload, workerSessionId: row.worker_session_id, fencingToken: Number(row.fencing_token), expiresAt: new Date(row.expires_at).getTime(), acquiredAt: new Date(row.acquired_at).getTime() }));
+  }
+
+  async delete(workflowId, leaseId, tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match release request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
+         AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
+        [workflowId,leaseId,principal.tenantId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async deleteExpired(workflowId, leaseId, now = Date.now(), tenantId = null) {
+    const result = await this.db.query(
+      tenantId
+        ? 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3 AND expires_at <= $4'
+        : 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND expires_at <= $3',
+      tenantId
+        ? [workflowId, leaseId, tenantId, new Date(now).toISOString()]
+        : [workflowId, leaseId, new Date(now).toISOString()]
+    );
+    return result.rowCount === 1;
+  }
+
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM workflow_leases');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresApprovalRepository {
+  constructor(db) { this.db = db; }
+
+  mapRow(row) {
+    return {
+      approvalId: row.approval_id, executionId: row.execution_id, step: Number(row.step),
+      planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
+      scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
+      used: Boolean(row.used), usedAt: row.used_at || undefined,
+      metadata: row.metadata, decision: row.metadata?.decision || null, tenantId: row.tenant_id
+    };
+  }
+
+  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null, persistencePrincipal = null } = {}) {
+    if (!executionId) return [];
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [String(executionId)];
+      const clauses = ['execution_id=$1'];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`tenant_id=$${values.length}`); }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        clauses.push(`e.payload->>'userId'=$${values.length}`);
+      }
+      if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
+      if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
+      if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
+      const query = persistencePrincipal
+        ? `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.map(clause => clause.replace(/^(execution_id|tenant_id|step|tool|plan_revision)=/, 'a.$1=')).join(' AND ')} ORDER BY a.issued_at DESC`
+        : `SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`;
+      const result = await client.query(query, values);
+      return result.rows.map(row => this.mapRow(row));
+    });
+  }
+  async findPending({ tenantId = null, limit = 100, now = Date.now(), persistencePrincipal = null } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
+    const nowIso = new Date(now).toISOString();
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (!persistencePrincipal) {
+        const result = effectiveTenant
+          ? await client.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [effectiveTenant, nowIso, boundedLimit])
+          : await client.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
+        return result.rows.map(row => this.mapRow(row));
+      }
+      const values = [nowIso];
+      const clauses = ['a.used=FALSE', 'a.expires_at>$1', "NOT (COALESCE(a.metadata, '{}'::jsonb) ? 'decision')"];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      values.push(persistencePrincipal.ownerId);
+      clauses.push(`e.payload->>'userId'=$${values.length}`);
+      values.push(boundedLimit);
+      const result = await client.query(
+        `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at ASC, a.approval_id ASC LIMIT $${values.length}`,
+        values
+      );
+      return result.rows.map(row => this.mapRow(row));
+    });
+  }
+  async save(approval, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(approval.tenantId || approval.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Approval');
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (persistencePrincipal) {
+        const owner = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [approval.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!owner.rows.length) throw Object.assign(new Error('Approval execution is not owned by the persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+      }
+      await client.query(
+        `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
+      );
+      return { ...approval, tenantId: effectiveTenant };
+    });
+  }
+  async findById(approvalId, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [approvalId];
+      let where = 'a.approval_id=$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND a.tenant_id=$${values.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND e.payload->>'userId'=$${values.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${where} LIMIT 1`, values);
+      return result.rows.length ? this.mapRow(result.rows[0]) : null;
+    });
+  }
+  async consume(approvalId, usedAt, tenantId = null, { persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [usedAt, approvalId];
+      let where = 'approval_id=$2 AND used=FALSE AND expires_at>$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const result = await client.query(`UPDATE approvals SET used=TRUE,used_at=$1 WHERE ${where}`, values);
+      return result.rowCount === 1;
+    });
+  }
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now(), persistencePrincipal = null) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    if (!decision || !['approved', 'rejected'].includes(decision.status) || typeof decision.actorId !== 'string' || !decision.actorId.trim() || typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
+    const nowMs = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
+    const nowIso = new Date(nowMs).toISOString();
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const selectValues = [approvalId];
+      let selectWhere = 'a.approval_id=$1';
+      if (effectiveTenant) { selectValues.push(effectiveTenant); selectWhere += ` AND a.tenant_id=$${selectValues.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        selectValues.push(persistencePrincipal.ownerId);
+        selectWhere += ` AND e.payload->>'userId'=$${selectValues.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const selected = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      if (!selected.rows.length) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+      const current = this.mapRow(selected.rows[0]);
+      if (current.decision) {
+        if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+        throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      const expiry = Date.parse(current.expiresAt);
+      if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+      const values = [JSON.stringify(decision), approvalId, nowIso];
+      let where = "approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')";
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const updated = await client.query(`UPDATE approvals SET metadata=COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE ${where} RETURNING *`, values);
+      if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
+      const latest = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      const record = latest.rows[0] ? this.mapRow(latest.rows[0]) : null;
+      if (record?.decision?.status === decision.status && record?.decision?.actorId === decision.actorId) return record;
+      if (record?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      if (record?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+    });
+  }
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM approvals');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresPersistence {
+  constructor({ pool, schema } = {}) {
+    this.isAsync = true;
+    this.db = pool instanceof PostgresDatabase ? pool : new PostgresDatabase({ pool, schema });
+    this.executions = new PostgresExecutionRepository(this.db);
+    this.events = new PostgresEventRepository(this.db);
+    this.idempotency = new PostgresIdempotencyRepository(this.db);
+    this.checkpoints = new PostgresCheckpointRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+    this.workflows = new PostgresWorkflowRepository(this.db, this.workers);
+    this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
+    this.approvals = new PostgresApprovalRepository(this.db);
+    this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
+    this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
+    this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+  }
+
+  initialize() {
+    return this.db.initialize();
+  }
+
+  health() {
+    return {
+      adapter: 'postgres',
+      ready: true,
+      repositories: {
+        executions: true,
+        events: true,
+        idempotency: true,
+        checkpoints: true,
+        workflows: true,
+        workflowLeases: true,
+        approvals: true,
+        tenantQuotas: true,
+        ownerChat: true,
+        ownerProfile: true,
+        workers: true
+      }
+    };
+  }
+}
+
+module.exports = {
+  PostgresPersistence,
+  PostgresExecutionRepository,
+  PostgresEventRepository,
+  PostgresIdempotencyRepository,
+  PostgresCheckpointRepository,
+  PostgresWorkflowRepository,
+  PostgresWorkflowLeaseRepository,
+  PostgresApprovalRepository,
+  PostgresWorkerRegistryRepository,
+  PostgresOwnerChatConversationRepository,
+  PostgresOwnerWorkProfileRepository
+};
+ + values.length; }
+      if (persistencePrincipal) { values.push(persistencePrincipal.ownerId); where += " AND payload->>'userId'=$" + values.length; }
+      const result = await client.query('SELECT payload FROM workflows WHERE ' + where + ' LIMIT 1', values);
+      return result.rows.length ? result.rows[0].payload : null;
+    });
+  }
+
+  async findByApprovalExecutionId({ executionId, tenantId = null, persistencePrincipal = null } = {}) {
+    if (!executionId) return null;
+    const values = [String(executionId)];
+    let tenantClause = '';
+    if (tenantId) {
+      values.push(tenantId);
+      tenantClause = ' AND tenant_id=$' + values.length;
+    }
+    const result = await this.db.query(
+      "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
+      "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
+      ' ORDER BY updated_at DESC LIMIT 1',
+      values
+    );
+    return result.rows.length ? result.rows[0].payload : null;
+  }
+
+  async findAll({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT payload FROM workflows WHERE tenant_id=$1 ORDER BY updated_at DESC', [tenantId])
+      : await this.db.query('SELECT payload FROM workflows ORDER BY updated_at DESC');
+    return result.rows.map(row => row.payload);
+  }
+
+  async delete(workflowId, tenantId = null) {
+    const result = await this.db.query(
+      tenantId ? 'DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2' : 'DELETE FROM workflows WHERE workflow_id=$1',
+      tenantId ? [workflowId, tenantId] : [workflowId]
+    );
+    return result.rowCount === 1;
+  }
+
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM workflows WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM workflows');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresWorkflowLeaseRepository {
+  constructor(db) { this.db = db; }
+
+  assertWorkerPrincipal(principal, tenantId, workerId = null, { requireLease = false } = {}) {
+    const identity = assertWorkerPersistencePrincipal(principal, { requireLease });
+    const tenant = tenantOrLocal(tenantId);
+    if (identity.tenantId !== tenant || (workerId && identity.workerId !== workerId)) {
+      throw Object.assign(new Error('Worker principal does not match workflow lease identity'), {
+        code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+      throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), {
+        code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED'
+      });
+    }
+    return identity;
+  }
+
+  async assertRegisteredWorkerSession(client, principal) {
+    const result = await client.query(
+      `SELECT 1 FROM worker_nodes
+       WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+         AND status='READY' AND expires_at > NOW()
+       FOR UPDATE`,
+      [principal.tenantId, principal.workerId, principal.sessionId]
+    );
+    if (result.rowCount !== 1) {
+      throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+    }
+    return true;
+  }
+
+  async tryAcquire(lease, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId);
+    const acquiredAt = new Date(lease.acquiredAt).toISOString();
+    const expiresAt = new Date(lease.expiresAt).toISOString();
+
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const workflow = await client.query(
+        'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [lease.workflowId, effectiveTenant]
+      );
+      if (!workflow.rows.length) {
+        throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+      }
+      const workflowState = workflow.rows[0].state;
+      const workflowPayload = workflow.rows[0].payload || {};
+      if (workflowPayload.cancelRequested || workflowState === 'CANCELLED') {
+        throw Object.assign(new Error('Workflow cancellation was requested'), { code: 'WORKFLOW_CANCELLATION_REQUESTED' });
+      }
+      if (['COMPLETED','FAILED'].includes(workflowState)) {
+        throw Object.assign(new Error('Workflow is terminal'), { code: 'WORKFLOW_TERMINAL' });
+      }
+      await client.query(
+        'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= $3',
+        [lease.workflowId, effectiveTenant, acquiredAt]
+      );
+      const result = await client.query(
+        `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT(workflow_id) DO NOTHING
+         RETURNING fencing_token`,
+        [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,principal.sessionId,acquiredAt,expiresAt,lease]
+      );
+      if (result.rowCount !== 1) return null;
+      return { ...lease, workerSessionId: principal.sessionId, fencingToken: Number(result.rows[0].fencing_token) };
+    });
+  }
+
+  async save(lease, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId, { requireLease: true });
+    if (principal.workflowId !== lease.workflowId || principal.leaseId !== lease.leaseId ||
+        Number(principal.fencingToken) !== Number(lease.fencingToken)) {
+      throw Object.assign(new Error('Lease principal does not match the lease payload'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1,payload=$2
+         WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
+           AND worker_session_id=$7 AND fencing_token=$8 AND expires_at > NOW()`,
+        [new Date(lease.expiresAt).toISOString(),lease,lease.workflowId,effectiveTenant,lease.leaseId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      if (result.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow lease is no longer owned by this worker session'), { code: 'WORKFLOW_LEASE_NOT_OWNER' });
+      }
+      return { ...lease };
+    });
+  }
+
+  async renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match renewal request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1::timestamptz,
+           payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
+         WHERE workflow_id=$2 AND tenant_id=$3 AND lease_id=$4 AND worker_id=$5
+           AND worker_session_id=$6 AND fencing_token=$7 AND expires_at > $8`,
+        [new Date(expiresAt).toISOString(),workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async assertCurrent(workflowId, leaseId, fencingToken, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId ||
+        Number(principal.fencingToken) !== Number(fencingToken)) return false;
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `SELECT 1 FROM workflow_leases
+         WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
+           AND worker_session_id=$5 AND fencing_token=$6 AND expires_at > $7 LIMIT 1`,
+        [workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async findByWorkflowId(workflowId, tenantId = null) {
+    const result = await this.db.query(
+      tenantId ? 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 LIMIT 1',
+      tenantId ? [workflowId, tenantId] : [workflowId]
+    );
+    return result.rows.length ? { ...result.rows[0].payload, workerSessionId: result.rows[0].worker_session_id, fencingToken: Number(result.rows[0].fencing_token), expiresAt: new Date(result.rows[0].expires_at).getTime(), acquiredAt: new Date(result.rows[0].acquired_at).getTime() } : null;
+  }
+
+  async findAll({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE tenant_id=$1 ORDER BY acquired_at ASC', [tenantId])
+      : await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases ORDER BY acquired_at ASC');
+    return result.rows.map(row => ({ ...row.payload, workerSessionId: row.worker_session_id, fencingToken: Number(row.fencing_token), expiresAt: new Date(row.expires_at).getTime(), acquiredAt: new Date(row.acquired_at).getTime() }));
+  }
+
+  async delete(workflowId, leaseId, tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match release request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
+         AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
+        [workflowId,leaseId,principal.tenantId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async deleteExpired(workflowId, leaseId, now = Date.now(), tenantId = null) {
+    const result = await this.db.query(
+      tenantId
+        ? 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3 AND expires_at <= $4'
+        : 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND expires_at <= $3',
+      tenantId
+        ? [workflowId, leaseId, tenantId, new Date(now).toISOString()]
+        : [workflowId, leaseId, new Date(now).toISOString()]
+    );
+    return result.rowCount === 1;
+  }
+
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM workflow_leases');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresApprovalRepository {
+  constructor(db) { this.db = db; }
+
+  mapRow(row) {
+    return {
+      approvalId: row.approval_id, executionId: row.execution_id, step: Number(row.step),
+      planRevision: Number(row.plan_revision), tool: row.tool, capability: row.capability,
+      scope: row.scope, issuedAt: row.issued_at, expiresAt: row.expires_at,
+      used: Boolean(row.used), usedAt: row.used_at || undefined,
+      metadata: row.metadata, decision: row.metadata?.decision || null, tenantId: row.tenant_id
+    };
+  }
+
+  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null, persistencePrincipal = null } = {}) {
+    if (!executionId) return [];
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [String(executionId)];
+      const clauses = ['execution_id=$1'];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`tenant_id=$${values.length}`); }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        clauses.push(`e.payload->>'userId'=$${values.length}`);
+      }
+      if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
+      if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
+      if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
+      const query = persistencePrincipal
+        ? `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.map(clause => clause.replace(/^(execution_id|tenant_id|step|tool|plan_revision)=/, 'a.$1=')).join(' AND ')} ORDER BY a.issued_at DESC`
+        : `SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`;
+      const result = await client.query(query, values);
+      return result.rows.map(row => this.mapRow(row));
+    });
+  }
+  async findPending({ tenantId = null, limit = 100, now = Date.now(), persistencePrincipal = null } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
+    const nowIso = new Date(now).toISOString();
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (!persistencePrincipal) {
+        const result = effectiveTenant
+          ? await client.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [effectiveTenant, nowIso, boundedLimit])
+          : await client.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
+        return result.rows.map(row => this.mapRow(row));
+      }
+      const values = [nowIso];
+      const clauses = ['a.used=FALSE', 'a.expires_at>$1', "NOT (COALESCE(a.metadata, '{}'::jsonb) ? 'decision')"];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      values.push(persistencePrincipal.ownerId);
+      clauses.push(`e.payload->>'userId'=$${values.length}`);
+      values.push(boundedLimit);
+      const result = await client.query(
+        `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at ASC, a.approval_id ASC LIMIT $${values.length}`,
+        values
+      );
+      return result.rows.map(row => this.mapRow(row));
+    });
+  }
+  async save(approval, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(approval.tenantId || approval.metadata?.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Approval');
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (persistencePrincipal) {
+        const owner = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [approval.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!owner.rows.length) throw Object.assign(new Error('Approval execution is not owned by the persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+      }
+      await client.query(
+        `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
+      );
+      return { ...approval, tenantId: effectiveTenant };
+    });
+  }
+  async findById(approvalId, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [approvalId];
+      let where = 'a.approval_id=$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND a.tenant_id=$${values.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND e.payload->>'userId'=$${values.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${where} LIMIT 1`, values);
+      return result.rows.length ? this.mapRow(result.rows[0]) : null;
+    });
+  }
+  async consume(approvalId, usedAt, tenantId = null, { persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [usedAt, approvalId];
+      let where = 'approval_id=$2 AND used=FALSE AND expires_at>$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const result = await client.query(`UPDATE approvals SET used=TRUE,used_at=$1 WHERE ${where}`, values);
+      return result.rowCount === 1;
+    });
+  }
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now(), persistencePrincipal = null) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    if (!decision || !['approved', 'rejected'].includes(decision.status) || typeof decision.actorId !== 'string' || !decision.actorId.trim() || typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
+    const nowMs = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
+    const nowIso = new Date(nowMs).toISOString();
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const selectValues = [approvalId];
+      let selectWhere = 'a.approval_id=$1';
+      if (effectiveTenant) { selectValues.push(effectiveTenant); selectWhere += ` AND a.tenant_id=$${selectValues.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        selectValues.push(persistencePrincipal.ownerId);
+        selectWhere += ` AND e.payload->>'userId'=$${selectValues.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const selected = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      if (!selected.rows.length) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+      const current = this.mapRow(selected.rows[0]);
+      if (current.decision) {
+        if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+        throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      const expiry = Date.parse(current.expiresAt);
+      if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+      const values = [JSON.stringify(decision), approvalId, nowIso];
+      let where = "approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')";
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const updated = await client.query(`UPDATE approvals SET metadata=COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE ${where} RETURNING *`, values);
+      if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
+      const latest = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      const record = latest.rows[0] ? this.mapRow(latest.rows[0]) : null;
+      if (record?.decision?.status === decision.status && record?.decision?.actorId === decision.actorId) return record;
+      if (record?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      if (record?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+    });
+  }
+  async count({ tenantId = null } = {}) {
+    const result = tenantId
+      ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])
+      : await this.db.query('SELECT COUNT(*)::int AS count FROM approvals');
+    return Number(result.rows[0].count);
+  }
+}
+
+class PostgresPersistence {
+  constructor({ pool, schema } = {}) {
+    this.isAsync = true;
+    this.db = pool instanceof PostgresDatabase ? pool : new PostgresDatabase({ pool, schema });
+    this.executions = new PostgresExecutionRepository(this.db);
+    this.events = new PostgresEventRepository(this.db);
+    this.idempotency = new PostgresIdempotencyRepository(this.db);
+    this.checkpoints = new PostgresCheckpointRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+    this.workflows = new PostgresWorkflowRepository(this.db, this.workers);
+    this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
+    this.approvals = new PostgresApprovalRepository(this.db);
+    this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
+    this.ownerChat = new PostgresOwnerChatConversationRepository(this.db);
+    this.ownerProfile = new PostgresOwnerWorkProfileRepository(this.db);
+    this.workers = new PostgresWorkerRegistryRepository(this.db);
+  }
+
+  initialize() {
+    return this.db.initialize();
+  }
+
+  health() {
+    return {
+      adapter: 'postgres',
+      ready: true,
+      repositories: {
+        executions: true,
+        events: true,
+        idempotency: true,
+        checkpoints: true,
+        workflows: true,
+        workflowLeases: true,
+        approvals: true,
+        tenantQuotas: true,
+        ownerChat: true,
+        ownerProfile: true,
+        workers: true
+      }
+    };
+  }
+}
+
+module.exports = {
+  PostgresPersistence,
+  PostgresExecutionRepository,
+  PostgresEventRepository,
+  PostgresIdempotencyRepository,
+  PostgresCheckpointRepository,
+  PostgresWorkflowRepository,
+  PostgresWorkflowLeaseRepository,
+  PostgresApprovalRepository,
+  PostgresWorkerRegistryRepository,
+  PostgresOwnerChatConversationRepository,
+  PostgresOwnerWorkProfileRepository
+};
+ + values.length;
+    }
     if (persistencePrincipal) {
       values.push(persistencePrincipal.ownerId);
       tenantClause += " AND payload->>'userId'=$" + values.length;
     }
-    return withPersistencePrincipal(this.db, persistencePrincipal, tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null), 'Workflow principal', async client => {
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
       const result = await client.query(
         "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
         "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
