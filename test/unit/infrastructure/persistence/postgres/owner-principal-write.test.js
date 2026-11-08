@@ -81,7 +81,18 @@ function createHarness(seed = []) {
     async transactionWithPrincipal(principal, work) {
       transactions += 1;
       assert.equal(principal.tenantId, 'tenant-a');
-      return work(client, principal);
+      const checkpointCount = checkpoints.length;
+      const eventCount = events.length;
+      const executionSnapshot = new Map(executions);
+      try {
+        return await work(client, principal);
+      } catch (error) {
+        checkpoints.length = checkpointCount;
+        events.length = eventCount;
+        executions.clear();
+        for (const [key, value] of executionSnapshot) executions.set(key, value);
+        throw error;
+      }
     },
     async transaction(work) {
       transactions += 1;
@@ -114,7 +125,8 @@ test('execution insert uses owner principal transaction and rejects owner mismat
     }, { tenantId: 'tenant-a', persistencePrincipal: principal }),
     error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
   );
-  assert.equal(harness.calls.length, before);
+  assert.ok(harness.calls.length > before, 'ownership is verified inside the principal transaction');
+  assert.equal(harness.checkpoints.length, 1, 'the rejected transaction must roll back its checkpoint insert');
 });
 
 test('execution update and cancellation remain owner-scoped inside one transaction', async () => {
