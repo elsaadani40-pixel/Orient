@@ -497,7 +497,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'APPROVAL_INBOX_UNAVAILABLE', message: 'صندوق الموافقات غير متاح.' });
             return;
           }
-          await agentRoutes.pendingApprovals(req, res);
+          await agentRoutes.pendingApprovals(req, res, ownerPersistencePrincipal);
           return;
         }
 
@@ -523,7 +523,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'APPROVAL_DECISION_UNAVAILABLE', message: 'اتخاذ قرار الموافقة غير متاح حاليًا.' });
             return;
           }
-          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, ownerSession.sessionId);
+          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, ownerSession.sessionId, ownerPersistencePrincipal);
           return;
         }
 
