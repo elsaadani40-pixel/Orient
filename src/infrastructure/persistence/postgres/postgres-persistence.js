@@ -764,11 +764,79 @@ class PostgresCheckpointRepository {
 class PostgresWorkflowRepository {
   constructor(db, workerRegistry = null) { this.db = db; this.workerRegistry = workerRegistry; }
 
-  async save(instance, tenantId = null, { workerPrincipal = null } = {}) {
+  async save(instance, tenantId = null, { workerPrincipal = null, dispatchClaim = false } = {}) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenant = tenantOrLocal(item.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Workflow');
     const fencingToken = Number(item.metadata?.fencingToken || 0);
+
+    if (dispatchClaim) {
+      const principal = assertWorkerPersistencePrincipal(workerPrincipal);
+      if (fencingToken > 0 || principal.tenantId !== effectiveTenant) {
+        throw Object.assign(new Error('Dispatch-claim principal does not match the unleased workflow recovery write'), {
+          code: 'WORKFLOW_DISPATCH_CLAIM_MISMATCH'
+        });
+      }
+      if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+        throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), {
+          code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED'
+        });
+      }
+      return this.db.transactionWithWorkerPrincipal(principal, async client => {
+        const worker = await client.query(
+          `SELECT 1 FROM worker_nodes
+           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+             AND status='READY' AND expires_at > clock_timestamp()
+           FOR UPDATE`,
+          [effectiveTenant,principal.workerId,principal.sessionId]
+        );
+        if (worker.rowCount !== 1) {
+          throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+        }
+        const workflow = await client.query(
+          'SELECT 1 FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+          [item.workflowId,effectiveTenant]
+        );
+        if (workflow.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+        }
+        const claim = await client.query(
+          `SELECT 1 FROM workflow_dispatch_claims
+           WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3
+             AND worker_session_id=$4 AND expires_at > clock_timestamp()
+           FOR UPDATE`,
+          [effectiveTenant,item.workflowId,principal.workerId,principal.sessionId]
+        );
+        if (claim.rowCount !== 1) {
+          throw Object.assign(new Error('Worker no longer owns the workflow dispatch claim'), { code: 'WORKFLOW_DISPATCH_CLAIM_LOST' });
+        }
+        const lease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND expires_at > clock_timestamp() FOR UPDATE',
+          [effectiveTenant,item.workflowId]
+        );
+        if (lease.rowCount !== 0) {
+          throw Object.assign(new Error('Workflow lease was acquired before recovery state could be committed'), { code: 'WORKFLOW_LEASE_HELD' });
+        }
+        const result = await client.query(
+          `UPDATE workflows SET state=$3,updated_at=$4,payload=$5
+           WHERE workflow_id=$1 AND tenant_id=$2
+             AND EXISTS (
+               SELECT 1 FROM workflow_dispatch_claims
+               WHERE tenant_id=$2 AND workflow_id=$1 AND worker_id=$6
+                 AND worker_session_id=$7 AND expires_at > clock_timestamp()
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM workflow_leases
+               WHERE tenant_id=$2 AND workflow_id=$1 AND expires_at > clock_timestamp()
+             )`,
+          [item.workflowId,effectiveTenant,item.state,item.updatedAt || new Date().toISOString(),item,principal.workerId,principal.sessionId]
+        );
+        if (result.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow recovery write lost its dispatch claim'), { code: 'WORKFLOW_DISPATCH_CLAIM_LOST' });
+        }
+        return item;
+      });
+    }
 
     if (fencingToken > 0) {
       const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
@@ -850,6 +918,10 @@ class PostgresWorkflowRepository {
        WHERE workflows.tenant_id=EXCLUDED.tenant_id
          AND NOT EXISTS (
            SELECT 1 FROM workflow_leases
+           WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp()
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM workflow_dispatch_claims
            WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp()
          )
        RETURNING workflow_id`,
