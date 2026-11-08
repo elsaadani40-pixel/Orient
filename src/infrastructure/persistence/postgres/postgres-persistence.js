@@ -819,30 +819,53 @@ class PostgresWorkflowRepository {
         code: 'WORKFLOW_FENCING_REJECTED'
       });
     }
-    const result = await this.db.query(
-      `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
-       SELECT $1,$2,$3,$4,$5
-       WHERE NOT EXISTS (
-         SELECT 1 FROM workflow_leases
-         WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW()
-       )
-       ON CONFLICT(workflow_id) DO UPDATE SET
-         tenant_id=EXCLUDED.tenant_id,state=EXCLUDED.state,
-         updated_at=EXCLUDED.updated_at,payload=EXCLUDED.payload
-       WHERE NOT EXISTS (
-         SELECT 1 FROM workflow_leases
-         WHERE workflow_id=EXCLUDED.workflow_id AND tenant_id=EXCLUDED.tenant_id
-           AND expires_at > NOW()
-       )
-       RETURNING workflow_id`,
-      [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
-    );
-    if (result.rowCount !== 1) {
-      throw Object.assign(new Error('Unleased workflow write rejected while a durable worker lease is active'), {
-        code: 'WORKFLOW_LEASE_HELD'
+    if (typeof this.db.transaction !== 'function') {
+      throw Object.assign(new Error('Transactional workflow writes are required'), {
+        code: 'WORKFLOW_TRANSACTION_REQUIRED'
       });
     }
-    return item;
+    return this.db.transaction(async client => {
+      let current = await client.query(
+        'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [item.workflowId, effectiveTenant]
+      );
+      if (current.rowCount !== 1) {
+        const inserted = await client.query(
+          `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
+           VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id`,
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+        );
+        if (inserted.rowCount === 1) return item;
+        current = await client.query(
+          'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+          [item.workflowId, effectiveTenant]
+        );
+        if (current.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow identity changed during persistence'), {
+            code: 'WORKFLOW_CONCURRENT_WRITE'
+          });
+        }
+      }
+      const activeLease = await client.query(
+        'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+        [item.workflowId, effectiveTenant]
+      );
+      if (activeLease.rowCount > 0) {
+        throw Object.assign(new Error('Unleased workflow write rejected while a durable worker lease is active'), {
+          code: 'WORKFLOW_LEASE_HELD'
+        });
+      }
+      const updated = await client.query(
+        'UPDATE workflows SET state=$3,updated_at=$4,payload=$5 WHERE workflow_id=$1 AND tenant_id=$2',
+        [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+      );
+      if (updated.rowCount !== 1) {
+        throw Object.assign(new Error('Unleased workflow write did not update its target row'), {
+          code: 'WORKFLOW_CONCURRENT_WRITE'
+        });
+      }
+      return item;
+    });
   }
 
   async claimQueued({tenantId='local',workerId,limit=100,claimTtlMs=5000,workerCapabilities=[],agingQuantumMs=30000,workerPrincipal=null}={}) {
