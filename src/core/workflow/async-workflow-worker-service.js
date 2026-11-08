@@ -75,8 +75,7 @@ class AsyncWorkflowWorkerService {
           status: 'READY',
           capabilities: this.workerCapabilities,
           metadata: this.workerMetadata
-        }, this.scheduler.tenantId || 'local')
-      , { workerPrincipal: this.workerPrincipal })
+        }, this.scheduler.tenantId || 'local', { workerPrincipal: this.workerPrincipal })
       ).then(() => {
         this.workerRegistered = true;
         return true;
