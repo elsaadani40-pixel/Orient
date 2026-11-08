@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { assertPersistencePrincipal } = require('./persistence-principal');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -153,6 +154,28 @@ class PostgresDatabase {
   }
   async query(text,values=[]){return this.pool.query(text,values);}
   async transaction(work){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await work(client);await client.query('COMMIT');return result;}catch(error){try{await client.query('ROLLBACK');}catch{}throw error;}finally{client.release();}}
+  async transactionWithPrincipal(principal, work) {
+    const identity = assertPersistencePrincipal(principal);
+    if (typeof work !== 'function') throw new TypeError('transaction work callback is required');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_tenant_id', $1, true), " +
+        "set_config('app.orient_owner_id', $2, true), " +
+        "set_config('app.orient_session_id', $3, true)",
+        [identity.tenantId, identity.ownerId, identity.sessionId]
+      );
+      const result = await work(client, identity);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   static json(value){return value===undefined?null:value;}
   static uuid(){return crypto.randomUUID();}
 }
