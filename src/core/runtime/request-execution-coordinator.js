@@ -353,7 +353,8 @@ class RequestExecutionCoordinator {
               agentId,
               operationId,
               ttlMs: 5 * 60 * 1000,
-              metadata: { approvalSummary }
+              metadata: { approvalSummary },
+              ...(persistencePrincipal ? { persistencePrincipal } : {})
             });
             context.record('approval.challenge.persisted', {
               executionId: context.executionId,
@@ -603,7 +604,8 @@ class RequestExecutionCoordinator {
         durableApproval = await this.approvalService?.getApprovedForExecution?.({
           approvalId: approval.approvalId,
           executionId,
-          tenantId: this.tenantId
+          tenantId: this.tenantId,
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
         }) || null;
         if (!durableApproval) {
           throw Object.assign(new Error('A durable approved decision for this exact execution is required'), {
@@ -616,7 +618,8 @@ class RequestExecutionCoordinator {
           step: pendingStep,
           tool: pendingPlanStep.tool,
           planRevision,
-          tenantId: this.tenantId
+          tenantId: this.tenantId,
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
         });
         if (durableApproval) {
           context.record('approval.recovered', {
