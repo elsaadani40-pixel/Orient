@@ -125,8 +125,7 @@ test('execution insert uses owner principal transaction and rejects owner mismat
     }, { tenantId: 'tenant-a', persistencePrincipal: principal }),
     error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
   );
-  assert.ok(harness.calls.length > before, 'ownership is verified inside the principal transaction');
-  assert.equal(harness.checkpoints.length, 1, 'the rejected transaction must roll back its checkpoint insert');
+  assert.equal(harness.calls.length, before, 'owner mismatch must be rejected before SQL');
 });
 
 test('execution update and cancellation remain owner-scoped inside one transaction', async () => {
@@ -223,5 +222,6 @@ test('checkpoint creation requires the same owner as its durable execution', asy
     }, { tenantId: 'tenant-a', persistencePrincipal: makePrincipal('owner-b') }),
     error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
   );
-  assert.equal(harness.calls.length, before);
+  assert.ok(harness.calls.length > before, 'ownership is verified inside the principal transaction');
+  assert.equal(harness.checkpoints.length, 1, 'the rejected transaction must roll back its checkpoint insert');
 });
