@@ -1,18 +1,18 @@
-const crypto=require('crypto');const WorkflowDefinition=require('./workflow-definition');
+const crypto=require('crypto');const WorkflowDefinition=require('./workflow-definition');const {createWorkerPersistencePrincipal,assertWorkerPersistencePrincipal}=require('../security/worker-persistence-principal');
 class AsyncWorkflowWorker{
- constructor({scheduler,executor,eventSink=()=>{},workerId=crypto.randomUUID(),now=()=>Date.now(),retryClassifier=()=>true,capabilities=[],workerRegistry=null,workerLeaseMs=30000,tenantId=null}){
-  this.scheduler=scheduler;this.executor=executor;this.eventSink=eventSink;this.workerId=workerId;this.now=now;this.retryClassifier=retryClassifier;this.workerRegistry=workerRegistry;this.workerLeaseMs=Math.max(1000,Number(workerLeaseMs)||30000);this.tenantId=tenantId||scheduler?.tenantId||null;this.capabilities=Array.isArray(capabilities)?[...new Set(capabilities.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()))]:[];
+ constructor({scheduler,executor,eventSink=()=>{},workerId=crypto.randomUUID(),now=()=>Date.now(),retryClassifier=()=>true,capabilities=[],workerRegistry=null,workerLeaseMs=30000,tenantId=null,workerPrincipal=null}){
+  this.scheduler=scheduler;this.executor=executor;this.eventSink=eventSink;this.workerId=workerId;this.now=now;this.retryClassifier=retryClassifier;this.workerRegistry=workerRegistry;this.workerLeaseMs=Math.max(1000,Number(workerLeaseMs)||30000);this.tenantId=tenantId||scheduler?.tenantId||null;this.capabilities=Array.isArray(capabilities)?[...new Set(capabilities.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()))]:[];this.workerPrincipal=workerPrincipal?assertWorkerPersistencePrincipal(workerPrincipal):createWorkerPersistencePrincipal({tenantId:this.tenantId||'local',workerId:this.workerId,sessionId:crypto.randomUUID(),capabilities:this.capabilities});if(this.workerPrincipal.tenantId!==(this.tenantId||'local')||this.workerPrincipal.workerId!==this.workerId||this.capabilities.some(capability=>!this.workerPrincipal.capabilities.includes(capability)))throw Object.assign(new Error('Worker principal does not match worker identity or capabilities'),{code:'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'});
  }
  async tick(){
   if(this.workerRegistry?.register){
-   await this.workerRegistry.register({workerId:this.workerId,tenantId:this.tenantId,heartbeatAt:new Date(this.now()).toISOString(),expiresAt:new Date(this.now()+this.workerLeaseMs).toISOString(),status:'READY',capabilities:this.capabilities,metadata:{workerRuntime:'orient-one'}},this.tenantId);
+   await this.workerRegistry.register({workerId:this.workerId,tenantId:this.tenantId,heartbeatAt:new Date(this.now()).toISOString(),expiresAt:new Date(this.now()+this.workerLeaseMs).toISOString(),status:'READY',capabilities:this.capabilities,metadata:{workerRuntime:'orient-one'}},this.tenantId,{workerPrincipal:this.workerPrincipal});
   }
-  const lease=await this.scheduler.leaseAsync(this.workerId,this.capabilities||[]);if(!lease)return null;
+  const lease=await this.scheduler.leaseAsync(this.workerId,this.capabilities||[],this.workerPrincipal);if(!lease)return null;
   const instance=lease.instance;let leaseLost=false;let workerHeartbeatError=null;let workerHeartbeat=null;
   const startWorkerHeartbeat=()=>{
    if(!this.workerRegistry?.heartbeat)return;
    const heartbeatMs=Math.max(1000,Math.floor(this.workerLeaseMs/3));
-   workerHeartbeat=setInterval(()=>{this.workerRegistry.heartbeat(this.workerId,{tenantId:this.tenantId,heartbeatAt:new Date(this.now()).toISOString(),expiresAt:new Date(this.now()+this.workerLeaseMs).toISOString(),status:'READY'}).catch(error=>{workerHeartbeatError=error;this.emit('worker.heartbeat.failed',{workerId:this.workerId,error:{code:error?.code||'WORKER_HEARTBEAT_FAILED',message:error?.message||String(error)}});});},heartbeatMs);
+   workerHeartbeat=setInterval(()=>{this.workerRegistry.heartbeat(this.workerId,{tenantId:this.tenantId,heartbeatAt:new Date(this.now()).toISOString(),expiresAt:new Date(this.now()+this.workerLeaseMs).toISOString(),status:'READY',workerPrincipal:this.workerPrincipal}).catch(error=>{workerHeartbeatError=error;this.emit('worker.heartbeat.failed',{workerId:this.workerId,error:{code:error?.code||'WORKER_HEARTBEAT_FAILED',message:error?.message||String(error)}});});},heartbeatMs);
    workerHeartbeat.unref?.();
   };
   const stopWorkerHeartbeat=()=>{if(workerHeartbeat)clearInterval(workerHeartbeat);workerHeartbeat=null;};

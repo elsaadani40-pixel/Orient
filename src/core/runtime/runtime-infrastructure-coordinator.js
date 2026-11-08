@@ -97,7 +97,7 @@ class RuntimeInfrastructureCoordinator {
       : Promise.resolve();
 
     this.recoveryReady =
-      !workflowScheduler && this.workflowRepository?.findAll
+      !workflowScheduler && !persistence?.isAsync && this.workflowRepository?.findAll
         ? Promise.resolve(this.workflowScheduler.recoverPersisted())
         : Promise.resolve(0);
   }

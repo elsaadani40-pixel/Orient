@@ -4,9 +4,16 @@ const { Pool } = require('pg');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const { randomUUID } = require('node:crypto');
 const { createPersistencePrincipal } = require('../../src/infrastructure/persistence/postgres/persistence-principal');
+const { createWorkerPersistencePrincipal } = require('../../src/core/security/worker-persistence-principal');
 
 function makeOwnerPrincipal(tenantId, ownerId) {
   return createPersistencePrincipal({ tenantId, ownerId, sessionId: 'session-' + randomUUID() });
+}
+
+function makeWorkerPrincipal(tenantId, workerId, capabilities = []) {
+  return createWorkerPersistencePrincipal({
+    tenantId, workerId, sessionId: 'worker-session-' + randomUUID(), capabilities
+  });
 }
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
@@ -20,7 +27,14 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  const workerColumns = await pool.query(
+    "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema() AND ((table_name='worker_nodes' AND column_name='session_id') OR (table_name='workflow_dispatch_claims' AND column_name='worker_session_id'))"
+  );
+  assert.deepEqual(
+    workerColumns.rows.map(row => row.table_name + '.' + row.column_name).sort(),
+    ['worker_nodes.session_id', 'workflow_dispatch_claims.worker_session_id']
+  );
 });
 
 
@@ -340,8 +354,12 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
     [workflowId]
   );
 
-  await persistence.workers.register({ workerId: 'worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, 'tenant-recovery');
-  await persistence.workers.register({ workerId: 'recovery-worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, 'tenant-recovery');
+  const recoveryPrincipal = makeWorkerPrincipal('tenant-recovery', 'recovery-worker');
+  await persistence.workers.register({
+    workerId: 'recovery-worker', tenantId: 'tenant-recovery', status: 'READY',
+    capabilities: [], heartbeatAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, 'tenant-recovery', { workerPrincipal: recoveryPrincipal });
 
   const scheduler = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
@@ -353,20 +371,19 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
   const persistedLease = await persistence.workflowLeases.findByWorkflowId(workflowId, 'tenant-recovery');
   assert.ok(persistedLease.expiresAt <= Date.now());
 
-  const recovered = await scheduler.recoverPersisted();
+  const recovered = await scheduler.recoverPersisted('recovery-worker', [], recoveryPrincipal);
   assert.equal(recovered, 1);
   assert.equal(scheduler.queue.length, 1);
   assert.equal(scheduler.queue[0].instance.state, 'QUEUED');
 
-  const takeover = await scheduler.leaseAsync('recovery-worker');
+  const takeover = await scheduler.leaseAsync('recovery-worker', [], recoveryPrincipal);
   assert.ok(takeover);
   assert.equal(takeover.workflowId, workflowId);
   assert.ok(takeover.fencingToken > firstLease.fencingToken);
   assert.equal(takeover.instance.state, 'RUNNING');
 
   await scheduler.releaseAsync(workflowId, takeover.leaseId);
-  await persistence.workers.unregister('worker', 'tenant-recovery');
-  await persistence.workers.unregister('recovery-worker', 'tenant-recovery');
+  await persistence.workers.unregister('recovery-worker', 'tenant-recovery', { workerPrincipal: recoveryPrincipal });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
@@ -403,9 +420,16 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
     leaseDurationMs: 30000
   });
 
-  await persistence.workers.register({ workerId: 'stale-worker-a', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
-  await persistence.workers.register({ workerId: 'worker', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
-  await persistence.workers.register({ workerId: 'recovery-worker-b', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+  const workerPrincipalA = makeWorkerPrincipal(tenantId, 'stale-worker-a');
+  const workerPrincipalB = makeWorkerPrincipal(tenantId, 'recovery-worker-b');
+  await persistence.workers.register({
+    workerId: 'stale-worker-a', tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: workerPrincipalA });
+  await persistence.workers.register({
+    workerId: 'recovery-worker-b', tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: workerPrincipalB });
 
   await schedulerA.enqueueDurable(instance);
 
@@ -414,17 +438,19 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
   const workerA = new AsyncWorkflowWorker({
     scheduler: schedulerA,
     workerId: 'stale-worker-a',
+    workerPrincipal: workerPrincipalA,
     executor: async () => {
       await pool.query(
         "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
         [workflowId]
       );
-      const recovered = await schedulerB.recoverPersisted();
+      const recovered = await schedulerB.recoverPersisted('recovery-worker-b', [], workerPrincipalB);
       assert.equal(recovered, 1);
 
       const workerB = new AsyncWorkflowWorker({
         scheduler: schedulerB,
         workerId: 'recovery-worker-b',
+        workerPrincipal: workerPrincipalB,
         executor: async ({ instance: recoveredInstance }) => {
           return { committedBy: 'worker-b', workflowId: recoveredInstance.workflowId };
         }
@@ -462,6 +488,8 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
   assert.equal(persisted.steps['protected-step'].state, 'COMPLETED');
   assert.equal(persisted.steps['protected-step'].result.committedBy, 'worker-b');
 
+  await persistence.workers.unregister('stale-worker-a', tenantId, { workerPrincipal: workerPrincipalA });
+  await persistence.workers.unregister('recovery-worker-b', tenantId, { workerPrincipal: workerPrincipalB });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
@@ -487,7 +515,12 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   await persistence.workflows.save(instance, tenantId);
   await persistence.tenantQuotas.ensureTenant(tenantId, policy);
 
-  await persistence.workers.register({ workerId: 'worker', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+  const quotaWorkerPrincipalA = makeWorkerPrincipal(tenantId, 'quota-worker-a');
+  const quotaWorkerPrincipalB = makeWorkerPrincipal(tenantId, 'quota-worker-b');
+  await persistence.workers.register({
+    workerId: 'quota-worker-b', tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: quotaWorkerPrincipalB });
 
   const schedulerA = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
@@ -507,7 +540,7 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   });
 
   await schedulerA.enqueueDurable(instance);
-  const leaseA = await schedulerA.leaseAsync('quota-worker-a');
+  const leaseA = await schedulerA.leaseAsync('quota-worker-a', [], quotaWorkerPrincipalA);
   assert.ok(leaseA);
 
   const beforeTakeover = await persistence.tenantQuotas.snapshot({ tenantId });
@@ -522,9 +555,9 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
     [workflowId, tenantId]
   );
 
-  const recovered = await schedulerB.recoverPersisted();
+  const recovered = await schedulerB.recoverPersisted('quota-worker-b', [], quotaWorkerPrincipalB);
   assert.equal(recovered, 1);
-  const leaseB = await schedulerB.leaseAsync('quota-worker-b');
+  const leaseB = await schedulerB.leaseAsync('quota-worker-b', [], quotaWorkerPrincipalB);
   assert.ok(leaseB);
   assert.ok(leaseB.fencingToken > leaseA.fencingToken);
 
@@ -542,6 +575,7 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   const finalSnapshot = await persistence.tenantQuotas.snapshot({ tenantId });
   assert.deepEqual(finalSnapshot, { tenantId, active: 0, queued: 0 });
 
+  await persistence.workers.unregister('quota-worker-b', tenantId, { workerPrincipal: quotaWorkerPrincipalB });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM tenant_quota_reservations WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
@@ -707,15 +741,18 @@ test('PostgreSQL durable claims require a live registered worker identity', asyn
     [workflowId, { workflowId, tenantId: 'tenant-worker-auth', state: 'QUEUED', metadata: {} }]
   );
 
+  const unregisteredPrincipal = makeWorkerPrincipal('tenant-worker-auth', 'unregistered-worker');
   await assert.rejects(
     () => persistence.workflows.claimQueued({
       tenantId: 'tenant-worker-auth',
       workerId: 'unregistered-worker',
-      limit: 1
+      limit: 1,
+      workerPrincipal: unregisteredPrincipal
     }),
-    error => error.code === 'WORKER_NOT_ACTIVE'
+    error => error.code === 'WORKER_SESSION_LOST'
   );
 
+  const registeredPrincipal = makeWorkerPrincipal('tenant-worker-auth', 'registered-worker', ['research.read']);
   await persistence.workers.register({
     workerId: 'registered-worker',
     tenantId: 'tenant-worker-auth',
@@ -723,18 +760,31 @@ test('PostgreSQL durable claims require a live registered worker identity', asyn
     capabilities: ['research.read'],
     heartbeatAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 60000).toISOString()
-  }, 'tenant-worker-auth');
+  }, 'tenant-worker-auth', { workerPrincipal: registeredPrincipal });
 
   const claimed = await persistence.workflows.claimQueued({
     tenantId: 'tenant-worker-auth',
     workerId: 'registered-worker',
     workerCapabilities: ['research.read'],
-    limit: 1
+    limit: 1,
+    workerPrincipal: registeredPrincipal
   });
   assert.equal(claimed.length, 1);
 
-  await persistence.workflows.releaseDispatchClaim(workflowId, 'registered-worker', 'tenant-worker-auth');
-  await persistence.workers.unregister('registered-worker', 'tenant-worker-auth');
+  const replacedSession = makeWorkerPrincipal('tenant-worker-auth', 'registered-worker', ['research.read']);
+  await assert.rejects(
+    persistence.workflows.claimQueued({
+      tenantId: 'tenant-worker-auth',
+      workerId: 'registered-worker',
+      workerCapabilities: ['research.read'],
+      limit: 1,
+      workerPrincipal: replacedSession
+    }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+
+  await persistence.workflows.releaseDispatchClaim(workflowId, 'registered-worker', 'tenant-worker-auth', { workerPrincipal: registeredPrincipal });
+  await persistence.workers.unregister('registered-worker', 'tenant-worker-auth', { workerPrincipal: registeredPrincipal });
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
@@ -746,7 +796,10 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
   );
 
   const workers = ['worker-a', 'worker-b', 'worker-recovery'].map(id => id + '-' + Date.now());
+  const workerPrincipals = new Map();
   for (const workerId of workers) {
+    const workerPrincipal = makeWorkerPrincipal('tenant-claim', workerId);
+    workerPrincipals.set(workerId, workerPrincipal);
     await persistence.workers.register({
       workerId,
       tenantId: 'tenant-claim',
@@ -754,7 +807,7 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
       capabilities: [],
       heartbeatAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60000).toISOString()
-    }, 'tenant-claim');
+    }, 'tenant-claim', { workerPrincipal });
   }
   const [workerA, workerB] = workers;
 
@@ -763,17 +816,25 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
       tenantId: 'tenant-claim',
       workerId: workerA,
       limit: 1,
-      claimTtlMs: 60000
+      claimTtlMs: 60000,
+      workerPrincipal: workerPrincipals.get(workerA)
     }),
     persistence.workflows.claimQueued({
       tenantId: 'tenant-claim',
       workerId: workerB,
       limit: 1,
-      claimTtlMs: 60000
+      claimTtlMs: 60000,
+      workerPrincipal: workerPrincipals.get(workerB)
     })
   ]);
 
   assert.equal(a.length + b.length, 1);
+
+  const winningWorker = a.length ? workerA : workerB;
+  const staleSessionForWinner = makeWorkerPrincipal('tenant-claim', winningWorker);
+  assert.equal(await persistence.workflows.releaseDispatchClaim(
+    workflowId, winningWorker, 'tenant-claim', { workerPrincipal: staleSessionForWinner }
+  ), false);
 
   await pool.query(
     "UPDATE workflow_dispatch_claims SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
@@ -786,12 +847,13 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
     tenantId: 'tenant-claim',
     workerId: workerRecovery,
     limit: 1,
-    claimTtlMs: 60000
+    claimTtlMs: 60000,
+    workerPrincipal: workerPrincipals.get(workerRecovery)
   });
   assert.equal(recovered.length, 1);
 
-  await persistence.workflows.releaseDispatchClaim(workflowId, workerRecovery, 'tenant-claim');
-  for (const workerId of workers) await persistence.workers.unregister(workerId, 'tenant-claim');
+  await persistence.workflows.releaseDispatchClaim(workflowId, workerRecovery, 'tenant-claim', { workerPrincipal: workerPrincipals.get(workerRecovery) });
+  for (const workerId of workers) await persistence.workers.unregister(workerId, 'tenant-claim', { workerPrincipal: workerPrincipals.get(workerId) });
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
@@ -1196,4 +1258,73 @@ test('PostgreSQL approval lifecycle isolates two owners and serializes competing
   );
   assert.equal(wrongOwnerConsume, false);
 
+});
+
+
+test('PostgreSQL worker registry fences replaced process sessions', async t => {
+  const tenantId = 'tenant-worker-session-' + randomUUID();
+  const workerId = 'worker-session-' + randomUUID();
+  const principalA = makeWorkerPrincipal(tenantId, workerId);
+  const principalB = makeWorkerPrincipal(tenantId, workerId);
+  const registration = principal => ({
+    workerId,
+    tenantId,
+    status: 'READY',
+    capabilities: [],
+    heartbeatAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    metadata: {}
+  });
+
+  t.after(async () => {
+    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2', [tenantId, workerId]);
+  });
+
+  await persistence.workers.register(registration(principalA), tenantId, {
+    workerPrincipal: principalA
+  });
+  await assert.rejects(
+    persistence.workers.register(registration(principalB), tenantId, {
+      workerPrincipal: principalB
+    }),
+    error => error.code === 'WORKER_SESSION_CONFLICT'
+  );
+  await assert.rejects(
+    persistence.workers.heartbeat(workerId, {
+      tenantId,
+      workerPrincipal: principalB
+    }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+
+  await persistence.workers.heartbeat(workerId, {
+    tenantId,
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    workerPrincipal: principalA
+  });
+  await pool.query(
+    "UPDATE worker_nodes SET expires_at=NOW()-INTERVAL '1 second' WHERE tenant_id=$1 AND worker_id=$2",
+    [tenantId, workerId]
+  );
+  await persistence.workers.register(registration(principalB), tenantId, {
+    workerPrincipal: principalB
+  });
+  await assert.rejects(
+    persistence.workers.heartbeat(workerId, {
+      tenantId,
+      workerPrincipal: principalA
+    }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  await persistence.workers.heartbeat(workerId, {
+    tenantId,
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    workerPrincipal: principalB
+  });
+  assert.equal(await persistence.workers.unregister(workerId, tenantId, {
+    workerPrincipal: principalA
+  }), false);
+  assert.equal(await persistence.workers.unregister(workerId, tenantId, {
+    workerPrincipal: principalB
+  }), true);
 });

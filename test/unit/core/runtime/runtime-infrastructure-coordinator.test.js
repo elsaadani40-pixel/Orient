@@ -71,3 +71,25 @@ test('runtime wires optional agent governance services into the execution loop',
   assert.equal(runtime.agentLoop.capabilityGovernance, capabilityGovernance);
   runtime.shutdown({ cancelQueued: false });
 });
+
+
+test('PostgreSQL workflow recovery waits for a trusted worker principal', async () => {
+  let recoveryCalls = 0;
+  const persistence = {
+    isAsync: true,
+    db: {},
+    workflows: {
+      async findAll() { recoveryCalls += 1; return []; },
+      async claimQueued() { recoveryCalls += 1; return []; }
+    },
+    workflowLeases: {},
+    tenantQuotas: { async ensureTenant() {} }
+  };
+  const coordinator = new RuntimeInfrastructureCoordinator({
+    persistence,
+    tenantId: 'tenant-worker'
+  });
+  await coordinator.recoveryReady;
+  assert.equal(recoveryCalls, 0);
+  await coordinator.shutdown();
+});

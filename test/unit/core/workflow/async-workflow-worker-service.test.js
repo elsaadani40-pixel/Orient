@@ -7,20 +7,24 @@ test('AsyncWorkflowWorkerService serializes polling and performs durable recover
   let recoveries = 0;
   let recoveryCapabilities = null;
   let factoryCapabilities = null;
+  let recoveryPrincipal = null;
+  let factoryPrincipal = null;
   let ticks = 0;
   let concurrent = 0;
   let maxConcurrent = 0;
   const errors = [];
 
   const scheduler = {
-    async recoverPersisted(workerId, capabilities) {
+    async recoverPersisted(workerId, capabilities, workerPrincipal) {
       recoveries += 1;
       recoveryCapabilities = { workerId, capabilities };
+      recoveryPrincipal = workerPrincipal;
     }
   };
 
-  const workerFactory = (workerId, capabilities) => {
+  const workerFactory = (workerId, capabilities, workerPrincipal) => {
     factoryCapabilities = { workerId, capabilities };
+    factoryPrincipal = workerPrincipal;
     return ({
     async tick() {
       concurrent += 1;
@@ -52,6 +56,8 @@ test('AsyncWorkflowWorkerService serializes polling and performs durable recover
   assert.equal(recoveries, 1);
   assert.deepEqual(recoveryCapabilities, { workerId: service.workerId, capabilities: ['web.search', 'calendar.read'] });
   assert.deepEqual(factoryCapabilities, { workerId: service.workerId, capabilities: ['web.search', 'calendar.read'] });
+  assert.equal(recoveryPrincipal, service.workerPrincipal);
+  assert.equal(factoryPrincipal, service.workerPrincipal);
   assert.equal(maxConcurrent, 1);
 
   now = 100;
@@ -144,4 +150,53 @@ test('AsyncWorkflowScheduler does not reserve quota after shutdown begins', asyn
     error => error?.code === 'SCHEDULER_SHUTTING_DOWN'
   );
   assert.equal(reservations, 0);
+});
+
+
+test('AsyncWorkflowWorkerService uses one trusted worker session for registration heartbeat recovery and shutdown', async () => {
+  const calls = [];
+  const scheduler = {
+    tenantId: 'tenant-worker',
+    async recoverPersisted(workerId, capabilities, workerPrincipal) {
+      calls.push(['recover', workerId, workerPrincipal]);
+      return 0;
+    }
+  };
+  const registry = {
+    async register(worker, tenantId, options) {
+      calls.push(['register', worker.workerId, tenantId, options.workerPrincipal]);
+      return worker;
+    },
+    async heartbeat(workerId, options) {
+      calls.push(['heartbeat', workerId, options.workerPrincipal]);
+      return true;
+    },
+    async unregister(workerId, tenantId, options) {
+      calls.push(['unregister', workerId, tenantId, options.workerPrincipal]);
+      return true;
+    }
+  };
+  const service = new AsyncWorkflowWorkerService({
+    scheduler,
+    workerRegistry: registry,
+    workerId: 'worker-session-test',
+    workerCapabilities: ['runtime', 'memory.read'],
+    workerFactory: (workerId, capabilities, workerPrincipal) => ({
+      workerId, capabilities, workerPrincipal,
+      async tick() { return { state: 'COMPLETED' }; }
+    }),
+    pollIntervalMs: 50,
+    recoveryIntervalMs: 50
+  });
+
+  await service.ensureWorkerRegistered();
+  await service.heartbeatWorker();
+  await service.runOnce();
+  await service.unregisterWorker();
+
+  assert.equal(calls.length, 4);
+  assert.ok(calls.every(call => call[call.length - 1] === service.workerPrincipal));
+  assert.equal(service.workerPrincipal.workerId, 'worker-session-test');
+  assert.equal(service.workerPrincipal.tenantId, 'tenant-worker');
+  assert.deepEqual(service.workerPrincipal.capabilities, ['memory.read', 'runtime']);
 });

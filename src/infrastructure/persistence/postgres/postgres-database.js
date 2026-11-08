@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS worker_nodes (
   status TEXT NOT NULL,
   capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  session_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (tenant_id, worker_id)
 );
 CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_heartbeat ON worker_nodes(tenant_id, heartbeat_at);
@@ -78,6 +79,7 @@ const MIGRATIONS = [
       tenant_id TEXT NOT NULL,
       workflow_id TEXT NOT NULL,
       worker_id TEXT NOT NULL,
+      worker_session_id TEXT NOT NULL DEFAULT '',
       claimed_at TIMESTAMPTZ NOT NULL,
       expires_at TIMESTAMPTZ NOT NULL,
       PRIMARY KEY (tenant_id, workflow_id)
@@ -156,6 +158,17 @@ const MIGRATIONS = [
       WHERE task_id IS NOT NULL;
   `},
 
+  {version:10,sql:`
+    ALTER TABLE worker_nodes
+      ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE workflow_dispatch_claims
+      ADD COLUMN IF NOT EXISTS worker_session_id TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_session
+      ON worker_nodes(tenant_id, worker_id, session_id);
+    CREATE INDEX IF NOT EXISTS idx_workflow_dispatch_claims_worker_session
+      ON workflow_dispatch_claims(tenant_id, worker_id, worker_session_id, expires_at);
+  `},
+
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -174,7 +187,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9)',[1,2,3,4,5,6,7,8,9]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9),($10)',[1,2,3,4,5,6,7,8,9,10]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);

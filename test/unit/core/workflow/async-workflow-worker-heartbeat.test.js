@@ -87,6 +87,8 @@ test('AsyncWorkflowWorker renews the durable lease while a step runs', async () 
 test('AsyncWorkflowWorker refreshes worker registry liveness during a long step', async () => {
   const registrations = [];
   const heartbeats = [];
+  let registeredPrincipal = null;
+  let leasePrincipal = null;
   let released = false;
   let stepCompleted = false;
   const step = { id: 'step-1' };
@@ -107,7 +109,7 @@ test('AsyncWorkflowWorker refreshes worker registry liveness during a long step'
   const lease = { workflowId: instance.workflowId, leaseId: 'lease-1', workerId: 'worker-1', fencingToken: 1, expiresAt: Date.now() + 3000, cancelled: false, deadlineAt: null, instance };
   const scheduler = {
     leaseDurationMs: 3000,
-    async leaseAsync() { return lease; },
+    async leaseAsync(workerId, capabilities, workerPrincipal) { leasePrincipal = workerPrincipal; return lease; },
     async renewAsync() { return lease; },
     async assertCurrentAsync() { return true; },
     async persistAsync() {},
@@ -115,7 +117,7 @@ test('AsyncWorkflowWorker refreshes worker registry liveness during a long step'
     async retryAsync() { throw new Error('unexpected retry'); }
   };
   const registry = {
-    async register(worker) { registrations.push(worker); return worker; },
+    async register(worker, tenantId, options) { registrations.push(worker); registeredPrincipal = options.workerPrincipal; return worker; },
     async heartbeat(workerId, payload) { heartbeats.push({ workerId, ...payload }); return registrations[0]; }
   };
   const worker = new AsyncWorkflowWorker({
@@ -136,6 +138,9 @@ test('AsyncWorkflowWorker refreshes worker registry liveness during a long step'
   assert.ok(heartbeats.length >= 1, 'expected worker registry heartbeat while step was running');
   assert.ok(heartbeats.every(call => call.workerId === 'worker-1'));
   assert.ok(heartbeats.every(call => call.tenantId === 'tenant-1'));
+  assert.equal(registeredPrincipal, worker.workerPrincipal);
+  assert.equal(leasePrincipal, worker.workerPrincipal);
+  assert.ok(heartbeats.every(call => call.workerPrincipal === worker.workerPrincipal));
 });
 
 test('AsyncWorkflowWorker stops safely when worker heartbeat fails', async () => {
