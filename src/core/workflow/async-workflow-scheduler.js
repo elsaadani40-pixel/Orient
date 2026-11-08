@@ -1,4 +1,5 @@
 const WorkflowScheduler=require('./workflow-scheduler');const AsyncWorkflowLeaseStore=require('./async-workflow-lease-store');
+const { createWorkerPersistencePrincipal } = require('../security/worker-persistence-principal');
 function normalizeCapabilities(value){return Array.isArray(value)?[...new Set(value.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()))]:[];}
 function requiredCapabilities(instance){return normalizeCapabilities(instance?.metadata?.requiredCapabilities);}
 function supportsCapabilities(instance,workerCapabilities){const required=requiredCapabilities(instance);if(!required.length)return true;const available=new Set(normalizeCapabilities(workerCapabilities));return required.every(capability=>available.has(capability));}
