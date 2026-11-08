@@ -42,8 +42,7 @@ test('scheduler clears stale fencing metadata only after it successfully release
   assert.equal(await scheduler.releaseAsync(instance.workflowId,'lease-release'),true);
   assert.equal('fencingToken' in instance.metadata,false);
   assert.equal(scheduler.active.has(instance.workflowId),false);
-  assert.equal(saves.length,1);
-  assert.equal(saves[0].options.workerPrincipal,null);
+  assert.equal(saves.length,0, 'lease release must not write a stale snapshot after ownership ends');
 });
 
 test('scheduler preserves fencing metadata when durable lease release reports lost ownership',async()=>{
@@ -60,8 +59,7 @@ test('scheduler preserves fencing metadata when durable lease release reports lo
   scheduler.active.set(instance.workflowId,{instance,leaseId:'lease-stale',fencingToken:29,workerPrincipal:principal});
   scheduler.leaseStore.release=async()=>({released:false});
   assert.equal(await scheduler.releaseAsync(instance.workflowId,'lease-stale'),false);
-  assert.equal('fencingToken' in instance.metadata,false);
+  assert.equal(instance.metadata.fencingToken,29);
   assert.equal(scheduler.active.has(instance.workflowId),false);
-  assert.equal(saves.length,1);
-  assert.equal(saves[0].options.workerPrincipal,null);
+  assert.equal(saves.length,0);
 });
