@@ -304,7 +304,7 @@ test('AsyncWorkflowWorker forwards the acquired lease principal to durable workf
     definition: { steps: [step] }, steps: { 'step-persist': { state: 'READY' } },
     readySteps() { return completed ? [] : [step]; },
     markStepRunning() {},
-    markStepCompleted() { completed = true; },
+    markStepCompleted(id) { completed = true; this.steps[id].state = 'COMPLETED'; },
     markStepFailed() { throw new Error('unexpected step failure'); },
     transition(state) { this.state = state; }
   };
