@@ -354,8 +354,12 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
     [workflowId]
   );
 
-  await persistence.workers.register({ workerId: 'worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, 'tenant-recovery');
-  await persistence.workers.register({ workerId: 'recovery-worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, 'tenant-recovery');
+  const recoveryPrincipal = makeWorkerPrincipal('tenant-recovery', 'recovery-worker');
+  await persistence.workers.register({
+    workerId: 'recovery-worker', tenantId: 'tenant-recovery', status: 'READY',
+    capabilities: [], heartbeatAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, 'tenant-recovery', { workerPrincipal: recoveryPrincipal });
 
   const scheduler = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
@@ -367,20 +371,19 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
   const persistedLease = await persistence.workflowLeases.findByWorkflowId(workflowId, 'tenant-recovery');
   assert.ok(persistedLease.expiresAt <= Date.now());
 
-  const recovered = await scheduler.recoverPersisted();
+  const recovered = await scheduler.recoverPersisted('recovery-worker', [], recoveryPrincipal);
   assert.equal(recovered, 1);
   assert.equal(scheduler.queue.length, 1);
   assert.equal(scheduler.queue[0].instance.state, 'QUEUED');
 
-  const takeover = await scheduler.leaseAsync('recovery-worker');
+  const takeover = await scheduler.leaseAsync('recovery-worker', [], recoveryPrincipal);
   assert.ok(takeover);
   assert.equal(takeover.workflowId, workflowId);
   assert.ok(takeover.fencingToken > firstLease.fencingToken);
   assert.equal(takeover.instance.state, 'RUNNING');
 
   await scheduler.releaseAsync(workflowId, takeover.leaseId);
-  await persistence.workers.unregister('worker', 'tenant-recovery');
-  await persistence.workers.unregister('recovery-worker', 'tenant-recovery');
+  await persistence.workers.unregister('recovery-worker', 'tenant-recovery', { workerPrincipal: recoveryPrincipal });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
