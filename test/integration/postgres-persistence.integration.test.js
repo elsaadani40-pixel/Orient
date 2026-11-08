@@ -435,6 +435,10 @@ test('PostgreSQL workflow writes require the active worker session and exact lea
     toJSON() { return { ...this }; }
   };
 
+  await assert.rejects(
+    persistence.workflows.save({ ...instance, metadata: {} }, tenantId),
+    error => error.code === 'WORKFLOW_LEASE_HELD'
+  );
   await persistence.workflows.save(instance, tenantId, { workerPrincipal: bound });
   const stored = await pool.query('SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
   assert.equal(stored.rows[0].state, 'RUNNING');
