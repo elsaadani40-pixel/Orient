@@ -17,26 +17,42 @@ function quoteIdentifier(value) {
   return '"' + value.replace(/"/g, '""') + '"';
 }
 
-async function normalizeManagedRoleMemberships(client) {
-  const managedRoles = ['orient_owner', 'orient_migrator', 'orient_runtime', 'orient_runtime_login'];
-  const memberships = await client.query(
-    'SELECT granted.rolname AS granted_role, member.rolname AS member_role ' +
-    'FROM pg_auth_members membership ' +
-    'JOIN pg_roles granted ON granted.oid = membership.roleid ' +
-    'JOIN pg_roles member ON member.oid = membership.member ' +
-    'WHERE granted.rolname = ANY($1::text[]) OR member.rolname = ANY($1::text[])',
-    [managedRoles]
-  );
+async function assertExpectedRoleMemberships(client) {
+  const result = await client.query(`
+    SELECT
+      pg_has_role(session_user, 'orient_owner', 'MEMBER') AS admin_is_owner_member,
+      pg_has_role('orient_migrator', 'orient_owner', 'MEMBER') AS migrator_is_owner_member,
+      pg_has_role('orient_migrator', 'orient_runtime', 'MEMBER') AS migrator_is_runtime_member,
+      pg_has_role('orient_runtime_login', 'orient_runtime', 'MEMBER') AS runtime_is_runtime_member,
+      pg_has_role('orient_runtime_login', 'orient_owner', 'MEMBER') AS runtime_is_owner_member
+  `);
+  const identity = result.rows?.[0];
+  if (!identity ||
+      identity.admin_is_owner_member !== true ||
+      identity.migrator_is_owner_member !== true ||
+      identity.migrator_is_runtime_member !== false ||
+      identity.runtime_is_runtime_member !== true ||
+      identity.runtime_is_owner_member !== false) {
+    throw Object.assign(
+      new Error('PostgreSQL administrator cannot establish the required isolated ORIENT role memberships. The provisioning login needs explicit ADMIN OPTION for the new roles; CREATEROLE alone may be insufficient on managed PostgreSQL.'),
+      { code: 'PERSISTENCE_ROLE_MEMBERSHIP_GRANT_DENIED', details: identity || {} }
+    );
+  }
+}
 
-  // The provisioning login is required to have CREATEROLE. PostgreSQL allows
-  // that restricted administrator to revoke memberships on these non-superuser
-  // managed roles directly. Do not SET ROLE to historical grantors: on managed
-  // services the grantor may be an administrative role the provisioner cannot
-  // assume (for example, Supabase's postgres role).
-  for (const membership of memberships.rows) {
-    await client.query(
-      'REVOKE ' + quoteIdentifier(membership.granted_role) +
-      ' FROM ' + quoteIdentifier(membership.member_role)
+async function assertApplicationObjectOwnership(client, tables) {
+  const identity = await client.query(
+    'SELECT rolname, rolsuper FROM pg_roles WHERE rolname = session_user'
+  );
+  const administrator = identity.rows?.[0];
+  if (!administrator) throw new Error('PostgreSQL administrator identity could not be verified.');
+  if (administrator.rolsuper) return;
+
+  const foreignOwners = tables.rows.filter(row => row.tableowner !== administrator.rolname);
+  if (foreignOwners.length > 0) {
+    throw Object.assign(
+      new Error('PostgreSQL provisioning login must own every existing ORIENT persistence table before ownership transfer.'),
+      { code: 'PERSISTENCE_ROLE_OBJECT_OWNERSHIP_INVALID', details: { foreignOwners } }
     );
   }
 }
@@ -65,22 +81,23 @@ async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword 
     await ensureRole(client, 'orient_runtime', 'NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS');
     await ensureRole(client, 'orient_migrator', 'LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', migratorPassword);
     await ensureRole(client, 'orient_runtime_login', 'LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', runtimePassword);
-    await normalizeManagedRoleMemberships(client);
     await client.query('GRANT orient_owner TO orient_migrator');
     // PostgreSQL requires the active administrator to be a member of the
     // destination role when transferring existing object ownership. Grant
     // this membership only for the transaction and revoke it before commit.
     await client.query('GRANT orient_owner TO CURRENT_USER');
     await client.query('GRANT orient_runtime TO orient_runtime_login');
+    await assertExpectedRoleMemberships(client);
     await client.query('GRANT USAGE, CREATE ON SCHEMA public TO orient_owner');
     await client.query('GRANT USAGE ON SCHEMA public TO orient_runtime');
     await client.query('REVOKE CREATE ON SCHEMA public FROM orient_runtime');
     await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public REVOKE ALL ON TABLES FROM orient_runtime');
     await client.query('ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public REVOKE ALL ON SEQUENCES FROM orient_runtime');
     const tables = await client.query(
-      'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename = ANY($2::text[])',
+      'SELECT tablename, tableowner FROM pg_tables WHERE schemaname = $1 AND tablename = ANY($2::text[])',
       ['public', applicationTables]
     );
+    await assertApplicationObjectOwnership(client, tables);
     for (const row of tables.rows) {
       await client.query('ALTER TABLE public.' + row.tablename + ' OWNER TO orient_owner');
     }
