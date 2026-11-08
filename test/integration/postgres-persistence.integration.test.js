@@ -2,6 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Pool } = require('pg');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
+const { randomUUID } = require('node:crypto');
+const { createPersistencePrincipal } = require('../../src/infrastructure/persistence/postgres/persistence-principal');
+
+function makeOwnerPrincipal(tenantId, ownerId) {
+  return createPersistencePrincipal({ tenantId, ownerId, sessionId: 'session-' + randomUUID() });
+}
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
 const CapabilityMapper = require('../../src/core/agent/capability/capability-mapper');
@@ -876,15 +882,21 @@ test('PostgreSQL cancellation wins terminal completion race', async () => {
 });
 
 
-test('PostgreSQL owner chat is durable, idempotent, bounded, and isolated by owner', async () => {
-  const ownerId = 'owner-chat-test-' + Date.now();
-  const otherOwner = new PostgresOwnerChatConversationRepository(persistence.db, {
-    ownerId: ownerId + '-other'
-  });
-  const chat = new PostgresOwnerChatConversationRepository(persistence.db, {
-    ownerId,
-    maxMessages: 3
-  });
+test('PostgreSQL owner chat requires a validated principal and isolates tenant and owner scopes', async () => {
+  const suffix = randomUUID();
+  const tenantId = 'tenant-owner-chat-' + suffix;
+  const ownerId = 'owner-chat-test-' + suffix;
+  const principal = makeOwnerPrincipal(tenantId, ownerId);
+  const otherOwnerPrincipal = makeOwnerPrincipal(tenantId, ownerId + '-other');
+  const otherTenantPrincipal = makeOwnerPrincipal(tenantId + '-other', ownerId);
+  const chat = new PostgresOwnerChatConversationRepository(persistence.db, { maxMessages: 3 });
+  const otherOwner = new PostgresOwnerChatConversationRepository(persistence.db);
+  const otherTenant = new PostgresOwnerChatConversationRepository(persistence.db);
+
+  await assert.rejects(
+    () => chat.list({ tenantId, ownerId, sessionId: 'forged-session' }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_REQUIRED'
+  );
 
   try {
     const baseTime = Date.now();
@@ -894,25 +906,35 @@ test('PostgreSQL owner chat is durable, idempotent, bounded, and isolated by own
       content: 'First owner message',
       createdAt: new Date(baseTime).toISOString()
     };
-    const inserted = await chat.append(first);
+    const inserted = await chat.append(first, principal);
     assert.equal(inserted.replayed, false);
     assert.equal(inserted.message.content, first.content);
 
-    const replay = await chat.append(first);
+    const replay = await chat.append(first, principal);
     assert.equal(replay.replayed, true);
     assert.equal(replay.message.id, first.id);
     await assert.rejects(
-      () => chat.append({ ...first, content: 'Different content under same id' }),
+      () => chat.append({ ...first, content: 'Different content under same id' }, principal),
       error => error.code === 'OWNER_CHAT_IDEMPOTENCY_CONFLICT'
     );
 
-    const linked = await chat.attachTaskId(first.id, 'task-01');
+    const linked = await chat.attachTaskId(first.id, 'task-01', principal);
     assert.equal(linked.message.taskId, 'task-01');
-    assert.equal((await chat.attachTaskId(first.id, 'task-01')).replayed, true);
+    assert.equal((await chat.attachTaskId(first.id, 'task-01', principal)).replayed, true);
     await assert.rejects(
-      () => chat.attachTaskId(first.id, 'task-02'),
+      () => chat.attachTaskId(first.id, 'task-02', principal),
       error => error.code === 'OWNER_CHAT_TASK_LINK_CONFLICT'
     );
+
+    const assistant = await chat.appendAssistantForTask({
+      id: 'assistant-01',
+      role: 'assistant',
+      content: 'Verified answer',
+      taskId: 'task-01',
+      createdAt: new Date(baseTime + 500).toISOString()
+    }, principal);
+    assert.equal(assistant.skipped, false);
+    assert.equal(assistant.message.content, 'Verified answer');
 
     for (let index = 2; index <= 4; index += 1) {
       await chat.append({
@@ -920,32 +942,133 @@ test('PostgreSQL owner chat is durable, idempotent, bounded, and isolated by own
         role: index % 2 === 0 ? 'assistant' : 'user',
         content: 'Owner chat message ' + index,
         createdAt: new Date(baseTime + index * 1000).toISOString()
-      });
+      }, principal);
     }
 
-    const history = await chat.list();
+    // Identical message identifiers remain independent across tenant and owner boundaries.
+    await otherTenant.append({ ...first, content: 'Other tenant message' }, otherTenantPrincipal);
+    await otherOwner.append({ ...first, content: 'Other owner message' }, otherOwnerPrincipal);
+
+    const history = await chat.list(principal);
     assert.equal(history.length, 3);
     assert.deepEqual(history.map(message => message.id), ['message-02', 'message-03', 'message-04']);
-    assert.deepEqual(await otherOwner.list(), []);
+    assert.equal((await otherTenant.list(otherTenantPrincipal))[0].content, 'Other tenant message');
+    assert.equal((await otherOwner.list(otherOwnerPrincipal))[0].content, 'Other owner message');
 
-    // A fresh repository instance sees the same persisted history after restart.
-    const restarted = new PostgresOwnerChatConversationRepository(persistence.db, {
-      ownerId,
-      maxMessages: 3
-    });
-    assert.deepEqual(await restarted.list(), history);
+    const restarted = new PostgresOwnerChatConversationRepository(persistence.db, { maxMessages: 3 });
+    assert.deepEqual(await restarted.list(principal), history);
   } finally {
-    await chat.clear();
-    await otherOwner.clear();
+    await chat.clear(principal);
+    await otherOwner.clear(otherOwnerPrincipal);
+    await otherTenant.clear(otherTenantPrincipal);
   }
 });
 
 
-test('PostgreSQL owner work profile persists validated partial updates and isolates owner scopes', async () => {
-  const ownerId = 'owner-profile-test-' + Date.now();
+test('PostgreSQL owner work profile requires a validated principal and isolates tenant and owner scopes', async () => {
+  const suffix = randomUUID();
+  const tenantId = 'tenant-owner-profile-' + suffix;
+  const ownerId = 'owner-profile-test-' + suffix;
   const otherOwnerId = ownerId + '-other';
-  const profile = new PostgresOwnerWorkProfileRepository(persistence.db, { ownerId });
-  const other = new PostgresOwnerWorkProfileRepository(persistence.db, { ownerId: otherOwnerId });
+  const principal = makeOwnerPrincipal(tenantId, ownerId);
+  const otherOwnerPrincipal = makeOwnerPrincipal(tenantId, otherOwnerId);
+  const otherTenantPrincipal = makeOwnerPrincipal(tenantId + '-other', ownerId);
+  const profile = new PostgresOwnerWorkProfileRepository(persistence.db);
+  const other = new PostgresOwnerWorkProfileRepository(persistence.db);
+  const otherTenant = new PostgresOwnerWorkProfileRepository(persistence.db);
+
+  await assert.rejects(
+    () => profile.get({ tenantId, ownerId, sessionId: 'forged-session' }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_REQUIRED'
+  );
+
+  try {
+    assert.deepEqual(await profile.get(principal), {
+      version: 1,
+      mode: 'standard',
+      workingPreferences: '',
+      updatedAt: null
+    });
+
+    const saved = await profile.update({
+      mode: 'plan-only',
+      workingPreferences: 'Inspect evidence, define acceptance criteria, test before merging.'
+    }, principal);
+    assert.equal(saved.mode, 'plan-only');
+    assert.equal(saved.workingPreferences, 'Inspect evidence, define acceptance criteria, test before merging.');
+    assert.ok(Number.isFinite(Date.parse(saved.updatedAt)));
+
+    const partial = await profile.update({ workingPreferences: 'Updated preference' }, principal);
+    assert.equal(partial.mode, 'plan-only');
+    assert.equal(partial.workingPreferences, 'Updated preference');
+    assert.ok(Date.parse(partial.updatedAt) >= Date.parse(saved.updatedAt));
+
+    const restarted = new PostgresOwnerWorkProfileRepository(persistence.db);
+    assert.deepEqual(await restarted.get(principal), partial);
+    assert.equal((await other.get(otherOwnerPrincipal)).mode, 'standard');
+    assert.equal((await other.get(otherOwnerPrincipal)).workingPreferences, '');
+    assert.equal((await otherTenant.get(otherTenantPrincipal)).mode, 'standard');
+
+    await assert.rejects(
+      () => profile.update({ mode: 'owner-admin' }, principal),
+      error => error.code === 'OWNER_PROFILE_MODE_INVALID'
+    );
+    await assert.rejects(
+      () => profile.update({ workingPreferences: 'x'.repeat(4001) }, principal),
+      error => error.code === 'OWNER_PROFILE_PREFERENCES_INVALID'
+    );
+  } finally {
+    await pool.query(
+      'DELETE FROM owner_work_profiles WHERE (tenant_id, owner_id) IN (($1,$2),($3,$4))',
+      [tenantId, ownerId, tenantId, otherOwnerId]
+    );
+    await pool.query(
+      'DELETE FROM owner_work_profiles WHERE tenant_id=$1 AND owner_id=$2',
+      [tenantId + '-other', ownerId]
+    );
+  }
+});
+
+
+test('PostgreSQL principal transaction context is isolated across concurrent pooled connections', async () => {
+  const suffix = randomUUID();
+  const first = makeOwnerPrincipal('tenant-context-a-' + suffix, 'owner-context-a');
+  const second = makeOwnerPrincipal('tenant-context-b-' + suffix, 'owner-context-b');
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  const observations = await Promise.all([first, second].map(principal =>
+    persistence.db.transactionWithPrincipal(principal, async client => {
+      const initial = await client.query(
+        `SELECT current_setting('app.orient_tenant_id', true) AS tenant_id,
+                current_setting('app.orient_owner_id', true) AS owner_id,
+                current_setting('app.orient_session_id', true) AS session_id`
+      );
+      await delay(30);
+      const later = await client.query(
+        `SELECT current_setting('app.orient_tenant_id', true) AS tenant_id,
+                current_setting('app.orient_owner_id', true) AS owner_id,
+                current_setting('app.orient_session_id', true) AS session_id`
+      );
+      return { initial: initial.rows[0], later: later.rows[0], principal };
+    })
+  ));
+
+  for (const item of observations) {
+    assert.equal(item.initial.tenant_id, item.principal.tenantId);
+    assert.equal(item.initial.owner_id, item.principal.ownerId);
+    assert.equal(item.initial.session_id, item.principal.sessionId);
+    assert.deepEqual(item.later, item.initial);
+  }
+
+  const reused = await pool.query(
+    `SELECT current_setting('app.orient_tenant_id', true) AS tenant_id,
+            current_setting('app.orient_owner_id', true) AS owner_id,
+            current_setting('app.orient_session_id', true) AS session_id`
+  );
+  assert.ok(!reused.rows[0].tenant_id, 'transaction-local tenant context must not leak to a reused pool connection');
+  assert.ok(!reused.rows[0].owner_id, 'transaction-local owner context must not leak to a reused pool connection');
+  assert.ok(!reused.rows[0].session_id, 'transaction-local session context must not leak to a reused pool connection');
+});
 
   try {
     assert.deepEqual(await profile.get(), {
