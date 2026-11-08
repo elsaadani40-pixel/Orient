@@ -741,15 +741,18 @@ test('PostgreSQL durable claims require a live registered worker identity', asyn
     [workflowId, { workflowId, tenantId: 'tenant-worker-auth', state: 'QUEUED', metadata: {} }]
   );
 
+  const unregisteredPrincipal = makeWorkerPrincipal('tenant-worker-auth', 'unregistered-worker');
   await assert.rejects(
     () => persistence.workflows.claimQueued({
       tenantId: 'tenant-worker-auth',
       workerId: 'unregistered-worker',
-      limit: 1
+      limit: 1,
+      workerPrincipal: unregisteredPrincipal
     }),
-    error => error.code === 'WORKER_NOT_ACTIVE'
+    error => error.code === 'WORKER_SESSION_LOST'
   );
 
+  const registeredPrincipal = makeWorkerPrincipal('tenant-worker-auth', 'registered-worker', ['research.read']);
   await persistence.workers.register({
     workerId: 'registered-worker',
     tenantId: 'tenant-worker-auth',
@@ -757,7 +760,7 @@ test('PostgreSQL durable claims require a live registered worker identity', asyn
     capabilities: ['research.read'],
     heartbeatAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 60000).toISOString()
-  }, 'tenant-worker-auth');
+  }, 'tenant-worker-auth', { workerPrincipal: registeredPrincipal });
 
   const claimed = await persistence.workflows.claimQueued({
     tenantId: 'tenant-worker-auth',
@@ -767,8 +770,8 @@ test('PostgreSQL durable claims require a live registered worker identity', asyn
   });
   assert.equal(claimed.length, 1);
 
-  await persistence.workflows.releaseDispatchClaim(workflowId, 'registered-worker', 'tenant-worker-auth');
-  await persistence.workers.unregister('registered-worker', 'tenant-worker-auth');
+  await persistence.workflows.releaseDispatchClaim(workflowId, 'registered-worker', 'tenant-worker-auth', { workerPrincipal: registeredPrincipal });
+  await persistence.workers.unregister('registered-worker', 'tenant-worker-auth', { workerPrincipal: registeredPrincipal });
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
@@ -780,7 +783,10 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
   );
 
   const workers = ['worker-a', 'worker-b', 'worker-recovery'].map(id => id + '-' + Date.now());
+  const workerPrincipals = new Map();
   for (const workerId of workers) {
+    const workerPrincipal = makeWorkerPrincipal('tenant-claim', workerId);
+    workerPrincipals.set(workerId, workerPrincipal);
     await persistence.workers.register({
       workerId,
       tenantId: 'tenant-claim',
@@ -788,7 +794,7 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
       capabilities: [],
       heartbeatAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60000).toISOString()
-    }, 'tenant-claim');
+    }, 'tenant-claim', { workerPrincipal });
   }
   const [workerA, workerB] = workers;
 
@@ -797,13 +803,15 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
       tenantId: 'tenant-claim',
       workerId: workerA,
       limit: 1,
-      claimTtlMs: 60000
+      claimTtlMs: 60000,
+      workerPrincipal: workerPrincipals.get(workerA)
     }),
     persistence.workflows.claimQueued({
       tenantId: 'tenant-claim',
       workerId: workerB,
       limit: 1,
-      claimTtlMs: 60000
+      claimTtlMs: 60000,
+      workerPrincipal: workerPrincipals.get(workerB)
     })
   ]);
 
@@ -824,8 +832,8 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
   });
   assert.equal(recovered.length, 1);
 
-  await persistence.workflows.releaseDispatchClaim(workflowId, workerRecovery, 'tenant-claim');
-  for (const workerId of workers) await persistence.workers.unregister(workerId, 'tenant-claim');
+  await persistence.workflows.releaseDispatchClaim(workflowId, workerRecovery, 'tenant-claim', { workerPrincipal: workerPrincipals.get(workerRecovery) });
+  for (const workerId of workers) await persistence.workers.unregister(workerId, 'tenant-claim', { workerPrincipal: workerPrincipals.get(workerId) });
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
