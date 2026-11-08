@@ -20,7 +20,14 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  const workerColumns = await pool.query(
+    "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema() AND ((table_name='worker_nodes' AND column_name='session_id') OR (table_name='workflow_dispatch_claims' AND column_name='worker_session_id'))"
+  );
+  assert.deepEqual(
+    workerColumns.rows.map(row => row.table_name + '.' + row.column_name).sort(),
+    ['worker_nodes.session_id', 'workflow_dispatch_claims.worker_session_id']
+  );
 });
 
 
