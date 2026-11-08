@@ -348,7 +348,7 @@ class OrientRuntime {
     };
   }
 
-  async getExecutionApprovals(executionId) {
+  async getExecutionApprovals(executionId, { persistencePrincipal = null } = {}) {
     if (!this.approvalService?.listForExecution) {
       throw Object.assign(new Error('Approval service is required for approval status'), {
         code: 'APPROVAL_SERVICE_REQUIRED'
@@ -363,7 +363,8 @@ class OrientRuntime {
 
     if (this.persistence?.executions?.findById) {
       const execution = await this.persistence.executions.findById(executionId, {
-        tenantId: this.tenantId
+        tenantId: this.tenantId,
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
       });
       if (!execution) {
         throw Object.assign(new Error(`Execution not found: ${executionId}`), {
