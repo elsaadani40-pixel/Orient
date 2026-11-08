@@ -376,7 +376,8 @@ class OrientRuntime {
 
     return this.approvalService.listForExecution({
       executionId,
-      tenantId: this.tenantId
+      tenantId: this.tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
   }
 
@@ -431,7 +432,7 @@ class OrientRuntime {
       throw Object.assign(new Error('Durable approval service is required'), { code: 'APPROVAL_SERVICE_REQUIRED' });
     }
     try {
-      return await this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId });
+      return await this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId, ...(options.persistencePrincipal ? { persistencePrincipal: options.persistencePrincipal } : {}) });
     } catch (error) {
       if (error?.code === 'APPROVAL_EXPIRED' && options.executionId && options.approvalId) {
         if (!(await this.isCurrentApprovalChallenge(options.executionId, options.approvalId))) {
@@ -442,7 +443,7 @@ class OrientRuntime {
             await this.persistence.executions.requestCancellation(
               options.executionId,
               'approval_expired',
-              { tenantId: options.tenantId || this.tenantId }
+              { tenantId: options.tenantId || this.tenantId, ...(options.persistencePrincipal ? { persistencePrincipal: options.persistencePrincipal } : {}) }
             );
           }
           await this.workflowExecutionCoordinator.expireApprovalWorkflow(
@@ -461,14 +462,14 @@ class OrientRuntime {
     }
   }
 
-  async listPendingApprovals({ limit = 100 } = {}) {
+  async listPendingApprovals({ limit = 100, persistencePrincipal = null } = {}) {
     if (!this.approvalService?.listPending) {
       throw Object.assign(new Error('Approval service is required for the pending inbox'), {
         code: 'APPROVAL_SERVICE_REQUIRED'
       });
     }
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
-    return this.approvalService.listPending({ tenantId: this.tenantId, limit: boundedLimit });
+    return this.approvalService.listPending({ tenantId: this.tenantId, limit: boundedLimit, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
   }
 
   async getExecutionEvents(executionId, { limit = 200, persistencePrincipal = null } = {}) {
