@@ -33,7 +33,8 @@ class AgentService {
         throw new AppError('A trusted persistence principal is required', 401, 'PERSISTENCE_PRINCIPAL_REQUIRED');
       }
       if (!ownerSessionContext || principal.sessionId !== ownerSessionContext.sessionId ||
-          principal.tenantId !== (this.runtime.tenantId || 'local')) {
+          principal.tenantId !== (this.runtime.tenantId || 'local') ||
+          principal.ownerId !== (this.runtime.userId || 'local')) {
         throw new AppError('Persistence principal does not match the authenticated task context', 403, 'PERSISTENCE_PRINCIPAL_MISMATCH');
       }
     }
