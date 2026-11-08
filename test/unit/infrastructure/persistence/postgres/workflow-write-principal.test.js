@@ -60,3 +60,25 @@ test('workflow state update rejects a replaced worker session and a stale lease'
   await assert.rejects(repoB.save(workflow(),'tenant-a',{workerPrincipal:identity()}),e=>e.code==='WORKFLOW_FENCING_REJECTED');
   assert.equal(stale.calls.some(x=>x.sql.startsWith('UPDATE workflows')),false);
 });
+
+
+test('unleased workflow writes cannot bypass a live lease by clearing the fencing token',async()=>{
+  const calls=[];
+  const db={async query(sql,values=[]){calls.push({sql,values});return{rows:[],rowCount:0};}};
+  const repo=new PostgresWorkflowRepository(db);
+  const unleased={...workflow(),metadata:{},toJSON(){return this;}};
+  await assert.rejects(repo.save(unleased,'tenant-a'),e=>e.code==='WORKFLOW_FENCING_REQUIRED');
+  assert.match(calls[0].sql,/NOT EXISTS/);
+  assert.match(calls[0].sql,/workflow_leases/);
+  assert.match(calls[0].sql,/clock_timestamp/);
+});
+
+test('unleased workflow creation and update remain possible when no active lease exists',async()=>{
+  const calls=[];
+  const db={async query(sql,values=[]){calls.push({sql,values});return{rows:[{workflow_id:'workflow-a'}],rowCount:1};}};
+  const repo=new PostgresWorkflowRepository(db);
+  const unleased={...workflow(),metadata:{},toJSON(){return this;}};
+  assert.equal(await repo.save(unleased,'tenant-a'),unleased);
+  assert.match(calls[0].sql,/NOT EXISTS/);
+  assert.match(calls[0].sql,/RETURNING workflow_id/);
+});
