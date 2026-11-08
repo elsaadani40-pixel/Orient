@@ -122,6 +122,39 @@ test('binds task idempotency lifecycle to the same authenticated persistence pri
   assert.equal(received[1].principal, persistencePrincipal);
 });
 
+test('rejects a valid principal issued for a different runtime owner before idempotency admission', async () => {
+  let admitted = false;
+  const runtime = {
+    tenantId: 'tenant-a',
+    userId: 'owner-a',
+    persistence: {
+      idempotency: {
+        begin: async () => { admitted = true; return { created: true, key: 'key' }; },
+        complete: async () => {},
+        fail: async () => {}
+      }
+    },
+    assertOwnerSessionContext: async () => true
+  };
+  const service = new AgentService(runtime);
+  const otherOwnerPrincipal = createPersistencePrincipal({
+    tenantId: 'tenant-a',
+    ownerId: 'owner-b',
+    sessionId: 'active-session'
+  });
+
+  await assert.rejects(
+    service.createTask({
+      goal: 'run a task',
+      idempotencyKey: 'different-owner-principal-key',
+      ownerSessionContext: { sessionId: 'active-session' },
+      persistencePrincipal: otherOwnerPrincipal
+    }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
+  );
+  assert.equal(admitted, false);
+});
+
 test('rejects a forged persistence principal before idempotency admission', async () => {
   let admitted = false;
   const runtime = {
