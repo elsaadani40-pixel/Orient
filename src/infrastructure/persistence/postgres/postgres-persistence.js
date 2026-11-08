@@ -795,6 +795,13 @@ class PostgresWorkflowRepository {
         if (worker.rowCount !== 1) {
           throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
         }
+        const workflow = await client.query(
+          'SELECT 1 FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+          [item.workflowId, effectiveTenant]
+        );
+        if (workflow.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+        }
         const lease = await client.query(
           `SELECT 1 FROM workflow_leases
            WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3
@@ -834,14 +841,25 @@ class PostgresWorkflowRepository {
         code: 'WORKFLOW_PERSISTENCE_PRINCIPAL_REQUIRED'
       });
     }
-    await this.db.query(
+    const result = await this.db.query(
       `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
        VALUES($1,$2,$3,$4,$5)
        ON CONFLICT(workflow_id) DO UPDATE SET
          tenant_id=EXCLUDED.tenant_id,state=EXCLUDED.state,
-         updated_at=EXCLUDED.updated_at,payload=EXCLUDED.payload`,
+         updated_at=EXCLUDED.updated_at,payload=EXCLUDED.payload
+       WHERE workflows.tenant_id=EXCLUDED.tenant_id
+         AND NOT EXISTS (
+           SELECT 1 FROM workflow_leases
+           WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp()
+         )
+       RETURNING workflow_id`,
       [item.workflowId,effectiveTenant,item.state,item.updatedAt || new Date().toISOString(),item]
     );
+    if (result.rowCount !== 1) {
+      throw Object.assign(new Error('Unleased workflow write is blocked while a worker lease is active'), {
+        code: 'WORKFLOW_FENCING_REQUIRED'
+      });
+    }
     return item;
   }
   async claimQueued({tenantId='local',workerId,limit=100,claimTtlMs=5000,workerCapabilities=[],agingQuantumMs=30000,workerPrincipal=null}={}) {
