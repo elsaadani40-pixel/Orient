@@ -1241,3 +1241,72 @@ test('PostgreSQL approval lifecycle isolates two owners and serializes competing
   assert.equal(wrongOwnerConsume, false);
 
 });
+
+
+test('PostgreSQL worker registry fences replaced process sessions', async t => {
+  const tenantId = 'tenant-worker-session-' + randomUUID();
+  const workerId = 'worker-session-' + randomUUID();
+  const principalA = makeWorkerPrincipal(tenantId, workerId);
+  const principalB = makeWorkerPrincipal(tenantId, workerId);
+  const registration = principal => ({
+    workerId,
+    tenantId,
+    status: 'READY',
+    capabilities: [],
+    heartbeatAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    metadata: {}
+  });
+
+  t.after(async () => {
+    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2', [tenantId, workerId]);
+  });
+
+  await persistence.workers.register(registration(principalA), tenantId, {
+    workerPrincipal: principalA
+  });
+  await assert.rejects(
+    persistence.workers.register(registration(principalB), tenantId, {
+      workerPrincipal: principalB
+    }),
+    error => error.code === 'WORKER_SESSION_CONFLICT'
+  );
+  await assert.rejects(
+    persistence.workers.heartbeat(workerId, {
+      tenantId,
+      workerPrincipal: principalB
+    }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+
+  await persistence.workers.heartbeat(workerId, {
+    tenantId,
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    workerPrincipal: principalA
+  });
+  await pool.query(
+    "UPDATE worker_nodes SET expires_at=NOW()-INTERVAL '1 second' WHERE tenant_id=$1 AND worker_id=$2",
+    [tenantId, workerId]
+  );
+  await persistence.workers.register(registration(principalB), tenantId, {
+    workerPrincipal: principalB
+  });
+  await assert.rejects(
+    persistence.workers.heartbeat(workerId, {
+      tenantId,
+      workerPrincipal: principalA
+    }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  await persistence.workers.heartbeat(workerId, {
+    tenantId,
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    workerPrincipal: principalB
+  });
+  assert.equal(await persistence.workers.unregister(workerId, tenantId, {
+    workerPrincipal: principalA
+  }), false);
+  assert.equal(await persistence.workers.unregister(workerId, tenantId, {
+    workerPrincipal: principalB
+  }), true);
+});
