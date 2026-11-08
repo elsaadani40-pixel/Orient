@@ -122,15 +122,15 @@ class RequestExecutionCoordinator {
       : 'tool_result';
   }
 
-  async isCancellationRequested(executionId) {
+  async isCancellationRequested(executionId, persistencePrincipal = null) {
     if (!executionId || typeof this.persistence?.executions?.findById !== 'function') return false;
-    const execution = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
+    const execution = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
     return Boolean(execution?.cancellationRequested);
   }
 
-  async reconcileCancellationAfterFailure(context, executionId, activeSnapshot = null) {
+  async reconcileCancellationAfterFailure(context, executionId, activeSnapshot = null, persistencePrincipal = null) {
     const durableExecution = typeof this.persistence?.executions?.findById === 'function'
-      ? await this.persistence.executions.findById(executionId, { tenantId: this.tenantId })
+      ? await this.persistence.executions.findById(executionId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : null;
 
     if (!durableExecution?.cancellationRequested && durableExecution?.status !== 'cancelled') {
@@ -147,9 +147,9 @@ class RequestExecutionCoordinator {
       reconciledContext.cancel(cancellationReason);
     }
 
-    const persisted = await this.persistenceCoordinator.persistExecution(reconciledContext, 'update');
-    await this.persistenceCoordinator.persistEvents(reconciledContext);
-    await this.persistenceCoordinator.checkpoint(reconciledContext, 'update', 'execution_cancelled');
+    const persisted = await this.persistenceCoordinator.persistExecution(reconciledContext, 'update', persistencePrincipal);
+    await this.persistenceCoordinator.persistEvents(reconciledContext, persistencePrincipal);
+    await this.persistenceCoordinator.checkpoint(reconciledContext, 'update', 'execution_cancelled', persistencePrincipal);
 
     return {
       context: reconciledContext,
@@ -184,7 +184,7 @@ class RequestExecutionCoordinator {
     return true;
   }
 
-  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null, persistencePrincipal = null } = {}) {
     await this.assertOwnerSessionContext(ownerSessionContext);
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
@@ -215,7 +215,7 @@ class RequestExecutionCoordinator {
     context.record('goal.created', context.goal.snapshot());
     context.metadata.tenantQuota = this.quotaPolicy.toJSON();
     context.record('request.understood', { inputLength: text.length });
-    await this.persistenceCoordinator.persistExecution(context, 'insert');
+    await this.persistenceCoordinator.persistExecution(context, 'insert', persistencePrincipal);
 
     try {
       context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
@@ -232,6 +232,7 @@ class RequestExecutionCoordinator {
         requestId,
         input: text,
         tenantId: this.tenantId,
+        persistencePrincipal,
         isCancellationRequested: async () => {
           if (ownerSessionContext !== null) {
             try {
@@ -240,7 +241,7 @@ class RequestExecutionCoordinator {
               return true;
             }
           }
-          return this.isCancellationRequested(context.executionId);
+          return this.isCancellationRequested(context.executionId, persistencePrincipal);
         },
         cancellationReason: ownerSessionContext !== null
           ? 'Owner session is no longer active'
@@ -258,7 +259,7 @@ class RequestExecutionCoordinator {
         }))
       };
       context.complete();
-      const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
+      const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update', persistencePrincipal);
 
       // Some lightweight runtimes intentionally omit an execution repository.
       // Enforce divergence checks whenever durable state is available; absence
@@ -269,8 +270,8 @@ class RequestExecutionCoordinator {
         context.requestCancellation(cancellationReason);
         context.cancel(cancellationReason);
         const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
-        await this.persistenceCoordinator.persistEvents(context);
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
         return {
           requestId,
           type: 'execution_cancelled',
@@ -336,7 +337,7 @@ class RequestExecutionCoordinator {
           summaryKind: approvalSummary.kind,
           changeCount: approvalSummary.changeCount || 0
         });
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_required');
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_required', persistencePrincipal);
         await this.persistenceCoordinator.persistEvents(context);
 
         if (this.approvalService?.issue && Number.isInteger(step) && step > 0 && tool && capability) {
@@ -366,7 +367,7 @@ class RequestExecutionCoordinator {
               changeCount: approvalSummary.changeCount || 0
             });
             error.executionContext.approvalId = issued.approvalId;
-            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issued');
+            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issued', persistencePrincipal);
             await this.persistenceCoordinator.persistEvents(context);
           } catch (issueError) {
             context.record('approval.challenge.issue_failed', {
@@ -375,7 +376,7 @@ class RequestExecutionCoordinator {
               planRevision,
               code: issueError.code || 'APPROVAL_ISSUE_FAILED'
             });
-            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issue_failed');
+            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issue_failed', persistencePrincipal);
             await this.persistenceCoordinator.persistEvents(context);
             throw issueError;
           }
@@ -387,7 +388,8 @@ class RequestExecutionCoordinator {
       const cancellationBeforeRecovery = await this.reconcileCancellationAfterFailure(
         context,
         context.executionId,
-        activeSnapshot
+        activeSnapshot,
+        persistencePrincipal
       );
       if (cancellationBeforeRecovery) {
         return {
@@ -397,7 +399,7 @@ class RequestExecutionCoordinator {
         };
       }
 
-      await this.recoveryCoordinator.fail({ context, error });
+      await this.recoveryCoordinator.fail({ context, error, persistencePrincipal });
 
       // If cancellation arrived while recovery was committing a failure, the
       // repository refuses that terminal write. Reconcile the durable intent
