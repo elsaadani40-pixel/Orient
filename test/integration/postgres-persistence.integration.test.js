@@ -4,9 +4,16 @@ const { Pool } = require('pg');
 const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOwnerWorkProfileRepository } = require('../../src/infrastructure/persistence/postgres/postgres-persistence');
 const { randomUUID } = require('node:crypto');
 const { createPersistencePrincipal } = require('../../src/infrastructure/persistence/postgres/persistence-principal');
+const { createWorkerPersistencePrincipal } = require('../../src/core/security/worker-persistence-principal');
 
 function makeOwnerPrincipal(tenantId, ownerId) {
   return createPersistencePrincipal({ tenantId, ownerId, sessionId: 'session-' + randomUUID() });
+}
+
+function makeWorkerPrincipal(tenantId, workerId, capabilities = []) {
+  return createWorkerPersistencePrincipal({
+    tenantId, workerId, sessionId: 'worker-session-' + randomUUID(), capabilities
+  });
 }
 const ApprovalService = require('../../src/core/agent/approval/approval-service');
 const AuthorizationService = require('../../src/core/agent/authorization/authorization-service');
