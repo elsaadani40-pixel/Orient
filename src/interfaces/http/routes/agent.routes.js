@@ -433,7 +433,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async resume(req, res, executionId, body, ownerSessionContext = null) {
+    async resume(req, res, executionId, body, ownerSessionContext = null, persistencePrincipal = null) {
       let options = {};
 
       if (body) {
@@ -455,7 +455,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         await agentService.assertOwnerSessionContext(ownerSessionContext);
       }
       const result =
-        await agentService.resumeExecution(executionId, options || {}, ownerSessionContext);
+        await agentService.resumeExecution(executionId, options || {}, ownerSessionContext, persistencePrincipal);
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
