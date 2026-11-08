@@ -67,6 +67,9 @@ async function ensureRole(client, name, options, password = null) {
 }
 
 async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword }) {
+  // Validate secrets before opening a connection or beginning a transaction.
+  quoteLiteral(migratorPassword);
+  quoteLiteral(runtimePassword);
   if (!pool || typeof pool.connect !== 'function') throw new TypeError('An administrative PostgreSQL pool is required.');
   const client = await pool.connect();
   const applicationTables = [
