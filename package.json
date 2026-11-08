@@ -13,7 +13,8 @@
     "start": "node app.js",
     "start:web": "node app.js",
     "start:website-standalone": "node server.js",
-    "orient": "node bin/orient.js"
+    "orient": "node bin/orient.js",
+    "db:roles": "node scripts/provision-postgres-roles.js"
   },
   "dependencies": {
     "pg": "^8.23.1"
