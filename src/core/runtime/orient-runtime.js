@@ -314,7 +314,7 @@ class OrientRuntime {
   }
 
 
-  async cancelExecution(executionId, { reason = 'Execution cancellation requested' } = {}) {
+  async cancelExecution(executionId, { reason = 'Execution cancellation requested', persistencePrincipal = null } = {}) {
     if (!this.persistence?.executions?.requestCancellation) {
       throw Object.assign(new Error('Durable execution cancellation storage is required'), {
         code: 'EXECUTION_CANCELLATION_STORAGE_REQUIRED'
@@ -327,7 +327,7 @@ class OrientRuntime {
     const requested = await this.persistence.executions.requestCancellation(
       executionId,
       reason,
-      { tenantId: this.tenantId }
+      { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) }
     );
 
     if (!requested) {
