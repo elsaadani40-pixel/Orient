@@ -110,6 +110,10 @@ async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword 
     await ensureRole(client, 'orient_runtime_login', 'LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', runtimePassword);
     await normalizeManagedRoleMemberships(client);
     await client.query('GRANT orient_owner TO orient_migrator');
+    // PostgreSQL requires the active administrator to be a member of the
+    // destination role when transferring existing object ownership. Grant
+    // this membership only for the transaction and revoke it before commit.
+    await client.query('GRANT orient_owner TO CURRENT_USER');
     await client.query('GRANT orient_runtime TO orient_runtime_login');
     await client.query('GRANT USAGE, CREATE ON SCHEMA public TO orient_owner');
     await client.query('GRANT USAGE ON SCHEMA public TO orient_runtime');
@@ -130,6 +134,7 @@ async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword 
     for (const row of sequences.rows) {
       await client.query('ALTER SEQUENCE public.' + row.sequence_name + ' OWNER TO orient_owner');
     }
+    await client.query('REVOKE orient_owner FROM CURRENT_USER');
     await client.query('COMMIT');
     return {
       ownerRole: 'orient_owner',
