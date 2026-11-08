@@ -167,39 +167,10 @@ test('CREATEROLE administrator provisions successfully when it owns the existing
     assert.equal(ownership.rows[0].count, 3);
   } finally {
     if (limitedPool) await limitedPool.end();
-    const owned = await adminPool.query(`
-      SELECT c.relname, c.relkind
-      FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-      WHERE r.rolname = 'orient_owner'
-        AND c.relnamespace = 'public'::regnamespace
-        AND c.relkind IN ('r','S')
-    `);
-    for (const row of owned.rows) {
-      const identifier = '"' + row.relname.replace(/"/g, '""') + '"';
-      await adminPool.query('ALTER ' + (row.relkind === 'S' ? 'SEQUENCE' : 'TABLE') + ' public.' + identifier + ' OWNER TO postgres');
-    }
-    const existingRoles = await adminPool.query(
-      'SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])',
-      [['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner']]
-    );
-    const roleNames = new Set(existingRoles.rows.map(row => row.rolname));
-    if (roleNames.has('orient_owner') && roleNames.has('orient_migrator')) {
-      await adminPool.query('REVOKE orient_owner FROM orient_migrator');
-    }
-    if (roleNames.has('orient_runtime') && roleNames.has('orient_runtime_login')) {
-      await adminPool.query('REVOKE orient_runtime FROM orient_runtime_login');
-    }
-    for (const row of existingRoles.rows) {
-      const identifier = '"' + row.rolname.replace(/"/g, '""') + '"';
-      await adminPool.query('DROP OWNED BY ' + identifier);
-    }
-    for (const role of ['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner']) {
-      await adminPool.query('DROP ROLE IF EXISTS "' + role + '"');
-    }
-    // The temporary CREATEROLE administrator is intentionally left in this
-    // disposable CI database; the PostgreSQL service container is destroyed
-    // after the job. Avoid DROP OWNED on the role because it is the grantor
-    // recorded for the role memberships created during this test.
+    // This scenario intentionally leaves its role and database-owner state in
+    // the disposable PostgreSQL service container. The container is destroyed
+    // when the integration job completes, avoiding brittle cleanup of the
+    // grantor dependency graph that the test is specifically exercising.
     await adminPool.end();
   }
 });
