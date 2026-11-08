@@ -1,0 +1,6 @@
+# Vercel project rootDirectory is website/. Keep owner and account pages out of
+# the public static deployment: these pages must be served only by the authenticated
+# ORIENT application server, never as directly addressable static assets.
+/owner.html
+/dashboard.html
+/account.html
