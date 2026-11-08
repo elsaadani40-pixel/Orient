@@ -515,7 +515,12 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   await persistence.workflows.save(instance, tenantId);
   await persistence.tenantQuotas.ensureTenant(tenantId, policy);
 
-  await persistence.workers.register({ workerId: 'worker', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+  const quotaWorkerPrincipalA = makeWorkerPrincipal(tenantId, 'quota-worker-a');
+  const quotaWorkerPrincipalB = makeWorkerPrincipal(tenantId, 'quota-worker-b');
+  await persistence.workers.register({
+    workerId: 'quota-worker-b', tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: quotaWorkerPrincipalB });
 
   const schedulerA = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
@@ -535,7 +540,7 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   });
 
   await schedulerA.enqueueDurable(instance);
-  const leaseA = await schedulerA.leaseAsync('quota-worker-a');
+  const leaseA = await schedulerA.leaseAsync('quota-worker-a', [], quotaWorkerPrincipalA);
   assert.ok(leaseA);
 
   const beforeTakeover = await persistence.tenantQuotas.snapshot({ tenantId });
@@ -550,9 +555,9 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
     [workflowId, tenantId]
   );
 
-  const recovered = await schedulerB.recoverPersisted();
+  const recovered = await schedulerB.recoverPersisted('quota-worker-b', [], quotaWorkerPrincipalB);
   assert.equal(recovered, 1);
-  const leaseB = await schedulerB.leaseAsync('quota-worker-b');
+  const leaseB = await schedulerB.leaseAsync('quota-worker-b', [], quotaWorkerPrincipalB);
   assert.ok(leaseB);
   assert.ok(leaseB.fencingToken > leaseA.fencingToken);
 
@@ -570,6 +575,7 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   const finalSnapshot = await persistence.tenantQuotas.snapshot({ tenantId });
   assert.deepEqual(finalSnapshot, { tenantId, active: 0, queued: 0 });
 
+  await persistence.workers.unregister('quota-worker-b', tenantId, { workerPrincipal: quotaWorkerPrincipalB });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM tenant_quota_reservations WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
