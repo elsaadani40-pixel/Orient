@@ -252,22 +252,33 @@ class PostgresEventRepository {
     };
   }
 
-  async append(event, { tenantId = null } = {}) {
-    const normalized = this.normalize(event, tenantId);
-    await this.db.query(
-      `INSERT INTO events(event_id,tenant_id,execution_id,goal_id,type,timestamp,payload)
-       VALUES($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT(event_id) DO NOTHING`,
-      [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId, normalized.type, normalized.timestamp, normalized]
-    );
-    return normalized;
+  async append(event, { tenantId = null, persistencePrincipal = null } = {}) {
+    const inserted = await this.appendMany([event], { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
+    return inserted[0] || this.normalize(event, tenantId);
   }
 
-  async appendMany(events, { tenantId = null } = {}) {
+  async appendMany(events, { tenantId = null, persistencePrincipal = null } = {}) {
     const inserted = [];
-    await this.db.transaction(async client => {
+    const effectiveTenant = tenantOrLocal(tenantId);
+    const persist = async client => {
       for (const event of events || []) {
-        const normalized = this.normalize(event, tenantId);
+        const normalized = this.normalize(event, effectiveTenant);
+        if (persistencePrincipal) {
+          if (!normalized.executionId) {
+            throw Object.assign(new Error('Owner-scoped events require an execution ID'), {
+              code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+            });
+          }
+          const ownerExecution = await client.query(
+            "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+            [normalized.executionId, effectiveTenant, persistencePrincipal.ownerId]
+          );
+          if (!ownerExecution.rows.length) {
+            throw Object.assign(new Error('Event execution is not owned by the persistence principal'), {
+              code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+            });
+          }
+        }
         const result = await client.query(
           `INSERT INTO events(event_id,tenant_id,execution_id,goal_id,type,timestamp,payload)
            VALUES($1,$2,$3,$4,$5,$6,$7)
@@ -276,7 +287,12 @@ class PostgresEventRepository {
         );
         if (result.rowCount === 1) inserted.push(normalized);
       }
-    });
+    };
+    if (persistencePrincipal) {
+      await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Event principal', persist);
+    } else {
+      await this.db.transaction(persist);
+    }
     return inserted;
   }
 
