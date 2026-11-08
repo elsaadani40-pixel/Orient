@@ -111,7 +111,9 @@ test('CREATEROLE administrator provisions successfully when it owns the existing
     await adminPool.query(
       "CREATE ROLE orient_provisioner LOGIN CREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'"
     );
-    await adminPool.query('GRANT pg_database_owner TO orient_provisioner');
+    const databaseName = new URL(process.env.DATABASE_URL).pathname.slice(1);
+    const quotedDatabaseName = '"' + databaseName.replace(/"/g, '""') + '"';
+    await adminPool.query('ALTER DATABASE ' + quotedDatabaseName + ' OWNER TO orient_provisioner');
     const applicationTables = [
       'schema_migrations','executions','events','idempotency','checkpoints','execution_evidence',
       'execution_resume_leases','workflows','workflow_leases','workflow_dispatch_claims',
