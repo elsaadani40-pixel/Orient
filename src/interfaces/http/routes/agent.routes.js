@@ -83,7 +83,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
     },
 
     async task(req, res, executionId, persistencePrincipal = null) {
-      const result = await agentService.getExecutionStatus(executionId, { persistencePrincipal });
+      const result = await agentService.getExecutionStatus(executionId, persistencePrincipal ? { persistencePrincipal } : {});
       // Deliberately omit tenant identifiers and raw execution results from the
       // cross-device task summary. Detailed output requires a separately governed API.
       const task = {
@@ -108,9 +108,9 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
 
     async taskResponse(req, res, executionId, persistencePrincipal = null) {
       const result = await agentService.getExecutionStatus(executionId, { persistencePrincipal });
-      const events = await agentService.getExecutionEvents(executionId, { limit: 100, persistencePrincipal });
+      const events = await agentService.getExecutionEvents(executionId, { limit: 100, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       const approvals = typeof agentService.getExecutionApprovals === 'function'
-        ? await agentService.getExecutionApprovals(executionId, { persistencePrincipal })
+        ? await agentService.getExecutionApprovals(executionId, persistencePrincipal ? { persistencePrincipal } : {})
         : [];
       const evidenceReferences = (Array.isArray(events) ? events : [])
         .filter(event => typeof event?.id === 'string' && event.id.length > 0)
@@ -124,7 +124,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       // results, plans, inputs, observations, and tool payloads never leave this boundary.
       let finalAnswer = { text: null, status: result.status === 'completed' ? 'unavailable' : 'pending' };
       if (result.status === 'completed' && typeof agentService.getFinalAnswer === 'function') {
-        const candidate = await agentService.getFinalAnswer(executionId, { persistencePrincipal });
+        const candidate = await agentService.getFinalAnswer(executionId, persistencePrincipal ? { persistencePrincipal } : {});
         // Treat the persistence adapter as a trust boundary too: malformed,
         // empty, or oversized answers must not turn a completed task into a 500
         // or leak an unvalidated value into the public response contract.
@@ -170,7 +170,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       // The service scopes the execution and its events to the runtime tenant.
       // Only the newest 200 events are currently retrievable; if a cursor falls
       // outside that window, report a gap instead of silently skipping history.
-      const events = await agentService.getExecutionEvents(executionId, { limit: 200, persistencePrincipal });
+      const events = await agentService.getExecutionEvents(executionId, { limit: 200, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       let startIndex = 0;
       if (after !== null) {
         const cursorIndex = events.findIndex(event => String(event.id) === after);
