@@ -363,6 +363,11 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
   instance.transition('RUNNING');
   await persistence.workflows.save(instance, 'tenant-recovery');
 
+  const crashedPrincipal = makeWorkerPrincipal('tenant-recovery', 'crashed-worker');
+  await persistence.workers.register({
+    workerId: 'crashed-worker', tenantId: 'tenant-recovery', status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, 'tenant-recovery', {workerPrincipal:crashedPrincipal});
   const firstLease = await persistence.workflowLeases.tryAcquire({
     workflowId,
     leaseId: 'crash-lease-a-' + Date.now(),
@@ -370,7 +375,7 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
     acquiredAt: Date.now(),
     expiresAt: Date.now() + 30000,
     metadata: { tenantId: 'tenant-recovery' }
-  }, 'tenant-recovery');
+  }, 'tenant-recovery', {workerPrincipal:crashedPrincipal});
 
   await pool.query(
     "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
@@ -407,6 +412,7 @@ test('PostgreSQL crash recovery requeues an orphaned running workflow after leas
 
   await scheduler.releaseAsync(workflowId, takeover.leaseId);
   await persistence.workers.unregister('recovery-worker', 'tenant-recovery', { workerPrincipal: recoveryPrincipal });
+  await persistence.workers.unregister('crashed-worker', 'tenant-recovery', { workerPrincipal: crashedPrincipal });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
@@ -742,6 +748,11 @@ test('PostgreSQL worker lease cannot resurrect a durably cancelled workflow', as
     [workflowId, { workflowId, tenantId: 'tenant-cancel', state: 'CANCELLED', cancelRequested: true, metadata: {} }]
   );
 
+  const cancelPrincipal = makeWorkerPrincipal('tenant-cancel', 'worker-cancel');
+  await persistence.workers.register({
+    workerId: 'worker-cancel', tenantId: 'tenant-cancel', status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, 'tenant-cancel', {workerPrincipal:cancelPrincipal});
   await assert.rejects(
     () => persistence.workflowLeases.tryAcquire({
       workflowId,
@@ -750,9 +761,10 @@ test('PostgreSQL worker lease cannot resurrect a durably cancelled workflow', as
       acquiredAt: Date.now(),
       expiresAt: Date.now() + 30000,
       metadata: { tenantId: 'tenant-cancel' }
-    }, 'tenant-cancel'),
+    }, 'tenant-cancel', {workerPrincipal:cancelPrincipal}),
     error => error.code === 'WORKFLOW_CANCELLATION_REQUESTED'
   );
+  await persistence.workers.unregister('worker-cancel','tenant-cancel',{workerPrincipal:cancelPrincipal});
 
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
