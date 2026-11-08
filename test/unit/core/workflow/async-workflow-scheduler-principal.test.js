@@ -50,7 +50,7 @@ test('scheduler preserves fencing metadata when durable lease release reports lo
   const saves=[];
   const scheduler=new AsyncWorkflowScheduler({
     tenantId:'tenant-a',
-    workflowRepository:{async save(instance,tenantId,options){saves.push({instance,tenantId,options});return instance;}}
+    workflowRepository:{async save(instance,tenantId,options){saves.push({instance,tenantId,options});throw Object.assign(new Error('another worker now owns the workflow'),{code:'WORKFLOW_FENCING_REQUIRED'});}}
   });
   const instance={workflowId:'workflow-stale-release',tenantId:'tenant-a',state:'WAITING',metadata:{fencingToken:29}};
   const principal=createWorkerPersistencePrincipal({
@@ -60,7 +60,8 @@ test('scheduler preserves fencing metadata when durable lease release reports lo
   scheduler.active.set(instance.workflowId,{instance,leaseId:'lease-stale',fencingToken:29,workerPrincipal:principal});
   scheduler.leaseStore.release=async()=>({released:false});
   assert.equal(await scheduler.releaseAsync(instance.workflowId,'lease-stale'),false);
-  assert.equal(instance.metadata.fencingToken,29);
+  assert.equal('fencingToken' in instance.metadata,false);
   assert.equal(scheduler.active.has(instance.workflowId),false);
-  assert.equal(saves.length,0);
+  assert.equal(saves.length,1);
+  assert.equal(saves[0].options.workerPrincipal,null);
 });
