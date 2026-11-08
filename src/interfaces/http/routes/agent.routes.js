@@ -18,7 +18,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       const result = await agentService.createTask({
         goal: payload.goal,
         idempotencyKey,
-        ownerSessionContext
+        ownerSessionContext,
+        persistencePrincipal
       });
       if (typeof onTaskCreated === 'function' && typeof result.task?.id === 'string' &&
           typeof req?.ownerChatMessageId === 'string') {
