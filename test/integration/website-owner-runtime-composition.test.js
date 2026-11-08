@@ -95,7 +95,8 @@ test('website owner session creates and reads a task through the real Runtime', 
     memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('home'); } },
     agentRoutes: createAgentRoutes(new AgentService(runtime)),
     ownerAuth,
-    websiteHandler: website.handler
+    websiteHandler: website.handler,
+    tenantId: 'website-runtime-test'
   });
 
   t.after(async () => {
