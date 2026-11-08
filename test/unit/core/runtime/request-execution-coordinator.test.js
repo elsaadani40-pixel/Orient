@@ -867,7 +867,8 @@ test('preserves the owner persistence principal when cancellation wins after fai
       }
     },
     persistenceCoordinator: {
-      persistExecution: async (_context, mode, receivedPrincipal) => {
+      persistExecution: async (context, mode, receivedPrincipal) => {
+        if (mode === 'insert') return context.snapshot();
         persistCalls.push(['execution', mode, receivedPrincipal]);
         return { status: 'cancelled', cancellationRequested: true };
       },
