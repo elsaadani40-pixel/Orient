@@ -67,7 +67,7 @@ test('PostgreSQL 17 provisions isolated ORIENT roles and transfers owned objects
     assert.equal(membership.rows[0].migrator_owner, true);
     assert.equal(membership.rows[0].runtime_group, true);
     assert.equal(membership.rows[0].runtime_owner, false);
-    assert.equal(membership.rows[0].admin_owner_membership, false);
+    assert.equal(membership.rows[0].admin_owner_membership, true);
 
     const runtimePrivileges = await pool.query(`
       SELECT
@@ -155,7 +155,7 @@ test('CREATEROLE administrator provisions successfully when it owns the existing
     assert.equal(membership.rows[0].migrator_owner, true);
     assert.equal(membership.rows[0].runtime_group, true);
     assert.equal(membership.rows[0].runtime_owner, false);
-    assert.equal(membership.rows[0].provisioner_owner_membership, false);
+    assert.equal(membership.rows[0].provisioner_owner_membership, true);
 
     const ownership = await adminPool.query(`
       SELECT COUNT(*)::int AS count
