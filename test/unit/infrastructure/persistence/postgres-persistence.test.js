@@ -11,6 +11,7 @@ const {
   PostgresCheckpointRepository
 } = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
 const PostgresTenantQuotaRepository = require('../../../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
+const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
 
 function fakeDb(responses = []) {
   const calls = [];
@@ -20,6 +21,7 @@ function fakeDb(responses = []) {
       calls.push({ text, values });
       return responses.shift() || { rows: [], rowCount: 0 };
     },
+    async transactionWithWorkerPrincipal(principal, work) { return this.transaction(work); },
     async transaction(work) {
       const client = {
         query: async (text, values = []) => {
@@ -89,8 +91,16 @@ test('Postgres persistence rejects cross-tenant writes before SQL execution', as
 
 
 test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
-  const db = fakeDb([{ rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 }, { rows: [], rowCount: 0 }, { rows: [{ fencing_token: '7' }], rowCount: 1 }]);
+  const db = fakeDb([
+    { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ fencing_token: '7' }], rowCount: 1 }
+  ]);
   const repo = new PostgresWorkflowLeaseRepository(db);
+  const workerPrincipal = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-a', workerId: 'worker-1', sessionId: 'session-1', capabilities: []
+  });
   const lease = await repo.tryAcquire({
     workflowId: 'wf-1',
     leaseId: 'lease-1',
@@ -98,7 +108,7 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
     acquiredAt: Date.now(),
     expiresAt: Date.now() + 30000,
     metadata: { tenantId: 'tenant-a' }
-  }, 'tenant-a');
+  }, 'tenant-a', { workerPrincipal });
   assert.equal(lease.fencingToken, 7);
   const insertCall = db.calls.find(call => call.text.includes('INSERT INTO workflow_leases'));
   assert.ok(insertCall);
