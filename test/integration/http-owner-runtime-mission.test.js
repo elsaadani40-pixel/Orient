@@ -75,6 +75,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     approvalService,
     persistence,
     tenantId: 'tenant-owner-runtime',
+    userId: 'owner',
     agentRegistry,
     approvalDecisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId),
     ownerSessionAuthorizer: sessionId => ownerAuth.isActiveSession(sessionId)
