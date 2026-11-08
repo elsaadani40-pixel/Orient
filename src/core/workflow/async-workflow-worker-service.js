@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { createWorkerPersistencePrincipal } = require('../security/worker-persistence-principal');
 
 class AsyncWorkflowWorkerService {
   constructor({
@@ -38,6 +39,12 @@ class AsyncWorkflowWorkerService {
     this.workerTtlMs = workerTtlMs;
     this.workerHeartbeatIntervalMs = workerHeartbeatIntervalMs || Math.max(1000, Math.floor(workerTtlMs / 3));
     this.workerCapabilities = [...workerCapabilities];
+    this.workerPrincipal = createWorkerPersistencePrincipal({
+      tenantId: this.scheduler.tenantId || 'local',
+      workerId: this.workerId,
+      sessionId: crypto.randomUUID(),
+      capabilities: this.workerCapabilities
+    });
     this.workerMetadata = { ...workerMetadata };
     this.running = false;
     this.timer = null;
@@ -69,6 +76,7 @@ class AsyncWorkflowWorkerService {
           capabilities: this.workerCapabilities,
           metadata: this.workerMetadata
         }, this.scheduler.tenantId || 'local')
+      , { workerPrincipal: this.workerPrincipal })
       ).then(() => {
         this.workerRegistered = true;
         return true;
@@ -87,7 +95,8 @@ class AsyncWorkflowWorkerService {
       tenantId: this.scheduler.tenantId || 'local',
       heartbeatAt: new Date(now).toISOString(),
       expiresAt: new Date(now + this.workerTtlMs).toISOString(),
-      status: 'READY'
+      status: 'READY',
+      workerPrincipal: this.workerPrincipal
     });
   }
 
@@ -95,7 +104,8 @@ class AsyncWorkflowWorkerService {
     if (!this.workerRegistry?.unregister || !this.workerRegistered) return false;
     const removed = await this.workerRegistry.unregister(
       this.workerId,
-      this.scheduler.tenantId || 'local'
+      this.scheduler.tenantId || 'local',
+      { workerPrincipal: this.workerPrincipal }
     );
     this.workerRegistered = false;
     return removed;
@@ -113,11 +123,11 @@ class AsyncWorkflowWorkerService {
           typeof this.scheduler.recoverPersisted === 'function' &&
           (this.lastRecoveryAt === null || now - this.lastRecoveryAt >= this.recoveryIntervalMs)
         ) {
-          await this.scheduler.recoverPersisted(this.workerId, this.workerCapabilities);
+          await this.scheduler.recoverPersisted(this.workerId, this.workerCapabilities, this.workerPrincipal);
           this.lastRecoveryAt = now;
         }
 
-        const worker = this.workerFactory(this.workerId, this.workerCapabilities);
+        const worker = this.workerFactory(this.workerId, this.workerCapabilities, this.workerPrincipal);
         if (!worker || typeof worker.tick !== 'function') {
           throw new TypeError('workerFactory must return a worker with tick()');
         }
