@@ -1,18 +1,14 @@
 -- ORIENT runtime schema v9: tenant-scope owner chat and work profiles.
 -- Existing v8 rows are retained and assigned to the legacy 'local' tenant.
--- The temporary defaults backfill existing rows; they are removed so future
--- writes must provide an explicit trusted tenant identifier.
+-- The local defaults both backfill v8 rows and preserve compatibility during
+-- the staged HTTP-principal rollout. Tenant-aware callers must pass tenant_id;
+-- defaults will be removed only after every repository path is principal-bound.
 BEGIN;
 
 ALTER TABLE public.owner_chat_messages
   ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'local';
 ALTER TABLE public.owner_work_profiles
   ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'local';
-
-ALTER TABLE public.owner_chat_messages
-  ALTER COLUMN tenant_id DROP DEFAULT;
-ALTER TABLE public.owner_work_profiles
-  ALTER COLUMN tenant_id DROP DEFAULT;
 
 ALTER TABLE public.owner_chat_messages
   DROP CONSTRAINT IF EXISTS owner_chat_messages_pkey;
