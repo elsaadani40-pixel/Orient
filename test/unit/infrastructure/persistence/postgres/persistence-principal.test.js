@@ -5,8 +5,8 @@ const assert = require('node:assert/strict');
 const {
   createPersistencePrincipal,
   assertPersistencePrincipal
-} = require('../../../../src/infrastructure/persistence/postgres/persistence-principal');
-const { PostgresDatabase } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
+} = require('../../../../../src/infrastructure/persistence/postgres/persistence-principal');
+const { PostgresDatabase } = require('../../../../../src/infrastructure/persistence/postgres/postgres-database');
 
 function createPoolHarness({ failAt = null } = {}) {
   const calls = [];
