@@ -66,6 +66,25 @@ async function ensureRole(client, name, options, password = null) {
   await client.query(statement);
 }
 
+async function assertPublicSchemaOwnerAuthority(client) {
+  const result = await client.query(`
+    SELECT role.rolsuper AS is_superuser,
+           owner_role.rolname AS schema_owner,
+           pg_has_role(session_user, owner_role.rolname, 'MEMBER') AS is_schema_owner_member
+    FROM pg_roles role
+    JOIN pg_namespace namespace ON namespace.nspname = 'public'
+    JOIN pg_roles owner_role ON owner_role.oid = namespace.nspowner
+    WHERE role.rolname = session_user
+  `);
+  const identity = result.rows?.[0];
+  if (!identity || (!identity.is_superuser && identity.is_schema_owner_member !== true)) {
+    throw Object.assign(
+      new Error('PostgreSQL provisioning login must own the public schema or be a member of its owning role to grant schema privileges to ORIENT roles.'),
+      { code: 'PERSISTENCE_ROLE_SCHEMA_AUTHORITY_INVALID', details: identity || {} }
+    );
+  }
+}
+
 async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword }) {
   // Validate secrets before opening a connection or beginning a transaction.
   quoteLiteral(migratorPassword);
@@ -91,6 +110,7 @@ async function provisionPostgresRoles({ pool, migratorPassword, runtimePassword 
     await client.query('GRANT orient_owner TO CURRENT_USER');
     await client.query('GRANT orient_runtime TO orient_runtime_login');
     await assertExpectedRoleMemberships(client);
+    await assertPublicSchemaOwnerAuthority(client);
     await client.query('GRANT USAGE, CREATE ON SCHEMA public TO orient_owner');
     await client.query('GRANT USAGE ON SCHEMA public TO orient_runtime');
     await client.query('REVOKE CREATE ON SCHEMA public FROM orient_runtime');
