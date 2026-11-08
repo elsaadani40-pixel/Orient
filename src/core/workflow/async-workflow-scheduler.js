@@ -67,6 +67,11 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
   if(this.quotaRepository)await this.quotaRepository.releaseWorkflow({tenantId:this.tenantId,workflowId:id,fencingToken:active.fencingToken});
   this.active.delete(id);this.clearReleasedFencingMetadata(active);return true;
  }
+ persist(instance){
+  // WorkflowScheduler.enqueue() invokes persistence synchronously. The async
+  // scheduler persists explicitly after acquiring the correct dispatch/lease authority.
+  return instance;
+ }
  async persistAsync(instance,workerPrincipal=null){if(this.workflowRepository?.save){const active=this.active.get(instance.workflowId);const principal=workerPrincipal||active?.workerPrincipal||null;await this.workflowRepository.save(instance,this.tenantId||instance.tenantId||null,{workerPrincipal:principal});}}
  async compensateAsync(instance,actions=[]){if(!instance||typeof instance.beginCompensation!=='function')throw new TypeError('workflow instance is required');instance.beginCompensation();for(const action of actions){if(!action?.id||typeof action.execute!=='function')continue;instance.recordCompensationAction({id:action.id,stepId:action.stepId||null,idempotencyKey:action.idempotencyKey||action.id});if(instance.compensation.completed.includes(action.id))continue;try{await action.execute();instance.markCompensationCompleted(action.id);await this.persistAsync(instance);}catch(error){instance.markCompensationFailed(action.id,error);await this.persistAsync(instance);throw error;}}return instance;}
  async retryAsync(instance,{priority=0,error,delayMs=null}={}){const next=instance.retry.attempt+1;if(next>this.maxRetries)return false;instance.retry.attempt=next;instance.retry.lastError={code:error?.code||'WORKFLOW_RETRY',message:error?.message||String(error)};const backoff=delayMs==null?Math.min(this.maxBackoffMs,this.baseBackoffMs*2**(next-1)):Math.max(0,delayMs);instance.retry.nextAttemptAt=new Date(this.clock()+backoff).toISOString();instance.resetStepForRetry(instance.metadata.failedStepId);if(instance.state==='RUNNING')instance.transition('WAITING');if(this.quotaRepository)await this.quotaRepository.queueWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId});await this.enqueueDurable(instance,{priority,deadlineAt:instance.deadlineAt,delayMs:backoff});return true;}
