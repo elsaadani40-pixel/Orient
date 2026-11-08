@@ -261,11 +261,12 @@ class OrientRuntime {
     return workflow.metadata?.approvalId === approvalId;
   }
 
-  async resume(executionId, options = {}, ownerSessionContext = null) {
+  async resume(executionId, options = {}, ownerSessionContext = null, persistencePrincipal = null) {
     try {
       const result = await this.requestExecutionCoordinator.resume(executionId, {
         ...options,
-        ownerSessionContext
+        ownerSessionContext,
+        persistencePrincipal
       });
       await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result);
       return result;
@@ -283,7 +284,7 @@ class OrientRuntime {
           const requested = await this.persistence.executions.requestCancellation(
             executionId,
             'approval_expired',
-            { tenantId: this.tenantId }
+            { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) }
           );
           if (!requested) {
             throw Object.assign(new Error('Expired approval execution was not found'), {
@@ -304,7 +305,7 @@ class OrientRuntime {
           error.executionContext.approvalId
         );
       } else if (typeof this.persistence?.executions?.findById === 'function') {
-        const durable = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
+        const durable = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         if (durable && ['completed', 'failed', 'cancelled'].includes(String(durable.status || '').toLowerCase())) {
           await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, { execution: durable });
         }
