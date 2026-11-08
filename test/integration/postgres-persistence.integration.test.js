@@ -38,6 +38,42 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
 });
 
 
+test('PostgreSQL workflow repository enforces owner isolation for reads and writes', async () => {
+  await persistence.initialize();
+  const tenantId = 'tenant-workflow-owner-' + randomUUID();
+  const workflowId = 'workflow-owner-' + randomUUID();
+  const ownerA = makeOwnerPrincipal(tenantId, 'owner-a');
+  const ownerB = makeOwnerPrincipal(tenantId, 'owner-b');
+  const instance = {
+    workflowId, tenantId, userId: 'owner-a', workspaceId: 'workspace-a',
+    state: 'WAITING', updatedAt: new Date().toISOString(), metadata: {},
+    toJSON() { return { ...this }; }
+  };
+  try {
+    await persistence.workflows.save(instance, tenantId, { persistencePrincipal: ownerA });
+    assert.equal((await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerA })).userId, 'owner-a');
+    assert.equal(await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerB }), null);
+    assert.deepEqual(await persistence.workflows.findAll({ tenantId, persistencePrincipal: ownerB }), []);
+    assert.equal(await persistence.workflows.findByApprovalExecutionId({
+      executionId: workflowId, tenantId, persistencePrincipal: ownerB
+    }), null);
+
+    await assert.rejects(
+      persistence.workflows.save({ ...instance, userId: 'owner-b' }, tenantId, { persistencePrincipal: ownerB }),
+      error => error.code === 'WORKFLOW_NOT_FOUND'
+    );
+    await assert.rejects(
+      persistence.workflows.save({ ...instance, userId: 'owner-b', workflowId: workflowId + '-new' }, tenantId, { persistencePrincipal: ownerA }),
+      error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
+    );
+    const updated = { ...instance, state: 'COMPLETED', updatedAt: new Date().toISOString() };
+    await persistence.workflows.save(updated, tenantId, { persistencePrincipal: ownerA });
+    assert.equal((await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerA })).state, 'COMPLETED');
+  } finally {
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  }
+});
+
 test('PostgreSQL v9 upgrades populated v8 owner tables without losing rows and isolates tenant keys', async () => {
   const { MIGRATIONS } = require('../../src/infrastructure/persistence/postgres/postgres-database');
   const migration = MIGRATIONS.find(item => item.version === 9);
