@@ -5,7 +5,7 @@ const { URL } = require('url');
 const AppError = require('../../core/errors/AppError');
 const logger = require('../../core/logging/logger');
 const { createAccessAuditEvent } = require('../../core/security/access-audit-event');
-const { createPersistencePrincipal } = require('../../infrastructure/persistence/postgres/persistence-principal');
+const { createPersistencePrincipal } = require('../../core/security/persistence-principal');
 
 function readBody(req, maxBytes = 1024 * 1024) {
   return new Promise((resolve, reject) => {
