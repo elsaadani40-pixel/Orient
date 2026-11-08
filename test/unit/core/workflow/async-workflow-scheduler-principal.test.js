@@ -83,3 +83,26 @@ test('enqueueDurable persists once through the async scheduler path, not the bas
   assert.equal(calls[0].instance,instance);
   assert.equal(calls[0].tenantId,'tenant-a');
 });
+
+
+test('scheduler uses dispatch-claim authority for queued recovery mutations',async()=>{
+  const calls=[];
+  const scheduler=new AsyncWorkflowScheduler({
+    tenantId:'tenant-a',
+    workflowRepository:{
+      async save(instance,tenantId,options){calls.push({kind:'save',instance,tenantId,options});return instance;},
+      async releaseDispatchClaim(workflowId,workerId,tenantId,options){calls.push({kind:'release',workflowId,workerId,tenantId,options});return true;}
+    }
+  });
+  const instance={workflowId:'workflow-recovered',tenantId:'tenant-a',state:'QUEUED',metadata:{}};
+  const principal=createWorkerPersistencePrincipal({
+    tenantId:'tenant-a',workerId:'worker-a',sessionId:'session-a',capabilities:[]
+  });
+  scheduler.dispatchClaims.set(instance.workflowId,principal);
+  await scheduler.persistAsync(instance);
+  assert.equal(calls[0].options.workerPrincipal,principal);
+  assert.equal(calls[0].options.dispatchClaim,true);
+  await scheduler.releaseDispatchClaimAsync(instance.workflowId,'worker-a',principal);
+  assert.equal(calls[1].kind,'release');
+  assert.equal(scheduler.dispatchClaims.has(instance.workflowId),false);
+});
