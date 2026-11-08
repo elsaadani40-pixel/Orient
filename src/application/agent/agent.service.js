@@ -1,11 +1,12 @@
 const AppError = require('../../core/errors/AppError');
+const { assertPersistencePrincipal } = require('../../core/security/persistence-principal');
 
 class AgentService {
   constructor(runtime) {
     this.runtime = runtime;
   }
 
-  async createTask({ goal, idempotencyKey, ownerSessionContext = null } = {}) {
+  async createTask({ goal, idempotencyKey, ownerSessionContext = null, persistencePrincipal = null } = {}) {
     const clean = typeof goal === 'string' ? goal.trim() : '';
     if (!clean) {
       throw new AppError('الهدف مطلوب', 400, 'TASK_GOAL_REQUIRED');
@@ -22,6 +23,19 @@ class AgentService {
         throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
       }
       await this.runtime.assertOwnerSessionContext(ownerSessionContext);
+    }
+
+    if (persistencePrincipal !== null) {
+      let principal;
+      try {
+        principal = assertPersistencePrincipal(persistencePrincipal);
+      } catch (_) {
+        throw new AppError('A trusted persistence principal is required', 401, 'PERSISTENCE_PRINCIPAL_REQUIRED');
+      }
+      if (!ownerSessionContext || principal.sessionId !== ownerSessionContext.sessionId ||
+          principal.tenantId !== (this.runtime.tenantId || 'local')) {
+        throw new AppError('Persistence principal does not match the authenticated task context', 403, 'PERSISTENCE_PRINCIPAL_MISMATCH');
+      }
     }
 
     const repository = this.runtime.persistence?.idempotency;
@@ -41,7 +55,8 @@ class AgentService {
       tool: 'api.v1.tasks.create:' + requestDigest,
       planRevision: 1,
       operationId,
-      tenantId
+      tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
 
     if (!begun.created) {
@@ -94,7 +109,7 @@ class AgentService {
         await repository.fail(begun.key, {
           code: error?.code || 'TASK_CREATION_FAILED',
           message: error?.message || 'Task creation failed'
-        }, { tenantId });
+        }, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       } catch (_) {
         // Preserve the original runtime error; the durable running record still
         // prevents a retry from silently executing the same key a second time.
@@ -102,7 +117,7 @@ class AgentService {
       throw error;
     }
 
-    await repository.complete(begun.key, task, { tenantId });
+    await repository.complete(begun.key, task, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
     return { task, replayed: false };
   }
 
