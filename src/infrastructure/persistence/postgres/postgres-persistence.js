@@ -772,7 +772,7 @@ class PostgresWorkflowRepository {
 
     if (dispatchClaim) {
       const principal = assertWorkerPersistencePrincipal(workerPrincipal);
-      if (fencingToken > 0 || principal.tenantId !== effectiveTenant) {
+      if (fencingToken > 0 || principal.tenantId !== effectiveTenant || principal.workflowId || principal.leaseId || principal.fencingToken !== undefined) {
         throw Object.assign(new Error('Dispatch-claim principal does not match the unleased workflow recovery write'), {
           code: 'WORKFLOW_DISPATCH_CLAIM_MISMATCH'
         });
