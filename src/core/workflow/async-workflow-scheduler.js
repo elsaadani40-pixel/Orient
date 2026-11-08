@@ -47,9 +47,11 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
  async assertCurrentAsync(id,leaseId,fencingToken){const active=this.active.get(id);if(!active||active.leaseId!==leaseId||Number(active.fencingToken)!==Number(fencingToken))throw Object.assign(new Error('Current workflow fencing token is invalid'),{code:'WORKFLOW_FENCING_REJECTED'});await this.leaseStore.assertCurrent(id,leaseId,fencingToken,active.workerPrincipal);return true;}
  async renewAsync(id,leaseId){const active=this.active.get(id);if(!active||active.leaseId!==leaseId)throw new Error('Active workflow lease not found');const renewed=await this.leaseStore.renew(id,leaseId,active.workerPrincipal);active.expiresAt=renewed.expiresAt;if(this.quotaRepository)await this.quotaRepository.refreshWorkflow({tenantId:this.tenantId,workflowId:id,expiresAt:renewed.expiresAt,fencingToken:active.fencingToken});return active;}
  async clearReleasedFencingMetadata(active){
-  if(!active?.instance?.metadata||Number(active.instance.metadata.fencingToken)!==Number(active.fencingToken))return;
-  delete active.instance.metadata.fencingToken;
-  try{await this.persistAsync(active.instance);}catch(error){if(error?.code!=='WORKFLOW_FENCING_REQUIRED')throw error;}
+  // Clear only the local object after confirmed release. Durable stale tokens
+  // are cleared by the next worker's claimed recovery before it requeues work.
+  if(active?.instance?.metadata&&Number(active.instance.metadata.fencingToken)===Number(active.fencingToken)){
+   delete active.instance.metadata.fencingToken;
+  }
  }
  async releaseAsync(id,leaseId=null){
   const active=this.active.get(id);if(!active)return false;
@@ -57,13 +59,13 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
   try{released=await this.leaseStore.release(id,leaseId||active.leaseId,active.workerPrincipal);}
   catch(error){
    if(['WORKER_SESSION_LOST','WORKFLOW_LEASE_NOT_OWNER','WORKFLOW_LEASE_EXPIRED','WORKFLOW_FENCING_REJECTED'].includes(error?.code)){
-    this.active.delete(id);await this.clearReleasedFencingMetadata(active);return false;
+    this.active.delete(id);return false;
    }
    throw error;
   }
-  if(released.released===false){this.active.delete(id);await this.clearReleasedFencingMetadata(active);return false;}
+  if(released.released===false){this.active.delete(id);return false;}
   if(this.quotaRepository)await this.quotaRepository.releaseWorkflow({tenantId:this.tenantId,workflowId:id,fencingToken:active.fencingToken});
-  this.active.delete(id);await this.clearReleasedFencingMetadata(active);return true;
+  this.active.delete(id);this.clearReleasedFencingMetadata(active);return true;
  }
  async persistAsync(instance,workerPrincipal=null){if(this.workflowRepository?.save){const active=this.active.get(instance.workflowId);const principal=workerPrincipal||active?.workerPrincipal||null;await this.workflowRepository.save(instance,this.tenantId||instance.tenantId||null,{workerPrincipal:principal});}}
  async compensateAsync(instance,actions=[]){if(!instance||typeof instance.beginCompensation!=='function')throw new TypeError('workflow instance is required');instance.beginCompensation();for(const action of actions){if(!action?.id||typeof action.execute!=='function')continue;instance.recordCompensationAction({id:action.id,stepId:action.stepId||null,idempotencyKey:action.idempotencyKey||action.id});if(instance.compensation.completed.includes(action.id))continue;try{await action.execute();instance.markCompensationCompleted(action.id);await this.persistAsync(instance);}catch(error){instance.markCompensationFailed(action.id,error);await this.persistAsync(instance);throw error;}}return instance;}
