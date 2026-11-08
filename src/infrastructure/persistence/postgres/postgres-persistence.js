@@ -1030,14 +1030,33 @@ class PostgresWorkflowRepository {
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
       const values = [workflowId];
       let where = 'workflow_id=$1';
-      if (effectiveTenant) { values.push(effectiveTenant); where += ' AND tenant_id=
+      if (effectiveTenant) {
+        values.push(effectiveTenant);
+        where += ' AND tenant_id=' + '$' + values.length;
+      }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += " AND payload->>'userId'=" + '$' + values.length;
+      }
+      const result = await client.query('SELECT payload FROM workflows WHERE ' + where + ' LIMIT 1', values);
+      return result.rows.length ? result.rows[0].payload : null;
+    });
+  }
+
+  async findByApprovalExecutionId({ executionId, tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId) return null;
     const values = [String(executionId)];
     const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
     let tenantClause = '';
     if (effectiveTenant) {
       values.push(effectiveTenant);
-      tenantClause = ' AND tenant_id=
+      tenantClause = ' AND tenant_id=' + '$' + values.length;
+    }
+    if (persistencePrincipal) {
+      values.push(persistencePrincipal.ownerId);
+      tenantClause += " AND payload->>'userId'=" + '$' + values.length;
+    }
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
       const result = await client.query(
         "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
         "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
@@ -1053,7 +1072,18 @@ class PostgresWorkflowRepository {
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
       const values = [];
       let where = '';
-      if (effectiveTenant) { values.push(effectiveTenant); where = 'WHERE tenant_id=
+      if (effectiveTenant) {
+        values.push(effectiveTenant);
+        where = 'WHERE tenant_id=' + '$' + values.length;
+      }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += (where ? ' AND ' : 'WHERE ') + "payload->>'userId'=" + '$' + values.length;
+      }
+      const result = await client.query('SELECT payload FROM workflows ' + where + ' ORDER BY updated_at DESC', values);
+      return result.rows.map(row => row.payload);
+    });
+  }
 
   async delete(workflowId, tenantId = null) {
     const result = await this.db.query(
