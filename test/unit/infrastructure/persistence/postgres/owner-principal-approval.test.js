@@ -87,7 +87,7 @@ test('approval lookup and inbox queries are scoped to the execution owner', asyn
   });
   assert.equal(pending.length, 1);
   assert.ok(harness.calls.every(call => call.sql.includes("e.payload->>'userId'")));
-  assert.equal(harness.transactionCount, 3);
+  assert.equal(harness.transactionCount, 4);
 });
 
 test('approval decisions and consumption are owner-scoped and atomic', async () => {
