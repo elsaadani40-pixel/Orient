@@ -221,6 +221,10 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
   }, 'tenant-fence', { workerPrincipal: workerA });
 
   assert.ok(first.fencingToken > 0);
+  const firstBound = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-fence', workerId: workerA.workerId, sessionId: workerA.sessionId,
+    capabilities: workerA.capabilities, workflowId, leaseId: first.leaseId, fencingToken: first.fencingToken
+  });
 
   await persistence.workflows.save({
     workflowId,
@@ -228,7 +232,7 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
     state: 'RUNNING',
     metadata: { fencingToken: first.fencingToken },
     toJSON() { return this; }
-  }, 'tenant-fence');
+  }, 'tenant-fence', { workerPrincipal: firstBound });
 
   await pool.query(
     "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
@@ -253,19 +257,21 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
       state: 'RUNNING',
       metadata: { fencingToken: first.fencingToken },
       toJSON() { return this; }
-    }, 'tenant-fence'),
+    }, 'tenant-fence', { workerPrincipal: firstBound }),
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
 
+  const secondBound = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-fence', workerId: workerB.workerId, sessionId: workerB.sessionId,
+    capabilities: workerB.capabilities, workflowId, leaseId: second.leaseId, fencingToken: second.fencingToken
+  });
   await persistence.workflows.save({
     workflowId,
     tenantId: 'tenant-fence',
     state: 'RUNNING',
     metadata: { fencingToken: second.fencingToken },
     toJSON() { return this; }
-  }, 'tenant-fence');
-
-  const secondBound = createWorkerPersistencePrincipal({tenantId:'tenant-fence',workerId:'worker-b',sessionId:workerB.sessionId,capabilities:workerB.capabilities,workflowId,leaseId:second.leaseId,fencingToken:second.fencingToken});
+  }, 'tenant-fence', { workerPrincipal: secondBound });
   await persistence.workflowLeases.delete(workflowId, second.leaseId, 'tenant-fence', {workerPrincipal:secondBound});
   await persistence.workers.unregister('worker-a','tenant-fence',{workerPrincipal:workerA});
   await persistence.workers.unregister('worker-b','tenant-fence',{workerPrincipal:workerB});
