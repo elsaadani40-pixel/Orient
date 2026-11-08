@@ -7,20 +7,24 @@ test('AsyncWorkflowWorkerService serializes polling and performs durable recover
   let recoveries = 0;
   let recoveryCapabilities = null;
   let factoryCapabilities = null;
+  let recoveryPrincipal = null;
+  let factoryPrincipal = null;
   let ticks = 0;
   let concurrent = 0;
   let maxConcurrent = 0;
   const errors = [];
 
   const scheduler = {
-    async recoverPersisted(workerId, capabilities) {
+    async recoverPersisted(workerId, capabilities, workerPrincipal) {
       recoveries += 1;
       recoveryCapabilities = { workerId, capabilities };
+      recoveryPrincipal = workerPrincipal;
     }
   };
 
-  const workerFactory = (workerId, capabilities) => {
+  const workerFactory = (workerId, capabilities, workerPrincipal) => {
     factoryCapabilities = { workerId, capabilities };
+    factoryPrincipal = workerPrincipal;
     return ({
     async tick() {
       concurrent += 1;
@@ -52,6 +56,8 @@ test('AsyncWorkflowWorkerService serializes polling and performs durable recover
   assert.equal(recoveries, 1);
   assert.deepEqual(recoveryCapabilities, { workerId: service.workerId, capabilities: ['web.search', 'calendar.read'] });
   assert.deepEqual(factoryCapabilities, { workerId: service.workerId, capabilities: ['web.search', 'calendar.read'] });
+  assert.equal(recoveryPrincipal, service.workerPrincipal);
+  assert.equal(factoryPrincipal, service.workerPrincipal);
   assert.equal(maxConcurrent, 1);
 
   now = 100;
