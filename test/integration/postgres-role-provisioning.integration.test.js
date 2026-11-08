@@ -111,8 +111,19 @@ test('CREATEROLE administrator provisions successfully when it owns the existing
     await adminPool.query(
       "CREATE ROLE orient_provisioner LOGIN CREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'"
     );
-    await adminPool.query('ALTER TABLE public.executions OWNER TO orient_provisioner');
-    await adminPool.query('ALTER TABLE public.schema_migrations OWNER TO orient_provisioner');
+    const applicationTables = [
+      'schema_migrations','executions','events','idempotency','checkpoints','execution_evidence',
+      'execution_resume_leases','workflows','workflow_leases','workflow_dispatch_claims',
+      'approvals','worker_nodes','tenant_quota_limits','tenant_quota_reservations',
+      'owner_chat_messages','owner_work_profiles'
+    ];
+    const existingTables = await adminPool.query(
+      'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename = ANY($2::text[])',
+      ['public', applicationTables]
+    );
+    for (const row of existingTables.rows) {
+      await adminPool.query('ALTER TABLE public."' + row.tablename.replace(/"/g, '""') + '" OWNER TO orient_provisioner');
+    }
     await adminPool.query('ALTER SEQUENCE public.workflow_lease_fencing_seq OWNER TO orient_provisioner');
 
     const limitedUrl = new URL(process.env.DATABASE_URL);
