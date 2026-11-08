@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeMessage, MAX_MESSAGES } = require('../owner-chat-conversation-store');
+const { assertPersistencePrincipal } = require('./persistence-principal');
 
 function chatError(message, code = 'OWNER_CHAT_MESSAGE_INVALID') {
   const error = new Error(message);
@@ -9,18 +10,14 @@ function chatError(message, code = 'OWNER_CHAT_MESSAGE_INVALID') {
 }
 
 class PostgresOwnerChatConversationRepository {
-  constructor(db, { ownerId = 'owner', maxMessages = MAX_MESSAGES } = {}) {
-    if (!db || typeof db.query !== 'function' || typeof db.transaction !== 'function') {
-      throw new TypeError('Postgres owner chat repository requires a database adapter');
-    }
-    if (typeof ownerId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(ownerId)) {
-      throw new TypeError('ownerId is invalid');
+  constructor(db, { maxMessages = MAX_MESSAGES } = {}) {
+    if (!db || typeof db.transactionWithPrincipal !== 'function') {
+      throw new TypeError('PostgreSQL owner chat repository requires principal-scoped transactions');
     }
     if (!Number.isInteger(maxMessages) || maxMessages < 1 || maxMessages > MAX_MESSAGES) {
       throw new TypeError('maxMessages must be between 1 and 500');
     }
     this.db = db;
-    this.ownerId = ownerId;
     this.maxMessages = maxMessages;
   }
 
@@ -34,30 +31,37 @@ class PostgresOwnerChatConversationRepository {
     };
   }
 
-  async list() {
-    const result = await this.db.query(
-      `SELECT message_id, role, content, created_at, task_id
-       FROM (
-         SELECT message_id, role, content, created_at, task_id
-         FROM owner_chat_messages
-         WHERE owner_id=$1
-         ORDER BY created_at DESC, message_id DESC
-         LIMIT $2
-       ) recent
-       ORDER BY created_at ASC, message_id ASC`,
-      [this.ownerId, this.maxMessages]
-    );
-    return result.rows.map(row => this.mapRow(row));
+  async list(principal) {
+    const identity = assertPersistencePrincipal(principal);
+    return this.db.transactionWithPrincipal(principal, async client => {
+      const result = await client.query(
+        `SELECT message_id, role, content, created_at, task_id
+         FROM (
+           SELECT message_id, role, content, created_at, task_id
+           FROM owner_chat_messages
+           WHERE tenant_id=$1 AND owner_id=$2
+           ORDER BY created_at DESC, message_id DESC
+           LIMIT $3
+         ) recent
+         ORDER BY created_at ASC, message_id ASC`,
+        [identity.tenantId, identity.ownerId, this.maxMessages]
+      );
+      return result.rows.map(row => this.mapRow(row));
+    });
   }
 
-  async append(input) {
+  async append(input, principal) {
+    const identity = assertPersistencePrincipal(principal);
     const message = normalizeMessage(input);
-    return this.db.transaction(async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['owner-chat:' + this.ownerId]);
+    return this.db.transactionWithPrincipal(principal, async client => {
+      const scopeKey = 'owner-chat:' + identity.tenantId + ':' + identity.ownerId;
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [scopeKey]);
       const existingResult = await client.query(
         `SELECT message_id, role, content, created_at, task_id
-         FROM owner_chat_messages WHERE owner_id=$1 AND message_id=$2 FOR UPDATE`,
-        [this.ownerId, message.id]
+         FROM owner_chat_messages
+         WHERE tenant_id=$1 AND owner_id=$2 AND message_id=$3
+         FOR UPDATE`,
+        [identity.tenantId, identity.ownerId, message.id]
       );
       if (existingResult.rows.length) {
         const existing = this.mapRow(existingResult.rows[0]);
@@ -66,48 +70,49 @@ class PostgresOwnerChatConversationRepository {
         }
         return { message: existing, replayed: true };
       }
-
       const inserted = await client.query(
-        `INSERT INTO owner_chat_messages(owner_id,message_id,role,content,created_at,task_id)
-         VALUES($1,$2,$3,$4,$5,$6)
+        `INSERT INTO owner_chat_messages(tenant_id,owner_id,message_id,role,content,created_at,task_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
          RETURNING message_id, role, content, created_at, task_id`,
-        [this.ownerId, message.id, message.role, message.content, message.createdAt, message.taskId]
+        [identity.tenantId, identity.ownerId, message.id, message.role, message.content, message.createdAt, message.taskId]
       );
       await client.query(
         `DELETE FROM owner_chat_messages
-         WHERE owner_id=$1 AND message_id IN (
+         WHERE tenant_id=$1 AND owner_id=$2 AND message_id IN (
            SELECT message_id FROM owner_chat_messages
-           WHERE owner_id=$1
+           WHERE tenant_id=$1 AND owner_id=$2
            ORDER BY created_at DESC, message_id DESC
-           OFFSET $2
+           OFFSET $3
          )`,
-        [this.ownerId, this.maxMessages]
+        [identity.tenantId, identity.ownerId, this.maxMessages]
       );
       return { message: this.mapRow(inserted.rows[0]), replayed: false };
     });
   }
 
-  async appendAssistantForTask(input) {
+  async appendAssistantForTask(input, principal) {
+    const identity = assertPersistencePrincipal(principal);
     if (!input || input.role !== 'assistant' ||
         typeof input.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(input.taskId)) {
       throw chatError('Assistant answer requires a valid task id');
     }
     const message = normalizeMessage(input);
-    return this.db.transaction(async client => {
-      // Use the same per-owner lock as append() and clear(), so clear/complete
-      // ordering is serialized across concurrent PostgreSQL requests.
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['owner-chat:' + this.ownerId]);
+    return this.db.transactionWithPrincipal(principal, async client => {
+      const scopeKey = 'owner-chat:' + identity.tenantId + ':' + identity.ownerId;
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [scopeKey]);
       const source = await client.query(
         `SELECT message_id FROM owner_chat_messages
-         WHERE owner_id=$1 AND role='user' AND task_id=$2 LIMIT 1 FOR UPDATE`,
-        [this.ownerId, message.taskId]
+         WHERE tenant_id=$1 AND owner_id=$2 AND role='user' AND task_id=$3
+         LIMIT 1 FOR UPDATE`,
+        [identity.tenantId, identity.ownerId, message.taskId]
       );
       if (!source.rows.length) return { message: null, replayed: false, skipped: true };
-
       const existingResult = await client.query(
         `SELECT message_id, role, content, created_at, task_id
-         FROM owner_chat_messages WHERE owner_id=$1 AND message_id=$2 FOR UPDATE`,
-        [this.ownerId, message.id]
+         FROM owner_chat_messages
+         WHERE tenant_id=$1 AND owner_id=$2 AND message_id=$3
+         FOR UPDATE`,
+        [identity.tenantId, identity.ownerId, message.id]
       );
       if (existingResult.rows.length) {
         const existing = this.mapRow(existingResult.rows[0]);
@@ -117,38 +122,41 @@ class PostgresOwnerChatConversationRepository {
         }
         return { message: existing, replayed: true, skipped: false };
       }
-
       const inserted = await client.query(
-        `INSERT INTO owner_chat_messages(owner_id,message_id,role,content,created_at,task_id)
-         VALUES($1,$2,$3,$4,$5,$6)
+        `INSERT INTO owner_chat_messages(tenant_id,owner_id,message_id,role,content,created_at,task_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7)
          RETURNING message_id, role, content, created_at, task_id`,
-        [this.ownerId, message.id, message.role, message.content, message.createdAt, message.taskId]
+        [identity.tenantId, identity.ownerId, message.id, message.role, message.content, message.createdAt, message.taskId]
       );
       await client.query(
         `DELETE FROM owner_chat_messages
-         WHERE owner_id=$1 AND message_id IN (
+         WHERE tenant_id=$1 AND owner_id=$2 AND message_id IN (
            SELECT message_id FROM owner_chat_messages
-           WHERE owner_id=$1
+           WHERE tenant_id=$1 AND owner_id=$2
            ORDER BY created_at DESC, message_id DESC
-           OFFSET $2
+           OFFSET $3
          )`,
-        [this.ownerId, this.maxMessages]
+        [identity.tenantId, identity.ownerId, this.maxMessages]
       );
       return { message: this.mapRow(inserted.rows[0]), replayed: false, skipped: false };
     });
   }
 
-  async attachTaskId(messageId, taskId) {
+  async attachTaskId(messageId, taskId, principal) {
+    const identity = assertPersistencePrincipal(principal);
     if (typeof messageId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(messageId) ||
         typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(taskId)) {
       throw chatError('Conversation message or task id is invalid');
     }
-    return this.db.transaction(async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['owner-chat:' + this.ownerId]);
+    return this.db.transactionWithPrincipal(principal, async client => {
+      const scopeKey = 'owner-chat:' + identity.tenantId + ':' + identity.ownerId;
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [scopeKey]);
       const result = await client.query(
         `SELECT message_id, role, content, created_at, task_id
-         FROM owner_chat_messages WHERE owner_id=$1 AND message_id=$2 FOR UPDATE`,
-        [this.ownerId, messageId]
+         FROM owner_chat_messages
+         WHERE tenant_id=$1 AND owner_id=$2 AND message_id=$3
+         FOR UPDATE`,
+        [identity.tenantId, identity.ownerId, messageId]
       );
       if (!result.rows.length) {
         throw chatError('Conversation message was not found', 'OWNER_CHAT_MESSAGE_NOT_FOUND');
@@ -159,10 +167,10 @@ class PostgresOwnerChatConversationRepository {
       }
       if (existing.taskId === taskId) return { message: existing, replayed: true };
       const updated = await client.query(
-        `UPDATE owner_chat_messages SET task_id=$3
-         WHERE owner_id=$1 AND message_id=$2 AND task_id IS NULL
+        `UPDATE owner_chat_messages SET task_id=$4
+         WHERE tenant_id=$1 AND owner_id=$2 AND message_id=$3 AND task_id IS NULL
          RETURNING message_id, role, content, created_at, task_id`,
-        [this.ownerId, messageId, taskId]
+        [identity.tenantId, identity.ownerId, messageId, taskId]
       );
       if (!updated.rows.length) {
         throw chatError('Conversation task linkage lost a race', 'OWNER_CHAT_TASK_LINK_CONFLICT');
@@ -171,10 +179,15 @@ class PostgresOwnerChatConversationRepository {
     });
   }
 
-  async clear() {
-    return this.db.transaction(async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['owner-chat:' + this.ownerId]);
-      await client.query('DELETE FROM owner_chat_messages WHERE owner_id=$1', [this.ownerId]);
+  async clear(principal) {
+    const identity = assertPersistencePrincipal(principal);
+    return this.db.transactionWithPrincipal(principal, async client => {
+      const scopeKey = 'owner-chat:' + identity.tenantId + ':' + identity.ownerId;
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [scopeKey]);
+      await client.query(
+        'DELETE FROM owner_chat_messages WHERE tenant_id=$1 AND owner_id=$2',
+        [identity.tenantId, identity.ownerId]
+      );
       return { cleared: true };
     });
   }
