@@ -482,6 +482,12 @@ class RequestExecutionCoordinator {
     }
 
     let context = ExecutionContext.restore(checkpoint.snapshot);
+    if (persistencePrincipal && context.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Checkpoint owner does not match the authenticated persistence principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+
     this.quotaService.assertTenant(context.tenantId || this.tenantId);
     this.quotaService.assertInputSize(context.input);
 
@@ -728,7 +734,7 @@ class RequestExecutionCoordinator {
         context = ExecutionContext.restore(activeContextSnapshot);
         context.requestCancellation(cancellationReason);
         context.cancel(cancellationReason);
-        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
+        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update', persistencePrincipal);
         await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
@@ -743,10 +749,10 @@ class RequestExecutionCoordinator {
         });
       }
 
-      await this.persistenceCoordinator.persistEvents(context);
+      await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
       await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_completed', persistencePrincipal);
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       }
 
       return {
@@ -766,17 +772,17 @@ class RequestExecutionCoordinator {
           error?.code === 'APPROVAL_NOT_APPROVED' ||
           error?.code === 'APPROVAL_EXPIRED') {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         throw error;
       }
 
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
-        await this.persistenceCoordinator.persistEvents(context);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         return { resumed: false, reason: 'execution_cancelled', execution: context.snapshot() };
       }
@@ -785,11 +791,12 @@ class RequestExecutionCoordinator {
       const cancellationBeforeRecovery = await this.reconcileCancellationAfterFailure(
         context,
         executionId,
-        activeSnapshot
+        activeSnapshot,
+        persistencePrincipal
       );
       if (cancellationBeforeRecovery) {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         return {
           resumed: false,
@@ -802,18 +809,20 @@ class RequestExecutionCoordinator {
         await this.recoveryCoordinator.fail({
           context,
           error,
-          checkpointReason: 'resume_failed'
+          checkpointReason: 'resume_failed',
+          persistencePrincipal
         });
       }
 
       const cancellationAfterRecovery = await this.reconcileCancellationAfterFailure(
         context,
         executionId,
-        activeSnapshot
+        activeSnapshot,
+        persistencePrincipal
       );
       if (cancellationAfterRecovery) {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         return {
           resumed: false,
@@ -823,7 +832,7 @@ class RequestExecutionCoordinator {
       }
 
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       }
       throw error;
     }
