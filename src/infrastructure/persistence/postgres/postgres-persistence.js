@@ -1037,6 +1037,7 @@ class PostgresWorkflowLeaseRepository {
       throw Object.assign(new Error('Lease principal does not match the lease payload'), { code: 'WORKFLOW_FENCING_REJECTED' });
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
       const result = await client.query(
         `UPDATE workflow_leases SET expires_at=$1,payload=$2
          WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
@@ -1056,6 +1057,7 @@ class PostgresWorkflowLeaseRepository {
       throw Object.assign(new Error('Lease principal does not match renewal request'), { code: 'WORKFLOW_FENCING_REJECTED' });
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
       const result = await client.query(
         `UPDATE workflow_leases SET expires_at=$1::timestamptz,
            payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
@@ -1072,6 +1074,7 @@ class PostgresWorkflowLeaseRepository {
     if (principal.workflowId !== workflowId || principal.leaseId !== leaseId ||
         Number(principal.fencingToken) !== Number(fencingToken)) return false;
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
       const result = await client.query(
         `SELECT 1 FROM workflow_leases
          WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
@@ -1103,6 +1106,7 @@ class PostgresWorkflowLeaseRepository {
       throw Object.assign(new Error('Lease principal does not match release request'), { code: 'WORKFLOW_FENCING_REJECTED' });
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
       const result = await client.query(
         `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
          AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
