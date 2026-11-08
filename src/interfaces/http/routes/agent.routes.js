@@ -241,7 +241,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async decideApproval(req, res, approvalId, body, actorId) {
+    async decideApproval(req, res, approvalId, body, actorId, persistencePrincipal = null) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new AppError('Invalid approval decision body', 400, 'INVALID_JSON');
       }
@@ -255,7 +255,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }
       let result;
       try {
-        result = await agentService.decideApproval({ approvalId, executionId, decision, actorId });
+        result = await agentService.decideApproval({ approvalId, executionId, decision, actorId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       } catch (error) {
         const decisionErrors = {
           APPROVAL_NOT_FOUND: [404, 'Approval not found'],
@@ -284,14 +284,14 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify({ ok: true, ...result }));
     },
 
-    async pendingApprovals(req, res) {
+    async pendingApprovals(req, res, persistencePrincipal = null) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
       const limit = limitValue === null ? 100 : Number(limitValue);
       if (!Number.isInteger(limit) || limit < 1) {
         throw new AppError('Invalid approval inbox limit', 400, 'INVALID_PAGINATION');
       }
-      const result = await agentService.listPendingApprovals({ limit });
+      const result = await agentService.listPendingApprovals({ limit, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'X-Content-Type-Options': 'nosniff',
