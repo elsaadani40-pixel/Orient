@@ -405,3 +405,36 @@ test('owner login rejects non-string and oversized password candidates', async (
   assert.equal((await auth.login({ password: 42, sourceIp: '192.0.2.220' })).code, 'OWNER_LOGIN_FAILED');
   assert.equal((await auth.login({ password: 'x'.repeat(1025), sourceIp: '192.0.2.221' })).code, 'OWNER_LOGIN_FAILED');
 });
+
+test('owner auth revokes every active session durably across service restarts', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-auth-revoke-all-'));
+  const stateFile = path.join(directory, 'owner-auth-state.json');
+  const password = 'a-strong-owner-password-2026';
+
+  try {
+    const auth = new OwnerAuthService({ password, stateFile });
+    const first = await auth.login({ password, sourceIp: '192.0.2.240' });
+    const second = await auth.login({ password, sourceIp: '192.0.2.241' });
+
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(auth.sessions.size, 2);
+    assert.ok(auth.authenticate(first.token));
+    assert.ok(auth.authenticate(second.token));
+
+    assert.equal(auth.revokeAllSessions(), 2);
+    assert.equal(auth.sessions.size, 0);
+    assert.equal(auth.authenticate(first.token), null);
+    assert.equal(auth.authenticate(second.token), null);
+
+    const persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    assert.deepEqual(persisted.sessions, [], 'all session revocations must be persisted');
+
+    const restarted = new OwnerAuthService({ password, stateFile });
+    assert.equal(restarted.authenticate(first.token), null, 'first session remains revoked after restart');
+    assert.equal(restarted.authenticate(second.token), null, 'second session remains revoked after restart');
+    assert.equal(restarted.sessions.size, 0);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
