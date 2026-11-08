@@ -569,11 +569,11 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
   const staleResult = await workerA.tick();
   assert.equal(staleResult, null);
   assert.ok(takeover);
-  assert.equal(takeover.metadata.fencingToken, undefined, 'released workflow instances must not retain stale fencing metadata');
+  assert.equal(takeover.metadata.fencingToken, undefined, 'released in-memory workflow instances must not retain stale fencing metadata');
 
   const persisted = await persistence.workflows.findById(workflowId, tenantId);
   assert.equal(persisted.state, 'COMPLETED');
-  assert.equal(persisted.metadata.fencingToken, undefined, 'durable workflow state must clear fencing metadata after lease release');
+  assert.ok(persisted.metadata.fencingToken > 0, 'durable fencing history remains until claimed recovery clears it');
   assert.equal(persisted.steps['protected-step'].state, 'COMPLETED');
   assert.equal(persisted.steps['protected-step'].result.committedBy, 'worker-b');
 
