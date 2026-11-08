@@ -37,6 +37,10 @@ function createHarness() {
   const client = {
     async query(sql, values = []) {
       calls.push({ sql, values });
+      if (sql.startsWith('SELECT 1 FROM executions')) {
+        return values[2] === 'owner-a' ? { rows: [{ '?column?': 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      if (sql.startsWith('INSERT INTO approvals')) return { rows: [], rowCount: 1 };
       if (sql.startsWith('SELECT a.* FROM approvals')) {
         const owner = values.find(value => value === 'owner-a' || value === 'owner-b');
         if (owner === 'owner-b') return { rows: [], rowCount: 0 };
@@ -106,6 +110,37 @@ test('approval decisions and consumption are owner-scoped and atomic', async () 
   });
   assert.equal(consumed, true);
   assert.equal(harness.current.used, true);
+
+  const otherOwner = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-b', sessionId: 'session-b'
+  });
+  await assert.rejects(
+    repository.recordDecision('approval-a', {
+      status: 'rejected', actorId: 'session-b', decidedAt: new Date().toISOString()
+    }, 'tenant-a', Date.now, otherOwner),
+    error => error.code === 'APPROVAL_NOT_FOUND'
+  );
+  const otherOwnerConsume = await repository.consume('approval-a', new Date().toISOString(), 'tenant-a', {
+    persistencePrincipal: otherOwner
+  });
+  assert.equal(otherOwnerConsume, false);
+
+  await repository.save({
+    approvalId: 'approval-b', executionId: 'execution-a', tenantId: 'tenant-a',
+    step: 2, planRevision: 1, tool: 'safe-tool', capability: 'safe:read',
+    scope: {}, issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60000).toISOString(), used: false
+  }, { tenantId: 'tenant-a', persistencePrincipal: ownerPrincipal });
+  await assert.rejects(
+    repository.save({
+      approvalId: 'approval-c', executionId: 'execution-a', tenantId: 'tenant-a',
+      step: 3, planRevision: 1, tool: 'safe-tool', capability: 'safe:read',
+      scope: {}, issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60000).toISOString(), used: false
+    }, { tenantId: 'tenant-a', persistencePrincipal: otherOwner }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
+  );
+
   assert.ok(harness.calls.every(call => call.sql.includes("e.payload->>'userId'") || call.sql.startsWith('UPDATE approvals SET used=TRUE')));
-  assert.equal(harness.transactionCount, 2);
+  assert.equal(harness.transactionCount, 6);
 });
