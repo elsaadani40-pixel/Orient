@@ -5,8 +5,8 @@ const assert = require('node:assert/strict');
 const {
   createWorkerPersistencePrincipal,
   assertWorkerPersistencePrincipal
-} = require('../../../src/core/security/worker-persistence-principal');
-const { PostgresDatabase } = require('../../../src/infrastructure/persistence/postgres/postgres-database');
+} = require('../../../../src/core/security/worker-persistence-principal');
+const { PostgresDatabase } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
 
 function makePool() {
   const calls = [];
