@@ -628,7 +628,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         const rawBody = await readBody(req, 8192);
         await agentRoutes.createTask(req, res, rawBody, {
           sessionId: ownerSession.sessionId
-        });
+        }, ownerPersistencePrincipal);
         return;
       }
 
