@@ -1,0 +1,89 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { PostgresWorkflowRepository } = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
+const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
+
+function fixture({ workerRows = 1, updateRows = 1 } = {}) {
+  const calls = [];
+  let transactions = 0;
+  let requireLease = false;
+  const client = {
+    async query(sql, values = []) {
+      calls.push({ sql, values });
+      if (sql.includes('FROM worker_nodes')) return { rowCount: workerRows, rows: workerRows ? [{}] : [] };
+      if (sql.includes('UPDATE workflows')) return { rowCount: updateRows, rows: [] };
+      throw new Error('Unexpected SQL: ' + sql);
+    }
+  };
+  const db = {
+    async query() { throw new Error('Fenced workflow writes must not use the pool query path'); },
+    async transactionWithWorkerPrincipal(principal, work, options) {
+      transactions += 1;
+      requireLease = options?.requireLease === true;
+      assert.equal(principal.kind, 'worker');
+      return work(client, principal);
+    }
+  };
+  const principal = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-a',
+    capabilities: ['web.search'], workflowId: 'workflow-a', leaseId: 'lease-a', fencingToken: 71
+  });
+  const instance = {
+    workflowId: 'workflow-a', tenantId: 'tenant-a', state: 'RUNNING',
+    updatedAt: new Date().toISOString(), metadata: { fencingToken: 71 },
+    toJSON() { return { workflowId: this.workflowId, tenantId: this.tenantId, state: this.state, updatedAt: this.updatedAt, metadata: this.metadata }; }
+  };
+  return { repo: new PostgresWorkflowRepository(db), db, calls, principal, instance, get transactions() { return transactions; }, get requireLease() { return requireLease; } };
+}
+
+test('fenced workflow writes require a lease-bound worker transaction and match exact session and lease', async () => {
+  const h = fixture();
+  const saved = await h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal });
+  assert.equal(saved.workflowId, 'workflow-a');
+  assert.equal(h.transactions, 1);
+  assert.equal(h.requireLease, true);
+  assert.match(h.calls[0].sql, /session_id=\$3/);
+  assert.match(h.calls[0].sql, /status='READY'/);
+  assert.match(h.calls[1].sql, /worker_session_id=\$8/);
+  assert.match(h.calls[1].sql, /lease_id=\$6/);
+  assert.match(h.calls[1].sql, /fencing_token=\$9/);
+  assert.deepEqual(h.calls[1].values.slice(5), ['lease-a', 'worker-a', 'session-a', 71]);
+});
+
+test('fenced workflow writes reject expired or replaced worker sessions', async () => {
+  const h = fixture({ workerRows: 0 });
+  await assert.rejects(
+    h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.transactions, 1);
+});
+
+test('fenced workflow writes reject stale lease rows even for a live worker session', async () => {
+  const h = fixture({ updateRows: 0 });
+  await assert.rejects(
+    h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal }),
+    error => error.code === 'WORKFLOW_FENCING_REJECTED'
+  );
+  assert.equal(h.calls.length, 2);
+});
+
+test('fenced workflow writes reject missing or mismatched principals before database access', async () => {
+  const h = fixture();
+  await assert.rejects(
+    h.repo.save(h.instance, 'tenant-a'),
+    error => error.code === 'WORKER_PERSISTENCE_PRINCIPAL_REQUIRED'
+  );
+  const wrongLease = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-a',
+    workflowId: 'workflow-a', leaseId: 'other-lease', fencingToken: 71
+  });
+  await assert.rejects(
+    h.repo.save(h.instance, 'tenant-a', { workerPrincipal: wrongLease }),
+    error => error.code === 'WORKFLOW_FENCING_REJECTED'
+  );
+  assert.equal(h.transactions, 0);
+});
