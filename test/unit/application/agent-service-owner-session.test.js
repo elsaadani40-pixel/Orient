@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const AgentService = require('../../../src/application/agent/agent.service');
+const { createPersistencePrincipal } = require('../../../src/core/security/persistence-principal');
 
 test('rejects an inactive owner session before creating an idempotency record', async () => {
   let idempotencyAdmission = false;
@@ -75,4 +76,78 @@ test('forwards the server-authenticated owner context into runtime execution', a
 
   assert.strictEqual(forwardedContext, ownerSessionContext);
   assert.equal(result.task.id, 'execution-owner-session');
+});
+
+test('binds task idempotency lifecycle to the same authenticated persistence principal', async () => {
+  const persistencePrincipal = createPersistencePrincipal({
+    tenantId: 'tenant-a',
+    ownerId: 'owner-a',
+    sessionId: 'active-session'
+  });
+  const received = [];
+  const runtime = {
+    tenantId: 'tenant-a',
+    persistence: {
+      idempotency: {
+        begin: async args => {
+          received.push({ method: 'begin', principal: args.persistencePrincipal });
+          return { created: true, key: 'principal-bound-key' };
+        },
+        complete: async (key, result, options) => {
+          received.push({ method: 'complete', principal: options.persistencePrincipal });
+        },
+        fail: async (key, error, options) => {
+          received.push({ method: 'fail', principal: options.persistencePrincipal });
+        }
+      }
+    },
+    assertOwnerSessionContext: async context => {
+      assert.equal(context.sessionId, 'active-session');
+      return true;
+    },
+    execute: async () => ({ execution: { executionId: 'execution-principal-bound' } }),
+    getExecutionStatus: async executionId => ({ executionId, status: 'completed' })
+  };
+
+  const service = new AgentService(runtime);
+  await service.createTask({
+    goal: 'run a task',
+    idempotencyKey: 'principal-bound-task-key',
+    ownerSessionContext: { sessionId: 'active-session' },
+    persistencePrincipal
+  });
+
+  assert.deepEqual(received.map(item => item.method), ['begin', 'complete']);
+  assert.equal(received[0].principal, persistencePrincipal);
+  assert.equal(received[1].principal, persistencePrincipal);
+});
+
+test('rejects a forged persistence principal before idempotency admission', async () => {
+  let admitted = false;
+  const runtime = {
+    tenantId: 'tenant-a',
+    persistence: {
+      idempotency: {
+        begin: async () => { admitted = true; return { created: true, key: 'key' }; },
+        complete: async () => {},
+        fail: async () => {}
+      }
+    },
+    assertOwnerSessionContext: async () => true
+  };
+  const service = new AgentService(runtime);
+  await assert.rejects(
+    service.createTask({
+      goal: 'run a task',
+      idempotencyKey: 'forged-principal-key',
+      ownerSessionContext: { sessionId: 'active-session' },
+      persistencePrincipal: {
+        tenantId: 'tenant-a',
+        ownerId: 'owner-a',
+        sessionId: 'active-session'
+      }
+    }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_REQUIRED'
+  );
+  assert.equal(admitted, false);
 });
