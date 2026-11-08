@@ -766,7 +766,8 @@ test('PostgreSQL durable claims require a live registered worker identity', asyn
     tenantId: 'tenant-worker-auth',
     workerId: 'registered-worker',
     workerCapabilities: ['research.read'],
-    limit: 1
+    limit: 1,
+    workerPrincipal: registeredPrincipal
   });
   assert.equal(claimed.length, 1);
 
@@ -828,7 +829,8 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
     tenantId: 'tenant-claim',
     workerId: workerRecovery,
     limit: 1,
-    claimTtlMs: 60000
+    claimTtlMs: 60000,
+    workerPrincipal: workerPrincipals.get(workerRecovery)
   });
   assert.equal(recovered.length, 1);
 
