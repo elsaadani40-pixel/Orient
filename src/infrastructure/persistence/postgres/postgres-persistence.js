@@ -602,13 +602,24 @@ class PostgresCheckpointRepository {
     };
   }
 
-  async findLatest(executionId, { verify = true, tenantId = null } = {}) {
-    const result = await this.db.query(
-      tenantId
-        ? 'SELECT * FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2 ORDER BY sequence DESC LIMIT 1'
-        : 'SELECT * FROM checkpoints WHERE execution_id=$1 ORDER BY sequence DESC LIMIT 1',
-      tenantId ? [executionId, tenantId] : [executionId]
-    );
+  async findLatest(executionId, { verify = true, tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const result = await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Checkpoint principal', client => {
+      const values = [executionId];
+      let where = 'execution_id=$1';
+      if (effectiveTenant) {
+        values.push(effectiveTenant);
+        where += ' AND tenant_id=$' + values.length;
+      }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ' AND snapshot->>\'userId\'=$' + values.length;
+      }
+      return client.query(
+        'SELECT * FROM checkpoints WHERE ' + where + ' ORDER BY sequence DESC LIMIT 1',
+        values
+      );
+    });
     if (!result.rows.length) return null;
     const row = result.rows[0];
     if (verify && row.snapshot_sha256 !== this.digest(row.snapshot)) {
