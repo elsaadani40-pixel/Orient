@@ -771,6 +771,18 @@ test('PostgreSQL durable claims require a live registered worker identity', asyn
   });
   assert.equal(claimed.length, 1);
 
+  const replacedSession = makeWorkerPrincipal('tenant-worker-auth', 'registered-worker', ['research.read']);
+  await assert.rejects(
+    persistence.workflows.claimQueued({
+      tenantId: 'tenant-worker-auth',
+      workerId: 'registered-worker',
+      workerCapabilities: ['research.read'],
+      limit: 1,
+      workerPrincipal: replacedSession
+    }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+
   await persistence.workflows.releaseDispatchClaim(workflowId, 'registered-worker', 'tenant-worker-auth', { workerPrincipal: registeredPrincipal });
   await persistence.workers.unregister('registered-worker', 'tenant-worker-auth', { workerPrincipal: registeredPrincipal });
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
@@ -817,6 +829,12 @@ test('PostgreSQL dispatch claims are exclusive across concurrent workers and exp
   ]);
 
   assert.equal(a.length + b.length, 1);
+
+  const winningWorker = a.length ? workerA : workerB;
+  const staleSessionForWinner = makeWorkerPrincipal('tenant-claim', winningWorker);
+  assert.equal(await persistence.workflows.releaseDispatchClaim(
+    workflowId, winningWorker, 'tenant-claim', { workerPrincipal: staleSessionForWinner }
+  ), false);
 
   await pool.query(
     "UPDATE workflow_dispatch_claims SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
