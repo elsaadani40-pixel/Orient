@@ -77,11 +77,16 @@ class AsyncWorkflowLeaseStore {
   async release(workflowId, leaseId, workerPrincipal = null) {
     const lease = await this.require(workflowId, leaseId);
     let released = true;
-    if (this.repository?.delete) {
-      released = await this.repository.delete(workflowId, leaseId, this.tenantId, { workerPrincipal });
+    try {
+      if (this.repository?.delete) {
+        released = await this.repository.delete(workflowId, leaseId, this.tenantId, { workerPrincipal });
+      }
+      return { ...lease, released };
+    } finally {
+      // A failed ownership check must not leave a stale process-local lease shadow.
+      // The durable row remains authoritative and can be re-read on the next lookup.
+      this.memory.delete(workflowId);
     }
-    if (released) this.memory.delete(workflowId);
-    return { ...lease, released };
   }
 
   async get(workflowId) {
