@@ -99,7 +99,7 @@ class PostgresExecutionRepository {
     const result = await this.db.query(tenantId ? 'SELECT payload FROM executions WHERE tenant_id=$1 AND payload->>\'goalId\'=$2 ORDER BY updated_at DESC' : 'SELECT payload FROM executions WHERE payload->>\'goalId\'=$1 ORDER BY updated_at DESC', tenantId ? [tenantId,goalId] : [goalId]); return result.rows.map(row => row.payload);
   }
 
-  async insert(execution, { tenantId = null } = {}) {
+  async insert(execution, { tenantId = null, persistencePrincipal = null } = {}) {
     const generatedExecutionId = execution.id || execution.executionId || crypto.randomUUID();
     const normalized = {
       ...execution,
@@ -119,69 +119,108 @@ class PostgresExecutionRepository {
     const effectiveTenant = tenantOrLocal(normalized.tenantId || normalized.metadata.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Execution');
     normalized.tenantId = effectiveTenant;
-    await this.db.query(
-      'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,$4)',
-      [normalized.executionId, effectiveTenant, normalized, normalized.updatedAt]
+    if (persistencePrincipal && normalized.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Execution owner does not match persistence principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', client =>
+      client.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,$4)',
+        [normalized.executionId, effectiveTenant, normalized, normalized.updatedAt]
+      )
     );
     return normalized;
   }
 
-  async update(executionId, patch, { tenantId = null } = {}) {
-    const current = await this.findById(executionId, { tenantId });
-    if (!current) return null;
-    const effectiveTenant = tenantOrLocal(current.tenantId || current.metadata?.tenantId);
-    assertTenant(effectiveTenant, tenantId, 'Execution');
-    const updated = {
-      ...current, ...patch,
-      ...(current.cancellationRequested ? { cancellationRequested: true, cancellationReason: current.cancellationReason || patch.cancellationReason || null } : {}),
-      id: current.id,
-      executionId: current.executionId,
-      tenantId: effectiveTenant,
-      updatedAt: new Date().toISOString()
-    };
-    // Compare-and-set the terminal outcome in PostgreSQL itself. The
-    // cancellation flag is read from the row being updated, not from the
-    // earlier snapshot, so a concurrent cancellation cannot be overwritten
-    // by a stale completion write.
-    const result = await this.db.query(
-      `UPDATE executions
-       SET payload=$3, updated_at=$4
-       WHERE execution_id=$1
-         AND tenant_id=$2
-         AND NOT (
-           COALESCE(payload->>'cancellationRequested', 'false') = 'true'
-           AND $5::text IN ('completed', 'failed')
-         )
-       RETURNING payload`,
-      [executionId, effectiveTenant, updated, updated.updatedAt, patch.status || '']
-    );
-
-    if (result.rows.length) return result.rows[0].payload;
-    // A concurrent cancellation won the race; return the authoritative row.
-    return this.findById(executionId, { tenantId: effectiveTenant });
+  async update(executionId, patch, { tenantId = null, persistencePrincipal = null } = {}) {
+    let requestedTenant = tenantId || patch?.tenantId;
+    if (!requestedTenant && !persistencePrincipal) {
+      const existing = await this.findById(executionId);
+      requestedTenant = existing?.tenantId || existing?.metadata?.tenantId || 'local';
+    }
+    const effectiveTenant = tenantOrLocal(requestedTenant);
+    if (persistencePrincipal) assertTenant(persistencePrincipal.tenantId, effectiveTenant, 'Execution principal');
+    if (persistencePrincipal && patch?.userId && patch.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Execution owner does not match persistence principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const ownerClause = persistencePrincipal ? " AND payload->>'userId'=$3" : '';
+      const values = persistencePrincipal ? [executionId, effectiveTenant, persistencePrincipal.ownerId] : [executionId, effectiveTenant];
+      const selected = await client.query(
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' + ownerClause + ' LIMIT 1',
+        values
+      );
+      if (!selected.rows.length) return null;
+      const current = selected.rows[0].payload;
+      const updated = {
+        ...current, ...patch,
+        ...(current.cancellationRequested ? { cancellationRequested: true, cancellationReason: current.cancellationReason || patch.cancellationReason || null } : {}),
+        id: current.id,
+        executionId: current.executionId,
+        tenantId: effectiveTenant,
+        updatedAt: new Date().toISOString()
+      };
+      const updateValues = [executionId, effectiveTenant, updated, updated.updatedAt, patch.status || ''];
+      const updateOwnerClause = persistencePrincipal ? ' AND payload->>\'userId\'=$6' : '';
+      if (persistencePrincipal) updateValues.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `UPDATE executions
+         SET payload=$3, updated_at=$4
+         WHERE execution_id=$1
+           AND tenant_id=$2${updateOwnerClause}
+           AND NOT (
+             COALESCE(payload->>'cancellationRequested', 'false') = 'true'
+             AND $5::text IN ('completed', 'failed')
+           )
+         RETURNING payload`,
+        updateValues
+      );
+      if (result.rows.length) return result.rows[0].payload;
+      const latest = await client.query(
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' + ownerClause + ' LIMIT 1',
+        values
+      );
+      return latest.rows.length ? latest.rows[0].payload : null;
+    });
   }
 
-  async requestCancellation(executionId, reason = 'Execution cancellation requested', { tenantId = null } = {}) {
+  async requestCancellation(executionId, reason = 'Execution cancellation requested', { tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId) throw new TypeError('executionId is required');
-
     const effectiveTenant = tenantOrLocal(tenantId);
     const updatedAt = new Date().toISOString();
-    const result = await this.db.query(
-      `UPDATE executions
-       SET payload = jsonb_set(
-         jsonb_set(payload, '{cancellationRequested}', 'true'::jsonb, true),
-         '{cancellationReason}', to_jsonb($3::text), true
-       ),
-       updated_at = $4
-       WHERE execution_id=$1
-         AND tenant_id=$2
-         AND COALESCE(payload->>'status','created') NOT IN ('completed','failed','cancelled')
-       RETURNING payload`,
-      [executionId, effectiveTenant, String(reason || 'Execution cancellation requested'), updatedAt]
-    );
-
-    if (result.rows.length) return result.rows[0].payload;
-    return this.findById(executionId, { tenantId: effectiveTenant });
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const ownerClause = persistencePrincipal ? " AND payload->>'userId'=$5" : '';
+      const values = [
+        executionId,
+        effectiveTenant,
+        String(reason || 'Execution cancellation requested'),
+        updatedAt
+      ];
+      if (persistencePrincipal) values.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `UPDATE executions
+         SET payload = jsonb_set(
+           jsonb_set(payload, '{cancellationRequested}', 'true'::jsonb, true),
+           '{cancellationReason}', to_jsonb($3::text), true
+         ),
+         updated_at = $4
+         WHERE execution_id=$1
+           AND tenant_id=$2${ownerClause}
+           AND COALESCE(payload->>'status','created') NOT IN ('completed','failed','cancelled')
+         RETURNING payload`,
+        values
+      );
+      if (result.rows.length) return result.rows[0].payload;
+      const latest = await client.query(
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' +
+        (persistencePrincipal ? " AND payload->>'userId'=$3" : '') + ' LIMIT 1',
+        persistencePrincipal ? [executionId, effectiveTenant, persistencePrincipal.ownerId] : [executionId, effectiveTenant]
+      );
+      return latest.rows.length ? latest.rows[0].payload : null;
+    });
   }
 
   async deleteById(executionId, { tenantId = null } = {}) {
@@ -218,22 +257,33 @@ class PostgresEventRepository {
     };
   }
 
-  async append(event, { tenantId = null } = {}) {
-    const normalized = this.normalize(event, tenantId);
-    await this.db.query(
-      `INSERT INTO events(event_id,tenant_id,execution_id,goal_id,type,timestamp,payload)
-       VALUES($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT(event_id) DO NOTHING`,
-      [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId, normalized.type, normalized.timestamp, normalized]
-    );
-    return normalized;
+  async append(event, { tenantId = null, persistencePrincipal = null } = {}) {
+    const inserted = await this.appendMany([event], { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
+    return inserted[0] || this.normalize(event, tenantId);
   }
 
-  async appendMany(events, { tenantId = null } = {}) {
+  async appendMany(events, { tenantId = null, persistencePrincipal = null } = {}) {
     const inserted = [];
-    await this.db.transaction(async client => {
+    const effectiveTenant = tenantOrLocal(tenantId);
+    const persist = async client => {
       for (const event of events || []) {
-        const normalized = this.normalize(event, tenantId);
+        const normalized = this.normalize(event, effectiveTenant);
+        if (persistencePrincipal) {
+          if (!normalized.executionId) {
+            throw Object.assign(new Error('Owner-scoped events require an execution ID'), {
+              code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+            });
+          }
+          const ownerExecution = await client.query(
+            "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+            [normalized.executionId, effectiveTenant, persistencePrincipal.ownerId]
+          );
+          if (!ownerExecution.rows.length) {
+            throw Object.assign(new Error('Event execution is not owned by the persistence principal'), {
+              code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+            });
+          }
+        }
         const result = await client.query(
           `INSERT INTO events(event_id,tenant_id,execution_id,goal_id,type,timestamp,payload)
            VALUES($1,$2,$3,$4,$5,$6,$7)
@@ -242,7 +292,12 @@ class PostgresEventRepository {
         );
         if (result.rowCount === 1) inserted.push(normalized);
       }
-    });
+    };
+    if (persistencePrincipal) {
+      await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Event principal', persist);
+    } else {
+      await this.db.transaction(persist);
+    }
     return inserted;
   }
 
@@ -490,16 +545,30 @@ class PostgresCheckpointRepository {
     return crypto.createHash('sha256').update(this.stableStringify(snapshot)).digest('hex');
   }
 
-  async save(snapshot, { reason = 'step_completed', tenantId = null } = {}) {
+  async save(snapshot, { reason = 'step_completed', tenantId = null, persistencePrincipal = null } = {}) {
     if (!snapshot?.executionId) throw new TypeError('snapshot.executionId is required');
     const effectiveTenant = tenantOrLocal(snapshot.tenantId || snapshot.metadata?.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Checkpoint');
+    if (persistencePrincipal && snapshot.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Checkpoint owner does not match persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+    }
     const snapshotCopy = JSON.parse(JSON.stringify(snapshot));
     const digest = this.digest(snapshotCopy);
     const checkpointId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
 
-    const persisted = await this.db.transaction(async client => {
+    const persist = async client => {
+      if (persistencePrincipal) {
+        const ownerExecution = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [snapshot.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!ownerExecution.rows.length) {
+          throw Object.assign(new Error('Checkpoint execution is not owned by the persistence principal'), {
+            code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+          });
+        }
+      }
       const collision = await client.query(
         'SELECT tenant_id FROM checkpoints WHERE execution_id=$1 AND tenant_id<>$2 LIMIT 1 FOR UPDATE',
         [snapshot.executionId,effectiveTenant]
@@ -522,7 +591,10 @@ class PostgresCheckpointRepository {
         [snapshot.executionId,effectiveTenant,sequence,checkpointId,reason,createdAt,snapshotCopy,digest]
       );
       return result.rows[0];
-    });
+    };
+    const persisted = persistencePrincipal
+      ? await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Checkpoint principal', persist)
+      : await this.db.transaction(persist);
     return this.toModel(persisted);
   }
 
@@ -535,13 +607,24 @@ class PostgresCheckpointRepository {
     };
   }
 
-  async findLatest(executionId, { verify = true, tenantId = null } = {}) {
-    const result = await this.db.query(
-      tenantId
-        ? 'SELECT * FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2 ORDER BY sequence DESC LIMIT 1'
-        : 'SELECT * FROM checkpoints WHERE execution_id=$1 ORDER BY sequence DESC LIMIT 1',
-      tenantId ? [executionId, tenantId] : [executionId]
-    );
+  async findLatest(executionId, { verify = true, tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const result = await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Checkpoint principal', client => {
+      const values = [executionId];
+      let where = 'execution_id=$1';
+      if (effectiveTenant) {
+        values.push(effectiveTenant);
+        where += ' AND tenant_id=$' + values.length;
+      }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ' AND snapshot->>\'userId\'=$' + values.length;
+      }
+      return client.query(
+        'SELECT * FROM checkpoints WHERE ' + where + ' ORDER BY sequence DESC LIMIT 1',
+        values
+      );
+    });
     if (!result.rows.length) return null;
     const row = result.rows[0];
     if (verify && row.snapshot_sha256 !== this.digest(row.snapshot)) {
@@ -552,7 +635,7 @@ class PostgresCheckpointRepository {
     return this.toModel(row);
   }
 
-  async acquireResumeLease(executionId, { tenantId = null, leaseDurationMs = 30000 } = {}) {
+  async acquireResumeLease(executionId, { tenantId = null, leaseDurationMs = 30000, persistencePrincipal = null } = {}) {
     if (!executionId) throw new TypeError('executionId is required');
     if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
       throw new TypeError('leaseDurationMs must be a positive integer');
@@ -560,25 +643,80 @@ class PostgresCheckpointRepository {
 
     const effectiveTenant = tenantOrLocal(tenantId);
     const leaseId = crypto.randomUUID();
-    const result = await this.db.query(
-      `INSERT INTO execution_resume_leases(execution_id,tenant_id,lease_id,acquired_at,expires_at)
-       SELECT c.execution_id,c.tenant_id,$3,NOW(),NOW()+($4::double precision * INTERVAL '1 millisecond')
-       FROM checkpoints c
-       WHERE c.execution_id=$1 AND c.tenant_id=$2
-       ORDER BY c.sequence DESC
-       LIMIT 1
-       ON CONFLICT (execution_id) DO UPDATE SET
-         tenant_id=EXCLUDED.tenant_id,
-         lease_id=EXCLUDED.lease_id,
-         acquired_at=EXCLUDED.acquired_at,
-         expires_at=EXCLUDED.expires_at
-       WHERE execution_resume_leases.tenant_id=EXCLUDED.tenant_id
-         AND execution_resume_leases.expires_at <= NOW()
-       RETURNING lease_id,acquired_at,expires_at`,
-      [executionId, effectiveTenant, leaseId, leaseDurationMs]
-    );
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Resume lease principal', async client => {
+      const ownerClause = persistencePrincipal ? " AND c.snapshot->>'userId'=$5" : '';
+      const insertValues = [executionId, effectiveTenant, leaseId, leaseDurationMs];
+      if (persistencePrincipal) insertValues.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `INSERT INTO execution_resume_leases(execution_id,tenant_id,lease_id,acquired_at,expires_at)
+         SELECT c.execution_id,c.tenant_id,$3,NOW(),NOW()+($4::double precision * INTERVAL '1 millisecond')
+         FROM checkpoints c
+         WHERE c.execution_id=$1 AND c.tenant_id=$2${ownerClause}
+         ORDER BY c.sequence DESC
+         LIMIT 1
+         ON CONFLICT (execution_id) DO UPDATE SET
+           tenant_id=EXCLUDED.tenant_id,
+           lease_id=EXCLUDED.lease_id,
+           acquired_at=EXCLUDED.acquired_at,
+           expires_at=EXCLUDED.expires_at
+         WHERE execution_resume_leases.tenant_id=EXCLUDED.tenant_id
+           AND execution_resume_leases.expires_at <= NOW()
+         RETURNING lease_id,acquired_at,expires_at`,
+        insertValues
+      );
 
-    if (result.rows.length) {
+      if (result.rows.length) {
+        const row = result.rows[0];
+        return {
+          leaseId: row.lease_id,
+          acquiredAt: new Date(row.acquired_at).toISOString(),
+          expiresAt: new Date(row.expires_at).toISOString(),
+          expiresAtMs: new Date(row.expires_at).getTime()
+        };
+      }
+
+      const checkpointValues = persistencePrincipal
+        ? [executionId, effectiveTenant, persistencePrincipal.ownerId]
+        : [executionId, effectiveTenant];
+      const checkpointOwnerClause = persistencePrincipal ? " AND snapshot->>'userId'=$3" : '';
+      const checkpoint = await client.query(
+        'SELECT 1 FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2' + checkpointOwnerClause + ' LIMIT 1',
+        checkpointValues
+      );
+      if (!checkpoint.rows.length) return null;
+
+      const existing = await client.query(
+        'SELECT tenant_id,expires_at FROM execution_resume_leases WHERE execution_id=$1 LIMIT 1',
+        [executionId]
+      );
+      if (existing.rows.length && existing.rows[0].tenant_id !== effectiveTenant) return null;
+
+      const error = new Error('Execution resume lease is already held');
+      error.code = 'CHECKPOINT_RESUME_LEASE_HELD';
+      throw error;
+    });
+  }
+
+  async renewResumeLease(executionId, leaseId, { tenantId = null, leaseDurationMs = 30000, persistencePrincipal = null } = {}) {
+    if (!executionId || !leaseId) return null;
+    if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
+      throw new TypeError('leaseDurationMs must be a positive integer');
+    }
+    const effectiveTenant = tenantOrLocal(tenantId);
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Resume lease principal', async client => {
+      const ownerClause = persistencePrincipal
+        ? " AND EXISTS (SELECT 1 FROM checkpoints c WHERE c.execution_id=execution_resume_leases.execution_id AND c.tenant_id=execution_resume_leases.tenant_id AND c.snapshot->>'userId'=$5)"
+        : '';
+      const values = [executionId, effectiveTenant, leaseId, leaseDurationMs];
+      if (persistencePrincipal) values.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `UPDATE execution_resume_leases
+         SET expires_at=NOW()+($4::double precision * INTERVAL '1 millisecond')
+         WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3 AND expires_at>NOW()${ownerClause}
+         RETURNING lease_id,acquired_at,expires_at`,
+        values
+      );
+      if (!result.rows.length) return null;
       const row = result.rows[0];
       return {
         leaseId: row.lease_id,
@@ -586,56 +724,24 @@ class PostgresCheckpointRepository {
         expiresAt: new Date(row.expires_at).toISOString(),
         expiresAtMs: new Date(row.expires_at).getTime()
       };
-    }
-
-    const checkpoint = await this.db.query(
-      'SELECT 1 FROM checkpoints WHERE execution_id=$1 AND tenant_id=$2 LIMIT 1',
-      [executionId, effectiveTenant]
-    );
-    if (!checkpoint.rows.length) return null;
-
-    const existing = await this.db.query(
-      'SELECT tenant_id,expires_at FROM execution_resume_leases WHERE execution_id=$1 LIMIT 1',
-      [executionId]
-    );
-    if (existing.rows.length && existing.rows[0].tenant_id !== effectiveTenant) return null;
-
-    const error = new Error('Execution resume lease is already held');
-    error.code = 'CHECKPOINT_RESUME_LEASE_HELD';
-    throw error;
+    });
   }
 
-  async renewResumeLease(executionId, leaseId, { tenantId = null, leaseDurationMs = 30000 } = {}) {
-    if (!executionId || !leaseId) return null;
-    if (!Number.isInteger(leaseDurationMs) || leaseDurationMs <= 0) {
-      throw new TypeError('leaseDurationMs must be a positive integer');
-    }
-    const effectiveTenant = tenantOrLocal(tenantId);
-    const result = await this.db.query(
-      `UPDATE execution_resume_leases
-       SET expires_at=NOW()+($4::double precision * INTERVAL '1 millisecond')
-       WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3 AND expires_at>NOW()
-       RETURNING lease_id,acquired_at,expires_at`,
-      [executionId, effectiveTenant, leaseId, leaseDurationMs]
-    );
-    if (!result.rows.length) return null;
-    const row = result.rows[0];
-    return {
-      leaseId: row.lease_id,
-      acquiredAt: new Date(row.acquired_at).toISOString(),
-      expiresAt: new Date(row.expires_at).toISOString(),
-      expiresAtMs: new Date(row.expires_at).getTime()
-    };
-  }
-
-  async releaseResumeLease(executionId, leaseId, { tenantId = null } = {}) {
+  async releaseResumeLease(executionId, leaseId, { tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId || !leaseId) return false;
     const effectiveTenant = tenantOrLocal(tenantId);
-    const result = await this.db.query(
-      'DELETE FROM execution_resume_leases WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3',
-      [executionId, effectiveTenant, leaseId]
-    );
-    return result.rowCount === 1;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Resume lease principal', async client => {
+      const ownerClause = persistencePrincipal
+        ? " AND EXISTS (SELECT 1 FROM checkpoints c WHERE c.execution_id=execution_resume_leases.execution_id AND c.tenant_id=execution_resume_leases.tenant_id AND c.snapshot->>'userId'=$4)"
+        : '';
+      const values = [executionId, effectiveTenant, leaseId];
+      if (persistencePrincipal) values.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        'DELETE FROM execution_resume_leases WHERE execution_id=$1 AND tenant_id=$2 AND lease_id=$3' + ownerClause,
+        values
+      );
+      return result.rowCount === 1;
+    });
   }
 
   async delete(executionId, { tenantId = null } = {}) {
@@ -956,95 +1062,144 @@ class PostgresApprovalRepository {
     };
   }
 
-  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null } = {}) {
+  async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId) return [];
-    const clauses = ['execution_id=$1'];
-    const values = [String(executionId)];
-    if (tenantId) { values.push(tenantId); clauses.push(`tenant_id=$${values.length}`); }
-    if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
-    if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
-    if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
-    const result = await this.db.query(`SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`, values);
-    return result.rows.map(row => this.mapRow(row));
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [String(executionId)];
+      const clauses = ['execution_id=$1'];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`tenant_id=$${values.length}`); }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        clauses.push(`e.payload->>'userId'=$${values.length}`);
+      }
+      if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
+      if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
+      if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
+      const query = persistencePrincipal
+        ? `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.map(clause => clause.replace(/^(execution_id|tenant_id|step|tool|plan_revision)=/, 'a.$1=')).join(' AND ')} ORDER BY a.issued_at DESC`
+        : `SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`;
+      const result = await client.query(query, values);
+      return result.rows.map(row => this.mapRow(row));
+    });
   }
-
-  async findPending({ tenantId = null, limit = 100, now = Date.now() } = {}) {
+  async findPending({ tenantId = null, limit = 100, now = Date.now(), persistencePrincipal = null } = {}) {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
     const nowIso = new Date(now).toISOString();
-    const result = tenantId
-      ? await this.db.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [tenantId, nowIso, boundedLimit])
-      : await this.db.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
-    return result.rows.map(row => this.mapRow(row));
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (!persistencePrincipal) {
+        const result = effectiveTenant
+          ? await client.query(`SELECT * FROM approvals WHERE tenant_id=$1 AND used=FALSE AND expires_at>$2 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $3`, [effectiveTenant, nowIso, boundedLimit])
+          : await client.query(`SELECT * FROM approvals WHERE used=FALSE AND expires_at>$1 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision') ORDER BY issued_at ASC, approval_id ASC LIMIT $2`, [nowIso, boundedLimit]);
+        return result.rows.map(row => this.mapRow(row));
+      }
+      const values = [nowIso];
+      const clauses = ['a.used=FALSE', 'a.expires_at>$1', "NOT (COALESCE(a.metadata, '{}'::jsonb) ? 'decision')"];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      values.push(persistencePrincipal.ownerId);
+      clauses.push(`e.payload->>'userId'=$${values.length}`);
+      values.push(boundedLimit);
+      const result = await client.query(
+        `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at ASC, a.approval_id ASC LIMIT $${values.length}`,
+        values
+      );
+      return result.rows.map(row => this.mapRow(row));
+    });
   }
-
-  async save(approval, { tenantId = null } = {}) {
+  async save(approval, { tenantId = null, persistencePrincipal = null } = {}) {
     const effectiveTenant = tenantOrLocal(approval.tenantId || approval.metadata?.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Approval');
-    await this.db.query(
-      `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
-    );
-    return { ...approval, tenantId: effectiveTenant };
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      if (persistencePrincipal) {
+        const owner = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [approval.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!owner.rows.length) throw Object.assign(new Error('Approval execution is not owned by the persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+      }
+      await client.query(
+        `INSERT INTO approvals(approval_id,tenant_id,execution_id,step,plan_revision,tool,capability,scope,issued_at,expires_at,used,used_at,metadata)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [approval.approvalId,effectiveTenant,approval.executionId,approval.step,approval.planRevision,approval.tool,approval.capability,approval.scope,approval.issuedAt,approval.expiresAt,Boolean(approval.used),approval.usedAt || null,{...(approval.metadata || {}),tenantId:effectiveTenant}]
+      );
+      return { ...approval, tenantId: effectiveTenant };
+    });
   }
-
-  async findById(approvalId, { tenantId = null } = {}) {
-    const result = await this.db.query(
-      tenantId ? 'SELECT * FROM approvals WHERE approval_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT * FROM approvals WHERE approval_id=$1 LIMIT 1',
-      tenantId ? [approvalId, tenantId] : [approvalId]
-    );
-    if (!result.rows.length) return null;
-    const row = result.rows[0];
-    return this.mapRow(row);
+  async findById(approvalId, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [approvalId];
+      let where = 'a.approval_id=$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND a.tenant_id=$${values.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND e.payload->>'userId'=$${values.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${where} LIMIT 1`, values);
+      return result.rows.length ? this.mapRow(result.rows[0]) : null;
+    });
   }
-
-  async consume(approvalId, usedAt, tenantId = null) {
-    const result = await this.db.query(
-      tenantId
-        ? 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND tenant_id=$3 AND used=FALSE AND expires_at>$1'
-        : 'UPDATE approvals SET used=TRUE,used_at=$1 WHERE approval_id=$2 AND used=FALSE AND expires_at>$1',
-      tenantId ? [usedAt, approvalId, tenantId] : [usedAt, approvalId]
-    );
-    return result.rowCount === 1;
+  async consume(approvalId, usedAt, tenantId = null, { persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const values = [usedAt, approvalId];
+      let where = 'approval_id=$2 AND used=FALSE AND expires_at>$1';
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const result = await client.query(`UPDATE approvals SET used=TRUE,used_at=$1 WHERE ${where}`, values);
+      return result.rowCount === 1;
+    });
   }
-
-  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now()) {
-    if (typeof approvalId !== 'string' || !approvalId.trim()) {
-      throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
-    }
-    if (!decision || !['approved', 'rejected'].includes(decision.status) ||
-        typeof decision.actorId !== 'string' || !decision.actorId.trim() ||
-        typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) {
-      throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
-    }
+  async recordDecision(approvalId, decision, tenantId = null, now = () => Date.now(), persistencePrincipal = null) {
+    if (typeof approvalId !== 'string' || !approvalId.trim()) throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
+    if (!decision || !['approved', 'rejected'].includes(decision.status) || typeof decision.actorId !== 'string' || !decision.actorId.trim() || typeof decision.decidedAt !== 'string' || !Number.isFinite(Date.parse(decision.decidedAt))) throw Object.assign(new TypeError('Invalid approval decision'), { code: 'APPROVAL_DECISION_INVALID' });
     const nowMs = typeof now === 'function' ? now() : now;
     if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
     const nowIso = new Date(nowMs).toISOString();
-    const current = await this.findById(approvalId, { tenantId });
-    if (!current) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
-    if (current.decision) {
-      if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
-      throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
-    }
-    if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
-    const expiry = current.expiresAt instanceof Date ? current.expiresAt.getTime() : Date.parse(current.expiresAt);
-    if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
-    const values = [JSON.stringify(decision), approvalId, nowIso];
-    let tenantClause = '';
-    if (tenantId) { values.push(tenantId); tenantClause = ' AND tenant_id=$4'; }
-    const updated = await this.db.query(
-      "UPDATE approvals SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')" + tenantClause + ' RETURNING *',
-      values
-    );
-    if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
-    const latest = await this.findById(approvalId, { tenantId });
-    if (latest?.decision?.status === decision.status && latest?.decision?.actorId === decision.actorId) return latest;
-    if (latest?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
-    if (latest?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
-    throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
+      const selectValues = [approvalId];
+      let selectWhere = 'a.approval_id=$1';
+      if (effectiveTenant) { selectValues.push(effectiveTenant); selectWhere += ` AND a.tenant_id=$${selectValues.length}`; }
+      let join = '';
+      if (persistencePrincipal) {
+        selectValues.push(persistencePrincipal.ownerId);
+        selectWhere += ` AND e.payload->>'userId'=$${selectValues.length}`;
+        join = ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id';
+      }
+      const selected = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      if (!selected.rows.length) throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
+      const current = this.mapRow(selected.rows[0]);
+      if (current.decision) {
+        if (current.decision.status === decision.status && current.decision.actorId === decision.actorId) return current;
+        throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      }
+      if (current.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      const expiry = Date.parse(current.expiresAt);
+      if (!Number.isFinite(expiry) || nowMs >= expiry) throw Object.assign(new Error('Approval expired'), { code: 'APPROVAL_EXPIRED' });
+      const values = [JSON.stringify(decision), approvalId, nowIso];
+      let where = "approval_id=$2 AND used=FALSE AND expires_at>$3 AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'decision')";
+      if (effectiveTenant) { values.push(effectiveTenant); where += ` AND tenant_id=$${values.length}`; }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ` AND EXISTS (SELECT 1 FROM executions e WHERE e.execution_id=approvals.execution_id AND e.tenant_id=approvals.tenant_id AND e.payload->>'userId'=$${values.length})`;
+      }
+      const updated = await client.query(`UPDATE approvals SET metadata=COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('decision', $1::jsonb) WHERE ${where} RETURNING *`, values);
+      if (updated.rowCount === 1) return this.mapRow(updated.rows[0]);
+      const latest = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${selectWhere} LIMIT 1`, selectValues);
+      const record = latest.rows[0] ? this.mapRow(latest.rows[0]) : null;
+      if (record?.decision?.status === decision.status && record?.decision?.actorId === decision.actorId) return record;
+      if (record?.decision) throw Object.assign(new Error('Approval decision is immutable'), { code: 'APPROVAL_DECISION_CONFLICT' });
+      if (record?.used) throw Object.assign(new Error('Approval already consumed'), { code: 'APPROVAL_ALREADY_USED' });
+      throw Object.assign(new Error('Approval expired or could not be recorded'), { code: 'APPROVAL_EXPIRED' });
+    });
   }
-
-
   async count({ tenantId = null } = {}) {
     const result = tenantId
       ? await this.db.query('SELECT COUNT(*)::int AS count FROM approvals WHERE tenant_id=$1', [tenantId])

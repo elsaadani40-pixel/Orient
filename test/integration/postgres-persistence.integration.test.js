@@ -1069,3 +1069,131 @@ test('PostgreSQL principal transaction context is isolated across concurrent poo
   assert.ok(!reused.rows[0].owner_id, 'transaction-local owner context must not leak to a reused pool connection');
   assert.ok(!reused.rows[0].session_id, 'transaction-local session context must not leak to a reused pool connection');
 });
+
+
+test('PostgreSQL approval lifecycle isolates two owners and serializes competing decisions', async t => {
+  const tenantId = 'tenant-owner-approval-' + randomUUID();
+  const ownerA = 'owner-a-' + randomUUID();
+  const ownerB = 'owner-b-' + randomUUID();
+  const executionA = 'execution-owner-a-' + randomUUID();
+  const executionB = 'execution-owner-b-' + randomUUID();
+  const principalA = makeOwnerPrincipal(tenantId, ownerA);
+  const principalB = makeOwnerPrincipal(tenantId, ownerB);
+  const approvalAId = 'approval-owner-a-' + randomUUID();
+  const approvalBId = 'approval-owner-b-' + randomUUID();
+
+  t.after(async () => {
+    await pool.query('DELETE FROM approvals WHERE tenant_id=$1 AND approval_id = ANY($2::text[])', [
+      tenantId, [approvalAId, approvalBId]
+    ]);
+    await pool.query('DELETE FROM executions WHERE tenant_id=$1 AND execution_id = ANY($2::text[])', [
+      tenantId, [executionA, executionB]
+    ]);
+  });
+
+  await persistence.executions.insert({
+    executionId: executionA,
+    tenantId,
+    userId: ownerA,
+    status: 'running'
+  }, { tenantId });
+  await persistence.executions.insert({
+    executionId: executionB,
+    tenantId,
+    userId: ownerB,
+    status: 'running'
+  }, { tenantId });
+
+  const baseApproval = executionId => ({
+    executionId,
+    tenantId,
+    step: 1,
+    planRevision: 1,
+    tool: 'memory.read',
+    capability: 'memory:read',
+    scope: {},
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 120000).toISOString(),
+    used: false,
+    metadata: { tenantId }
+  });
+  await persistence.approvals.save({
+    ...baseApproval(executionA), approvalId: approvalAId
+  }, { tenantId, persistencePrincipal: principalA });
+  await persistence.approvals.save({
+    ...baseApproval(executionB), approvalId: approvalBId
+  }, { tenantId, persistencePrincipal: principalB });
+
+  const ownerARecord = await persistence.approvals.findById(approvalAId, {
+    tenantId, persistencePrincipal: principalA
+  });
+  const ownerBCannotReadA = await persistence.approvals.findById(approvalAId, {
+    tenantId, persistencePrincipal: principalB
+  });
+  assert.equal(ownerARecord?.approvalId, approvalAId);
+  assert.equal(ownerBCannotReadA, null);
+
+  const ownerAPending = await persistence.approvals.findPending({
+    tenantId, persistencePrincipal: principalA, now: Date.now()
+  });
+  const ownerBPending = await persistence.approvals.findPending({
+    tenantId, persistencePrincipal: principalB, now: Date.now()
+  });
+  assert.deepEqual(ownerAPending.map(item => item.approvalId), [approvalAId]);
+  assert.deepEqual(ownerBPending.map(item => item.approvalId), [approvalBId]);
+
+  const makeApprovalService = () => new ApprovalService({
+    repository: persistence.approvals,
+    tenantId,
+    decisionAuthorizer: async ({ actorId }) =>
+      actorId === principalA.sessionId || actorId === principalB.sessionId
+  });
+  const serviceA = makeApprovalService();
+  const serviceB = makeApprovalService();
+
+  await assert.rejects(
+    serviceA.decide({
+      approvalId: approvalBId,
+      executionId: executionB,
+      decision: 'approved',
+      actorId: principalA.sessionId,
+      tenantId,
+      persistencePrincipal: principalA
+    }),
+    error => error.code === 'APPROVAL_NOT_FOUND'
+  );
+
+  const competing = await Promise.allSettled([
+    serviceA.decide({
+      approvalId: approvalAId,
+      executionId: executionA,
+      decision: 'approved',
+      actorId: principalA.sessionId,
+      tenantId,
+      persistencePrincipal: principalA
+    }),
+    serviceB.decide({
+      approvalId: approvalAId,
+      executionId: executionA,
+      decision: 'rejected',
+      actorId: principalA.sessionId,
+      tenantId,
+      persistencePrincipal: principalA
+    })
+  ]);
+  assert.equal(competing.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(competing.filter(result => result.status === 'rejected').length, 1);
+  const durable = await persistence.approvals.findById(approvalAId, {
+    tenantId, persistencePrincipal: principalA
+  });
+  assert.ok(['approved', 'rejected'].includes(durable.decision?.status));
+
+  const wrongOwnerConsume = await persistence.approvals.consume(
+    approvalAId,
+    new Date().toISOString(),
+    tenantId,
+    { persistencePrincipal: principalB }
+  );
+  assert.equal(wrongOwnerConsume, false);
+
+});

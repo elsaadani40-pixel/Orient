@@ -30,7 +30,7 @@ class ExecutionRecoveryCoordinator {
     return serialized;
   }
 
-  async fail({ context, error, checkpointReason = null }) {
+  async fail({ context, error, checkpointReason = null, persistencePrincipal = null }) {
     if (
       context.isActive() &&
       context.canTransitionAgentTo('recovering')
@@ -48,7 +48,8 @@ class ExecutionRecoveryCoordinator {
     const committedCheckpoint = await this.checkpoint(
       context,
       'update',
-      checkpointReason || 'recovery_failure_committed'
+      checkpointReason || 'recovery_failure_committed',
+      persistencePrincipal
     );
 
     // A repository-level cancellation guard can reject the failed terminal
@@ -66,11 +67,11 @@ class ExecutionRecoveryCoordinator {
       };
     }
 
-    await this.persistExecution(context, 'update');
-    await this.persistEvents(context);
+    await this.persistExecution(context, 'update', persistencePrincipal);
+    await this.persistEvents(context, persistencePrincipal);
 
     if (checkpointReason) {
-      await this.checkpoint(context, 'update', checkpointReason);
+      await this.checkpoint(context, 'update', checkpointReason, persistencePrincipal);
     }
 
     return recovery;

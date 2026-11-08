@@ -497,7 +497,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'APPROVAL_INBOX_UNAVAILABLE', message: 'صندوق الموافقات غير متاح.' });
             return;
           }
-          await agentRoutes.pendingApprovals(req, res);
+          await agentRoutes.pendingApprovals(req, res, ownerPersistencePrincipal);
           return;
         }
 
@@ -523,7 +523,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'APPROVAL_DECISION_UNAVAILABLE', message: 'اتخاذ قرار الموافقة غير متاح حاليًا.' });
             return;
           }
-          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, ownerSession.sessionId);
+          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, ownerSession.sessionId, ownerPersistencePrincipal);
           return;
         }
 
@@ -554,7 +554,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             res,
             ownerResumeMatch[1],
             { approval: { approvalId } },
-            { sessionId: ownerSession.sessionId }
+            { sessionId: ownerSession.sessionId },
+            ownerPersistencePrincipal
           );
           return;
         }
@@ -576,7 +577,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
             return;
           }
-          await agentRoutes.cancel(req, res, ownerCancelMatch[1], { reason: 'owner_rejected', ...payload });
+          await agentRoutes.cancel(req, res, ownerCancelMatch[1], { reason: 'owner_rejected', ...payload }, ownerPersistencePrincipal);
           return;
         }
 
@@ -793,7 +794,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           req,
           res,
           decodeURIComponent(executionCancelMatch[1]),
-          body
+          body,
+          ownerPersistencePrincipal
         );
         return;
       }
@@ -811,7 +813,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           res,
           decodeURIComponent(executionResumeMatch[1]),
           body,
-          ownerSession ? { sessionId: ownerSession.sessionId } : null
+          ownerSession ? { sessionId: ownerSession.sessionId } : null,
+          ownerPersistencePrincipal
         );
         return;
       }
