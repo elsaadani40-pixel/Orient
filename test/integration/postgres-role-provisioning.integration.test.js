@@ -166,7 +166,7 @@ test('CREATEROLE administrator provisions successfully when it owns the existing
     }
     const existingRoles = await adminPool.query(
       'SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])',
-      [['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner', 'orient_provisioner']]
+      [['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner']]
     );
     const roleNames = new Set(existingRoles.rows.map(row => row.rolname));
     if (roleNames.has('orient_owner') && roleNames.has('orient_migrator')) {
@@ -179,9 +179,13 @@ test('CREATEROLE administrator provisions successfully when it owns the existing
       const identifier = '"' + row.rolname.replace(/"/g, '""') + '"';
       await adminPool.query('DROP OWNED BY ' + identifier);
     }
-    for (const role of ['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner', 'orient_provisioner']) {
+    for (const role of ['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner']) {
       await adminPool.query('DROP ROLE IF EXISTS "' + role + '"');
     }
+    // The temporary CREATEROLE administrator is intentionally left in this
+    // disposable CI database; the PostgreSQL service container is destroyed
+    // after the job. Avoid DROP OWNED on the role because it is the grantor
+    // recorded for the role memberships created during this test.
     await adminPool.end();
   }
 });
