@@ -554,7 +554,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             res,
             ownerResumeMatch[1],
             { approval: { approvalId } },
-            { sessionId: ownerSession.sessionId }
+            { sessionId: ownerSession.sessionId },
+            ownerPersistencePrincipal
           );
           return;
         }
