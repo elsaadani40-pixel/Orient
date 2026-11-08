@@ -771,3 +771,60 @@ test('rejects a revoked owner session before loading a resumable checkpoint', as
 
   assert.equal(checkpointReads, 0);
 });
+
+
+test('rejects approval challenges that claim a tenant different from the active execution tenant', async () => {
+  let approvalIssueCalls = 0;
+  let checkpointCalls = 0;
+  let eventPersistenceCalls = 0;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test.cross-tenant-approval', steps: [{ step: 1, tool: 'test.tool' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async ({ context }) => {
+        throw Object.assign(new Error('approval required'), {
+          code: 'APPROVAL_REQUIRED',
+          executionContext: {
+            executionId: context.executionId,
+            step: 1,
+            planRevision: 1,
+            tool: 'test.tool',
+            capability: 'workspace.write',
+            tenantId: 'tenant-b',
+            input: {}
+          }
+        });
+      }
+    },
+    recoveryCoordinator: { fail: async () => { throw new Error('recovery must not run'); } },
+    persistence: null,
+    persistenceCoordinator: {
+      persistExecution: async () => ({}),
+      checkpoint: async () => { checkpointCalls += 1; },
+      persistEvents: async () => { eventPersistenceCalls += 1; }
+    },
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    approvalService: {
+      issue: async () => {
+        approvalIssueCalls += 1;
+        return { approvalId: 'must-not-be-issued' };
+      }
+    },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+
+  await assert.rejects(
+    coordinator.execute('perform guarded action'),
+    error => error.code === 'APPROVAL_TENANT_MISMATCH' && error.statusCode === 403
+  );
+
+  assert.equal(approvalIssueCalls, 0, 'no approval may be issued into another tenant');
+  assert.equal(checkpointCalls, 0, 'mismatched approval metadata must be rejected before checkpointing');
+  assert.equal(eventPersistenceCalls, 0, 'mismatched approval metadata must be rejected before event persistence');
+});
