@@ -4,11 +4,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 
-const createServer = require('../../src/interfaces/http/server');
-const createAgentRoutes = require('../../src/interfaces/http/routes/agent.routes');
+const createServer = require('../../../../src/interfaces/http/server');
+const createAgentRoutes = require('../../../../src/interfaces/http/routes/agent.routes');
 const {
   assertPersistencePrincipal
-} = require('../../src/infrastructure/persistence/postgres/persistence-principal');
+} = require('../../../../src/infrastructure/persistence/postgres/persistence-principal');
 
 function createOwnerAuth() {
   return {
