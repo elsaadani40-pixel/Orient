@@ -71,6 +71,7 @@ test('unleased workflow writes cannot bypass a live lease by clearing the fencin
   await assert.rejects(repo.save(unleased,'tenant-a'),e=>e.code==='WORKFLOW_FENCING_REQUIRED');
   assert.match(calls[0].sql,/NOT EXISTS/);
   assert.match(calls[0].sql,/workflow_leases/);
+  assert.match(calls[0].sql,/workflow_dispatch_claims/);
   assert.match(calls[0].sql,/clock_timestamp/);
 });
 
