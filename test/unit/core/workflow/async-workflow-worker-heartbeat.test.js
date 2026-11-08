@@ -263,7 +263,7 @@ test('AsyncWorkflowWorker treats a replaced registry session as lost lease and n
     steps: { 'step-session': { state: 'READY' } },
     readySteps() { return completed || failed ? [] : [step]; },
     markStepRunning() {},
-    markStepCompleted() { completed = true; },
+    markStepCompleted(id) { completed = true; this.steps[id].state = 'COMPLETED'; },
     markStepFailed() { failed = true; },
     transition(state) { this.state = state; }
   };
