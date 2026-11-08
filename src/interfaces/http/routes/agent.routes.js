@@ -466,7 +466,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async cancel(req, res, executionId, body) {
+    async cancel(req, res, executionId, body, persistencePrincipal = null) {
       let options = {};
       if (body) {
         try {
@@ -476,7 +476,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         }
       }
 
-      const result = await agentService.cancelExecution(executionId, options || {});
+      const result = await agentService.cancelExecution(executionId, { ...(options || {}), ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'X-Content-Type-Options': 'nosniff',
