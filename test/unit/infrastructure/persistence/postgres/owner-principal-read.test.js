@@ -17,7 +17,7 @@ function createHarness() {
       if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: '1' }], rowCount: 1 };
       if (sql.includes('FROM executions') && sql.includes('payload')) {
         const owner = values.find(value => value === 'owner-a' || value === 'owner-b');
-        if (sql.includes('payload->>\\'userId\\'=$')) {
+        if (sql.includes("payload->>'userId'=$")) {
           return {
             rows: owner === 'owner-a'
               ? [{ payload: { executionId: 'exec-a', userId: 'owner-a' } }]
