@@ -79,7 +79,7 @@ test('fenced workflow writes reject missing or mismatched principals before data
   );
   const wrongLease = createWorkerPersistencePrincipal({
     tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-a',
-    workflowId: 'workflow-a', leaseId: 'other-lease', fencingToken: 71
+    workflowId: 'other-workflow', leaseId: 'other-lease', fencingToken: 71
   });
   await assert.rejects(
     h.repo.save(h.instance, 'tenant-a', { workerPrincipal: wrongLease }),
