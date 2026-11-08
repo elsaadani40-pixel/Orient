@@ -245,3 +245,47 @@ test('AsyncWorkflowWorker refuses to commit a step after fencing is lost during 
   assert.equal(assertCalls, 2, 'fencing must be checked before and after the side effect');
   assert.equal(released, true);
 });
+
+
+test('AsyncWorkflowWorker treats a replaced registry session as lost lease and never commits the step', async () => {
+  let failed = false;
+  let completed = false;
+  let persisted = false;
+  let released = false;
+  const step = { id: 'step-session' };
+  const instance = {
+    workflowId: 'worker-session-replaced',
+    state: 'RUNNING',
+    cancelRequested: false,
+    deadlineAt: null,
+    definition: { steps: [step] },
+    steps: { 'step-session': { state: 'READY' } },
+    readySteps() { return completed || failed ? [] : [step]; },
+    markStepRunning() {},
+    markStepCompleted() { completed = true; },
+    markStepFailed() { failed = true; },
+    transition(state) { this.state = state; }
+  };
+  const lease = {
+    workflowId: instance.workflowId, leaseId: 'lease-session', workerId: 'worker-session',
+    fencingToken: 51, expiresAt: Date.now() + 30000, instance
+  };
+  const scheduler = {
+    leaseDurationMs: 30000,
+    async leaseAsync() { return lease; },
+    async renewAsync() { throw Object.assign(new Error('worker session replaced'), { code: 'WORKER_SESSION_LOST' }); },
+    async persistAsync() { persisted = true; },
+    async releaseAsync() { released = true; throw Object.assign(new Error('worker session replaced'), { code: 'WORKER_SESSION_LOST' }); }
+  };
+  const worker = new AsyncWorkflowWorker({
+    scheduler,
+    workerId: 'worker-session',
+    executor: async () => ({ shouldNotRun: true })
+  });
+  const result = await worker.tick();
+  assert.equal(result, null);
+  assert.equal(completed, false);
+  assert.equal(failed, false);
+  assert.equal(persisted, false);
+  assert.equal(released, true);
+});
