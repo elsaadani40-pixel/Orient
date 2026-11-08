@@ -1026,7 +1026,7 @@ class PostgresWorkflowRepository {
   }
 
   async findById(workflowId, tenantId = null, { persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
       const values = [workflowId];
       let where = 'workflow_id=$1';
@@ -1042,7 +1042,7 @@ class PostgresWorkflowRepository {
       values.push(persistencePrincipal.ownerId);
       tenantClause += " AND payload->>'userId'=$" + values.length;
     }
-    return withPersistencePrincipal(this.db, persistencePrincipal, tenantId ? tenantOrLocal(tenantId) : null, 'Workflow principal', async client => {
+    return withPersistencePrincipal(this.db, persistencePrincipal, tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null), 'Workflow principal', async client => {
       const result = await client.query(
         "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
         "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
@@ -1054,7 +1054,7 @@ class PostgresWorkflowRepository {
   }
 
   async findAll({ tenantId = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
       const values = [];
       let where = '';
