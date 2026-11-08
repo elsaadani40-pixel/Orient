@@ -131,10 +131,8 @@ const MIGRATIONS = [
     ALTER TABLE owner_work_profiles
       ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'local';
 
-    ALTER TABLE owner_chat_messages
-      ALTER COLUMN tenant_id DROP DEFAULT;
-    ALTER TABLE owner_work_profiles
-      ALTER COLUMN tenant_id DROP DEFAULT;
+    -- Keep the legacy local default until authenticated HTTP principal propagation
+    -- is complete; all new tenant-aware callers must still pass tenant_id explicitly.
 
     ALTER TABLE owner_chat_messages
       DROP CONSTRAINT IF EXISTS owner_chat_messages_pkey;
