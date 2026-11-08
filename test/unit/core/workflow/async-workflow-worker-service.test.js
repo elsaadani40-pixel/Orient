@@ -151,3 +151,52 @@ test('AsyncWorkflowScheduler does not reserve quota after shutdown begins', asyn
   );
   assert.equal(reservations, 0);
 });
+
+
+test('AsyncWorkflowWorkerService uses one trusted worker session for registration heartbeat recovery and shutdown', async () => {
+  const calls = [];
+  const scheduler = {
+    tenantId: 'tenant-worker',
+    async recoverPersisted(workerId, capabilities, workerPrincipal) {
+      calls.push(['recover', workerId, workerPrincipal]);
+      return 0;
+    }
+  };
+  const registry = {
+    async register(worker, tenantId, options) {
+      calls.push(['register', worker.workerId, tenantId, options.workerPrincipal]);
+      return worker;
+    },
+    async heartbeat(workerId, options) {
+      calls.push(['heartbeat', workerId, options.workerPrincipal]);
+      return true;
+    },
+    async unregister(workerId, tenantId, options) {
+      calls.push(['unregister', workerId, tenantId, options.workerPrincipal]);
+      return true;
+    }
+  };
+  const service = new AsyncWorkflowWorkerService({
+    scheduler,
+    workerRegistry: registry,
+    workerId: 'worker-session-test',
+    workerCapabilities: ['runtime', 'memory.read'],
+    workerFactory: (workerId, capabilities, workerPrincipal) => ({
+      workerId, capabilities, workerPrincipal,
+      async tick() { return { state: 'COMPLETED' }; }
+    }),
+    pollIntervalMs: 50,
+    recoveryIntervalMs: 50
+  });
+
+  await service.ensureWorkerRegistered();
+  await service.heartbeatWorker();
+  await service.runOnce();
+  await service.unregisterWorker();
+
+  assert.equal(calls.length, 4);
+  assert.ok(calls.every(call => call[call.length - 1] === service.workerPrincipal));
+  assert.equal(service.workerPrincipal.workerId, 'worker-session-test');
+  assert.equal(service.workerPrincipal.tenantId, 'tenant-worker');
+  assert.deepEqual(service.workerPrincipal.capabilities, ['memory.read', 'runtime']);
+});
