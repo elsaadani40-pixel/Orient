@@ -974,6 +974,20 @@ class PostgresWorkflowLeaseRepository {
     return identity;
   }
 
+  async assertRegisteredWorkerSession(client, principal) {
+    const result = await client.query(
+      `SELECT 1 FROM worker_nodes
+       WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+         AND status='READY' AND expires_at > NOW()
+       FOR UPDATE`,
+      [principal.tenantId, principal.workerId, principal.sessionId]
+    );
+    if (result.rowCount !== 1) {
+      throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+    }
+    return true;
+  }
+
   async tryAcquire(lease, tenantId = null, { workerPrincipal = null } = {}) {
     const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Lease');
@@ -982,16 +996,7 @@ class PostgresWorkflowLeaseRepository {
     const expiresAt = new Date(lease.expiresAt).toISOString();
 
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
-      const worker = await client.query(
-        'SELECT session_id,status,expires_at FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
-        [effectiveTenant, principal.workerId]
-      );
-      if (!worker.rows.length || worker.rows[0].session_id !== principal.sessionId ||
-          worker.rows[0].status !== 'READY' || new Date(worker.rows[0].expires_at).getTime() <= Date.now()) {
-        throw Object.assign(new Error('Worker session is not active for workflow lease acquisition'), {
-          code: 'WORKER_SESSION_LOST'
-        });
-      }
+      await this.assertRegisteredWorkerSession(client, principal);
       const workflow = await client.query(
         'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
         [lease.workflowId, effectiveTenant]
