@@ -27,7 +27,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
           messageId: req.ownerChatMessageId,
           idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : null,
           replayed: Boolean(result.replayed),
-          persistencePrincipal
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
         });
       }
       const statusCode = result.replayed ? 200 : 201;
@@ -135,7 +135,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }
       if (result.status === 'completed' && finalAnswer.status === 'available' &&
           typeof onFinalAnswer === 'function') {
-        await onFinalAnswer({ executionId, text: finalAnswer.text, persistencePrincipal });
+        await onFinalAnswer({ executionId, text: finalAnswer.text, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       }
       const response = createRuntimeResponseV1({
         assistantText: finalAnswer.text,
