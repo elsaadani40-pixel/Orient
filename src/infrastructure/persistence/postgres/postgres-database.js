@@ -124,6 +124,39 @@ const MIGRATIONS = [
     );
   `},
 
+
+  {version:9,sql:`
+    ALTER TABLE owner_chat_messages
+      ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE owner_work_profiles
+      ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'local';
+
+    ALTER TABLE owner_chat_messages
+      ALTER COLUMN tenant_id DROP DEFAULT;
+    ALTER TABLE owner_work_profiles
+      ALTER COLUMN tenant_id DROP DEFAULT;
+
+    ALTER TABLE owner_chat_messages
+      DROP CONSTRAINT IF EXISTS owner_chat_messages_pkey;
+    ALTER TABLE owner_chat_messages
+      ADD CONSTRAINT owner_chat_messages_pkey
+      PRIMARY KEY (tenant_id, owner_id, message_id);
+
+    ALTER TABLE owner_work_profiles
+      DROP CONSTRAINT IF EXISTS owner_work_profiles_pkey;
+    ALTER TABLE owner_work_profiles
+      ADD CONSTRAINT owner_work_profiles_pkey
+      PRIMARY KEY (tenant_id, owner_id);
+
+    DROP INDEX IF EXISTS idx_owner_chat_messages_order;
+    DROP INDEX IF EXISTS idx_owner_chat_messages_task;
+    CREATE INDEX IF NOT EXISTS idx_owner_chat_messages_tenant_order
+      ON owner_chat_messages(tenant_id, owner_id, created_at, message_id);
+    CREATE INDEX IF NOT EXISTS idx_owner_chat_messages_tenant_task
+      ON owner_chat_messages(tenant_id, owner_id, task_id)
+      WHERE task_id IS NOT NULL;
+  `},
+
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -142,7 +175,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8)',[1,2,3,4,5,6,7,8]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9)',[1,2,3,4,5,6,7,8,9]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
