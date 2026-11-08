@@ -136,3 +136,33 @@ A further fail-closed check is now added at `AgentService.createTask`:
 This closes the **task-creation admission identity check only**. It does not yet bind the principal to the Runtime execution, execution repository, events, checkpoints, resume/cancel, or owner-scoped reads. The runtime still owns a singleton persistence coordinator configured with tenant identity only, so a principal must not be placed on that singleton or inferred from mutable execution metadata.
 
 The next implementation slice remains the full request-scoped lifecycle propagation and repository migration described above. Exact-head CI must complete on the latest commit before treating these changes as verified. PR #350 remains Draft; no RLS policies, hosted grants, roles, or production credentials are changed.
+
+
+## Follow-up verification: PR #351 owner-scoped read slice
+
+Audit target: PR #351 head `1caa2771c6f801664972d2b02b5a0240ac768c96` (2026-11-08).
+
+The following read paths now carry the exact server-issued principal from the authenticated HTTP request into the PostgreSQL repository boundary:
+
+- Task list and execution history: `AgentService.listExecutionSummaries` → `OrientRuntime.listExecutionSummaries` → `PostgresExecutionRepository.findPage/findAll`.
+- Task status: `AgentService.getExecutionStatus` → `OrientRuntime.getExecutionStatus` → `PostgresExecutionRepository.findById`.
+- Task event history and SSE: `AgentService.getExecutionEvents` → `OrientRuntime.getExecutionEvents` → `PostgresEventRepository.findByExecutionId`.
+- Final answer: status, execution evidence lookup, and idempotent answer persistence receive the same principal.
+- Execution approval listing first verifies that the referenced execution is visible to the authenticated owner before listing approvals for that execution.
+
+For principal-scoped execution reads, SQL includes the execution payload owner identity (`payload->>'userId'`) and runs through `transactionWithPrincipal`. Event history is constrained by an ownership-checked execution existence query. Both count and page queries use the same principal-scoped transaction client. Legacy non-principal calls retain their existing query shape for compatibility; they are not considered owner-isolated and must not be used for authenticated production reads.
+
+Exact-head CI on this PR revision completed successfully: Unit + Architecture (Node 22 and Node 24), Full Repository Test Suite (Node 24 + PostgreSQL), PostgreSQL Integration (Node 22), Android Companion, Static Safety Checks, CodeQL, Owner Dashboard (Chromium), and Gitleaks.
+
+### Still not closed
+
+- Execution insert/update/cancellation writes and recovery reconciliation.
+- Event append and appendMany writes.
+- Checkpoint history and resume-lease lifecycle.
+- Resume, cancel, and approval decision mutations.
+- Pending approval inbox ownership.
+- Workflow, worker, dispatch-claim, worker-registry, and tenant-quota principal separation.
+- Full atomicity across execution, events, checkpoints, idempotency, and approval state.
+- RLS policy activation and hosted database role/grant/credential changes.
+
+This is a successful read-path sub-slice only. PR #351 remains Draft and is stacked on PR #350; neither PR claims complete owner isolation. The RLS activation gate remains closed until every lifecycle path has explicit owner or worker principal authority and adversarial cross-owner, cross-tenant, rollback, pool-reuse, and concurrency tests pass.
