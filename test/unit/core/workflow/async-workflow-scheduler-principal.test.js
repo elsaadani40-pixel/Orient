@@ -63,3 +63,23 @@ test('scheduler preserves fencing metadata when durable lease release reports lo
   assert.equal(scheduler.active.has(instance.workflowId),false);
   assert.equal(saves.length,0);
 });
+
+
+test('enqueueDurable persists once through the async scheduler path, not the base synchronous hook',async()=>{
+  const WorkflowDefinition=require('../../../../src/core/workflow/workflow-definition');
+  const WorkflowInstance=require('../../../../src/core/workflow/workflow-instance');
+  const calls=[];
+  const scheduler=new AsyncWorkflowScheduler({
+    tenantId:'tenant-a',
+    workflowRepository:{async save(instance,tenantId,options){calls.push({instance,tenantId,options});return instance;}}
+  });
+  const definition=new WorkflowDefinition({
+    id:'scheduler-persist-definition',version:1,name:'Persist',
+    steps:[{id:'step',tool:'noop',input:{}}]
+  });
+  const instance=new WorkflowInstance({definition,workflowId:'workflow-enqueue',tenantId:'tenant-a'});
+  await scheduler.enqueueDurable(instance);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].instance,instance);
+  assert.equal(calls[0].tenantId,'tenant-a');
+});
