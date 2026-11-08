@@ -576,7 +576,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
             return;
           }
-          await agentRoutes.cancel(req, res, ownerCancelMatch[1], { reason: 'owner_rejected', ...payload });
+          await agentRoutes.cancel(req, res, ownerCancelMatch[1], { reason: 'owner_rejected', ...payload }, ownerPersistencePrincipal);
           return;
         }
 
@@ -793,7 +793,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           req,
           res,
           decodeURIComponent(executionCancelMatch[1]),
-          body
+          body,
+          ownerPersistencePrincipal
         );
         return;
       }
