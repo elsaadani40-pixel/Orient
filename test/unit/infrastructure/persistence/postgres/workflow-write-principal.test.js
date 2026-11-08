@@ -11,11 +11,12 @@ function identity(overrides={}) {
     ...overrides
   });
 }
-function harness({workerActive=true,leaseActive=true,updateCount=1}={}) {
+function harness({workerActive=true,leaseActive=true,claimActive=true,updateCount=1}={}) {
   const calls=[];let transactions=0;
   const client={async query(sql,values=[]){
     calls.push({sql,values});
     if(sql.includes('FROM worker_nodes'))return{rows:workerActive?[{ok:true}]:[],rowCount:workerActive?1:0};
+    if(sql.includes('FROM workflow_dispatch_claims'))return{rows:claimActive?[{ok:true}]:[],rowCount:claimActive?1:0};
     if(sql.includes('FROM workflow_leases'))return{rows:leaseActive?[{ok:true}]:[],rowCount:leaseActive?1:0};
     if(sql.startsWith('UPDATE workflows'))return{rows:[],rowCount:updateCount};
     return{rows:[],rowCount:1};
@@ -81,4 +82,19 @@ test('unleased workflow creation and update remain possible when no active lease
   assert.equal(await repo.save(unleased,'tenant-a'),unleased);
   assert.match(calls[0].sql,/NOT EXISTS/);
   assert.match(calls[0].sql,/RETURNING workflow_id/);
+});
+
+
+test('workflow recovery state writes require the exact active dispatch claim session',async()=>{
+  const h=harness({leaseActive:false}),repo=new PostgresWorkflowRepository(h.db);
+  const worker=createWorkerPersistencePrincipal({tenantId:'tenant-a',workerId:'worker-a',sessionId:'session-a',capabilities:[]});
+  const recovered={...workflow(),state:'RECOVERING',metadata:{},toJSON(){return this;}};
+  assert.equal(await repo.save(recovered,'tenant-a',{workerPrincipal:worker,dispatchClaim:true}),recovered);
+  assert.equal(h.transactions,1);
+  assert.ok(h.calls.some(x=>x.sql.includes('worker_dispatch_claims')&&x.sql.includes('worker_session_id')));
+  assert.ok(h.calls.some(x=>x.sql.startsWith('UPDATE workflows')));
+
+  const stale=harness({leaseActive:false,claimActive:false}),staleRepo=new PostgresWorkflowRepository(stale.db);
+  await assert.rejects(staleRepo.save(recovered,'tenant-a',{workerPrincipal:worker,dispatchClaim:true}),e=>e.code==='WORKFLOW_DISPATCH_CLAIM_LOST');
+  assert.equal(stale.calls.some(x=>x.sql.startsWith('UPDATE workflows')),false);
 });
