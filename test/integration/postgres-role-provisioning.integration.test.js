@@ -80,7 +80,7 @@ test('PostgreSQL 17 provisions isolated ORIENT roles and transfers owned objects
     const owned = await pool.query(`
       SELECT c.relname, c.relkind
       FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-      WHERE r.rolname = 'orient_owner'
+      WHERE r.rolname = ANY(ARRAY['orient_owner','orient_provisioner'])
         AND c.relnamespace = 'public'::regnamespace
         AND c.relkind IN ('r','S')
     `);
