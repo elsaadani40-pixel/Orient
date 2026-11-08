@@ -183,14 +183,14 @@ class OrientRuntime {
     this.agentExecutionCoordinator = new AgentExecutionCoordinator({
       agentOrchestrator: this.agentOrchestrator,
       agentLoop: this.agentLoop,
-      checkpoint: (context, mode, reason) => this.checkpoint(context, mode, reason),
+      checkpoint: (context, mode, reason, persistencePrincipal) => this.checkpoint(context, mode, reason, persistencePrincipal),
       validateReplannedPlan: (nextPlan, previousFingerprint) => this.validateReplannedPlan(nextPlan, previousFingerprint)
     });
 
     this.executionRecoveryCoordinator = new ExecutionRecoveryCoordinator({
       agentOrchestrator: this.agentOrchestrator,
-      persistExecution: (context, mode) => this.persistExecution(context, mode),
-      persistEvents: (context) => this.persistEvents(context),
+      persistExecution: (context, mode, persistencePrincipal) => this.persistExecution(context, mode, persistencePrincipal),
+      persistEvents: (context, persistencePrincipal) => this.persistEvents(context, persistencePrincipal),
       checkpoint: (context, mode, reason) => this.checkpoint(context, mode, reason)
     });
 
@@ -217,16 +217,16 @@ class OrientRuntime {
       version;
   }
 
-  persistEvents(context) {
-    return this.persistenceCoordinator.persistEvents(context);
+  persistEvents(context, persistencePrincipal = null) {
+    return this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
   }
 
-  async persistExecution(context, mode = 'update') {
-    return this.persistenceCoordinator.persistExecution(context, mode);
+  async persistExecution(context, mode = 'update', persistencePrincipal = null) {
+    return this.persistenceCoordinator.persistExecution(context, mode, persistencePrincipal);
   }
 
-  async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
-    return this.persistenceCoordinator.checkpoint(context, mode, reason);
+  async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint', persistencePrincipal = null) {
+    return this.persistenceCoordinator.checkpoint(context, mode, reason, persistencePrincipal);
   }
 
   planFingerprint(plan) {
