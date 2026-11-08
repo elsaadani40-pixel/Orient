@@ -57,12 +57,17 @@ test('PostgreSQL 17 provisions isolated ORIENT roles and transfers owned objects
         pg_has_role('orient_migrator', 'orient_owner', 'MEMBER') AS migrator_owner,
         pg_has_role('orient_runtime_login', 'orient_runtime', 'MEMBER') AS runtime_group,
         pg_has_role('orient_runtime_login', 'orient_owner', 'MEMBER') AS runtime_owner,
-        pg_has_role(session_user, 'orient_owner', 'MEMBER') AS admin_owner_membership
+        EXISTS (
+          SELECT 1 FROM pg_auth_members membership
+          JOIN pg_roles granted ON granted.oid = membership.roleid
+          JOIN pg_roles member ON member.oid = membership.member
+          WHERE granted.rolname = 'orient_owner' AND member.rolname = session_user
+        ) AS admin_owner_membership
     `);
     assert.equal(membership.rows[0].migrator_owner, true);
     assert.equal(membership.rows[0].runtime_group, true);
     assert.equal(membership.rows[0].runtime_owner, false);
-    assert.equal(membership.rows[0].admin_owner_membership, true);
+    assert.equal(membership.rows[0].admin_owner_membership, false);
 
     const runtimePrivileges = await pool.query(`
       SELECT
