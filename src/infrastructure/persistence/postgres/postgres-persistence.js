@@ -99,7 +99,7 @@ class PostgresExecutionRepository {
     const result = await this.db.query(tenantId ? 'SELECT payload FROM executions WHERE tenant_id=$1 AND payload->>\'goalId\'=$2 ORDER BY updated_at DESC' : 'SELECT payload FROM executions WHERE payload->>\'goalId\'=$1 ORDER BY updated_at DESC', tenantId ? [tenantId,goalId] : [goalId]); return result.rows.map(row => row.payload);
   }
 
-  async insert(execution, { tenantId = null } = {}) {
+  async insert(execution, { tenantId = null, persistencePrincipal = null } = {}) {
     const generatedExecutionId = execution.id || execution.executionId || crypto.randomUUID();
     const normalized = {
       ...execution,
@@ -119,69 +119,103 @@ class PostgresExecutionRepository {
     const effectiveTenant = tenantOrLocal(normalized.tenantId || normalized.metadata.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Execution');
     normalized.tenantId = effectiveTenant;
-    await this.db.query(
-      'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,$4)',
-      [normalized.executionId, effectiveTenant, normalized, normalized.updatedAt]
+    if (persistencePrincipal && normalized.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Execution owner does not match persistence principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', client =>
+      client.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,$4)',
+        [normalized.executionId, effectiveTenant, normalized, normalized.updatedAt]
+      )
     );
     return normalized;
   }
 
-  async update(executionId, patch, { tenantId = null } = {}) {
-    const current = await this.findById(executionId, { tenantId });
-    if (!current) return null;
-    const effectiveTenant = tenantOrLocal(current.tenantId || current.metadata?.tenantId);
-    assertTenant(effectiveTenant, tenantId, 'Execution');
-    const updated = {
-      ...current, ...patch,
-      ...(current.cancellationRequested ? { cancellationRequested: true, cancellationReason: current.cancellationReason || patch.cancellationReason || null } : {}),
-      id: current.id,
-      executionId: current.executionId,
-      tenantId: effectiveTenant,
-      updatedAt: new Date().toISOString()
-    };
-    // Compare-and-set the terminal outcome in PostgreSQL itself. The
-    // cancellation flag is read from the row being updated, not from the
-    // earlier snapshot, so a concurrent cancellation cannot be overwritten
-    // by a stale completion write.
-    const result = await this.db.query(
-      `UPDATE executions
-       SET payload=$3, updated_at=$4
-       WHERE execution_id=$1
-         AND tenant_id=$2
-         AND NOT (
-           COALESCE(payload->>'cancellationRequested', 'false') = 'true'
-           AND $5::text IN ('completed', 'failed')
-         )
-       RETURNING payload`,
-      [executionId, effectiveTenant, updated, updated.updatedAt, patch.status || '']
-    );
-
-    if (result.rows.length) return result.rows[0].payload;
-    // A concurrent cancellation won the race; return the authoritative row.
-    return this.findById(executionId, { tenantId: effectiveTenant });
+  async update(executionId, patch, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(tenantId || patch?.tenantId);
+    assertTenant(persistencePrincipal?.tenantId, persistencePrincipal ? effectiveTenant : persistencePrincipal?.tenantId, 'Execution principal');
+    if (persistencePrincipal && patch?.userId && patch.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Execution owner does not match persistence principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const ownerClause = persistencePrincipal ? " AND payload->>'userId'=$3" : '';
+      const values = persistencePrincipal ? [executionId, effectiveTenant, persistencePrincipal.ownerId] : [executionId, effectiveTenant];
+      const selected = await client.query(
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' + ownerClause + ' LIMIT 1',
+        values
+      );
+      if (!selected.rows.length) return null;
+      const current = selected.rows[0].payload;
+      const updated = {
+        ...current, ...patch,
+        ...(current.cancellationRequested ? { cancellationRequested: true, cancellationReason: current.cancellationReason || patch.cancellationReason || null } : {}),
+        id: current.id,
+        executionId: current.executionId,
+        tenantId: effectiveTenant,
+        updatedAt: new Date().toISOString()
+      };
+      const updateValues = [executionId, effectiveTenant, updated, updated.updatedAt, patch.status || ''];
+      const updateOwnerClause = persistencePrincipal ? ' AND payload->>\'userId\'=$6' : '';
+      if (persistencePrincipal) updateValues.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `UPDATE executions
+         SET payload=$3, updated_at=$4
+         WHERE execution_id=$1
+           AND tenant_id=$2${updateOwnerClause}
+           AND NOT (
+             COALESCE(payload->>'cancellationRequested', 'false') = 'true'
+             AND $5::text IN ('completed', 'failed')
+           )
+         RETURNING payload`,
+        updateValues
+      );
+      if (result.rows.length) return result.rows[0].payload;
+      const latest = await client.query(
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' + ownerClause + ' LIMIT 1',
+        values
+      );
+      return latest.rows.length ? latest.rows[0].payload : null;
+    });
   }
 
-  async requestCancellation(executionId, reason = 'Execution cancellation requested', { tenantId = null } = {}) {
+  async requestCancellation(executionId, reason = 'Execution cancellation requested', { tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId) throw new TypeError('executionId is required');
-
     const effectiveTenant = tenantOrLocal(tenantId);
     const updatedAt = new Date().toISOString();
-    const result = await this.db.query(
-      `UPDATE executions
-       SET payload = jsonb_set(
-         jsonb_set(payload, '{cancellationRequested}', 'true'::jsonb, true),
-         '{cancellationReason}', to_jsonb($3::text), true
-       ),
-       updated_at = $4
-       WHERE execution_id=$1
-         AND tenant_id=$2
-         AND COALESCE(payload->>'status','created') NOT IN ('completed','failed','cancelled')
-       RETURNING payload`,
-      [executionId, effectiveTenant, String(reason || 'Execution cancellation requested'), updatedAt]
-    );
-
-    if (result.rows.length) return result.rows[0].payload;
-    return this.findById(executionId, { tenantId: effectiveTenant });
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const ownerClause = persistencePrincipal ? " AND payload->>'userId'=$5" : '';
+      const values = [
+        executionId,
+        effectiveTenant,
+        String(reason || 'Execution cancellation requested'),
+        updatedAt
+      ];
+      if (persistencePrincipal) values.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `UPDATE executions
+         SET payload = jsonb_set(
+           jsonb_set(payload, '{cancellationRequested}', 'true'::jsonb, true),
+           '{cancellationReason}', to_jsonb($3::text), true
+         ),
+         updated_at = $4
+         WHERE execution_id=$1
+           AND tenant_id=$2${ownerClause}
+           AND COALESCE(payload->>'status','created') NOT IN ('completed','failed','cancelled')
+         RETURNING payload`,
+        values
+      );
+      if (result.rows.length) return result.rows[0].payload;
+      const latest = await client.query(
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' +
+        (persistencePrincipal ? " AND payload->>'userId'=$3" : '') + ' LIMIT 1',
+        persistencePrincipal ? [executionId, effectiveTenant, persistencePrincipal.ownerId] : [executionId, effectiveTenant]
+      );
+      return latest.rows.length ? latest.rows[0].payload : null;
+    });
   }
 
   async deleteById(executionId, { tenantId = null } = {}) {
