@@ -768,6 +768,11 @@ class PostgresWorkflowRepository {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenant = tenantOrLocal(item.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Workflow');
+    if (workerPrincipal && persistencePrincipal) {
+      throw Object.assign(new Error('Workflow writes must use either worker lease authority or owner authority, not both'), {
+        code: 'WORKFLOW_AUTHORITY_AMBIGUOUS'
+      });
+    }
     const fencingToken = Number(item.metadata?.fencingToken || 0);
     if (fencingToken > 0) {
       const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
@@ -813,11 +818,6 @@ class PostgresWorkflowRepository {
         }
         return item;
       }, { requireLease: true });
-    }
-    if (workerPrincipal && persistencePrincipal) {
-      throw Object.assign(new Error('Workflow writes must use either worker lease authority or owner authority, not both'), {
-        code: 'WORKFLOW_AUTHORITY_AMBIGUOUS'
-      });
     }
     if (persistencePrincipal) {
       const owner = assertPersistencePrincipal(persistencePrincipal);
