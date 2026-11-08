@@ -348,7 +348,7 @@ class OrientRuntime {
     };
   }
 
-  async getExecutionApprovals(executionId) {
+  async getExecutionApprovals(executionId, { persistencePrincipal = null } = {}) {
     if (!this.approvalService?.listForExecution) {
       throw Object.assign(new Error('Approval service is required for approval status'), {
         code: 'APPROVAL_SERVICE_REQUIRED'
@@ -363,7 +363,8 @@ class OrientRuntime {
 
     if (this.persistence?.executions?.findById) {
       const execution = await this.persistence.executions.findById(executionId, {
-        tenantId: this.tenantId
+        tenantId: this.tenantId,
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
       });
       if (!execution) {
         throw Object.assign(new Error(`Execution not found: ${executionId}`), {
@@ -378,7 +379,7 @@ class OrientRuntime {
     });
   }
 
-  async listExecutionSummaries({ limit = 50, offset = 0 } = {}) {
+  async listExecutionSummaries({ limit = 50, offset = 0, persistencePrincipal = null } = {}) {
     if (!this.persistence?.executions?.findAll) {
       throw Object.assign(new Error('Durable execution storage is required for history'), {
         code: 'EXECUTION_STORAGE_REQUIRED'
@@ -392,12 +393,13 @@ class OrientRuntime {
       const result = await this.persistence.executions.findPage({
         tenantId: this.tenantId,
         limit: boundedLimit,
-        offset: boundedOffset
+        offset: boundedOffset,
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
       });
       total = result.total;
       page = result.executions;
     } else {
-      const executions = await this.persistence.executions.findAll({ tenantId: this.tenantId });
+      const executions = await this.persistence.executions.findAll({ tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       const ordered = executions.sort((a, b) =>
         Date.parse(b.updatedAt || b.startedAt || 0) - Date.parse(a.updatedAt || a.startedAt || 0)
       );
@@ -468,7 +470,7 @@ class OrientRuntime {
     return this.approvalService.listPending({ tenantId: this.tenantId, limit: boundedLimit });
   }
 
-  async getExecutionEvents(executionId, { limit = 200 } = {}) {
+  async getExecutionEvents(executionId, { limit = 200, persistencePrincipal = null } = {}) {
     if (!this.persistence?.events?.findByExecutionId) {
       throw Object.assign(new Error('Durable execution event storage is required'), {
         code: 'EXECUTION_EVENT_STORAGE_REQUIRED'
@@ -480,7 +482,8 @@ class OrientRuntime {
       });
     }
     const execution = await this.persistence?.executions?.findById?.(executionId, {
-      tenantId: this.tenantId
+      tenantId: this.tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
     if (!execution) {
       throw Object.assign(new Error(`Execution not found: ${executionId}`), {
@@ -490,12 +493,13 @@ class OrientRuntime {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 200)) : 200;
     const events = await this.persistence.events.findByExecutionId(executionId, {
       tenantId: this.tenantId,
-      limit: boundedLimit
+      limit: boundedLimit,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
     return events.slice(-boundedLimit);
   }
 
-  async getExecutionStatus(executionId) {
+  async getExecutionStatus(executionId, { persistencePrincipal = null } = {}) {
     if (!this.persistence?.executions?.findById) {
       throw Object.assign(new Error('Durable execution storage is required for status'), {
         code: 'EXECUTION_STORAGE_REQUIRED'
@@ -509,7 +513,8 @@ class OrientRuntime {
     }
 
     const execution = await this.persistence.executions.findById(executionId, {
-      tenantId: this.tenantId
+      tenantId: this.tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
 
     if (!execution) {
