@@ -107,7 +107,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
     },
 
     async taskResponse(req, res, executionId, persistencePrincipal = null) {
-      const result = await agentService.getExecutionStatus(executionId, { persistencePrincipal });
+      const result = await agentService.getExecutionStatus(executionId, persistencePrincipal ? { persistencePrincipal } : {});
       const events = await agentService.getExecutionEvents(executionId, { limit: 100, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       const approvals = typeof agentService.getExecutionApprovals === 'function'
         ? await agentService.getExecutionApprovals(executionId, persistencePrincipal ? { persistencePrincipal } : {})
@@ -301,7 +301,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
     },
 
     async events(req, res, executionId, persistencePrincipal = null) {
-      const initialEvents = await agentService.getExecutionEvents(executionId, { limit: 200, persistencePrincipal });
+      const initialEvents = await agentService.getExecutionEvents(executionId, { limit: 200, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -422,7 +422,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
 
     async approvals(req, res, executionId, persistencePrincipal = null) {
       const result =
-        await agentService.getExecutionApprovals(executionId, { persistencePrincipal });
+        await agentService.getExecutionApprovals(executionId, persistencePrincipal ? { persistencePrincipal } : {});
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
