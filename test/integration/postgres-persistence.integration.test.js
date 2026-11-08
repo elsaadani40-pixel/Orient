@@ -342,6 +342,66 @@ test('PostgreSQL rejects stale lease renewal after takeover', async () => {
 });
 
 
+test('PostgreSQL lease authority is revoked when the registered worker session is replaced', async () => {
+  const workflowId = 'replaced-session-lease-' + Date.now();
+  const tenantId = 'tenant-replaced-session';
+  await pool.query(
+    'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,NOW(),$4)',
+    [workflowId, tenantId, 'QUEUED', { workflowId, tenantId, state: 'QUEUED', metadata: {} }]
+  );
+  const oldWorker = makeWorkerPrincipal(tenantId, 'worker-replaced');
+  await persistence.workers.register({
+    workerId: oldWorker.workerId, tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: oldWorker });
+  const lease = await persistence.workflowLeases.tryAcquire({
+    workflowId, leaseId: 'lease-old-session-' + Date.now(), workerId: oldWorker.workerId,
+    acquiredAt: Date.now(), expiresAt: Date.now() + 60000, metadata: { tenantId }
+  }, tenantId, { workerPrincipal: oldWorker });
+  const oldLeasePrincipal = createWorkerPersistencePrincipal({
+    tenantId, workerId: oldWorker.workerId, sessionId: oldWorker.sessionId,
+    capabilities: oldWorker.capabilities, workflowId, leaseId: lease.leaseId,
+    fencingToken: lease.fencingToken
+  });
+
+  await pool.query(
+    'UPDATE worker_nodes SET expires_at=NOW()-INTERVAL \'1 second\' WHERE tenant_id=$1 AND worker_id=$2',
+    [tenantId, oldWorker.workerId]
+  );
+  const newWorker = makeWorkerPrincipal(tenantId, 'worker-replaced');
+  await persistence.workers.register({
+    workerId: newWorker.workerId, tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: newWorker });
+
+  await assert.rejects(
+    persistence.workflowLeases.renewIfOwned(workflowId, lease.leaseId, Date.now() + 30000, Date.now(), tenantId, { workerPrincipal: oldLeasePrincipal }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  await assert.rejects(
+    persistence.workflowLeases.assertCurrent(workflowId, lease.leaseId, lease.fencingToken, Date.now(), tenantId, { workerPrincipal: oldLeasePrincipal }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  await assert.rejects(
+    persistence.workflowLeases.delete(workflowId, lease.leaseId, tenantId, { workerPrincipal: oldLeasePrincipal }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  assert.equal(
+    await persistence.workflowLeases.delete(workflowId, lease.leaseId, tenantId, {
+      workerPrincipal: createWorkerPersistencePrincipal({
+        tenantId, workerId: newWorker.workerId, sessionId: newWorker.sessionId,
+        capabilities: newWorker.capabilities, workflowId, leaseId: lease.leaseId,
+        fencingToken: lease.fencingToken
+      })
+    }),
+    false
+  );
+
+  await persistence.workers.unregister(newWorker.workerId, tenantId, { workerPrincipal: newWorker });
+  await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+});
+
 test('PostgreSQL crash recovery requeues an orphaned running workflow after lease expiry', async () => {
   const WorkflowDefinition = require('../../src/core/workflow/workflow-definition');
   const WorkflowInstance = require('../../src/core/workflow/workflow-instance');
