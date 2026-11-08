@@ -118,6 +118,7 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
 test('Postgres workflow writes reject stale fencing tokens under the worker lease principal', async () => {
   const db = fakeDb([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ workflow_id: 'wf-1' }], rowCount: 1 },
     { rows: [], rowCount: 0 }
   ]);
   const repo = new PostgresWorkflowRepository(db);
