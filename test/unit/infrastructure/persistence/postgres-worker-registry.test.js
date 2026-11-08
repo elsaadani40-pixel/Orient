@@ -94,7 +94,7 @@ test('worker registry heartbeat and unregister require the exact active worker s
   const db = fakeDb();
   const repo = new PostgresWorkerRegistryRepository(db);
   await assert.rejects(
-    () => repo.heartbeat('missing', { tenantId: 'tenant-a', workerPrincipal: principal() }),
+    () => repo.heartbeat('worker-a', { tenantId: 'tenant-a', workerPrincipal: principal() }),
     error => error.code === 'WORKER_SESSION_LOST'
   );
   assert.match(db.calls[0].sql, /session_id=\$6 AND expires_at > NOW\(\)/);
