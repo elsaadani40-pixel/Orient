@@ -179,8 +179,10 @@ test('agent route callbacks preserve the same validated persistence principal th
     sessionId: 'session-callback'
   });
   const callbacks = [];
+  let createTaskArgs = null;
   const agentService = {
-    async createTask() {
+    async createTask(args) {
+      createTaskArgs = args;
       return { task: { id: 'task-callback' }, replayed: false };
     },
     async getExecutionStatus() {
@@ -215,6 +217,8 @@ test('agent route callbacks preserve the same validated persistence principal th
   await routes.taskResponse(request, response, 'task-callback', principal);
 
   assert.deepEqual(callbacks.map(item => item.type), ['created', 'answer']);
+  assert.equal(createTaskArgs.persistencePrincipal, principal);
+  assert.equal(createTaskArgs.ownerSessionContext.sessionId, 'authenticated-session-callback');
   assert.equal(callbacks[0].principal, principal);
   assert.equal(callbacks[1].principal, principal);
 });

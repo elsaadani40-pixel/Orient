@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { assertPersistencePrincipal } = require('../../../core/security/persistence-principal');
 const { PostgresDatabase } = require('./postgres-database');
 const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repository');
 const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-repository');
@@ -249,22 +250,44 @@ class PostgresIdempotencyRepository {
     return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
   }
 
-  async findByKey(key, { tenantId = 'local' } = {}) {
+  async withPrincipal(persistencePrincipal, tenantId, work) {
+    if (!persistencePrincipal) {
+      return work({ query: (sql, values) => this.db.query(sql, values) });
+    }
+    const principal = assertPersistencePrincipal(persistencePrincipal);
+    assertTenant(principal.tenantId, tenantId, 'Idempotency principal');
+    if (typeof this.db.transactionWithPrincipal !== 'function') {
+      throw Object.assign(new Error('Principal-scoped PostgreSQL transactions are required'), {
+        code: 'PRINCIPAL_TRANSACTION_REQUIRED'
+      });
+    }
+    return this.db.transactionWithPrincipal(principal, work);
+  }
+
+  async findByKey(key, { tenantId = 'local', persistencePrincipal = null } = {}) {
     const effectiveTenant = tenantOrLocal(tenantId);
-    const result = await this.db.query('SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',[key,effectiveTenant]);
-    if (!result.rows.length) return null;
-    const record = result.rows[0].payload;
-    assertTenant(tenantOrLocal(record.tenantId), effectiveTenant, 'Idempotency');
-    return record;
+    return this.withPrincipal(persistencePrincipal, effectiveTenant, async client => {
+      const result = await client.query(
+        'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',
+        [key, effectiveTenant]
+      );
+      if (!result.rows.length) return null;
+      const record = result.rows[0].payload;
+      assertTenant(tenantOrLocal(record.tenantId), effectiveTenant, 'Idempotency');
+      return record;
+    });
   }
 
   async find(args) {
-    return this.findByKey(this.buildKey(args), { tenantId: args?.tenantId || 'local' });
+    return this.findByKey(this.buildKey(args), {
+      tenantId: args?.tenantId || 'local',
+      persistencePrincipal: args?.persistencePrincipal || null
+    });
   }
 
   async begin(args) {
     const key = this.buildKey(args);
-    const tenantId = args?.tenantId || 'local';
+    const tenantId = tenantOrLocal(args?.tenantId);
     const record = {
       id: crypto.randomUUID(), key,
       executionId: args.executionId, step: args.step, tool: args.tool,
@@ -272,53 +295,112 @@ class PostgresIdempotencyRepository {
       tenantId, status: 'running', result: null, error: null,
       startedAt: new Date().toISOString(), completedAt: null
     };
-    const result = await this.db.query(
-      `INSERT INTO idempotency(key,tenant_id,payload,status,updated_at)
-       VALUES($1,$2,$3,'running',$4)
-       ON CONFLICT(tenant_id,key) DO NOTHING`,
-      [key, tenantId, record, record.startedAt]
-    );
-    if (result.rowCount === 1) return { created: true, key, record };
-    const existing = await this.findByKey(key, { tenantId });
-    return { created: false, key, record: existing };
+    return this.withPrincipal(args.persistencePrincipal || null, tenantId, async client => {
+      const result = await client.query(
+        `INSERT INTO idempotency(key,tenant_id,payload,status,updated_at)
+         VALUES($1,$2,$3,'running',$4)
+         ON CONFLICT(tenant_id,key) DO NOTHING`,
+        [key, tenantId, record, record.startedAt]
+      );
+      if (result.rowCount === 1) return { created: true, key, record };
+      const existing = await client.query(
+        'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',
+        [key, tenantId]
+      );
+      const existingRecord = existing.rows.length ? existing.rows[0].payload : null;
+      if (existingRecord) assertTenant(tenantOrLocal(existingRecord.tenantId), tenantId, 'Idempotency');
+      return { created: false, key, record: existingRecord };
+    });
   }
 
-  async complete(key, result, { tenantId = null } = {}) {
-    const record = await this.findByKey(key, { tenantId });
-    if (!record) return null;
-    if (record.status === 'completed') {
-      if (JSON.stringify(record.result) !== JSON.stringify(result ?? null)) { const error = new Error('Idempotency record is already completed with a different result'); error.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error.status=409; throw error; }
+  async complete(key, result, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(tenantId);
+    return this.withPrincipal(persistencePrincipal, effectiveTenant, async client => {
+      const selected = await client.query(
+        'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',
+        [key, effectiveTenant]
+      );
+      if (!selected.rows.length) return null;
+      const record = selected.rows[0].payload;
+      assertTenant(tenantOrLocal(record.tenantId), effectiveTenant, 'Idempotency');
+      if (record.status === 'completed') {
+        if (JSON.stringify(record.result) !== JSON.stringify(result ?? null)) {
+          const error = new Error('Idempotency record is already completed with a different result');
+          error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; error.status = 409; throw error;
+        }
+        return record;
+      }
+      if (record.status !== 'running') {
+        const error = new Error('Idempotency record is not running');
+        error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; error.status = 409; throw error;
+      }
+      record.status = 'completed';
+      record.result = result ?? null;
+      record.completedAt = new Date().toISOString();
+      const updated = await client.query(
+        'UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2 AND status=$6',
+        [key, effectiveTenant, record, record.status, record.completedAt, 'running']
+      );
+      if (updated.rowCount !== 1) {
+        const error = new Error('Idempotency terminal transition lost a race');
+        error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; error.status = 409; throw error;
+      }
       return record;
-    }
-    if (record.status !== 'running') { const error=new Error('Idempotency record is not running'); error.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error.status=409; throw error; }
-    record.status='completed'; record.result=result ?? null; record.completedAt=new Date().toISOString();
-    const updated=await this.db.query('UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2 AND status=$6',
-      [key, tenantId || record.tenantId, record, record.status, record.completedAt, 'running']);
-    if (updated.rowCount !== 1) { const error=new Error('Idempotency terminal transition lost a race'); error.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error.status=409; throw error; }
-    return record;
+    });
   }
 
-  async fail(key, error, { tenantId = null } = {}) {
-    const record = await this.findByKey(key, { tenantId });
-    if (!record) return null;
-    if (record.status === 'failed') return record;
-    if (record.status === 'completed') { const error2=new Error('Completed idempotency record cannot be failed'); error2.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error2.status=409; throw error2; }
-    if (record.status !== 'running') { const error2=new Error('Idempotency record is not running'); error2.code='IDEMPOTENCY_TERMINAL_CONFLICT'; error2.status=409; throw error2; }
-    record.status='failed'; record.error={code:error?.code || 'EXECUTION_FAILED',message:error?.message || String(error || '')}; record.completedAt=new Date().toISOString();
-    const updated=await this.db.query('UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2 AND status=$6',[key,tenantId || record.tenantId,record,record.status,record.completedAt,'running']);
-    if(updated.rowCount!==1){const error2=new Error('Idempotency terminal transition lost a race');error2.code='IDEMPOTENCY_TERMINAL_CONFLICT';error2.status=409;throw error2;}
-    return record;
+  async fail(key, error, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantOrLocal(tenantId);
+    return this.withPrincipal(persistencePrincipal, effectiveTenant, async client => {
+      const selected = await client.query(
+        'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',
+        [key, effectiveTenant]
+      );
+      if (!selected.rows.length) return null;
+      const record = selected.rows[0].payload;
+      assertTenant(tenantOrLocal(record.tenantId), effectiveTenant, 'Idempotency');
+      if (record.status === 'failed') return record;
+      if (record.status === 'completed') {
+        const conflict = new Error('Completed idempotency record cannot be failed');
+        conflict.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; conflict.status = 409; throw conflict;
+      }
+      if (record.status !== 'running') {
+        const conflict = new Error('Idempotency record is not running');
+        conflict.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; conflict.status = 409; throw conflict;
+      }
+      record.status = 'failed';
+      record.error = {
+        code: error?.code || 'EXECUTION_FAILED',
+        message: error?.message || String(error || '')
+      };
+      record.completedAt = new Date().toISOString();
+      const updated = await client.query(
+        'UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2 AND status=$6',
+        [key, effectiveTenant, record, record.status, record.completedAt, 'running']
+      );
+      if (updated.rowCount !== 1) {
+        const conflict = new Error('Idempotency terminal transition lost a race');
+        conflict.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; conflict.status = 409; throw conflict;
+      }
+      return record;
+    });
   }
 
   async delete(key, { tenantId = 'local' } = {}) {
     const effectiveTenant = tenantOrLocal(tenantId);
-    const result = await this.db.query('DELETE FROM idempotency WHERE key=$1 AND tenant_id=$2',[key,effectiveTenant]);
+    const result = await this.db.query(
+      'DELETE FROM idempotency WHERE key=$1 AND tenant_id=$2',
+      [key, effectiveTenant]
+    );
     return result.rowCount === 1;
   }
 
   async count({ tenantId = 'local' } = {}) {
     const effectiveTenant = tenantOrLocal(tenantId);
-    const result = await this.db.query('SELECT COUNT(*)::int AS count FROM idempotency WHERE tenant_id=$1',[effectiveTenant]);
+    const result = await this.db.query(
+      'SELECT COUNT(*)::int AS count FROM idempotency WHERE tenant_id=$1',
+      [effectiveTenant]
+    );
     return Number(result.rows[0].count);
   }
 }

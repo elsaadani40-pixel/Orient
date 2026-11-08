@@ -65,3 +65,74 @@ The current database exposes `query()` and `transaction()` without principal req
 For each migrated method, tests must prove: no principal means no SQL; forged principal means no SQL; caller identity mismatch is rejected; cross-tenant/owner access is denied; all statements in the operation use one checked-out client; rollback and pool reuse do not leak context; and concurrent approval/idempotency/lease races retain their invariants.
 
 No hosted Supabase policies, role grants, production credentials, or runtime connection settings are changed by this audit.
+
+
+## Follow-up verification: PR #350 head
+
+Audit target: `65a56723d1cac1f68777cea342c527455372210d` (2026-11-08).
+
+The earlier HTTP-to-idempotency gap is partially closed on this branch:
+
+- `server.js` passes the server-issued principal to `agentRoutes.createTask`.
+- `agent.routes.js` forwards that exact object to `AgentService.createTask`.
+- `AgentService` validates issuance and rejects session/tenant mismatch before idempotency admission.
+- The PostgreSQL idempotency begin/complete/fail methods use `transactionWithPrincipal` when the validated principal is supplied. The non-principal compatibility path remains available and is not RLS-safe.
+
+The following execution-lifecycle gaps remain confirmed at this head:
+
+1. **Runtime handoff:** `AgentService.createTask` calls `this.execute(clean, { ownerSessionContext })`; it does not pass `persistencePrincipal` to `OrientRuntime.execute`.
+2. **Shared persistence coordinator:** `ExecutionPersistenceCoordinator` is constructed once with the runtime's fixed `tenantId`. Its `persistExecution`, `persistEvents`, and `checkpoint` methods pass tenant options only, not a principal.
+3. **Execution repository:** execution reads, inserts, updates, cancellation writes, deletes, counts, and pagination still use pool-level `db.query` calls and accept tenant filters rather than a validated principal.
+4. **Events/checkpoints/resume leases:** these repositories remain outside `transactionWithPrincipal`; event append and checkpoint/lease operations are not principal-bound.
+5. **Resume and cancellation:** `RequestExecutionCoordinator.resume` and `OrientRuntime.cancelExecution` use the runtime tenant for checkpoint, execution, and lease operations. They do not receive an owner principal.
+6. **Owner reads:** task list/status/events/final-answer/approval reads are scoped to the runtime tenant and are not explicitly owner-principal-bound at their repository boundary.
+7. **Approvals/workflows/workers/quotas:** these remain separate migration families. Owner decisions and worker-side consumption/dispatch must use distinct trusted principal types.
+
+### Required next vertical slice
+
+Do not solve this by putting a principal on the singleton runtime or in mutable ambient state. Pass an immutable request-scoped owner principal explicitly through the service and request coordinator into every persistence operation. Background execution, recovery, workflow dispatch, and workers must receive a separately issued worker/system principal. Reads as well as writes must be covered.
+
+The slice must preserve single-client transaction scope and existing CAS/locking/fencing guarantees for execution state, event batches, checkpoints, resume leases, cancellation, and restart recovery. Add adversarial tests for two owners in one tenant, two tenants on a constrained pool, forged/missing/mismatched principals, cross-owner reads, rollback, connection reuse, and worker/owner separation.
+
+PR #350 is therefore a successful idempotency sub-slice only. It does not close the execution lifecycle or satisfy the RLS activation gate. No hosted RLS policy, role, grant, or production credential change is authorized by this audit.
+
+
+## Additional identity-binding finding: owner ID is not bound to runtime identity
+
+A follow-up trace of the production composition on this branch found a second identity consistency gap:
+
+- `app.js` constructs `OrientRuntime` with `tenantId`, but does not supply `userId`; `OrientRuntime` therefore defaults `this.userId` to `local`.
+- The same composition calls `createServer` with the trusted configured `tenantId` and hard-coded `ownerId: 'owner'`.
+- `server.js` issues the persistence principal from that trusted `ownerId` and authenticated session.
+- `AgentService.createTask` currently validates principal issuance, tenant, and session, but does not bind `principal.ownerId` to a canonical runtime/request owner identity.
+- The request execution context consequently uses the runtime's `userId` (`local`) rather than the principal's owner identity (`owner`).
+
+This is not a caller-controlled identity injection in the current production composition, because the principal's owner ID comes from trusted server configuration. It is nevertheless an identity-model inconsistency: durable owner-scoped authorization cannot be proven end-to-end while the task's runtime identity and persistence principal owner differ.
+
+### Required correction before owner-scoped execution persistence
+
+1. Establish one canonical owner identity in the production composition root and pass it consistently to both `OrientRuntime.userId` and `createServer.ownerId`.
+2. Make the authenticated request boundary bind the exact issued principal to the request execution context; do not reconstruct identity from `ownerSessionContext`.
+3. Reject mismatched tenant/owner/session before any idempotency or execution SQL.
+4. Add composition tests proving runtime owner ID equals principal owner ID, plus two-owner same-tenant isolation tests.
+5. Keep non-owner/system work on an explicit worker/system identity path rather than silently inheriting the owner identity.
+
+Do not infer that changing only `userId` fixes persistence isolation. Repository-level principal transactions and owner-scoped reads/writes remain unimplemented.
+
+
+## Follow-up verification: owner identity admission hardening
+
+Audit target: latest PR #350 head after the owner-principal admission tests (2026-11-08).
+
+The production composition identity mismatch recorded above is corrected in the branch: `app.js` supplies the same canonical `owner` value to `OrientRuntime.userId` and `createServer.ownerId`. The composition integration test asserts the Runtime identity and passes it as the server owner identity.
+
+A further fail-closed check is now added at `AgentService.createTask`:
+
+- An owner-session task without a validated persistence principal is rejected before idempotency admission.
+- The issued principal must match the authenticated session, Runtime tenant, and Runtime owner identity.
+- A valid principal issued for a different owner in the same tenant is rejected before repository admission.
+- Unit tests cover missing principal, cross-owner principal, and the accepted matching-principal path.
+
+This closes the **task-creation admission identity check only**. It does not yet bind the principal to the Runtime execution, execution repository, events, checkpoints, resume/cancel, or owner-scoped reads. The runtime still owns a singleton persistence coordinator configured with tenant identity only, so a principal must not be placed on that singleton or inferred from mutable execution metadata.
+
+The next implementation slice remains the full request-scoped lifecycle propagation and repository migration described above. Exact-head CI must complete on the latest commit before treating these changes as verified. PR #350 remains Draft; no RLS policies, hosted grants, roles, or production credentials are changed.
