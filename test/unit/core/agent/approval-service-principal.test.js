@@ -26,9 +26,10 @@ test('approval service forwards the immutable owner principal to every durable o
     used: false,
     metadata: {}
   };
+  let findCount = 0;
   const repository = {
     async save(value, options) { calls.push(['save', options.persistencePrincipal]); return value; },
-    async findById(id, options) { calls.push(['findById', options.persistencePrincipal]); return { ...approval, decision: null }; },
+    async findById(id, options) { calls.push(['findById', options.persistencePrincipal]); findCount += 1; return { ...approval, decision: findCount === 1 ? null : { status: 'approved', actorId: 'session-a' } }; },
     async findByExecution(options) { calls.push(['findByExecution', options.persistencePrincipal]); return [{ ...approval, decision: { status: 'approved', actorId: 'session-a' } }]; },
     async findPending(options) { calls.push(['findPending', options.persistencePrincipal]); return [approval]; },
     async recordDecision(id, decision, tenantId, clock, identity) { calls.push(['recordDecision', identity]); return { ...approval, decision }; },
