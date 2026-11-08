@@ -191,6 +191,7 @@ jobs:
         run: |
           node --test --test-timeout=120000 test/integration/postgres-persistence.integration.test.js
           node --test --test-timeout=120000 test/integration/postgres-task-idempotency.integration.test.js
+          ORIENT_RUN_ROLE_PROVISIONING_INTEGRATION=1 node --test --test-timeout=120000 test/integration/postgres-role-provisioning.integration.test.js
 
   full-repository-suite:
     name: Full Repository Test Suite (Node 24 + PostgreSQL)
