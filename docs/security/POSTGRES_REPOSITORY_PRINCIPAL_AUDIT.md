@@ -95,3 +95,26 @@ Do not solve this by putting a principal on the singleton runtime or in mutable 
 The slice must preserve single-client transaction scope and existing CAS/locking/fencing guarantees for execution state, event batches, checkpoints, resume leases, cancellation, and restart recovery. Add adversarial tests for two owners in one tenant, two tenants on a constrained pool, forged/missing/mismatched principals, cross-owner reads, rollback, connection reuse, and worker/owner separation.
 
 PR #350 is therefore a successful idempotency sub-slice only. It does not close the execution lifecycle or satisfy the RLS activation gate. No hosted RLS policy, role, grant, or production credential change is authorized by this audit.
+
+
+## Additional identity-binding finding: owner ID is not bound to runtime identity
+
+A follow-up trace of the production composition on this branch found a second identity consistency gap:
+
+- `app.js` constructs `OrientRuntime` with `tenantId`, but does not supply `userId`; `OrientRuntime` therefore defaults `this.userId` to `local`.
+- The same composition calls `createServer` with the trusted configured `tenantId` and hard-coded `ownerId: 'owner'`.
+- `server.js` issues the persistence principal from that trusted `ownerId` and authenticated session.
+- `AgentService.createTask` currently validates principal issuance, tenant, and session, but does not bind `principal.ownerId` to a canonical runtime/request owner identity.
+- The request execution context consequently uses the runtime's `userId` (`local`) rather than the principal's owner identity (`owner`).
+
+This is not a caller-controlled identity injection in the current production composition, because the principal's owner ID comes from trusted server configuration. It is nevertheless an identity-model inconsistency: durable owner-scoped authorization cannot be proven end-to-end while the task's runtime identity and persistence principal owner differ.
+
+### Required correction before owner-scoped execution persistence
+
+1. Establish one canonical owner identity in the production composition root and pass it consistently to both `OrientRuntime.userId` and `createServer.ownerId`.
+2. Make the authenticated request boundary bind the exact issued principal to the request execution context; do not reconstruct identity from `ownerSessionContext`.
+3. Reject mismatched tenant/owner/session before any idempotency or execution SQL.
+4. Add composition tests proving runtime owner ID equals principal owner ID, plus two-owner same-tenant isolation tests.
+5. Keep non-owner/system work on an explicit worker/system identity path rather than silently inheriting the owner identity.
+
+Do not infer that changing only `userId` fixes persistence isolation. Repository-level principal transactions and owner-scoped reads/writes remain unimplemented.
