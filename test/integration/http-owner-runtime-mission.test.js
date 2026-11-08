@@ -82,7 +82,8 @@ test('authenticated dashboard request completes a harmless mission through the r
   const server = createServer({
     memoryRoutes: { home() {}, add() {}, delete() {} },
     agentRoutes: createAgentRoutes(new AgentService(runtime)),
-    ownerAuth
+    ownerAuth,
+    tenantId: 'tenant-owner-runtime'
   });
 
   t.after(async () => {
