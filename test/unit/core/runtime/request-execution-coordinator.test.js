@@ -634,6 +634,7 @@ test('resume rejects a caller-supplied approval id without a durable approved de
   });
   context.metadata.planRevision = 1;
   context.metadata.pendingStepInputs = { 1: { approvalRequired: true } };
+  context.startStep({ step: 1, tool: 'danger.write', planRevision: 1 });
   context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
 
   let executionAttempts = 0;
