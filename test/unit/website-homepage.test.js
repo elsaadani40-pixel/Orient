@@ -8,7 +8,7 @@ const vm = require('node:vm');
 
 const homepagePath = path.join(__dirname, '../../website/index.html');
 
-function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLanguage = null } = {}) {
+function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLanguage = null, hostname = 'localhost' } = {}) {
   const html = fs.readFileSync(homepagePath, 'utf8');
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]);
   const script = scripts.find(source => source.includes("orient-language"));
@@ -20,6 +20,7 @@ function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLang
   const element = () => ({
     textContent: '',
     innerHTML: '',
+    hidden: false,
     href: '',
     dataset: {},
     attributes: {},
@@ -41,6 +42,7 @@ function bootHomepage({ reducedMotion = false, browserLanguage = 'en', savedLang
   const fetchCalls = [];
   const context = {
     document,
+    location: { hostname },
     window: { matchMedia: () => ({ matches: reducedMotion }) },
     navigator: { language: browserLanguage },
     localStorage: {
@@ -67,6 +69,7 @@ test('homepage initializes language and account navigation when reduced motion i
   assert.equal(app.elements.lang.textContent, 'English');
   assert.equal(app.fetchCalls.length, 1);
   assert.equal(app.fetchCalls[0].url, '/api/auth/me');
+  assert.equal(app.elements.authAction.hidden, false);
 });
 
 test('homepage restores a saved language and persists the next selection', () => {
@@ -81,4 +84,11 @@ test('homepage defaults to English when no Arabic preference is available', () =
   const app = bootHomepage({ browserLanguage: 'en' });
   assert.equal(app.document.documentElement.lang, 'en');
   assert.equal(app.document.documentElement.dir, 'ltr');
+});
+
+
+test('public landing pages do not expose local-only account routes or call the local auth API', () => {
+  const app = bootHomepage({ hostname: 'orient.example' });
+  assert.equal(app.elements.authAction.hidden, true);
+  assert.equal(app.fetchCalls.length, 0);
 });
