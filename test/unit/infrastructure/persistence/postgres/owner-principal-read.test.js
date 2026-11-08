@@ -15,6 +15,13 @@ function createHarness() {
     async query(sql, values = []) {
       calls.push({ sql, values });
       if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: '1' }], rowCount: 1 };
+      if (sql.includes('FROM events')) {
+        const owner = values.find(value => value === 'owner-a' || value === 'owner-b');
+        return {
+          rows: owner === 'owner-a' ? [{ payload: { id: 'event-a', executionId: 'exec-a' } }] : [],
+          rowCount: owner === 'owner-a' ? 1 : 0
+        };
+      }
       if (sql.includes('FROM executions') && sql.includes('payload')) {
         const owner = values.find(value => value === 'owner-a' || value === 'owner-b');
         if (sql.includes("payload->>'userId'=$")) {
@@ -26,13 +33,6 @@ function createHarness() {
           };
         }
         return { rows: [{ payload: { executionId: 'exec-a', userId: 'owner-a' } }], rowCount: 1 };
-      }
-      if (sql.includes('FROM events')) {
-        const owner = values.find(value => value === 'owner-a' || value === 'owner-b');
-        return {
-          rows: owner === 'owner-a' ? [{ payload: { id: 'event-a', executionId: 'exec-a' } }] : [],
-          rowCount: owner === 'owner-a' ? 1 : 0
-        };
       }
       throw new Error('Unexpected SQL: ' + sql);
     }
