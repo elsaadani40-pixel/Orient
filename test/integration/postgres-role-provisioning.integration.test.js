@@ -168,6 +168,13 @@ test('CREATEROLE administrator provisions successfully when it owns the existing
       'SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])',
       [['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner', 'orient_provisioner']]
     );
+    const roleNames = new Set(existingRoles.rows.map(row => row.rolname));
+    if (roleNames.has('orient_owner') && roleNames.has('orient_migrator')) {
+      await adminPool.query('REVOKE orient_owner FROM orient_migrator');
+    }
+    if (roleNames.has('orient_runtime') && roleNames.has('orient_runtime_login')) {
+      await adminPool.query('REVOKE orient_runtime FROM orient_runtime_login');
+    }
     for (const row of existingRoles.rows) {
       const identifier = '"' + row.rolname.replace(/"/g, '""') + '"';
       await adminPool.query('DROP OWNED BY ' + identifier);
