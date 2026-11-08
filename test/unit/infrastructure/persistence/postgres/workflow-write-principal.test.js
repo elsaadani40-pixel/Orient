@@ -41,6 +41,8 @@ test('workflow state update validates and atomically matches the active worker s
   assert.match(lease.sql,/worker_session_id/);
   assert.match(lease.sql,/fencing_token/);
   assert.match(update.sql,/worker_session_id/);
+  assert.match(update.sql,/worker_nodes/);
+  assert.match(update.sql,/clock_timestamp/);
   assert.deepEqual(update.values.slice(5),['lease-a','worker-a','session-a',17]);
 });
 
