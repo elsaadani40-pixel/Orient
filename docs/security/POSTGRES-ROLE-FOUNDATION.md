@@ -24,7 +24,7 @@ npm run db:roles
 
 Use a trusted administrative connection only from a protected operator environment. Do not put connection strings or passwords in source control, client bundles, issue comments, or chat. Store credentials in the database host's secret manager.
 
-The script provisions roles and transfers ownership of known ORIENT tables/sequences. The invoking administrator must already own the existing ORIENT persistence objects (or be a superuser), and must have sufficient ADMIN OPTION to grant the two intended role memberships. `CREATEROLE` alone is not assumed to be sufficient. The script verifies the resulting memberships because PostgreSQL may emit warnings rather than hard errors when a grant is not authorized; any missing membership aborts and rolls back the transaction.
+The script provisions roles and transfers ownership of known ORIENT tables/sequences. The invoking administrator must already own the existing ORIENT persistence objects (or be a superuser), and must have sufficient ADMIN OPTION to grant the intended role memberships. `CREATEROLE` alone is not assumed to be sufficient. A temporary membership in `orient_owner` is granted to the administrator for object ownership transfer and default-privilege setup, then revoked before commit. The script verifies the required memberships because PostgreSQL may emit warnings rather than hard errors when a grant is not authorized; any missing membership aborts and rolls back the transaction.
 
 ## Important limitations
 
