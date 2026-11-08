@@ -118,3 +118,21 @@ This is not a caller-controlled identity injection in the current production com
 5. Keep non-owner/system work on an explicit worker/system identity path rather than silently inheriting the owner identity.
 
 Do not infer that changing only `userId` fixes persistence isolation. Repository-level principal transactions and owner-scoped reads/writes remain unimplemented.
+
+
+## Follow-up verification: owner identity admission hardening
+
+Audit target: latest PR #350 head after the owner-principal admission tests (2026-11-08).
+
+The production composition identity mismatch recorded above is corrected in the branch: `app.js` supplies the same canonical `owner` value to `OrientRuntime.userId` and `createServer.ownerId`. The composition integration test asserts the Runtime identity and passes it as the server owner identity.
+
+A further fail-closed check is now added at `AgentService.createTask`:
+
+- An owner-session task without a validated persistence principal is rejected before idempotency admission.
+- The issued principal must match the authenticated session, Runtime tenant, and Runtime owner identity.
+- A valid principal issued for a different owner in the same tenant is rejected before repository admission.
+- Unit tests cover missing principal, cross-owner principal, and the accepted matching-principal path.
+
+This closes the **task-creation admission identity check only**. It does not yet bind the principal to the Runtime execution, execution repository, events, checkpoints, resume/cancel, or owner-scoped reads. The runtime still owns a singleton persistence coordinator configured with tenant identity only, so a principal must not be placed on that singleton or inferred from mutable execution metadata.
+
+The next implementation slice remains the full request-scoped lifecycle propagation and repository migration described above. Exact-head CI must complete on the latest commit before treating these changes as verified. PR #350 remains Draft; no RLS policies, hosted grants, roles, or production credentials are changed.
