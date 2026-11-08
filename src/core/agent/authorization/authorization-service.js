@@ -50,7 +50,7 @@ class AuthorizationService {
     const requiresApproval = typeof this.capabilityPolicy.requiresApproval === 'function' && this.capabilityPolicy.requiresApproval(capability);
     if (!requiresApproval) return { allowed: true, tool, capability, risk, requiresApproval: false, reason: decision.reason };
     if (!this.approvalService) return { allowed: false, tool, capability, risk, requiresApproval: true, reason: 'APPROVAL_SERVICE_REQUIRED' };
-    const checked = await this.approvalService.validate({ approval, executionId, step, tool, capability, planRevision, scope, tenantId, agentId, operationId });
+    const checked = await this.approvalService.validate({ approval, executionId, step, tool, capability, planRevision, scope, tenantId, agentId, operationId, persistencePrincipal });
     return { allowed: checked.allowed, tool, capability, risk, requiresApproval: true, approval: checked.approval || null, reason: checked.reason };
   }
 
