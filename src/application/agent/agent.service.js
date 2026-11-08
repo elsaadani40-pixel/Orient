@@ -82,7 +82,7 @@ class AgentService {
     try {
       let result;
       try {
-        result = await this.execute(clean, { ownerSessionContext });
+        result = await this.execute(clean, { ownerSessionContext, persistencePrincipal });
       } catch (error) {
         // Approval-required executions have a durable ID and are paused, not failed.
         // Accept the task without retrying the high-risk side effect.
@@ -97,7 +97,7 @@ class AgentService {
         throw new AppError('لم يُرجع Runtime معرّف مهمة قابلًا للتحقق', 502, 'TASK_EXECUTION_ID_MISSING');
       }
 
-      const execution = await this.getExecutionStatus(executionId);
+      const execution = await this.getExecutionStatus(executionId, { persistencePrincipal });
       task = {
         id: execution.executionId,
         status: execution.status,
@@ -127,8 +127,8 @@ class AgentService {
   }
 
 
-  async getFinalAnswer(executionId) {
-    const status = await this.getExecutionStatus(executionId);
+  async getFinalAnswer(executionId, { persistencePrincipal = null } = {}) {
+    const status = await this.getExecutionStatus(executionId, { persistencePrincipal });
     if (status.status !== 'completed') return { text: null, status: 'pending' };
 
     const persistence = this.runtime.persistence;
@@ -143,7 +143,7 @@ class AgentService {
 
     const tenantId = this.runtime.tenantId || 'local';
     const operationId = finalAnswerOperationId(tenantId, executionId);
-    const existing = await repository.findByKey(operationId, { tenantId });
+    const existing = await repository.findByKey(operationId, { tenantId, persistencePrincipal });
     if (existing?.status === 'completed') return normalizeFinalAnswer(existing.result);
     if (existing) return { text: null, status: existing.status === 'failed' ? 'unavailable' : 'pending' };
 
@@ -153,7 +153,8 @@ class AgentService {
       tool: 'api.v1.final-answer.generate',
       planRevision: 1,
       operationId,
-      tenantId
+      tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
     if (!begun.created) {
       if (begun.record?.status === 'completed') return normalizeFinalAnswer(begun.record.result);
@@ -162,7 +163,7 @@ class AgentService {
 
     let answer = { text: null, status: 'unavailable' };
     try {
-      const execution = await executions.findById(executionId, { tenantId });
+      const execution = await executions.findById(executionId, { tenantId, persistencePrincipal });
       if (!execution || execution.status !== 'completed') {
         answer = { text: null, status: 'unavailable' };
       } else {
@@ -199,7 +200,7 @@ class AgentService {
     }
 
     try {
-      const saved = await repository.complete(begun.key, answer, { tenantId });
+      const saved = await repository.complete(begun.key, answer, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       if (saved?.status === 'completed') return normalizeFinalAnswer(saved.result);
     } catch (_) {
       // Do not return an unpersisted answer: the next poll must not regenerate it silently.
@@ -252,16 +253,16 @@ class AgentService {
     return this.runtime.getExecutionEvents(executionId, options);
   }
 
-  getExecutionStatus(executionId) {
-    return this.runtime.getExecutionStatus(executionId);
+  getExecutionStatus(executionId, options = {}) {
+    return this.runtime.getExecutionStatus(executionId, options);
   }
 
-  getExecutionApprovals(executionId) {
-    return this.runtime.getExecutionApprovals(executionId);
+  getExecutionApprovals(executionId, options = {}) {
+    return this.runtime.getExecutionApprovals(executionId, options);
   }
 
-  resumeExecution(executionId, options = {}, ownerSessionContext = null) {
-    return this.runtime.resume(executionId, options, ownerSessionContext);
+  resumeExecution(executionId, options = {}, ownerSessionContext = null, persistencePrincipal = null) {
+    return this.runtime.resume(executionId, options, ownerSessionContext, persistencePrincipal);
   }
 
   cancelExecution(executionId, options = {}) {

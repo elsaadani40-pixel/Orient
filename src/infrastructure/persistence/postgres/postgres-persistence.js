@@ -18,41 +18,82 @@ function assertTenant(actual, expected, label) {
   }
 }
 
+async function withPersistencePrincipal(db, persistencePrincipal, tenantId, label, work) {
+  if (!persistencePrincipal) return work({ query: (sql, values) => db.query(sql, values) });
+  const principal = assertPersistencePrincipal(persistencePrincipal);
+  assertTenant(principal.tenantId, tenantOrLocal(tenantId), label);
+  if (typeof db.transactionWithPrincipal !== 'function') {
+    throw Object.assign(new Error('Principal-scoped PostgreSQL transactions are required'), {
+      code: 'PRINCIPAL_TRANSACTION_REQUIRED'
+    });
+  }
+  return db.transactionWithPrincipal(principal, work);
+}
+
 class PostgresExecutionRepository {
   constructor(db) { this.db = db; }
 
-  async findById(executionId, { tenantId = null } = {}) {
-    const values = tenantId ? [executionId, tenantId] : [executionId];
-    const where = tenantId ? 'AND tenant_id=$2' : '';
-    const result = await this.db.query(
-      `SELECT payload FROM executions WHERE execution_id=$1 ${where} LIMIT 1`,
-      values
-    );
-    return result.rows.length ? result.rows[0].payload : null;
+  async findById(executionId, { tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const values = effectiveTenant ? [executionId, effectiveTenant] : [executionId];
+      let where = effectiveTenant ? 'AND tenant_id=$2' : '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += ' AND payload->>\'userId\'=$' + values.length;
+      }
+      const result = await client.query(
+        `SELECT payload FROM executions WHERE execution_id=$1 ${where} LIMIT 1`,
+        values
+      );
+      return result.rows.length ? result.rows[0].payload : null;
+    });
   }
 
-  async findAll({ tenantId = null } = {}) {
-    const result = tenantId
-      ? await this.db.query('SELECT payload FROM executions WHERE tenant_id=$1 ORDER BY updated_at DESC', [tenantId])
-      : await this.db.query('SELECT payload FROM executions ORDER BY updated_at DESC');
-    return result.rows.map(row => row.payload);
+  async findAll({ tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const values = effectiveTenant ? [effectiveTenant] : [];
+      let where = effectiveTenant ? 'WHERE tenant_id=$1' : '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += (where ? ' AND ' : 'WHERE ') + 'payload->>\'userId\'=$' + values.length;
+      }
+      const result = await client.query(
+        'SELECT payload FROM executions ' + where + ' ORDER BY updated_at DESC',
+        values
+      );
+      return result.rows.map(row => row.payload);
+    });
   }
 
-  async findPage({ tenantId = null, limit = 50, offset = 0 } = {}) {
+  async findPage({ tenantId = null, limit = 50, offset = 0, persistencePrincipal = null } = {}) {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
     const boundedOffset = Number.isInteger(offset) ? Math.max(0, Math.min(offset, 10000)) : 0;
-    const [countResult, pageResult] = tenantId
-      ? await Promise.all([
-          this.db.query('SELECT COUNT(*)::int AS total FROM executions WHERE tenant_id=$1', [tenantId]),
-          this.db.query('SELECT payload FROM executions WHERE tenant_id=$1 ORDER BY updated_at DESC, execution_id DESC LIMIT $2 OFFSET $3', [tenantId, boundedLimit, boundedOffset])
-        ])
-      : await Promise.all([
-          this.db.query('SELECT COUNT(*)::int AS total FROM executions'),
-          this.db.query('SELECT payload FROM executions ORDER BY updated_at DESC, execution_id DESC LIMIT $1 OFFSET $2', [boundedLimit, boundedOffset])
-        ]);
-    return { total: Number(countResult.rows[0]?.total || 0), limit: boundedLimit, offset: boundedOffset, executions: pageResult.rows.map(row => row.payload) };
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const values = effectiveTenant ? [effectiveTenant] : [];
+      let where = effectiveTenant ? 'WHERE tenant_id=$1' : '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += (where ? ' AND ' : 'WHERE ') + 'payload->>\'userId\'=$' + values.length;
+      }
+      const countResult = await client.query('SELECT COUNT(*)::int AS total FROM executions ' + where, values);
+      const pageValues = [...values, boundedLimit, boundedOffset];
+      const pageResult = await client.query(
+        'SELECT payload FROM executions ' + where +
+        ' ORDER BY updated_at DESC, execution_id DESC LIMIT $' + (values.length + 1) +
+        ' OFFSET $' + (values.length + 2),
+        pageValues
+      );
+      return {
+        total: Number(countResult.rows[0]?.total || 0),
+        limit: boundedLimit,
+        offset: boundedOffset,
+        executions: pageResult.rows.map(row => row.payload)
+      };
+    });
   }
-
 
   async findByGoalId(goalId, { tenantId = null } = {}) {
     const result = await this.db.query(tenantId ? 'SELECT payload FROM executions WHERE tenant_id=$1 AND payload->>\'goalId\'=$2 ORDER BY updated_at DESC' : 'SELECT payload FROM executions WHERE payload->>\'goalId\'=$1 ORDER BY updated_at DESC', tenantId ? [tenantId,goalId] : [goalId]); return result.rows.map(row => row.payload);
@@ -212,16 +253,47 @@ class PostgresEventRepository {
     return result.rows.map(row => row.payload);
   }
 
-  async findByExecutionId(id, { tenantId = null, limit = null } = {}) {
-    if (Number.isInteger(limit) && limit > 0) {
-      const boundedLimit = Math.min(limit, 200);
-      const result = tenantId
-        ? await this.db.query('SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp DESC,event_id DESC LIMIT $3) recent ORDER BY timestamp ASC,event_id ASC', [tenantId, id, boundedLimit])
-        : await this.db.query('SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE execution_id=$1 ORDER BY timestamp DESC,event_id DESC LIMIT $2) recent ORDER BY timestamp ASC,event_id ASC', [id, boundedLimit]);
+  async findByExecutionId(id, { tenantId = null, limit = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Event principal', async client => {
+      const boundedLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : null;
+      if (!persistencePrincipal) {
+        if (boundedLimit) {
+          const result = await client.query(
+            effectiveTenant
+              ? 'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp DESC,event_id DESC LIMIT $3) recent ORDER BY timestamp ASC,event_id ASC'
+              : 'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE execution_id=$1 ORDER BY timestamp DESC,event_id DESC LIMIT $2) recent ORDER BY timestamp ASC,event_id ASC',
+            effectiveTenant ? [effectiveTenant, id, boundedLimit] : [id, boundedLimit]
+          );
+          return result.rows.map(row => row.payload);
+        }
+        const result = await client.query(
+          effectiveTenant
+            ? 'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp ASC,event_id ASC'
+            : 'SELECT payload FROM events WHERE execution_id=$1 ORDER BY timestamp ASC,event_id ASC',
+          effectiveTenant ? [effectiveTenant, id] : [id]
+        );
+        return result.rows.map(row => row.payload);
+      }
+
+      const values = [effectiveTenant, id, persistencePrincipal.ownerId];
+      const ownerClause = " AND EXISTS (SELECT 1 FROM executions x WHERE x.execution_id=events.execution_id AND x.tenant_id=events.tenant_id AND x.payload->>'userId'=$3)";
+      if (boundedLimit) {
+        values.push(boundedLimit);
+        const result = await client.query(
+          'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE tenant_id=$1 AND execution_id=$2' +
+          ownerClause + ' ORDER BY timestamp DESC,event_id DESC LIMIT $4) recent ORDER BY timestamp ASC,event_id ASC',
+          values
+        );
+        return result.rows.map(row => row.payload);
+      }
+      const result = await client.query(
+        'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2' +
+        ownerClause + ' ORDER BY timestamp ASC,event_id ASC',
+        values
+      );
       return result.rows.map(row => row.payload);
-    }
-    const result = await this.db.query(tenantId ? 'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp ASC,event_id ASC' : 'SELECT payload FROM events WHERE execution_id=$1 ORDER BY timestamp ASC,event_id ASC', tenantId ? [tenantId,id] : [id]);
-    return result.rows.map(row => row.payload);
+    });
   }
 
   async findByGoalId(id, { tenantId = null } = {}) {

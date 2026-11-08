@@ -635,7 +635,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       // Unified v1 task reads deliberately reuse the existing AgentService/runtime
       // and sit after the shared owner-session and origin protections above.
       if (req.method === 'GET' && requestUrl.pathname === '/api/v1/tasks') {
-        await agentRoutes.tasks(req, res);
+        await agentRoutes.tasks(req, res, ownerPersistencePrincipal);
         return;
       }
 
@@ -654,12 +654,12 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         ? v1TaskEventsId
         : null;
       if (req.method === 'GET' && v1TaskEventsMatch) {
-        await agentRoutes.taskEvents(req, res, v1TaskEventsMatch);
+        await agentRoutes.taskEvents(req, res, v1TaskEventsMatch, ownerPersistencePrincipal);
         return;
       }
 
       if (req.method === 'GET' && v1TaskMatch) {
-        await agentRoutes.task(req, res, v1TaskMatch[1]);
+        await agentRoutes.task(req, res, v1TaskMatch[1], ownerPersistencePrincipal);
         return;
       }
 
@@ -727,7 +727,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         await agentRoutes.events(
           req,
           res,
-          decodeURIComponent(executionEventsMatch[1])
+          decodeURIComponent(executionEventsMatch[1]),
+          ownerPersistencePrincipal
         );
         return;
       }
@@ -736,7 +737,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         req.method === 'GET' &&
         requestUrl.pathname === '/executions'
       ) {
-        await agentRoutes.executions(req, res);
+        await agentRoutes.executions(req, res, ownerPersistencePrincipal);
         return;
       }
 
@@ -758,7 +759,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         await agentRoutes.status(
           req,
           res,
-          decodeURIComponent(executionStatusMatch[1])
+          decodeURIComponent(executionStatusMatch[1]),
+          ownerPersistencePrincipal
         );
         return;
       }
@@ -773,7 +775,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         await agentRoutes.approvals(
           req,
           res,
-          decodeURIComponent(executionApprovalsMatch[1])
+          decodeURIComponent(executionApprovalsMatch[1]),
+          ownerPersistencePrincipal
         );
         return;
       }
