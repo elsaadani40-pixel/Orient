@@ -134,8 +134,13 @@ class PostgresExecutionRepository {
   }
 
   async update(executionId, patch, { tenantId = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantOrLocal(tenantId || patch?.tenantId);
-    assertTenant(persistencePrincipal?.tenantId, persistencePrincipal ? effectiveTenant : persistencePrincipal?.tenantId, 'Execution principal');
+    let requestedTenant = tenantId || patch?.tenantId;
+    if (!requestedTenant && !persistencePrincipal) {
+      const existing = await this.findById(executionId);
+      requestedTenant = existing?.tenantId || existing?.metadata?.tenantId || 'local';
+    }
+    const effectiveTenant = tenantOrLocal(requestedTenant);
+    if (persistencePrincipal) assertTenant(persistencePrincipal.tenantId, effectiveTenant, 'Execution principal');
     if (persistencePrincipal && patch?.userId && patch.userId !== persistencePrincipal.ownerId) {
       throw Object.assign(new Error('Execution owner does not match persistence principal'), {
         code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
