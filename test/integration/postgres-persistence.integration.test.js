@@ -420,9 +420,16 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
     leaseDurationMs: 30000
   });
 
-  await persistence.workers.register({ workerId: 'stale-worker-a', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
-  await persistence.workers.register({ workerId: 'worker', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
-  await persistence.workers.register({ workerId: 'recovery-worker-b', tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId);
+  const workerPrincipalA = makeWorkerPrincipal(tenantId, 'stale-worker-a');
+  const workerPrincipalB = makeWorkerPrincipal(tenantId, 'recovery-worker-b');
+  await persistence.workers.register({
+    workerId: 'stale-worker-a', tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: workerPrincipalA });
+  await persistence.workers.register({
+    workerId: 'recovery-worker-b', tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: workerPrincipalB });
 
   await schedulerA.enqueueDurable(instance);
 
@@ -431,17 +438,19 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
   const workerA = new AsyncWorkflowWorker({
     scheduler: schedulerA,
     workerId: 'stale-worker-a',
+    workerPrincipal: workerPrincipalA,
     executor: async () => {
       await pool.query(
         "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
         [workflowId]
       );
-      const recovered = await schedulerB.recoverPersisted();
+      const recovered = await schedulerB.recoverPersisted('recovery-worker-b', [], workerPrincipalB);
       assert.equal(recovered, 1);
 
       const workerB = new AsyncWorkflowWorker({
         scheduler: schedulerB,
         workerId: 'recovery-worker-b',
+        workerPrincipal: workerPrincipalB,
         executor: async ({ instance: recoveredInstance }) => {
           return { committedBy: 'worker-b', workflowId: recoveredInstance.workflowId };
         }
@@ -479,6 +488,8 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
   assert.equal(persisted.steps['protected-step'].state, 'COMPLETED');
   assert.equal(persisted.steps['protected-step'].result.committedBy, 'worker-b');
 
+  await persistence.workers.unregister('stale-worker-a', tenantId, { workerPrincipal: workerPrincipalA });
+  await persistence.workers.unregister('recovery-worker-b', tenantId, { workerPrincipal: workerPrincipalB });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
