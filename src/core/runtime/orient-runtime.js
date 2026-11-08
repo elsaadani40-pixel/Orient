@@ -191,7 +191,7 @@ class OrientRuntime {
       agentOrchestrator: this.agentOrchestrator,
       persistExecution: (context, mode, persistencePrincipal) => this.persistExecution(context, mode, persistencePrincipal),
       persistEvents: (context, persistencePrincipal) => this.persistEvents(context, persistencePrincipal),
-      checkpoint: (context, mode, reason) => this.checkpoint(context, mode, reason)
+      checkpoint: (context, mode, reason, persistencePrincipal) => this.checkpoint(context, mode, reason, persistencePrincipal)
     });
 
     this.requestExecutionCoordinator = new RequestExecutionCoordinator({
