@@ -958,99 +958,162 @@ class PostgresWorkflowRepository {
 class PostgresWorkflowLeaseRepository {
   constructor(db) { this.db = db; }
 
-  async tryAcquire(lease, tenantId = null) {
+  assertWorkerPrincipal(principal, tenantId, workerId = null, { requireLease = false } = {}) {
+    const identity = assertWorkerPersistencePrincipal(principal, { requireLease });
+    const tenant = tenantOrLocal(tenantId);
+    if (identity.tenantId !== tenant || (workerId && identity.workerId !== workerId)) {
+      throw Object.assign(new Error('Worker principal does not match workflow lease identity'), {
+        code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+      throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), {
+        code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED'
+      });
+    }
+    return identity;
+  }
+
+  async assertRegisteredWorkerSession(client, principal) {
+    const result = await client.query(
+      `SELECT 1 FROM worker_nodes
+       WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+         AND status='READY' AND expires_at > NOW()
+       FOR UPDATE`,
+      [principal.tenantId, principal.workerId, principal.sessionId]
+    );
+    if (result.rowCount !== 1) {
+      throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+    }
+    return true;
+  }
+
+  async tryAcquire(lease, tenantId = null, { workerPrincipal = null } = {}) {
     const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Lease');
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId);
     const acquiredAt = new Date(lease.acquiredAt).toISOString();
     const expiresAt = new Date(lease.expiresAt).toISOString();
 
-    return this.db.transaction(async client => {
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
       const workflow = await client.query(
         'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
         [lease.workflowId, effectiveTenant]
       );
       if (!workflow.rows.length) {
-        const error = new Error('Workflow is not durably registered');
-        error.code = 'WORKFLOW_NOT_FOUND';
-        throw error;
+        throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
       }
       const workflowState = workflow.rows[0].state;
       const workflowPayload = workflow.rows[0].payload || {};
       if (workflowPayload.cancelRequested || workflowState === 'CANCELLED') {
-        const error = new Error('Workflow cancellation was requested');
-        error.code = 'WORKFLOW_CANCELLATION_REQUESTED';
-        throw error;
+        throw Object.assign(new Error('Workflow cancellation was requested'), { code: 'WORKFLOW_CANCELLATION_REQUESTED' });
       }
       if (['COMPLETED','FAILED'].includes(workflowState)) {
-        const error = new Error('Workflow is terminal');
-        error.code = 'WORKFLOW_TERMINAL';
-        throw error;
+        throw Object.assign(new Error('Workflow is terminal'), { code: 'WORKFLOW_TERMINAL' });
       }
       await client.query(
         'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= $3',
         [lease.workflowId, effectiveTenant, acquiredAt]
       );
       const result = await client.query(
-        `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,acquired_at,expires_at,payload)
-         VALUES($1,$2,$3,$4,$5,$6,$7)
+        `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT(workflow_id) DO NOTHING
          RETURNING fencing_token`,
-        [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,acquiredAt,expiresAt,lease]
+        [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,principal.sessionId,acquiredAt,expiresAt,lease]
       );
       if (result.rowCount !== 1) return null;
-      return { ...lease, fencingToken: Number(result.rows[0].fencing_token) };
+      return { ...lease, workerSessionId: principal.sessionId, fencingToken: Number(result.rows[0].fencing_token) };
     });
   }
 
-  async save(lease, tenantId = null) {
+  async save(lease, tenantId = null, { workerPrincipal = null } = {}) {
     const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Lease');
-    await this.db.query(
-      `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,acquired_at,expires_at,payload)
-       VALUES($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT(workflow_id) DO UPDATE SET
-         tenant_id=EXCLUDED.tenant_id,lease_id=EXCLUDED.lease_id,
-         worker_id=EXCLUDED.worker_id,acquired_at=EXCLUDED.acquired_at,
-         expires_at=EXCLUDED.expires_at,payload=EXCLUDED.payload`,
-      [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,new Date(lease.acquiredAt).toISOString(),new Date(lease.expiresAt).toISOString(),lease]
-    );
-    return { ...lease };
+    const principal = this.assertWorkerPrincipal(workerPrincipal, effectiveTenant, lease.workerId, { requireLease: true });
+    if (principal.workflowId !== lease.workflowId || principal.leaseId !== lease.leaseId ||
+        Number(principal.fencingToken) !== Number(lease.fencingToken)) {
+      throw Object.assign(new Error('Lease principal does not match the lease payload'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1,payload=$2
+         WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
+           AND worker_session_id=$7 AND fencing_token=$8 AND expires_at > NOW()`,
+        [new Date(lease.expiresAt).toISOString(),lease,lease.workflowId,effectiveTenant,lease.leaseId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      if (result.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow lease is no longer owned by this worker session'), { code: 'WORKFLOW_LEASE_NOT_OWNER' });
+      }
+      return { ...lease };
+    });
   }
 
-  async renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null) {
-    const result = await this.db.query(
-      `UPDATE workflow_leases SET expires_at=$1::timestamptz,payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
-       WHERE workflow_id=$2 AND lease_id=$3 AND expires_at > $4 ${tenantId ? 'AND tenant_id=$5' : ''}`,
-      tenantId
-        ? [new Date(expiresAt).toISOString(), workflowId, leaseId, new Date(now).toISOString(), tenantId]
-        : [new Date(expiresAt).toISOString(), workflowId, leaseId, new Date(now).toISOString()]
-    );
-    return result.rowCount === 1;
+  async renewIfOwned(workflowId, leaseId, expiresAt, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match renewal request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `UPDATE workflow_leases SET expires_at=$1::timestamptz,
+           payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
+         WHERE workflow_id=$2 AND tenant_id=$3 AND lease_id=$4 AND worker_id=$5
+           AND worker_session_id=$6 AND fencing_token=$7 AND expires_at > $8`,
+        [new Date(expiresAt).toISOString(),workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
+  }
+
+  async assertCurrent(workflowId, leaseId, fencingToken, now = Date.now(), tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId ||
+        Number(principal.fencingToken) !== Number(fencingToken)) return false;
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `SELECT 1 FROM workflow_leases
+         WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
+           AND worker_session_id=$5 AND fencing_token=$6 AND expires_at > $7 LIMIT 1`,
+        [workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken,new Date(now).toISOString()]
+      );
+      return result.rowCount === 1;
+    });
   }
 
   async findByWorkflowId(workflowId, tenantId = null) {
     const result = await this.db.query(
-      tenantId ? 'SELECT payload,expires_at,acquired_at FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload,expires_at,acquired_at FROM workflow_leases WHERE workflow_id=$1 LIMIT 1',
+      tenantId ? 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE workflow_id=$1 LIMIT 1',
       tenantId ? [workflowId, tenantId] : [workflowId]
     );
-    return result.rows.length ? { ...result.rows[0].payload, expiresAt: new Date(result.rows[0].expires_at).getTime(), acquiredAt: new Date(result.rows[0].acquired_at).getTime() } : null;
+    return result.rows.length ? { ...result.rows[0].payload, workerSessionId: result.rows[0].worker_session_id, fencingToken: Number(result.rows[0].fencing_token), expiresAt: new Date(result.rows[0].expires_at).getTime(), acquiredAt: new Date(result.rows[0].acquired_at).getTime() } : null;
   }
 
   async findAll({ tenantId = null } = {}) {
     const result = tenantId
-      ? await this.db.query('SELECT payload,expires_at,acquired_at FROM workflow_leases WHERE tenant_id=$1 ORDER BY acquired_at ASC', [tenantId])
-      : await this.db.query('SELECT payload,expires_at,acquired_at FROM workflow_leases ORDER BY acquired_at ASC');
-    return result.rows.map(row => ({ ...row.payload, expiresAt: new Date(row.expires_at).getTime(), acquiredAt: new Date(row.acquired_at).getTime() }));
+      ? await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases WHERE tenant_id=$1 ORDER BY acquired_at ASC', [tenantId])
+      : await this.db.query('SELECT payload,expires_at,acquired_at,worker_session_id,fencing_token FROM workflow_leases ORDER BY acquired_at ASC');
+    return result.rows.map(row => ({ ...row.payload, workerSessionId: row.worker_session_id, fencingToken: Number(row.fencing_token), expiresAt: new Date(row.expires_at).getTime(), acquiredAt: new Date(row.acquired_at).getTime() }));
   }
 
-  async delete(workflowId, leaseId, tenantId = null) {
-    const result = await this.db.query(
-      tenantId
-        ? 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3'
-        : 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2',
-      tenantId ? [workflowId, leaseId, tenantId] : [workflowId, leaseId]
-    );
-    return result.rowCount === 1;
+  async delete(workflowId, leaseId, tenantId = null, { workerPrincipal = null } = {}) {
+    const principal = this.assertWorkerPrincipal(workerPrincipal, tenantId, null, { requireLease: true });
+    if (principal.workflowId !== workflowId || principal.leaseId !== leaseId) {
+      throw Object.assign(new Error('Lease principal does not match release request'), { code: 'WORKFLOW_FENCING_REJECTED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      await this.assertRegisteredWorkerSession(client, principal);
+      const result = await client.query(
+        `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
+         AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
+        [workflowId,leaseId,principal.tenantId,principal.workerId,principal.sessionId,principal.fencingToken]
+      );
+      return result.rowCount === 1;
+    });
   }
 
   async deleteExpired(workflowId, leaseId, now = Date.now(), tenantId = null) {

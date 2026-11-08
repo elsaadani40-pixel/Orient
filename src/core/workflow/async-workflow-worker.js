@@ -1,4 +1,5 @@
 const crypto=require('crypto');const WorkflowDefinition=require('./workflow-definition');const {createWorkerPersistencePrincipal,assertWorkerPersistencePrincipal}=require('../security/worker-persistence-principal');
+function isLeaseLost(error){return ['WORKER_SESSION_LOST','WORKFLOW_LEASE_NOT_OWNER','WORKFLOW_LEASE_EXPIRED','WORKFLOW_FENCING_REJECTED'].includes(error?.code);}
 class AsyncWorkflowWorker{
  constructor({scheduler,executor,eventSink=()=>{},workerId=crypto.randomUUID(),now=()=>Date.now(),retryClassifier=()=>true,capabilities=[],workerRegistry=null,workerLeaseMs=30000,tenantId=null,workerPrincipal=null}){
   this.scheduler=scheduler;this.executor=executor;this.eventSink=eventSink;this.workerId=workerId;this.now=now;this.retryClassifier=retryClassifier;this.workerRegistry=workerRegistry;this.workerLeaseMs=Math.max(1000,Number(workerLeaseMs)||30000);this.tenantId=tenantId||scheduler?.tenantId||null;this.capabilities=Array.isArray(capabilities)?[...new Set(capabilities.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()))]:[];this.workerPrincipal=workerPrincipal?assertWorkerPersistencePrincipal(workerPrincipal):createWorkerPersistencePrincipal({tenantId:this.tenantId||'local',workerId:this.workerId,sessionId:crypto.randomUUID(),capabilities:this.capabilities});if(this.workerPrincipal.tenantId!==(this.tenantId||'local')||this.workerPrincipal.workerId!==this.workerId||this.capabilities.some(capability=>!this.workerPrincipal.capabilities.includes(capability)))throw Object.assign(new Error('Worker principal does not match worker identity or capabilities'),{code:'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'});
@@ -23,9 +24,9 @@ class AsyncWorkflowWorker{
     if(workerHeartbeatError){leaseLost=true;break;}
     if(lease.cancelled||instance.cancelRequested){const from=instance.state;if(instance.state!=='CANCELLED')instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
     if(lease.deadlineAt&&new Date(lease.deadlineAt).getTime()<=this.now()){instance.metadata.deadlineExceeded=true;instance.metadata.failureCode='WORKFLOW_DEADLINE_EXCEEDED';const from=instance.state;if(instance.state!=='FAILED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);break;}
-    await this.scheduler.renewAsync(instance.workflowId,lease.leaseId);if(workerHeartbeatError){leaseLost=true;break;}
+    try{await this.scheduler.renewAsync(instance.workflowId,lease.leaseId);}catch(error){if(isLeaseLost(error)){leaseLost=true;break;}throw error;}if(workerHeartbeatError){leaseLost=true;break;}
     const ready=instance.readySteps();if(!ready.length){const done=instance.definition.steps.every(s=>instance.steps[s.id].state===WorkflowDefinition.STEP_STATES.COMPLETED);const from=instance.state;if(done)instance.transition('COMPLETED');else if(instance.state!=='FAILED'&&instance.state!=='CANCELLED')instance.transition('FAILED');this.emitState(instance,from,instance.state,lease);break;}
-    const step=ready[0];if(lease.fencingToken!==undefined&&typeof this.scheduler.assertCurrentAsync==='function')await this.scheduler.assertCurrentAsync(instance.workflowId,lease.leaseId,lease.fencingToken);instance.markStepRunning(step.id);
+    const step=ready[0];if(lease.fencingToken!==undefined&&typeof this.scheduler.assertCurrentAsync==='function'){try{await this.scheduler.assertCurrentAsync(instance.workflowId,lease.leaseId,lease.fencingToken);}catch(error){if(isLeaseLost(error)){leaseLost=true;break;}throw error;}}instance.markStepRunning(step.id);
     try{
      const heartbeatMs=Math.max(1000,Math.floor(this.scheduler.leaseDurationMs/3));let heartbeatError=null;
      const heartbeat=setInterval(()=>{this.scheduler.renewAsync(instance.workflowId,lease.leaseId).catch(error=>{heartbeatError=error;});},heartbeatMs);
@@ -35,7 +36,7 @@ class AsyncWorkflowWorker{
      if(instance.cancelRequested){const from=instance.state;instance.cancelStep(step.id);instance.transition('CANCELLED');this.emitState(instance,from,instance.state,lease);break;}
      const executionId=result?.execution?.executionId||result?.executionId||null;if(typeof executionId==='string'&&executionId)instance.metadata={...instance.metadata,taskId:instance.metadata.taskId||instance.workflowId,executionId};instance.markStepCompleted(step.id,result);this.emit('workflow.step.completed',{workflowId:instance.workflowId,leaseId:lease.leaseId,stepId:step.id,executionId});
     }catch(error){
-     if(error?.code==='WORKFLOW_LEASE_NOT_OWNER'||error?.code==='WORKFLOW_LEASE_EXPIRED'||error?.code==='WORKFLOW_FENCING_REJECTED'){leaseLost=true;break;}
+     if(isLeaseLost(error)){leaseLost=true;break;}
      if(workerHeartbeatError){leaseLost=true;break;}
      if(error?.code==='APPROVAL_REQUIRED'){
       // Approval is a durable pause, not a failed step or a retryable tool error.
@@ -53,7 +54,7 @@ class AsyncWorkflowWorker{
    if(leaseLost)return null;await this.scheduler.persistAsync(instance);return instance;
   }finally{
    stopWorkerHeartbeat();
-   try{await this.scheduler.releaseAsync(instance.workflowId,lease.leaseId);}catch(error){if(!leaseLost&&!['WORKFLOW_LEASE_NOT_OWNER','WORKFLOW_LEASE_EXPIRED'].includes(error?.code))throw error;}
+   try{await this.scheduler.releaseAsync(instance.workflowId,lease.leaseId);}catch(error){if(!leaseLost&&!isLeaseLost(error))throw error;}
   }
  }
  emit(type,payload){this.eventSink({eventId:crypto.randomUUID(),type,timestamp:new Date(this.now()).toISOString(),payload});}

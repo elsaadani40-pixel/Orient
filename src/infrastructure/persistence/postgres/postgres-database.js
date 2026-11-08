@@ -169,6 +169,13 @@ const MIGRATIONS = [
       ON workflow_dispatch_claims(tenant_id, worker_id, worker_session_id, expires_at);
   `},
 
+  {version:11,sql:`
+    ALTER TABLE workflow_leases
+      ADD COLUMN IF NOT EXISTS worker_session_id TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS idx_workflow_leases_worker_session
+      ON workflow_leases(tenant_id, worker_id, worker_session_id, expires_at);
+  `},
+
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -187,7 +194,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9),($10)',[1,2,3,4,5,6,7,8,9,10]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9),($10),($11)',[1,2,3,4,5,6,7,8,9,10,11]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
