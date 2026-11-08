@@ -23,13 +23,21 @@ The current implementation has useful lifecycle controls, but tenant scoping and
 - Added `PostgresDatabase.transactionWithWorkerPrincipal`, which establishes worker-specific transaction-local context on one checked-out client and always commits/rolls back and releases that client.
 - Added unit coverage for untrusted-object rejection, immutable identity, all-or-nothing lease binding, transaction-local context, and rollback.
 
-This is an authority primitive only. It is not yet wired into worker registration, dispatch, leases, or workflow writes and does not claim worker isolation.
+This is an authority primitive plus a first wired worker-session slice. It does not yet claim complete worker isolation.
+
+## Implemented worker-session slice
+
+- Worker bootstrap now issues one immutable principal per process session; the same object is passed through worker registration, heartbeat, scheduler recovery, and worker factory creation.
+- PostgreSQL worker registry writes require a matching tenant/worker/session principal.
+- A live worker ID cannot be replaced by a different session. Expired sessions may be replaced; the old session can no longer heartbeat or unregister the replacement.
+- Dispatch claim creation and release require the same worker principal. Claims persist `worker_session_id`, and claim admission verifies the active registered session and capability set.
+- Migration v10 adds `worker_nodes.session_id` and `workflow_dispatch_claims.worker_session_id`.
 
 ## Required end-state protocol
 
 1. **Worker session issuance:** only the trusted worker bootstrap creates a worker principal. Every process boot gets a new session ID. A worker ID alone is never accepted as authority.
-2. **Registration and heartbeat:** registry writes require the matching tenant/worker/session principal; registration cannot overwrite a live different worker session without an explicit stale-session/fencing rule.
-3. **Dispatch claim:** claim creation and release require the same worker principal and registered capability set. Claim rows must be bound to worker session and expiry.
+2. **Registration and heartbeat:** implemented in the current worker-session slice. Registry writes require the matching tenant/worker/session principal; live-session replacement is rejected and expired-session replacement fences the prior session.
+3. **Dispatch claim:** implemented in the current worker-session slice. Claim creation and release require the same worker principal and registered capability set; claim rows are bound to worker session and expiry.
 4. **Lease binding:** after durable lease acquisition, mint a lease-bound worker principal containing workflow ID, lease ID, and fencing token. Every renew/assert/release operation must verify all of them and the worker session.
 5. **Workflow writes:** leased workflow writes must match workflow ID, tenant, worker ID, lease ID, fencing token, and unexpired lease in the same transaction. A stale worker must not mutate a newer worker's workflow.
 6. **Delegated owner authority:** a worker may act on an owner's execution only through a durable workflow-to-execution relation and a lease-bound delegation check. The worker must not invent or infer owner identity from request input or mutable process state.
