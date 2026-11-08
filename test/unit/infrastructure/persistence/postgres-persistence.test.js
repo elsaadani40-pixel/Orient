@@ -116,8 +116,13 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
 });
 
 test('Postgres workflow writes reject stale fencing tokens', async () => {
-  const db = fakeDb([{ rows: [], rowCount: 0 }]);
+  const db = fakeDb([{ rows: [{}], rowCount: 1 }, { rows: [], rowCount: 0 }]);
   const repo = new PostgresWorkflowRepository(db);
+  const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
+  const workerPrincipal = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-a',
+    workflowId: 'wf-1', leaseId: 'lease-stale', fencingToken: 6
+  });
   await assert.rejects(
     () => repo.save({
       workflowId: 'wf-1',
@@ -126,9 +131,11 @@ test('Postgres workflow writes reject stale fencing tokens', async () => {
       updatedAt: new Date().toISOString(),
       metadata: { fencingToken: 6 },
       toJSON() { return this; }
-    }, 'tenant-a'),
+    }, 'tenant-a', { workerPrincipal }),
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
+  assert.match(db.calls[1].text, /worker_session_id/);
+  assert.match(db.calls[1].text, /fencing_token/);
 });
 
 

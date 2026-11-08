@@ -221,6 +221,10 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
   }, 'tenant-fence', { workerPrincipal: workerA });
 
   assert.ok(first.fencingToken > 0);
+  const firstBound = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-fence', workerId: workerA.workerId, sessionId: workerA.sessionId,
+    capabilities: workerA.capabilities, workflowId, leaseId: first.leaseId, fencingToken: first.fencingToken
+  });
 
   await persistence.workflows.save({
     workflowId,
@@ -228,7 +232,7 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
     state: 'RUNNING',
     metadata: { fencingToken: first.fencingToken },
     toJSON() { return this; }
-  }, 'tenant-fence');
+  }, 'tenant-fence', { workerPrincipal: firstBound });
 
   await pool.query(
     "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
@@ -253,19 +257,21 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
       state: 'RUNNING',
       metadata: { fencingToken: first.fencingToken },
       toJSON() { return this; }
-    }, 'tenant-fence'),
+    }, 'tenant-fence', { workerPrincipal: firstBound }),
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
 
+  const secondBound = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-fence', workerId: workerB.workerId, sessionId: workerB.sessionId,
+    capabilities: workerB.capabilities, workflowId, leaseId: second.leaseId, fencingToken: second.fencingToken
+  });
   await persistence.workflows.save({
     workflowId,
     tenantId: 'tenant-fence',
     state: 'RUNNING',
     metadata: { fencingToken: second.fencingToken },
     toJSON() { return this; }
-  }, 'tenant-fence');
-
-  const secondBound = createWorkerPersistencePrincipal({tenantId:'tenant-fence',workerId:'worker-b',sessionId:workerB.sessionId,capabilities:workerB.capabilities,workflowId,leaseId:second.leaseId,fencingToken:second.fencingToken});
+  }, 'tenant-fence', { workerPrincipal: secondBound });
   await persistence.workflowLeases.delete(workflowId, second.leaseId, 'tenant-fence', {workerPrincipal:secondBound});
   await persistence.workers.unregister('worker-a','tenant-fence',{workerPrincipal:workerA});
   await persistence.workers.unregister('worker-b','tenant-fence',{workerPrincipal:workerB});
@@ -398,6 +404,71 @@ test('PostgreSQL lease authority is revoked when the registered worker session i
   );
 
   await persistence.workers.unregister(newWorker.workerId, tenantId, { workerPrincipal: newWorker });
+  await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+});
+
+test('PostgreSQL workflow writes require the active worker session and exact lease fencing identity', async () => {
+  const workflowId = 'worker-fenced-write-' + Date.now();
+  const tenantId = 'tenant-worker-fenced-write';
+  await pool.query(
+    'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,NOW(),$4)',
+    [workflowId, tenantId, 'QUEUED', { workflowId, tenantId, state: 'QUEUED', metadata: {} }]
+  );
+  const oldWorker = makeWorkerPrincipal(tenantId, 'worker-fenced-write');
+  await persistence.workers.register({
+    workerId: oldWorker.workerId, tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: oldWorker });
+  const lease = await persistence.workflowLeases.tryAcquire({
+    workflowId, leaseId: 'lease-fenced-write-' + Date.now(), workerId: oldWorker.workerId,
+    acquiredAt: Date.now(), expiresAt: Date.now() + 60000, metadata: { tenantId }
+  }, tenantId, { workerPrincipal: oldWorker });
+  const bound = createWorkerPersistencePrincipal({
+    tenantId, workerId: oldWorker.workerId, sessionId: oldWorker.sessionId,
+    capabilities: oldWorker.capabilities, workflowId, leaseId: lease.leaseId,
+    fencingToken: lease.fencingToken
+  });
+  const instance = {
+    workflowId, tenantId, state: 'RUNNING', updatedAt: new Date().toISOString(),
+    metadata: { fencingToken: lease.fencingToken },
+    toJSON() { return { ...this }; }
+  };
+
+  await assert.rejects(
+    persistence.workflows.save({ ...instance, metadata: {} }, tenantId),
+    error => error.code === 'WORKFLOW_LEASE_HELD'
+  );
+  await persistence.workflows.save(instance, tenantId, { workerPrincipal: bound });
+  const stored = await pool.query('SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  assert.equal(stored.rows[0].state, 'RUNNING');
+  assert.equal(stored.rows[0].payload.metadata.fencingToken, lease.fencingToken);
+
+  await pool.query(
+    'UPDATE worker_nodes SET expires_at=NOW()-INTERVAL \'1 second\' WHERE tenant_id=$1 AND worker_id=$2',
+    [tenantId, oldWorker.workerId]
+  );
+  const replacement = makeWorkerPrincipal(tenantId, oldWorker.workerId);
+  await persistence.workers.register({
+    workerId: replacement.workerId, tenantId, status: 'READY', capabilities: [],
+    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+  }, tenantId, { workerPrincipal: replacement });
+
+  await assert.rejects(
+    persistence.workflows.save(instance, tenantId, { workerPrincipal: bound }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  const replacementBound = createWorkerPersistencePrincipal({
+    tenantId, workerId: replacement.workerId, sessionId: replacement.sessionId,
+    capabilities: replacement.capabilities, workflowId, leaseId: lease.leaseId,
+    fencingToken: lease.fencingToken
+  });
+  await assert.rejects(
+    persistence.workflows.save(instance, tenantId, { workerPrincipal: replacementBound }),
+    error => error.code === 'WORKFLOW_FENCING_REJECTED'
+  );
+
+  await persistence.workers.unregister(replacement.workerId, tenantId, { workerPrincipal: replacement });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
 });

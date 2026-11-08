@@ -2,6 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const AsyncWorkflowScheduler=require('../../../../src/core/workflow/async-workflow-scheduler');
 const {WorkflowDefinition,WorkflowInstance}=require('../../../../src/core/workflow');
+const {createWorkerPersistencePrincipal}=require('../../../../src/core/security/worker-persistence-principal');
 function definition(){return new WorkflowDefinition({id:'compensation',version:1,name:'Compensation',steps:[{id:'step',tool:'noop',input:{}}]});}
 test('async scheduler compensates lease and durable quota when persistence fails after acquisition',async()=>{
   const instance=new WorkflowInstance({definition:definition(),workflowId:'persist-failure-wf',tenantId:'tenant-compensation'});
@@ -16,4 +17,27 @@ test('async scheduler compensates lease and durable quota when persistence fails
   assert.equal(leases.size,0,'durable lease leaked');
   assert.equal(quotaCalls.length,1,'quota reservation leaked');
   assert.equal(quotaCalls[0].workflowId,instance.workflowId);
+});
+
+
+test('async scheduler uses the active lease principal for workflow persistence', async () => {
+  const workflowId = 'persist-active-lease';
+  const tenantId = 'tenant-persist-active';
+  const principal = createWorkerPersistencePrincipal({
+    tenantId, workerId: 'worker-a', sessionId: 'session-a',
+    workflowId, leaseId: 'lease-a', fencingToken: 88
+  });
+  let saved = null;
+  const workflowRepository = {
+    async save(...args) { saved = args; }
+  };
+  const scheduler = new AsyncWorkflowScheduler({ tenantId, workflowRepository });
+  const instance = {
+    workflowId, tenantId, state: 'RUNNING', metadata: { fencingToken: 88 }
+  };
+  scheduler.active.set(workflowId, { workerPrincipal: principal });
+  await scheduler.persistAsync(instance);
+  assert.equal(saved[0], instance);
+  assert.equal(saved[1], tenantId);
+  assert.equal(saved[2].workerPrincipal, principal);
 });

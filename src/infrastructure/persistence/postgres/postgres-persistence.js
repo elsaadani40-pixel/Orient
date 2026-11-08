@@ -764,39 +764,108 @@ class PostgresCheckpointRepository {
 class PostgresWorkflowRepository {
   constructor(db, workerRegistry = null) { this.db = db; this.workerRegistry = workerRegistry; }
 
-  async save(instance, tenantId = null) {
+  async save(instance, tenantId = null, { workerPrincipal = null } = {}) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenant = tenantOrLocal(item.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Workflow');
     const fencingToken = Number(item.metadata?.fencingToken || 0);
     if (fencingToken > 0) {
-      const result = await this.db.query(
-        `UPDATE workflows
-         SET state=$3,updated_at=$4,payload=$5
-         WHERE workflow_id=$1 AND tenant_id=$2
-           AND EXISTS (
-             SELECT 1 FROM workflow_leases
-             WHERE workflow_id=$1 AND tenant_id=$2
-               AND fencing_token=$6 AND expires_at > NOW()
-           )`,
-        [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item, fencingToken]
+      const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
+      if (principal.tenantId !== effectiveTenant || principal.workflowId !== item.workflowId ||
+          principal.fencingToken !== fencingToken) {
+        throw Object.assign(new Error('Worker principal does not match workflow write lease'), {
+          code: 'WORKFLOW_FENCING_REJECTED'
+        });
+      }
+      if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+        throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), {
+          code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED'
+        });
+      }
+      return this.db.transactionWithWorkerPrincipal(principal, async client => {
+        const worker = await client.query(
+          `SELECT 1 FROM worker_nodes
+           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+             AND status='READY' AND expires_at > NOW()
+           FOR UPDATE`,
+          [effectiveTenant, principal.workerId, principal.sessionId]
+        );
+        if (worker.rowCount !== 1) {
+          throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+        }
+        const result = await client.query(
+          `UPDATE workflows
+           SET state=$3,updated_at=$4,payload=$5
+           WHERE workflow_id=$1 AND tenant_id=$2
+             AND EXISTS (
+               SELECT 1 FROM workflow_leases
+               WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$6
+                 AND worker_id=$7 AND worker_session_id=$8
+                 AND fencing_token=$9 AND expires_at > NOW()
+             )`,
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(),
+            item, principal.leaseId, principal.workerId, principal.sessionId, principal.fencingToken]
+        );
+        if (result.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow write rejected by worker session and durable fencing'), {
+            code: 'WORKFLOW_FENCING_REJECTED'
+          });
+        }
+        return item;
+      }, { requireLease: true });
+    }
+    if (workerPrincipal) {
+      throw Object.assign(new Error('A lease-bound workflow write requires a persisted fencing token'), {
+        code: 'WORKFLOW_FENCING_REJECTED'
+      });
+    }
+    if (typeof this.db.transaction !== 'function') {
+      throw Object.assign(new Error('Transactional workflow writes are required'), {
+        code: 'WORKFLOW_TRANSACTION_REQUIRED'
+      });
+    }
+    return this.db.transaction(async client => {
+      let current = await client.query(
+        'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [item.workflowId, effectiveTenant]
       );
-      if (result.rowCount !== 1) {
-        const error = new Error('Workflow write rejected by durable fencing token');
-        error.code = 'WORKFLOW_FENCING_REJECTED';
-        throw error;
+      if (current.rowCount !== 1) {
+        const inserted = await client.query(
+          `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
+           VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id`,
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+        );
+        if (inserted.rowCount === 1) return item;
+        current = await client.query(
+          'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+          [item.workflowId, effectiveTenant]
+        );
+        if (current.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow identity changed during persistence'), {
+            code: 'WORKFLOW_CONCURRENT_WRITE'
+          });
+        }
+      }
+      const activeLease = await client.query(
+        'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+        [item.workflowId, effectiveTenant]
+      );
+      if (activeLease.rowCount > 0) {
+        throw Object.assign(new Error('Unleased workflow write rejected while a durable worker lease is active'), {
+          code: 'WORKFLOW_LEASE_HELD'
+        });
+      }
+      const updated = await client.query(
+        'UPDATE workflows SET state=$3,updated_at=$4,payload=$5 WHERE workflow_id=$1 AND tenant_id=$2',
+        [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+      );
+      if (updated.rowCount !== 1) {
+        throw Object.assign(new Error('Unleased workflow write did not update its target row'), {
+          code: 'WORKFLOW_CONCURRENT_WRITE'
+        });
       }
       return item;
-    }
-    await this.db.query(
-      `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
-       VALUES($1,$2,$3,$4,$5)
-       ON CONFLICT(workflow_id) DO UPDATE SET
-         tenant_id=EXCLUDED.tenant_id,state=EXCLUDED.state,
-         updated_at=EXCLUDED.updated_at,payload=EXCLUDED.payload`,
-      [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
-    );
-    return item;
+    });
   }
 
   async claimQueued({tenantId='local',workerId,limit=100,claimTtlMs=5000,workerCapabilities=[],agingQuantumMs=30000,workerPrincipal=null}={}) {
