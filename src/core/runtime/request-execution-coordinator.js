@@ -269,7 +269,7 @@ class RequestExecutionCoordinator {
         context = ExecutionContext.restore(activeContextSnapshot);
         context.requestCancellation(cancellationReason);
         context.cancel(cancellationReason);
-        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
+        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update', persistencePrincipal);
         await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
         return {
@@ -285,7 +285,7 @@ class RequestExecutionCoordinator {
         });
       }
 
-      await this.persistenceCoordinator.persistEvents(context);
+      await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
 
       const result = loopResult.result;
       return {
@@ -301,8 +301,8 @@ class RequestExecutionCoordinator {
     } catch (error) {
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
-        await this.persistenceCoordinator.persistEvents(context);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
         return { requestId, type: 'execution_cancelled', execution: context.snapshot() };
       }
 
@@ -338,7 +338,7 @@ class RequestExecutionCoordinator {
           changeCount: approvalSummary.changeCount || 0
         });
         await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_required', persistencePrincipal);
-        await this.persistenceCoordinator.persistEvents(context);
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
 
         if (this.approvalService?.issue && Number.isInteger(step) && step > 0 && tool && capability) {
           try {
@@ -368,7 +368,7 @@ class RequestExecutionCoordinator {
             });
             error.executionContext.approvalId = issued.approvalId;
             await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issued', persistencePrincipal);
-            await this.persistenceCoordinator.persistEvents(context);
+            await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
           } catch (issueError) {
             context.record('approval.challenge.issue_failed', {
               executionId: context.executionId,
@@ -377,7 +377,7 @@ class RequestExecutionCoordinator {
               code: issueError.code || 'APPROVAL_ISSUE_FAILED'
             });
             await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issue_failed', persistencePrincipal);
-            await this.persistenceCoordinator.persistEvents(context);
+            await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
             throw issueError;
           }
         }
