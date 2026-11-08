@@ -215,7 +215,7 @@ test('owner-gated workbench serves its same-origin client without website-handle
   const ownerAuth = {
     enabled: true,
     authenticate(cookie) {
-      return cookie === 'workbench-test-session' ? { token: cookie } : null;
+      return cookie === 'workbench-test-session' ? { token: cookie, sessionId: 'workbench-owner-session' } : null;
     },
     status() { return { passwordChangeRequired }; }
   };

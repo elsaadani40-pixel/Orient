@@ -80,7 +80,7 @@ test('owner work profile API requires owner session and CSRF-protected same-orig
   const ownerProfile = new OwnerWorkProfileStore({ filePath: path.join(dir, 'owner-profile.json') });
   const ownerAuth = {
     enabled: true,
-    authenticate(token) { return token === 'valid-session' ? { csrfToken: 'csrf-token', expiresAt: Date.now() + 60000 } : null; },
+    authenticate(token) { return token === 'valid-session' ? { sessionId: 'owner-http-session-1', csrfToken: 'csrf-token', expiresAt: Date.now() + 60000 } : null; },
     verifyCsrf(session, token) { return session?.csrfToken === token; },
     status() { return { passwordChangeRequired: false }; }
   };

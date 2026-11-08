@@ -3,7 +3,7 @@ const { createRuntimeResponseV1, MAX_ASSISTANT_TEXT_CHARS } = require('../contra
 
 function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated = null } = {}) {
   return {
-    async createTask(req, res, body, ownerSessionContext = null) {
+    async createTask(req, res, body, ownerSessionContext = null, persistencePrincipal = null) {
       let payload;
       try {
         payload = typeof body === 'string' ? JSON.parse(body || '{}') : body;
@@ -26,7 +26,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
           executionId: result.task.id,
           messageId: req.ownerChatMessageId,
           idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : null,
-          replayed: Boolean(result.replayed)
+          replayed: Boolean(result.replayed),
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
         });
       }
       const statusCode = result.replayed ? 200 : 201;
@@ -104,7 +105,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify({ apiVersion: 'v1', task }));
     },
 
-    async taskResponse(req, res, executionId) {
+    async taskResponse(req, res, executionId, persistencePrincipal = null) {
       const result = await agentService.getExecutionStatus(executionId);
       const events = await agentService.getExecutionEvents(executionId, { limit: 100 });
       const approvals = typeof agentService.getExecutionApprovals === 'function'
@@ -134,7 +135,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }
       if (result.status === 'completed' && finalAnswer.status === 'available' &&
           typeof onFinalAnswer === 'function') {
-        await onFinalAnswer({ executionId, text: finalAnswer.text });
+        await onFinalAnswer({ executionId, text: finalAnswer.text, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       }
       const response = createRuntimeResponseV1({
         assistantText: finalAnswer.text,
