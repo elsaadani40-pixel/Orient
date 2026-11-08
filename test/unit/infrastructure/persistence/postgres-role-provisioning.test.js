@@ -10,6 +10,7 @@ test('role provisioning creates four separated roles and revokes broad future de
     async query(sql, values = []) {
       statements.push({ sql, values });
       if (sql === 'SELECT 1 FROM pg_roles WHERE rolname = $1') return { rowCount: 0, rows: [] };
+      if (sql.includes('FROM pg_roles role')) return { rows: [{ is_superuser: true, schema_owner: 'pg_database_owner', is_schema_owner_member: false }] };
       if (sql.includes('pg_has_role(session_user')) return { rows: [{ admin_is_owner_member: true, migrator_is_owner_member: true, migrator_is_runtime_member: false, runtime_is_runtime_member: true, runtime_is_owner_member: false }] };
       if (sql.includes('SELECT rolname, rolsuper FROM pg_roles')) return { rows: [{ rolname: 'postgres', rolsuper: true }] };
       if (sql.includes('FROM pg_tables')) return { rowCount: 0, rows: [{ tablename: 'executions' }] };
@@ -32,7 +33,7 @@ test('role provisioning creates four separated roles and revokes broad future de
   assert.ok(sql.some(statement => statement.includes('CREATE ROLE orient_runtime_login LOGIN INHERIT')));
   assert.ok(sql.includes('GRANT orient_owner TO orient_migrator'));
   assert.ok(sql.includes('GRANT orient_owner TO CURRENT_USER'));
-  assert.ok(sql.includes('REVOKE orient_owner FROM CURRENT_USER'));
+  assert.equal(sql.includes('REVOKE orient_owner FROM CURRENT_USER'), false);
   assert.ok(sql.includes('GRANT orient_runtime TO orient_runtime_login'));
   assert.ok(sql.includes('ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public REVOKE ALL ON TABLES FROM orient_runtime'));
   assert.ok(sql.includes('ALTER DEFAULT PRIVILEGES FOR ROLE orient_owner IN SCHEMA public REVOKE ALL ON SEQUENCES FROM orient_runtime'));
