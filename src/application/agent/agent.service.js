@@ -25,6 +25,10 @@ class AgentService {
       await this.runtime.assertOwnerSessionContext(ownerSessionContext);
     }
 
+    if (ownerSessionContext !== null && persistencePrincipal === null) {
+      throw new AppError('A trusted persistence principal is required for owner task creation', 401, 'PERSISTENCE_PRINCIPAL_REQUIRED');
+    }
+
     if (persistencePrincipal !== null) {
       let principal;
       try {
