@@ -90,11 +90,17 @@ test('fenced workflow writes reject missing or mismatched principals before data
 
 
 test('unleased workflow writes cannot overwrite a workflow with an active durable lease', async () => {
-  let capturedSql = '';
+  const calls = [];
   const db = {
-    async query(sql) {
-      capturedSql = sql;
-      return { rowCount: 0, rows: [] };
+    async transaction(work) {
+      return work({
+        async query(sql, values = []) {
+          calls.push({ sql, values });
+          if (sql.includes('SELECT workflow_id FROM workflows')) return { rowCount: 1, rows: [{ workflow_id: 'workflow-active-lease' }] };
+          if (sql.includes('FROM workflow_leases')) return { rowCount: 1, rows: [{}] };
+          throw new Error('Unexpected SQL: ' + sql);
+        }
+      });
     }
   };
   const repo = new PostgresWorkflowRepository(db);
@@ -105,6 +111,6 @@ test('unleased workflow writes cannot overwrite a workflow with an active durabl
     }, 'tenant-a'),
     error => error.code === 'WORKFLOW_LEASE_HELD'
   );
-  assert.match(capturedSql, /NOT EXISTS/);
-  assert.match(capturedSql, /workflow_leases/);
+  assert.match(calls[0].sql, /FOR UPDATE/);
+  assert.match(calls[1].sql, /workflow_leases/);
 });
