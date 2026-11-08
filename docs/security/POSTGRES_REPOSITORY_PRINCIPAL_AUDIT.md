@@ -41,6 +41,10 @@ A source trace on the audited `main` confirms an additional boundary gap:
 
 Therefore the owner principal currently protects the owner chat/profile persistence boundary but does not yet protect task idempotency or the execution lifecycle. A valid session ID in runtime metadata is not equivalent to a validated persistence principal object. Do not infer principal authority from `ownerSessionContext` or `context.metadata`.
 
+
+- `src/core/runtime/execution-persistence-coordinator.js` is the persistence choke point for execution snapshots, event batches, and checkpoints. Its current constructor stores persistence and tenant only; `persistEvents`, `persistExecution`, and `checkpoint` pass tenant options but no principal. Updating only the HTTP route or AgentService would therefore still leave the execution lifecycle unbound.
+- `src/core/runtime/request-execution-coordinator.js` validates the owner session and creates execution context metadata containing the session ID, but it does not carry a persistence-principal object into the persistence coordinator. Durable resume also reads checkpoints and executions with tenant options only.
+
 This is a concrete prerequisite for the first migration slice: route → AgentService → Runtime/RequestExecutionCoordinator → PersistenceCoordinator → Execution/Events/Idempotency/Checkpoints must carry one validated principal for owner-originated operations, while worker-originated operations must use a separately issued worker principal. The task-creation route must forward the principal explicitly; it must not reconstruct one from the session context.
 
 ## Migration order and special handling
