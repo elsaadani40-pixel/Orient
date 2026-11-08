@@ -764,29 +764,60 @@ class PostgresCheckpointRepository {
 class PostgresWorkflowRepository {
   constructor(db, workerRegistry = null) { this.db = db; this.workerRegistry = workerRegistry; }
 
-  async save(instance, tenantId = null) {
+  async save(instance, tenantId = null, { workerPrincipal = null } = {}) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenant = tenantOrLocal(item.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Workflow');
     const fencingToken = Number(item.metadata?.fencingToken || 0);
     if (fencingToken > 0) {
-      const result = await this.db.query(
-        `UPDATE workflows
-         SET state=$3,updated_at=$4,payload=$5
-         WHERE workflow_id=$1 AND tenant_id=$2
-           AND EXISTS (
-             SELECT 1 FROM workflow_leases
-             WHERE workflow_id=$1 AND tenant_id=$2
-               AND fencing_token=$6 AND expires_at > NOW()
-           )`,
-        [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item, fencingToken]
-      );
-      if (result.rowCount !== 1) {
-        const error = new Error('Workflow write rejected by durable fencing token');
-        error.code = 'WORKFLOW_FENCING_REJECTED';
-        throw error;
+      const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
+      if (principal.tenantId !== effectiveTenant || principal.workflowId !== item.workflowId ||
+          principal.fencingToken !== fencingToken) {
+        throw Object.assign(new Error('Worker principal does not match workflow write lease'), {
+          code: 'WORKFLOW_FENCING_REJECTED'
+        });
       }
-      return item;
+      if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+        throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), {
+          code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED'
+        });
+      }
+      return this.db.transactionWithWorkerPrincipal(principal, async client => {
+        const worker = await client.query(
+          `SELECT 1 FROM worker_nodes
+           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+             AND status='READY' AND expires_at > NOW()
+           FOR UPDATE`,
+          [effectiveTenant, principal.workerId, principal.sessionId]
+        );
+        if (worker.rowCount !== 1) {
+          throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+        }
+        const result = await client.query(
+          `UPDATE workflows
+           SET state=$3,updated_at=$4,payload=$5
+           WHERE workflow_id=$1 AND tenant_id=$2
+             AND EXISTS (
+               SELECT 1 FROM workflow_leases
+               WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$6
+                 AND worker_id=$7 AND worker_session_id=$8
+                 AND fencing_token=$9 AND expires_at > NOW()
+             )`,
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(),
+            item, principal.leaseId, principal.workerId, principal.sessionId, principal.fencingToken]
+        );
+        if (result.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow write rejected by worker session and durable fencing'), {
+            code: 'WORKFLOW_FENCING_REJECTED'
+          });
+        }
+        return item;
+      }, { requireLease: true });
+    }
+    if (workerPrincipal) {
+      throw Object.assign(new Error('A lease-bound workflow write requires a persisted fencing token'), {
+        code: 'WORKFLOW_FENCING_REJECTED'
+      });
     }
     await this.db.query(
       `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
