@@ -13,8 +13,7 @@ test('PostgreSQL 17 provisions isolated ORIENT roles using a non-superuser CREAT
   let provisionerPool;
   try {
     await adminPool.query(
-      'CREATE ROLE orient_provisioner LOGIN CREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD $1',
-      [adminPassword]
+      "CREATE ROLE orient_provisioner LOGIN CREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD '" + adminPassword + "'"
     );
     await adminPool.query('GRANT CREATE ON SCHEMA public TO orient_provisioner');
 
