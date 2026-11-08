@@ -1,7 +1,7 @@
 'use strict';
 
 const { normalizeMessage, MAX_MESSAGES } = require('../owner-chat-conversation-store');
-const { assertPersistencePrincipal } = require('./persistence-principal');
+const { assertPersistencePrincipal } = require('../../../core/security/persistence-principal');
 
 function chatError(message, code = 'OWNER_CHAT_MESSAGE_INVALID') {
   const error = new Error(message);
