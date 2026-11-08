@@ -5,6 +5,7 @@ const { URL } = require('url');
 const AppError = require('../../core/errors/AppError');
 const logger = require('../../core/logging/logger');
 const { createAccessAuditEvent } = require('../../core/security/access-audit-event');
+const { createPersistencePrincipal } = require('../../infrastructure/persistence/postgres/persistence-principal');
 
 function readBody(req, maxBytes = 1024 * 1024) {
   return new Promise((resolve, reject) => {
@@ -74,7 +75,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null, unsandboxedExecution = false }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null, unsandboxedExecution = false, tenantId = 'local', ownerId = 'owner' }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -176,6 +177,11 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       const ownerCookie = parseCookies(req.headers.cookie).orient_owner_session;
       const ownerSession = ownerAuth && ownerAuth.enabled
         ? ownerAuth.authenticate(ownerCookie)
+        : null;
+      // Issue persistence identity from trusted server configuration and the
+      // authenticated session only; never trust request-supplied identity fields.
+      const ownerPersistencePrincipal = ownerSession
+        ? createPersistencePrincipal({ tenantId, ownerId, sessionId: ownerSession.sessionId })
         : null;
 
       if (req.method === 'GET' &&
@@ -320,10 +326,10 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           try {
-            let messages = await ownerChatStore.list();
+            let messages = await ownerChatStore.list(ownerPersistencePrincipal);
             if (typeof ownerChatHistoryResolver === 'function') {
-              await ownerChatHistoryResolver(messages);
-              messages = await ownerChatStore.list();
+              await ownerChatHistoryResolver(messages, ownerPersistencePrincipal);
+              messages = await ownerChatStore.list(ownerPersistencePrincipal);
             }
             sendJson(res, 200, { ok: true, messages });
           } catch (error) {
@@ -344,7 +350,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           try {
-            await ownerChatStore.clear();
+            await ownerChatStore.clear(ownerPersistencePrincipal);
             sendJson(res, 200, { ok: true, cleared: true });
           } catch (error) {
             logger.error('Owner chat history deletion failed', { code: error.code || 'OWNER_CHAT_DELETE_FAILED' });
@@ -360,7 +366,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           }
           if (req.method === 'GET') {
             try {
-              sendJson(res, 200, { ok: true, profile: await ownerProfile.get() });
+              sendJson(res, 200, { ok: true, profile: await ownerProfile.get(ownerPersistencePrincipal) });
             } catch (error) {
               logger.error('Owner work profile read failed', { code: error.code || 'OWNER_PROFILE_READ_FAILED' });
               sendJson(res, 503, { ok: false, code: 'OWNER_PROFILE_UNAVAILABLE', message: 'تعذر قراءة ملف عمل المالك.' });
@@ -388,7 +394,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           try {
-            const profile = await ownerProfile.update(payload);
+            const profile = await ownerProfile.update(payload, ownerPersistencePrincipal);
             sendJson(res, 200, { ok: true, profile });
           } catch (error) {
             const invalid = String(error.code || '').startsWith('OWNER_PROFILE_') && error.code !== 'OWNER_PROFILE_STORAGE_INVALID';
@@ -407,7 +413,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'RUNTIME_RESPONSE_UNAVAILABLE', message: 'نتيجة Runtime غير متاحة حاليًا.' });
             return;
           }
-          await agentRoutes.taskResponse(req, res, ownerChatResponseMatch[1]);
+          await agentRoutes.taskResponse(req, res, ownerChatResponseMatch[1], ownerPersistencePrincipal);
           return;
         }
 
@@ -453,7 +459,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
               ? suppliedId
               : randomUUID();
             try {
-              await ownerChatStore.append({ id: messageId, role: 'user', content: displayMessage });
+              await ownerChatStore.append({ id: messageId, role: 'user', content: displayMessage }, ownerPersistencePrincipal);
               req.ownerChatMessageId = messageId;
             } catch (error) {
               if (error.code === 'OWNER_CHAT_IDEMPOTENCY_CONFLICT') {
@@ -467,7 +473,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           }
           await agentRoutes.createTask(req, res, JSON.stringify({ goal: message }), {
             sessionId: ownerSession.sessionId
-          });
+          }, ownerPersistencePrincipal);
           return;
         }
 
