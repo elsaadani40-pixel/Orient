@@ -386,6 +386,7 @@ const runtime =
     authorizationService,
     persistence,
     tenantId: config.defaultTenantId,
+    userId: 'owner',
     maxQueueDepth: config.maxQueueDepth,
     workflowDispatchWindow: config.workflowDispatchWindow,
     workflowAgingQuantumMs: config.workflowAgingQuantumMs,
