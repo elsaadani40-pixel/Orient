@@ -74,6 +74,8 @@ test('PostgreSQL 17 provisions isolated ORIENT roles and transfers object owners
     assert.equal(runtimePrivileges.rows[0].can_insert, false);
   } finally {
     // Restore test database objects before removing the temporary roles.
+    const current = await pool.query('SELECT current_user AS role_name');
+    const currentRole = '"' + current.rows[0].role_name.replace(/"/g, '""') + '"';
     const owned = await pool.query(`
       SELECT c.relname, c.relkind
       FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
@@ -83,16 +85,19 @@ test('PostgreSQL 17 provisions isolated ORIENT roles and transfers object owners
     `);
     for (const row of owned.rows) {
       const identifier = '"' + row.relname.replace(/"/g, '""') + '"';
-      await pool.query('ALTER ' + (row.relkind === 'S' ? 'SEQUENCE' : 'TABLE') + ' public.' + identifier + ' OWNER TO CURRENT_USER');
+      await pool.query('ALTER ' + (row.relkind === 'S' ? 'SEQUENCE' : 'TABLE') + ' public.' + identifier + ' OWNER TO ' + currentRole);
     }
-    await pool.query('DROP OWNED BY orient_runtime_login');
-    await pool.query('DROP OWNED BY orient_migrator');
-    await pool.query('DROP OWNED BY orient_runtime');
-    await pool.query('DROP OWNED BY orient_owner');
-    await pool.query('DROP ROLE IF EXISTS orient_runtime_login');
-    await pool.query('DROP ROLE IF EXISTS orient_migrator');
-    await pool.query('DROP ROLE IF EXISTS orient_runtime');
-    await pool.query('DROP ROLE IF EXISTS orient_owner');
+    const existingRoles = await pool.query(
+      'SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])',
+      [['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner']]
+    );
+    for (const row of existingRoles.rows) {
+      const identifier = '"' + row.rolname.replace(/"/g, '""') + '"';
+      await pool.query('DROP OWNED BY ' + identifier);
+    }
+    for (const role of ['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner']) {
+      await pool.query('DROP ROLE IF EXISTS "' + role + '"');
+    }
     await pool.end();
   }
 });
