@@ -10,7 +10,7 @@ class AuthorizationService {
     this.capabilityGovernance = capabilityGovernance;
   }
 
-  async authorize(tool, { executionId = null, step = null, planRevision = 1, approval = null, scope = {}, tenantId = null, agentId = null, operationId = null } = {}) {
+  async authorize(tool, { executionId = null, step = null, planRevision = 1, approval = null, scope = {}, tenantId = null, agentId = null, operationId = null, persistencePrincipal = null } = {}) {
     if (!tool || typeof tool !== 'string') throw new AppError('اسم الأداة مطلوب للتفويض', 500, 'AUTHORIZATION_TOOL_REQUIRED');
     if (this.capabilityGovernance) {
       if (!agentId) {
