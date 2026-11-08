@@ -42,8 +42,14 @@ test('rejects an inactive owner session before creating an idempotency record', 
 
 test('forwards the server-authenticated owner context into runtime execution', async () => {
   let forwardedContext = null;
+  const persistencePrincipal = createPersistencePrincipal({
+    tenantId: 'tenant-a',
+    ownerId: 'owner-a',
+    sessionId: 'active-session'
+  });
   const runtime = {
     tenantId: 'tenant-a',
+    userId: 'owner-a',
     persistence: {
       idempotency: {
         begin: async () => ({ created: true, key: 'idempotency-key' }),
@@ -71,7 +77,8 @@ test('forwards the server-authenticated owner context into runtime execution', a
   const result = await service.createTask({
     goal: 'run a task',
     idempotencyKey: 'owner-session-test-0002',
-    ownerSessionContext
+    ownerSessionContext,
+    persistencePrincipal
   });
 
   assert.strictEqual(forwardedContext, ownerSessionContext);
@@ -151,6 +158,32 @@ test('rejects a valid principal issued for a different runtime owner before idem
       persistencePrincipal: otherOwnerPrincipal
     }),
     error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
+  );
+  assert.equal(admitted, false);
+});
+
+test('rejects an owner task without a persistence principal before idempotency admission', async () => {
+  let admitted = false;
+  const runtime = {
+    tenantId: 'tenant-a',
+    userId: 'owner-a',
+    persistence: {
+      idempotency: {
+        begin: async () => { admitted = true; return { created: true, key: 'key' }; },
+        complete: async () => {},
+        fail: async () => {}
+      }
+    },
+    assertOwnerSessionContext: async () => true
+  };
+
+  await assert.rejects(
+    new AgentService(runtime).createTask({
+      goal: 'run a task',
+      idempotencyKey: 'missing-owner-principal-key',
+      ownerSessionContext: { sessionId: 'active-session' }
+    }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_REQUIRED'
   );
   assert.equal(admitted, false);
 });
