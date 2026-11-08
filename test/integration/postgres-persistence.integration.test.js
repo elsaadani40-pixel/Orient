@@ -221,6 +221,7 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
   }, 'tenant-fence', { workerPrincipal: workerA });
 
   assert.ok(first.fencingToken > 0);
+  const firstBound = createWorkerPersistencePrincipal({tenantId:'tenant-fence',workerId:'worker-a',sessionId:workerA.sessionId,capabilities:workerA.capabilities,workflowId,leaseId:first.leaseId,fencingToken:first.fencingToken});
 
   await persistence.workflows.save({
     workflowId,
@@ -228,7 +229,7 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
     state: 'RUNNING',
     metadata: { fencingToken: first.fencingToken },
     toJSON() { return this; }
-  }, 'tenant-fence');
+  }, 'tenant-fence', {workerPrincipal:firstBound});
 
   await pool.query(
     "UPDATE workflow_leases SET expires_at=NOW()-INTERVAL '1 second' WHERE workflow_id=$1",
@@ -253,19 +254,18 @@ test('PostgreSQL fencing rejects stale writes after a lease takeover', async () 
       state: 'RUNNING',
       metadata: { fencingToken: first.fencingToken },
       toJSON() { return this; }
-    }, 'tenant-fence'),
+    }, 'tenant-fence', {workerPrincipal:firstBound}),
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
 
+  const secondBound = createWorkerPersistencePrincipal({tenantId:'tenant-fence',workerId:'worker-b',sessionId:workerB.sessionId,capabilities:workerB.capabilities,workflowId,leaseId:second.leaseId,fencingToken:second.fencingToken});
   await persistence.workflows.save({
     workflowId,
     tenantId: 'tenant-fence',
     state: 'RUNNING',
     metadata: { fencingToken: second.fencingToken },
     toJSON() { return this; }
-  }, 'tenant-fence');
-
-  const secondBound = createWorkerPersistencePrincipal({tenantId:'tenant-fence',workerId:'worker-b',sessionId:workerB.sessionId,capabilities:workerB.capabilities,workflowId,leaseId:second.leaseId,fencingToken:second.fencingToken});
+  }, 'tenant-fence', {workerPrincipal:secondBound});
   await persistence.workflowLeases.delete(workflowId, second.leaseId, 'tenant-fence', {workerPrincipal:secondBound});
   await persistence.workers.unregister('worker-a','tenant-fence',{workerPrincipal:workerA});
   await persistence.workers.unregister('worker-b','tenant-fence',{workerPrincipal:workerB});
@@ -569,11 +569,11 @@ test('PostgreSQL rejects a stale worker that resumes after takeover during step 
   const staleResult = await workerA.tick();
   assert.equal(staleResult, null);
   assert.ok(takeover);
-  assert.equal(takeover.metadata.fencingToken > 0, true);
+  assert.equal(takeover.metadata.fencingToken, undefined, 'released in-memory workflow instances must not retain stale fencing metadata');
 
   const persisted = await persistence.workflows.findById(workflowId, tenantId);
   assert.equal(persisted.state, 'COMPLETED');
-  assert.equal(persisted.metadata.fencingToken, takeover.metadata.fencingToken);
+  assert.ok(persisted.metadata.fencingToken > 0, 'durable fencing history remains until claimed recovery clears it');
   assert.equal(persisted.steps['protected-step'].state, 'COMPLETED');
   assert.equal(persisted.steps['protected-step'].result.committedBy, 'worker-b');
 
