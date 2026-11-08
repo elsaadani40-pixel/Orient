@@ -103,7 +103,7 @@ test('PostgreSQL 17 provisions isolated ORIENT roles and transfers owned objects
   }
 });
 
-test('CREATEROLE without ADMIN OPTION fails closed without leaving partial roles', { skip: !enabled }, async () => {
+test('CREATEROLE administrator provisions successfully when it owns the existing ORIENT objects', { skip: !enabled }, async () => {
   const adminPool = new Pool({ connectionString: process.env.DATABASE_URL, application_name: 'orient-createrole-test-admin' });
   const password = 'provisioner-secret-' + Date.now();
   let limitedPool;
@@ -111,28 +111,70 @@ test('CREATEROLE without ADMIN OPTION fails closed without leaving partial roles
     await adminPool.query(
       "CREATE ROLE orient_provisioner LOGIN CREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'"
     );
+    await adminPool.query('ALTER TABLE public.executions OWNER TO orient_provisioner');
+    await adminPool.query('ALTER TABLE public.schema_migrations OWNER TO orient_provisioner');
+    await adminPool.query('ALTER SEQUENCE public.workflow_lease_fencing_seq OWNER TO orient_provisioner');
+
     const limitedUrl = new URL(process.env.DATABASE_URL);
     limitedUrl.username = 'orient_provisioner';
     limitedUrl.password = password;
     limitedPool = new Pool({ connectionString: limitedUrl.toString(), application_name: 'orient-createrole-test' });
 
-    await assert.rejects(
-      () => provisionPostgresRoles({
-        pool: limitedPool,
-        migratorPassword: 'migrator-secret-' + Date.now(),
-        runtimePassword: 'runtime-secret-' + Date.now()
-      }),
-      error => error.code === 'PERSISTENCE_ROLE_MEMBERSHIP_GRANT_DENIED'
-    );
+    await provisionPostgresRoles({
+      pool: limitedPool,
+      migratorPassword: 'migrator-secret-' + Date.now(),
+      runtimePassword: 'runtime-secret-' + Date.now()
+    });
 
-    const leftovers = await adminPool.query(
-      "SELECT COUNT(*)::int AS count FROM pg_roles WHERE rolname = ANY($1::text[])",
-      [['orient_owner', 'orient_migrator', 'orient_runtime', 'orient_runtime_login']]
-    );
-    assert.equal(leftovers.rows[0].count, 0);
+    const membership = await adminPool.query(`
+      SELECT
+        pg_has_role('orient_migrator', 'orient_owner', 'MEMBER') AS migrator_owner,
+        pg_has_role('orient_runtime_login', 'orient_runtime', 'MEMBER') AS runtime_group,
+        pg_has_role('orient_runtime_login', 'orient_owner', 'MEMBER') AS runtime_owner,
+        EXISTS (
+          SELECT 1 FROM pg_auth_members m
+          JOIN pg_roles granted ON granted.oid = m.roleid
+          JOIN pg_roles member ON member.oid = m.member
+          WHERE granted.rolname = 'orient_owner' AND member.rolname = 'orient_provisioner'
+        ) AS provisioner_owner_membership
+    `);
+    assert.equal(membership.rows[0].migrator_owner, true);
+    assert.equal(membership.rows[0].runtime_group, true);
+    assert.equal(membership.rows[0].runtime_owner, false);
+    assert.equal(membership.rows[0].provisioner_owner_membership, false);
+
+    const ownership = await adminPool.query(`
+      SELECT COUNT(*)::int AS count
+      FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
+      WHERE r.rolname = 'orient_owner'
+        AND c.relnamespace = 'public'::regnamespace
+        AND c.relname = ANY($1::text[])
+    `, [['executions', 'schema_migrations', 'workflow_lease_fencing_seq']]);
+    assert.equal(ownership.rows[0].count, 3);
   } finally {
     if (limitedPool) await limitedPool.end();
-    await adminPool.query('DROP ROLE IF EXISTS orient_provisioner');
+    const owned = await adminPool.query(`
+      SELECT c.relname, c.relkind
+      FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
+      WHERE r.rolname = 'orient_owner'
+        AND c.relnamespace = 'public'::regnamespace
+        AND c.relkind IN ('r','S')
+    `);
+    for (const row of owned.rows) {
+      const identifier = '"' + row.relname.replace(/"/g, '""') + '"';
+      await adminPool.query('ALTER ' + (row.relkind === 'S' ? 'SEQUENCE' : 'TABLE') + ' public.' + identifier + ' OWNER TO postgres');
+    }
+    const existingRoles = await adminPool.query(
+      'SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])',
+      [['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner', 'orient_provisioner']]
+    );
+    for (const row of existingRoles.rows) {
+      const identifier = '"' + row.rolname.replace(/"/g, '""') + '"';
+      await adminPool.query('DROP OWNED BY ' + identifier);
+    }
+    for (const role of ['orient_runtime_login', 'orient_migrator', 'orient_runtime', 'orient_owner', 'orient_provisioner']) {
+      await adminPool.query('DROP ROLE IF EXISTS "' + role + '"');
+    }
     await adminPool.end();
   }
 });
