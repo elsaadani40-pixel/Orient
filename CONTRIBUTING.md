@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping improve ORIENT ONE. The project prioritizes correctness, clear ownership, safe execution, and reproducible evidence over the size of a change.
+Thank you for helping improve ORIENT. The project prioritizes correctness, clear ownership, safe execution, and reproducible evidence over the size of a change.
 
 ## Before changing code
 
