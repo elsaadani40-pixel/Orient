@@ -606,10 +606,12 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
 
   const quotaWorkerPrincipalA = makeWorkerPrincipal(tenantId, 'quota-worker-a');
   const quotaWorkerPrincipalB = makeWorkerPrincipal(tenantId, 'quota-worker-b');
-  await persistence.workers.register({
-    workerId: 'quota-worker-b', tenantId, status: 'READY', capabilities: [],
-    heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
-  }, tenantId, { workerPrincipal: quotaWorkerPrincipalB });
+  for (const workerPrincipal of [quotaWorkerPrincipalA, quotaWorkerPrincipalB]) {
+    await persistence.workers.register({
+      workerId: workerPrincipal.workerId, tenantId, status: 'READY', capabilities: [],
+      heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+    }, tenantId, { workerPrincipal });
+  }
 
   const schedulerA = new AsyncWorkflowScheduler({
     workflowRepository: persistence.workflows,
@@ -664,6 +666,7 @@ test('PostgreSQL quota survives stale worker release after lease takeover', asyn
   const finalSnapshot = await persistence.tenantQuotas.snapshot({ tenantId });
   assert.deepEqual(finalSnapshot, { tenantId, active: 0, queued: 0 });
 
+  await persistence.workers.unregister('quota-worker-a', tenantId, { workerPrincipal: quotaWorkerPrincipalA });
   await persistence.workers.unregister('quota-worker-b', tenantId, { workerPrincipal: quotaWorkerPrincipalB });
   await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
   await pool.query('DELETE FROM tenant_quota_reservations WHERE workflow_id=$1', [workflowId]);
