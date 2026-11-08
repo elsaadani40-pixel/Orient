@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { assertPersistencePrincipal } = require('../../../core/security/persistence-principal');
+const { assertWorkerPersistencePrincipal } = require('../../../core/security/worker-persistence-principal');
 const { PostgresDatabase } = require('./postgres-database');
 const PostgresTenantQuotaRepository = require('./postgres-tenant-quota-repository');
 const PostgresWorkerRegistryRepository = require('./postgres-worker-registry-repository');
@@ -798,23 +799,36 @@ class PostgresWorkflowRepository {
     return item;
   }
 
-  async claimQueued({tenantId='local',workerId,limit=100,claimTtlMs=5000,workerCapabilities=[],agingQuantumMs=30000}={}) {
+  async claimQueued({tenantId='local',workerId,limit=100,claimTtlMs=5000,workerCapabilities=[],agingQuantumMs=30000,workerPrincipal=null}={}) {
     if (!workerId) throw new TypeError('workerId is required');
+    const principal = assertWorkerPersistencePrincipal(workerPrincipal);
+    const effectiveTenant = tenantOrLocal(tenantId);
+    if (principal.tenantId !== effectiveTenant || principal.workerId !== workerId) {
+      throw Object.assign(new Error('Worker principal does not match dispatch claim identity'), { code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH' });
+    }
     const safeLimit=Math.max(1,Math.min(1000,Number(limit)||100));
     const capabilities=Array.isArray(workerCapabilities)
       ? [...new Set(workerCapabilities.filter(x=>typeof x==='string'&&x.trim()).map(x=>x.trim()))]
       : [];
+    const principalCapabilities = new Set(principal.capabilities);
+    if (capabilities.some(capability => !principalCapabilities.has(capability))) {
+      throw Object.assign(new Error('Requested worker capabilities exceed principal authority'), { code: 'WORKER_CAPABILITY_MISMATCH' });
+    }
     const safeAgingQuantumMs=Math.max(1000,Number(agingQuantumMs)||30000);
     const expiresAt=new Date(Date.now()+Math.max(1000,Number(claimTtlMs)||5000)).toISOString();
-    return this.db.transaction(async client => {
+    if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
+      throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), { code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
       if (this.workerRegistry) {
         const worker = await client.query(
-          'SELECT worker_id,capabilities,status,expires_at FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
-          [tenantId, workerId]
+          'SELECT worker_id,session_id,capabilities,status,expires_at FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
+          [effectiveTenant, workerId]
         );
-        if (!worker.rows.length || new Date(worker.rows[0].expires_at).getTime() <= Date.now()) {
-          const error = new Error('Worker is not registered or its lease has expired');
-          error.code = 'WORKER_NOT_ACTIVE';
+        if (!worker.rows.length || worker.rows[0].session_id !== principal.sessionId ||
+            new Date(worker.rows[0].expires_at).getTime() <= Date.now()) {
+          const error = new Error('Worker session is not registered or its lease has expired');
+          error.code = 'WORKER_SESSION_LOST';
           throw error;
         }
         if (worker.rows[0].status !== 'READY') {
@@ -833,7 +847,7 @@ class PostgresWorkflowRepository {
           throw error;
         }
       }
-      await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND expires_at <= NOW()',[tenantId]);
+      await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND expires_at <= NOW()',[effectiveTenant]);
       const result=await client.query(
         `WITH candidates AS (
            SELECT w.workflow_id FROM workflows w
@@ -847,22 +861,32 @@ class PostgresWorkflowRepository {
            ) DESC, w.updated_at ASC
            FOR UPDATE SKIP LOCKED LIMIT $2
          )
-         INSERT INTO workflow_dispatch_claims(tenant_id,workflow_id,worker_id,claimed_at,expires_at)
-         SELECT $1,workflow_id,$3,NOW(),$6 FROM candidates
+         INSERT INTO workflow_dispatch_claims(tenant_id,workflow_id,worker_id,worker_session_id,claimed_at,expires_at)
+         SELECT $1,workflow_id,$3,$7,NOW(),$6 FROM candidates
          ON CONFLICT (tenant_id,workflow_id) DO NOTHING RETURNING workflow_id`,
-        [tenantId,safeLimit,workerId,JSON.stringify(capabilities),safeAgingQuantumMs,expiresAt]
+        [effectiveTenant,safeLimit,workerId,JSON.stringify(capabilities),safeAgingQuantumMs,expiresAt,principal.sessionId]
       );
       if(!result.rows.length) return [];
       const ids=result.rows.map(row=>row.workflow_id);
-      const workflows=await client.query('SELECT payload FROM workflows WHERE tenant_id=$1 AND workflow_id=ANY($2::text[])',[tenantId,ids]);
+      const workflows=await client.query('SELECT payload FROM workflows WHERE tenant_id=$1 AND workflow_id=ANY($2::text[])',[effectiveTenant,ids]);
       const byId=new Map(workflows.rows.map(row=>[row.payload.workflowId,row.payload]));
       return ids.map(id=>byId.get(id)).filter(Boolean);
     });
   }
 
-  async releaseDispatchClaim(workflowId,workerId,tenantId='local') {
-    const result=await this.db.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3',[tenantId,workflowId,workerId]);
-    return result.rowCount===1;
+  async releaseDispatchClaim(workflowId,workerId,tenantId='local',{workerPrincipal=null}={}) {
+    const principal = assertWorkerPersistencePrincipal(workerPrincipal);
+    const effectiveTenant = tenantOrLocal(tenantId);
+    if (principal.tenantId !== effectiveTenant || principal.workerId !== workerId) {
+      throw Object.assign(new Error('Worker principal does not match dispatch release identity'), { code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH' });
+    }
+    return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      const result=await client.query(
+        'DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3 AND worker_session_id=$4',
+        [effectiveTenant,workflowId,workerId,principal.sessionId]
+      );
+      return result.rowCount===1;
+    });
   }
   async requestCancellation(workflowId, tenantId = null) {
     const effectiveTenant = tenantOrLocal(tenantId);
