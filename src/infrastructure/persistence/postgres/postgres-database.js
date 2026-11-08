@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { assertPersistencePrincipal } = require('./persistence-principal');
+const { assertWorkerPersistencePrincipal } = require('../../../core/security/worker-persistence-principal');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -196,6 +197,40 @@ class PostgresDatabase {
         "set_config('app.orient_owner_id', $2, true), " +
         "set_config('app.orient_session_id', $3, true)",
         [identity.tenantId, identity.ownerId, identity.sessionId]
+      );
+      const result = await work(client, identity);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async transactionWithWorkerPrincipal(principal, work, { requireLease = false } = {}) {
+    const identity = assertWorkerPersistencePrincipal(principal, { requireLease });
+    if (typeof work !== 'function') throw new TypeError('transaction work callback is required');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_tenant_id', $1, true), " +
+        "set_config('app.orient_worker_id', $2, true), " +
+        "set_config('app.orient_worker_session_id', $3, true), " +
+        "set_config('app.orient_worker_capabilities', $4, true), " +
+        "set_config('app.orient_workflow_id', $5, true), " +
+        "set_config('app.orient_workflow_lease_id', $6, true), " +
+        "set_config('app.orient_workflow_fencing_token', $7, true)",
+        [
+          identity.tenantId,
+          identity.workerId,
+          identity.sessionId,
+          JSON.stringify(identity.capabilities),
+          identity.workflowId || '',
+          identity.leaseId || '',
+          identity.fencingToken === undefined ? '' : String(identity.fencingToken)
+        ]
       );
       const result = await work(client, identity);
       await client.query('COMMIT');
