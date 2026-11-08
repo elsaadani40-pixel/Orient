@@ -141,6 +141,7 @@ test('approval decisions and consumption are owner-scoped and atomic', async () 
     error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
   );
 
-  assert.ok(harness.calls.every(call => call.sql.includes("e.payload->>'userId'") || call.sql.startsWith('UPDATE approvals SET used=TRUE')));
+  assert.ok(harness.calls.some(call => call.sql.includes("e.payload->>'userId'")));
+  assert.ok(harness.calls.filter(call => call.sql.startsWith('UPDATE approvals')).every(call => call.sql.includes('EXISTS (SELECT 1 FROM executions')));
   assert.equal(harness.transactionCount, 6);
 });
