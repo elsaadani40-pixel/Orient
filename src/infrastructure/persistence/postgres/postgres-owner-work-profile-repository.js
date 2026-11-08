@@ -4,7 +4,7 @@ const {
   normalizeProfile,
   DEFAULT_PROFILE
 } = require('../owner-work-profile-store');
-const { assertPersistencePrincipal } = require('./persistence-principal');
+const { assertPersistencePrincipal } = require('../../../core/security/persistence-principal');
 
 class PostgresOwnerWorkProfileRepository {
   constructor(db) {
