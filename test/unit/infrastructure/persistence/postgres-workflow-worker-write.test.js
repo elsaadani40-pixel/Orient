@@ -87,3 +87,24 @@ test('fenced workflow writes reject missing or mismatched principals before data
   );
   assert.equal(h.transactions, 0);
 });
+
+
+test('unleased workflow writes cannot overwrite a workflow with an active durable lease', async () => {
+  let capturedSql = '';
+  const db = {
+    async query(sql) {
+      capturedSql = sql;
+      return { rowCount: 0, rows: [] };
+    }
+  };
+  const repo = new PostgresWorkflowRepository(db);
+  await assert.rejects(
+    repo.save({
+      workflowId: 'workflow-active-lease', tenantId: 'tenant-a', state: 'QUEUED',
+      metadata: {}, updatedAt: new Date().toISOString()
+    }, 'tenant-a'),
+    error => error.code === 'WORKFLOW_LEASE_HELD'
+  );
+  assert.match(capturedSql, /NOT EXISTS/);
+  assert.match(capturedSql, /workflow_leases/);
+});
