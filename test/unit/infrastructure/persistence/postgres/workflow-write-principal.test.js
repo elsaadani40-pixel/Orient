@@ -91,7 +91,7 @@ test('workflow recovery state writes require the exact active dispatch claim ses
   const recovered={...workflow(),state:'RECOVERING',metadata:{},toJSON(){return this;}};
   assert.equal(await repo.save(recovered,'tenant-a',{workerPrincipal:worker,dispatchClaim:true}),recovered);
   assert.equal(h.transactions,1);
-  assert.ok(h.calls.some(x=>x.sql.includes('worker_dispatch_claims')&&x.sql.includes('worker_session_id')));
+  assert.ok(h.calls.some(x=>x.sql.includes('workflow_dispatch_claims')&&x.sql.includes('worker_session_id')));
   assert.ok(h.calls.some(x=>x.sql.startsWith('UPDATE workflows')));
 
   const stale=harness({leaseActive:false,claimActive:false}),staleRepo=new PostgresWorkflowRepository(stale.db);
