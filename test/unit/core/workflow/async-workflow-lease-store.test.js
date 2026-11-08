@@ -60,3 +60,21 @@ test('AsyncWorkflowLeaseStore forwards the exact worker principal to every lease
   assert.equal(calls[0][1], worker);
   assert.ok(calls.slice(1).every(call => call[1] === bound));
 });
+
+
+test('AsyncWorkflowLeaseStore clears its local lease shadow when durable release loses ownership', async () => {
+  const store = new AsyncWorkflowLeaseStore({
+    tenantId: 'tenant-a',
+    repository: {
+      async tryAcquire(lease) { return { ...lease, fencingToken: 23 }; },
+      async delete() { return false; },
+      async findByWorkflowId() { return null; }
+    },
+    clock: () => 1000,
+    leaseDurationMs: 30000
+  });
+  const lease = await store.acquire('wf-stale', 'worker-a', { tenantId: 'tenant-a' });
+  const released = await store.release('wf-stale', lease.leaseId);
+  assert.equal(released.released, false);
+  assert.equal(await store.get('wf-stale'), null);
+});
