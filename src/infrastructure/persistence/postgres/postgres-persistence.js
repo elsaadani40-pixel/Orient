@@ -540,16 +540,19 @@ class PostgresCheckpointRepository {
     return crypto.createHash('sha256').update(this.stableStringify(snapshot)).digest('hex');
   }
 
-  async save(snapshot, { reason = 'step_completed', tenantId = null } = {}) {
+  async save(snapshot, { reason = 'step_completed', tenantId = null, persistencePrincipal = null } = {}) {
     if (!snapshot?.executionId) throw new TypeError('snapshot.executionId is required');
     const effectiveTenant = tenantOrLocal(snapshot.tenantId || snapshot.metadata?.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Checkpoint');
+    if (persistencePrincipal && snapshot.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Checkpoint owner does not match persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+    }
     const snapshotCopy = JSON.parse(JSON.stringify(snapshot));
     const digest = this.digest(snapshotCopy);
     const checkpointId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
 
-    const persisted = await this.db.transaction(async client => {
+    const persist = async client => {
       const collision = await client.query(
         'SELECT tenant_id FROM checkpoints WHERE execution_id=$1 AND tenant_id<>$2 LIMIT 1 FOR UPDATE',
         [snapshot.executionId,effectiveTenant]
@@ -571,8 +574,22 @@ class PostgresCheckpointRepository {
          RETURNING execution_id,tenant_id,sequence,checkpoint_id,reason,created_at,snapshot,snapshot_sha256`,
         [snapshot.executionId,effectiveTenant,sequence,checkpointId,reason,createdAt,snapshotCopy,digest]
       );
+      if (persistencePrincipal) {
+        const ownerExecution = await client.query(
+          "SELECT 1 FROM executions WHERE execution_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 LIMIT 1",
+          [snapshot.executionId, effectiveTenant, persistencePrincipal.ownerId]
+        );
+        if (!ownerExecution.rows.length) {
+          throw Object.assign(new Error('Checkpoint execution is not owned by the persistence principal'), {
+            code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+          });
+        }
+      }
       return result.rows[0];
-    });
+    };
+    const persisted = persistencePrincipal
+      ? await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Checkpoint principal', persist)
+      : await this.db.transaction(persist);
     return this.toModel(persisted);
   }
 
