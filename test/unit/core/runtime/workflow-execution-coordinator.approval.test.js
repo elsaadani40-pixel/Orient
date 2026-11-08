@@ -260,6 +260,7 @@ test('approval workflow reconciliation forwards the authenticated owner principa
   };
   const calls = [];
   const workflowRepository = {
+    async findAll() { return [instance.toJSON()]; },
     async findByApprovalExecutionId(options) {
       calls.push(['find', options]);
       return instance.toJSON();
