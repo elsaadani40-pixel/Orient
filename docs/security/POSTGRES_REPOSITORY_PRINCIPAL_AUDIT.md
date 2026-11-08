@@ -30,6 +30,19 @@ This is a source-level inventory, not a claim that the listed operations have al
 - **Worker registry:** `register`, `heartbeat`, `unregister`, `findById`, `findAll`, `reapExpired`, `count`.
 - **Tenant quotas:** `ensureTenant`, `reserveWorkflow`, `promoteWorkflow`, `recoverWorkflow`, `queueWorkflow`, `refreshWorkflow`, `releaseWorkflow`, `snapshot`.
 
+## HTTP-to-runtime propagation gap confirmed
+
+A source trace on the audited `main` confirms an additional boundary gap:
+
+- `src/interfaces/http/server.js` creates the validated owner persistence principal and passes it as the fifth argument to `agentRoutes.createTask(...)`.
+- `src/interfaces/http/routes/agent.routes.js` accepts that fifth argument, but the call to `agentService.createTask(...)` forwards only `goal`, `idempotencyKey`, and `ownerSessionContext`. The validated principal is not forwarded to the service.
+- `src/application/agent/agent.service.js` validates the owner session but calls `idempotency.begin/complete/fail` with tenant identifiers only. Those calls do not receive a validated persistence principal.
+- `src/core/runtime/request-execution-coordinator.js` accepts the owner session context and validates it, but constructs the execution context with tenant/user/workspace metadata; it does not accept or propagate the persistence principal to execution/event/checkpoint repositories.
+
+Therefore the owner principal currently protects the owner chat/profile persistence boundary but does not yet protect task idempotency or the execution lifecycle. A valid session ID in runtime metadata is not equivalent to a validated persistence principal object. Do not infer principal authority from `ownerSessionContext` or `context.metadata`.
+
+This is a concrete prerequisite for the first migration slice: route → AgentService → Runtime/RequestExecutionCoordinator → PersistenceCoordinator → Execution/Events/Idempotency/Checkpoints must carry one validated principal for owner-originated operations, while worker-originated operations must use a separately issued worker principal. The task-creation route must forward the principal explicitly; it must not reconstruct one from the session context.
+
 ## Migration order and special handling
 
 1. **Execution + Events:** propagate owner principals for HTTP-originated work and worker principals for background/recovery work. Preserve cancellation CAS behavior, deterministic event ordering, append idempotency, and tenant-scoped pagination.
