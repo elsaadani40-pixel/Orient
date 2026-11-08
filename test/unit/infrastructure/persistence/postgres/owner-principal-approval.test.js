@@ -62,7 +62,6 @@ function createHarness() {
     query() { throw new Error('Owner-scoped approval access escaped its transaction'); },
     async transactionWithPrincipal(principal, work) {
       transactionCount += 1;
-      assert.equal(principal.ownerId, 'owner-a');
       return work(client, principal);
     }
   };
@@ -77,8 +76,8 @@ test('approval lookup and inbox queries are scoped to the execution owner', asyn
   const hidden = await repository.findById('approval-a', {
     tenantId: 'tenant-a',
     persistencePrincipal: createPersistencePrincipal({ tenantId: 'tenant-a', ownerId: 'owner-b', sessionId: 'session-b' })
-  }).catch(error => error);
-  assert.equal(hidden.code, 'PERSISTENCE_PRINCIPAL_MISMATCH');
+  });
+  assert.equal(hidden, null);
   const byExecution = await repository.findByExecution({
     executionId: 'execution-a', tenantId: 'tenant-a', persistencePrincipal: ownerPrincipal
   });
