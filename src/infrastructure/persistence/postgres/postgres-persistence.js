@@ -1066,18 +1066,20 @@ class PostgresApprovalRepository {
     if (!executionId) return [];
     const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
-      const clauses = ['a.execution_id=$1'];
       const values = [String(executionId)];
-      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`a.tenant_id=$${values.length}`); }
+      const clauses = ['execution_id=$1'];
+      if (effectiveTenant) { values.push(effectiveTenant); clauses.push(`tenant_id=$${values.length}`); }
       if (persistencePrincipal) {
         values.push(persistencePrincipal.ownerId);
         clauses.push(`e.payload->>'userId'=$${values.length}`);
       }
-      if (step !== null) { values.push(Number(step)); clauses.push(`a.step=$${values.length}`); }
-      if (tool !== null) { values.push(tool); clauses.push(`a.tool=$${values.length}`); }
-      if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`a.plan_revision=$${values.length}`); }
-      const join = persistencePrincipal ? ' JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id' : '';
-      const result = await client.query(`SELECT a.* FROM approvals a${join} WHERE ${clauses.join(' AND ')} ORDER BY a.issued_at DESC`, values);
+      if (step !== null) { values.push(Number(step)); clauses.push(`step=$${values.length}`); }
+      if (tool !== null) { values.push(tool); clauses.push(`tool=$${values.length}`); }
+      if (planRevision !== null) { values.push(Number(planRevision)); clauses.push(`plan_revision=$${values.length}`); }
+      const query = persistencePrincipal
+        ? `SELECT a.* FROM approvals a JOIN executions e ON e.execution_id=a.execution_id AND e.tenant_id=a.tenant_id WHERE ${clauses.map(clause => clause.replace(/^(execution_id|tenant_id|step|tool|plan_revision)=/, 'a.$1=')).join(' AND ')} ORDER BY a.issued_at DESC`
+        : `SELECT * FROM approvals WHERE ${clauses.join(' AND ')} ORDER BY issued_at DESC`;
+      const result = await client.query(query, values);
       return result.rows.map(row => this.mapRow(row));
     });
   }
