@@ -51,6 +51,10 @@ const createProjectTools =
 
 const OpenMausBotMcpClient =
   require('./src/infrastructure/agents/openmausbot-mcp-client').OpenMausBotMcpClient;
+const OpenMausBotAgentProvider =
+  require('./src/infrastructure/agents/openmausbot-agent-provider');
+const ExternalAgentProviderRegistry =
+  require('./src/application/agents/external-agent-provider-registry');
 const createOpenMausBotTools =
   require('./src/application/tools/openmausbot.tools');
 const ProjectOperationReceiptStore =
@@ -277,7 +281,10 @@ if (openMausBotEnabled) {
     args: openMausBotArgs,
     timeoutMs
   });
-  openMausBotTools = createOpenMausBotTools(openMausBotClient);
+  const externalAgentProviders = new ExternalAgentProviderRegistry();
+  externalAgentProviders.register(new OpenMausBotAgentProvider(openMausBotClient));
+  externalAgentProviders.seal();
+  openMausBotTools = createOpenMausBotTools(externalAgentProviders.get('openmausbot'));
 }
 
 // Prefer the explicitly governed project tools over the legacy workspace
