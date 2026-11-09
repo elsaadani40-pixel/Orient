@@ -419,3 +419,64 @@ test('Postgres workflow outbox acknowledgement locks and advances checkpoint rev
   assert.match(db.calls[0].text, /FOR UPDATE/);
   assert.match(db.calls[1].text, /UPDATE workflows SET payload=\$3/);
 });
+
+
+test('Postgres mission event append requires the active lease-bound worker principal', async () => {
+  const db = fakeDb([
+    { rows: [{}], rowCount: 1 },
+    { rows: [{}], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ next_sequence: '1' }], rowCount: 1 },
+    { rows: [{ payload: { id: 'worker-event-1', sequence: 1 } }], rowCount: 1 }
+  ]);
+  const repo = new PostgresEventRepository(db);
+  const workerPrincipal = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-a',
+    workerId: 'worker-a',
+    sessionId: 'session-a',
+    workflowId: 'workflow-a',
+    leaseId: 'lease-a',
+    fencingToken: 9
+  });
+  const result = await repo.appendMissionEvent({
+    id: 'worker-event-1',
+    aggregateId: 'workflow-a',
+    executionId: 'workflow-a',
+    type: 'workflow.state.changed',
+    timestamp: '2026-11-09T11:00:00.000Z',
+    data: { tenantId: 'tenant-a', from: 'QUEUED', to: 'RUNNING' }
+  }, { tenantId: 'tenant-a', workerPrincipal });
+
+  assert.equal(result.sequence, 1);
+  assert.match(db.calls[0].text, /FROM worker_nodes/);
+  assert.match(db.calls[0].text, /session_id/);
+  assert.match(db.calls[1].text, /FROM workflow_leases/);
+  assert.match(db.calls[1].text, /fencing_token/);
+  assert.match(db.calls[1].text, /expires_at > NOW/);
+  assert.match(db.calls[2].text, /pg_advisory_xact_lock/);
+});
+
+test('Postgres mission event append rejects a worker principal for another workflow', async () => {
+  const db = fakeDb();
+  const repo = new PostgresEventRepository(db);
+  const workerPrincipal = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-a',
+    workerId: 'worker-a',
+    sessionId: 'session-a',
+    workflowId: 'workflow-other',
+    leaseId: 'lease-a',
+    fencingToken: 9
+  });
+  await assert.rejects(
+    () => repo.appendMissionEvent({
+      id: 'worker-event-cross-workflow',
+      aggregateId: 'workflow-a',
+      executionId: 'workflow-a',
+      type: 'workflow.state.changed',
+      data: { tenantId: 'tenant-a' }
+    }, { tenantId: 'tenant-a', workerPrincipal }),
+    error => error.code === 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+  );
+  assert.equal(db.calls.length, 0);
+});
