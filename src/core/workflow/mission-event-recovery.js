@@ -27,7 +27,13 @@ class MissionEventRecovery {
     const validatedSnapshot = this._validateSnapshot(snapshot, workflowId, tenantId);
 
     if (!events.length) {
-      const revision = Number(validatedSnapshot?.checkpoint?.revision || 0);
+      if (!validatedSnapshot) {
+        throw recoveryError(
+          'Workflow snapshot is missing and no durable mission event history is available',
+          'MISSION_SNAPSHOT_MISSING'
+        );
+      }
+      const revision = Number(validatedSnapshot.checkpoint?.revision || 0);
       if (!Number.isInteger(revision) || revision < 0) {
         throw recoveryError('Workflow checkpoint revision is invalid', 'MISSION_CHECKPOINT_MISMATCH');
       }
