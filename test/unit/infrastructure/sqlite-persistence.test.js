@@ -202,6 +202,18 @@ test('SQLite workflow repair atomically advances only the expected tenant revisi
     }, { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 5 });
     assert.equal(repaired.checkpoint.revision, 5);
     assert.equal(persistence.workflows.findById('wf-repair-sqlite', 'tenant-a').checkpoint.revision, 5);
+    persistence.workflowLeases.save({
+      workflowId: 'wf-repair-sqlite', leaseId: 'lease-repair-sqlite', workerId: 'worker-a',
+      acquiredAt: '2026-11-09T10:00:00.000Z', expiresAt: '2999-01-01T00:00:00.000Z',
+      metadata: { tenantId: 'tenant-a' }
+    }, 'tenant-a');
+    assert.throws(
+      () => persistence.workflows.repair({
+        workflowId: 'wf-repair-sqlite', tenantId: 'tenant-a', state: 'WAITING',
+        checkpoint: { revision: 5 }
+      }, { tenantId: 'tenant-a', expectedRevision: 5, targetRevision: 6 }),
+      error => error.code === 'WORKFLOW_LEASE_HELD'
+    );
     assert.throws(
       () => persistence.workflows.repair({
         workflowId: 'wf-repair-sqlite', tenantId: 'tenant-a', state: 'WAITING',
