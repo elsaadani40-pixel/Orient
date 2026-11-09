@@ -76,36 +76,84 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
   if (!availableQueueCapacity || availableQueueCapacity < this.dispatchWindow) return 0;
 
   const tenantId = this.tenantId || 'local';
-  if (this.missionEventRecovery && this.workflowRepository?.findAll) {
-    const snapshots = await this.workflowRepository.findAll({ tenantId });
+  let snapshots = null;
+  let reconciledWorkflowIds = null;
+
+  if (this.missionEventRecovery) {
+    if (typeof this.workflowRepository?.findAll !== 'function') {
+      throw Object.assign(
+        new Error('Workflow snapshots must be enumerated before durable mission recovery can dispatch work'),
+        { code: 'WORKFLOW_RECOVERY_SNAPSHOT_ENUMERATION_REQUIRED' }
+      );
+    }
+
+    snapshots = await this.workflowRepository.findAll({ tenantId });
+    reconciledWorkflowIds = new Set();
+
     for (const snapshot of snapshots) {
       if (!snapshot?.workflowId || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(snapshot.state)) continue;
       try {
         await this.missionEventRecovery.reconcile(snapshot.workflowId, tenantId);
+        reconciledWorkflowIds.add(snapshot.workflowId);
       } catch (error) {
-        if (error?.code === 'MISSION_EVENT_HISTORY_REQUIRED' ||
-            error?.code === 'WORKFLOW_LEASE_HELD' ||
-            error?.code === 'WORKFLOW_DISPATCH_CLAIM_HELD' ||
-            error?.code === 'WORKFLOW_CHECKPOINT_CONFLICT') continue;
+        if (
+          error?.code === 'MISSION_EVENT_HISTORY_REQUIRED' ||
+          error?.code === 'WORKFLOW_LEASE_HELD' ||
+          error?.code === 'WORKFLOW_DISPATCH_CLAIM_HELD' ||
+          error?.code === 'WORKFLOW_CHECKPOINT_CONFLICT'
+        ) {
+          // This workflow is deliberately excluded from this dispatch pass.
+          // A failed or deferred reconciliation is never evidence of a safe snapshot.
+          continue;
+        }
         throw error;
       }
     }
   }
 
   const claimLimit = this.dispatchWindow;
-  const persisted = this.workflowRepository?.claimQueued
+  const usesDispatchClaims = typeof this.workflowRepository?.claimQueued === 'function';
+  const persisted = usesDispatchClaims
     ? await this.workflowRepository.claimQueued({
         tenantId, workerId, limit: claimLimit,
         claimTtlMs: Math.max(this.leaseDurationMs, 5000),
         workerCapabilities, agingQuantumMs: this.agingQuantumMs, workerPrincipal
       })
-    : await this.workflowRepository.findAll({ tenantId });
+    : await (snapshots || this.workflowRepository.findAll({ tenantId }));
+
+  const releaseUnverifiedClaim = async workflowId => {
+    if (!usesDispatchClaims) return;
+    if (typeof this.workflowRepository.releaseDispatchClaim !== 'function') {
+      throw Object.assign(
+        new Error('Cannot safely release a dispatch claim for a workflow that failed recovery verification'),
+        { code: 'WORKFLOW_RECOVERY_CLAIM_RELEASE_UNSUPPORTED', workflowId }
+      );
+    }
+    try {
+      await this.workflowRepository.releaseDispatchClaim(
+        workflowId, workerId, tenantId, { workerPrincipal }
+      );
+    } catch (cause) {
+      const error = Object.assign(
+        new Error('Failed to release a dispatch claim for a workflow that was not recovery-verified'),
+        { code: 'WORKFLOW_RECOVERY_CLAIM_RELEASE_FAILED', workflowId, cause }
+      );
+      throw error;
+    }
+  };
+
   const WorkflowInstance = require('./workflow-instance');
   let recovered = 0;
 
   for (const payload of persisted) {
     if (!payload || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state) ||
         Boolean(payload.metadata && payload.metadata.approvalBlocked)) continue;
+
+    if (reconciledWorkflowIds && !reconciledWorkflowIds.has(payload.workflowId)) {
+      await releaseUnverifiedClaim(payload.workflowId);
+      continue;
+    }
+
     if (this.queue.some(item => item.instance.workflowId === payload.workflowId) ||
         this.active.has(payload.workflowId)) continue;
 
