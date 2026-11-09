@@ -159,3 +159,14 @@ test('recognizes an uncheckpointed snapshot without events as a legacy workflow'
   );
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
+
+
+test('does not treat a missing snapshot and missing event history as a legacy workflow', async () => {
+  const s = stores();
+  const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
+  await assert.rejects(
+    () => recovery.reconcile('missing-workflow', 'tenant-a'),
+    error => error.code === 'MISSION_SNAPSHOT_MISSING'
+  );
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
