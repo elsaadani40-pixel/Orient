@@ -5,6 +5,36 @@ const ExecutionContext = require('../execution/execution-context');
 const AgentState = require('../agent/state/agent-state');
 const AppError = require('../errors/AppError');
 
+function setExecutionAdmission(error, state) {
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) {
+    const wrapped = new Error(String(error));
+    wrapped.executionAdmission = state;
+    return wrapped;
+  }
+  try {
+    const wrapped = Object.create(Object.getPrototypeOf(error));
+    for (const key of Reflect.ownKeys(error)) {
+      if (key === 'executionAdmission') continue;
+      const descriptor = Object.getOwnPropertyDescriptor(error, key);
+      if (descriptor) Object.defineProperty(wrapped, key, descriptor);
+    }
+    Object.defineProperty(wrapped, 'executionAdmission', {
+      value: state, enumerable: true, configurable: true, writable: true
+    });
+    return wrapped;
+  } catch (_) {
+    const wrapped = new Error(error.message || String(error));
+    wrapped.name = error.name || 'Error';
+    for (const key of ['code', 'statusCode', 'executionContext']) {
+      try { if (error[key] !== undefined) wrapped[key] = error[key]; } catch (_) {}
+    }
+    wrapped.stack = error.stack || wrapped.stack;
+    wrapped.cause = error;
+    wrapped.executionAdmission = state;
+    return wrapped;
+  }
+}
+
 function createApprovalSummary(tool, input) {
   if (tool !== 'project.execute_change') {
     return { kind: 'tool_action', tool: String(tool || 'unknown').slice(0, 120) };
@@ -184,37 +214,54 @@ class RequestExecutionCoordinator {
     return true;
   }
 
-  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null, persistencePrincipal = null } = {}) {
-    await this.assertOwnerSessionContext(ownerSessionContext);
+  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null, persistencePrincipal = null, executionId = null } = {}) {
+    try {
+      await this.assertOwnerSessionContext(ownerSessionContext);
+    } catch (error) {
+      throw setExecutionAdmission(error, 'rejected');
+    }
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
 
-    if (!text) return { requestId, type: 'error', message: 'لم يتم إرسال طلب.' };
+    if (!text) return { requestId, type: 'error', code: 'AGENT_INPUT_REQUIRED', message: 'لم يتم إرسال طلب.', executionAdmission: 'rejected' };
     if (text.length > this.maxInputChars) {
       return {
         requestId,
         type: 'error',
         code: 'INPUT_TOO_LARGE',
-        message: 'حجم الطلب يتجاوز الحد المسموح.'
+        message: 'حجم الطلب يتجاوز الحد المسموح.',
+        executionAdmission: 'rejected'
       };
     }
 
-    this.quotaService.assertTenant(this.tenantId);
-    this.quotaService.assertInputSize(text);
+    try {
+      this.quotaService.assertTenant(this.tenantId);
+      this.quotaService.assertInputSize(text);
+    } catch (error) {
+      throw setExecutionAdmission(error, 'rejected');
+    }
 
-    let context = new ExecutionContext({
-      requestId,
-      input: text,
-      tenantId: this.tenantId,
-      userId: this.userId,
-      workspaceId: this.workspaceId,
-      metadata: ownerSessionContext ? { ownerSessionId: ownerSessionContext.sessionId } : {}
-    });
+    let context;
+    try {
+      context = new ExecutionContext({
+        requestId,
+        executionId,
+        input: text,
+        tenantId: this.tenantId,
+        userId: this.userId,
+        workspaceId: this.workspaceId,
+        metadata: ownerSessionContext ? { ownerSessionId: ownerSessionContext.sessionId } : {}
+      });
+      context.start();
+      context.record('goal.created', context.goal.snapshot());
+      context.metadata.tenantQuota = this.quotaPolicy.toJSON();
+      context.record('request.understood', { inputLength: text.length });
+    } catch (error) {
+      throw setExecutionAdmission(error, 'rejected');
+    }
 
-    context.start();
-    context.record('goal.created', context.goal.snapshot());
-    context.metadata.tenantQuota = this.quotaPolicy.toJSON();
-    context.record('request.understood', { inputLength: text.length });
+    // A persistence error may be reported after a durable insert committed.
+    // Leave it unclassified so task idempotency can reconcile by reserved ID.
     await this.persistenceCoordinator.persistExecution(context, 'insert', persistencePrincipal);
 
     try {
@@ -298,7 +345,8 @@ class RequestExecutionCoordinator {
         replanning: replanningDecision.toJSON(),
         execution: context.snapshot()
       };
-    } catch (error) {
+    } catch (caughtError) {
+      const error = setExecutionAdmission(caughtError, 'accepted');
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
         await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
@@ -379,7 +427,7 @@ class RequestExecutionCoordinator {
             });
             await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issue_failed', persistencePrincipal);
             await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
-            throw issueError;
+            throw setExecutionAdmission(issueError, 'accepted');
           }
         }
         throw error;
