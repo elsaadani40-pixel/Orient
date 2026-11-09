@@ -202,6 +202,7 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
  }
  async enqueueDurable(instance,options={}){
   enforceInputQuota(instance,this.quotaPolicy);
+  if(!this.accepting)throw new (require('../errors/AppError'))('Workflow scheduler is shutting down',503,'SCHEDULER_SHUTTING_DOWN');
   if(!instance)throw new TypeError('Workflow instance is required');
   const reservation=options.reservation||this.reserveEnqueue(instance);
   let quotaReserved=false;
