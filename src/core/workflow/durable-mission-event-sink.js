@@ -70,7 +70,7 @@ class DurableMissionEventSink {
     return persisted;
   }
 
-  recordCreation(instance, { persistencePrincipal = null } = {}) {
+  async recordCreation(instance, { persistencePrincipal = null } = {}) {
     const created = this._event(instance, 'workflow.created', {
       workflowId: instance.workflowId,
       tenantId: instance.tenantId,
