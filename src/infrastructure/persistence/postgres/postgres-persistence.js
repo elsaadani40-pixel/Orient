@@ -978,6 +978,26 @@ class PostgresWorkflowRepository {
       } else if (expectedRevision !== 0) {
         throw Object.assign(new Error('Workflow snapshot disappeared during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
       }
+      if (current.rowCount) {
+        const activeClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeClaim.rowCount > 0) {
+          throw Object.assign(new Error('Workflow repair rejected while a worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
+        const activeLease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeLease.rowCount > 0) {
+          throw Object.assign(new Error('Workflow repair rejected while a worker lease is active'), {
+            code: 'WORKFLOW_LEASE_HELD'
+          });
+        }
+      }
       item.checkpoint = { revision: targetRevision, lastSavedAt: new Date().toISOString() };
       if (!current.rowCount) {
         const inserted = await client.query(
