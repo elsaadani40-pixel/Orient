@@ -48,7 +48,14 @@ class OwnerIdentityService {
     this.createdBootstrap = false;
     this._bootstrapPassword = null;
     this.state = this.read();
-    this.loginFailures = new Map((this.state?.loginFailures || []).map(({ key, ...failure }) => [key, failure]));
+    this.loginFailureKeyFile = this.stateFile + '.lockout-key';
+    this.loginFailureKeySecret = this.loadLoginFailureSecret();
+    this.loginFailures = new Map((this.state?.loginFailures || []).map(({ key, ...failure }) => [key, {
+      ...failure,
+      // Records written before key separation used the password verifier as
+      // their HMAC key. Keep them recognizable until their lockout window expires.
+      keyVersion: failure.keyVersion === undefined ? 1 : failure.keyVersion
+    }]));
     if (!this.state) {
       const secret = bootstrapPassword || crypto.randomBytes(24).toString('base64url');
       if (typeof secret !== 'string' || secret.length > 1024 || (!/^\d{10}$/.test(secret) && secret.length < MIN_PASSWORD)) throw new RangeError('Bootstrap password must be exactly 10 digits or at least 14 characters');
@@ -115,7 +122,8 @@ class OwnerIdentityService {
           !Number.isInteger(item.count) || item.count < 1 || item.count > 100 ||
           !Number.isSafeInteger(item.windowStartedAt) || item.windowStartedAt < 0 || item.windowStartedAt > this.now() ||
           !Number.isSafeInteger(item.blockedUntil) || item.blockedUntil < 0 ||
-          item.blockedUntil > this.now() + 86400000) {
+          item.blockedUntil > this.now() + 86400000 ||
+          (item.keyVersion !== undefined && item.keyVersion !== 1 && item.keyVersion !== 2)) {
         throw Object.assign(new Error('Owner identity login-failure state is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
       }
       seenFailureKeys.add(item.key);
@@ -138,7 +146,9 @@ class OwnerIdentityService {
     try {
       fd = fs.openSync(tmp, 'wx', 0o600);
       fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
-      fs.fchmodSync(fd, 0o600);
+      try { fs.fchmodSync(fd, 0o600); } catch (error) {
+        if (process.platform !== 'win32') throw error;
+      }
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = null;
@@ -191,7 +201,96 @@ class OwnerIdentityService {
     return { token, csrfToken, expiresAt };
   }
 
+  loadLoginFailureSecret() {
+    const dir = path.dirname(this.stateFile);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(dir, 0o700); } catch (error) {
+      if (process.platform !== 'win32') {
+        throw Object.assign(new Error('Could not protect owner identity directory'), {
+          code: 'OWNER_LOCKOUT_KEY_PERSIST_FAILED',
+          cause: error
+        });
+      }
+    }
+
+    const readExisting = () => {
+      let fd;
+      try {
+        const linkStat = fs.lstatSync(this.loginFailureKeyFile);
+        if (linkStat.isSymbolicLink()) {
+          throw Object.assign(new Error('Owner lockout key file must not be a symbolic link'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
+        }
+        const noFollow = fs.constants.O_NOFOLLOW || 0;
+        fd = fs.openSync(this.loginFailureKeyFile, fs.constants.O_RDONLY | noFollow);
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size !== 64) {
+          throw Object.assign(new Error('Owner lockout key file is invalid'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
+        }
+        const encoded = fs.readFileSync(fd, 'utf8');
+        if (!/^[a-f0-9]{64}$/.test(encoded)) {
+          throw Object.assign(new Error('Owner lockout key file is invalid'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
+        }
+        try { fs.fchmodSync(fd, 0o600); } catch (error) {
+          if (process.platform !== 'win32') throw error;
+        }
+        return Buffer.from(encoded, 'hex');
+      } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+      }
+    };
+
+    try {
+      return readExisting();
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+
+    // A missing key must never silently invalidate active v2 lockouts. Legacy
+    // records remain usable because their old verifier-derived digest can still
+    // be checked until those records expire or a password rotation clears them.
+    if ((this.state?.loginFailures || []).some(item => item.keyVersion === 2)) {
+      throw Object.assign(new Error('Owner lockout key is missing while protected failure records exist'), {
+        code: 'OWNER_LOCKOUT_KEY_UNAVAILABLE'
+      });
+    }
+
+    const secret = crypto.randomBytes(32);
+    let fd;
+    let created = false;
+    try {
+      fd = fs.openSync(this.loginFailureKeyFile, 'wx', 0o600);
+      fs.writeFileSync(fd, secret.toString('hex'), 'utf8');
+      try { fs.fchmodSync(fd, 0o600); } catch (error) {
+        if (process.platform !== 'win32') throw error;
+      }
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      created = true;
+
+      if (process.platform !== 'win32') {
+        const dirFd = fs.openSync(dir, 'r');
+        try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+      }
+      return secret;
+    } catch (error) {
+      if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+      if (error.code === 'EEXIST') return readExisting();
+      if (!created) { try { fs.rmSync(this.loginFailureKeyFile, { force: true }); } catch {} }
+      throw Object.assign(new Error('Could not persist owner lockout key safely'), {
+        code: 'OWNER_LOCKOUT_KEY_PERSIST_FAILED',
+        committed: created,
+        cause: error
+      });
+    }
+  }
+
   loginFailureKey(sourceIp) {
+    const ip = String(sourceIp || 'unknown').slice(0, 64);
+    return crypto.createHmac('sha256', this.loginFailureKeySecret).update(ip).digest('hex');
+  }
+
+  legacyLoginFailureKey(sourceIp) {
     const ip = String(sourceIp || 'unknown').slice(0, 64);
     return crypto.createHmac('sha256', this.state.passwordHash).update(ip).digest('hex');
   }
@@ -214,7 +313,7 @@ class OwnerIdentityService {
     }
   }
 
-  recordLoginFailure(key, now, maxFailures, lockoutMs) {
+  recordLoginFailure(key, now, maxFailures, lockoutMs, keyVersion = 2) {
     const previous = this.loginFailures.get(key);
     if (!previous && this.loginFailures.size >= 1024) return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
     const withinWindow = previous && now - previous.windowStartedAt < lockoutMs;
@@ -223,7 +322,8 @@ class OwnerIdentityService {
     this.loginFailures.set(key, {
       count,
       windowStartedAt: withinWindow ? previous.windowStartedAt : now,
-      blockedUntil: count >= maxFailures ? now + lockoutMs : 0
+      blockedUntil: count >= maxFailures ? now + lockoutMs : 0,
+      keyVersion
     });
     try { this.save(); }
     catch (error) { if (!error.committed) { if (prior) this.loginFailures.set(key, prior); else this.loginFailures.delete(key); } throw error; }
@@ -236,16 +336,33 @@ class OwnerIdentityService {
         !Number.isSafeInteger(lockoutMs) || lockoutMs < 1000 || lockoutMs > 86400000) throw new RangeError('Invalid owner login protection policy');
     this.pruneLoginFailures(now);
     const failureKey = this.loginFailureKey(sourceIp);
-    const prior = this.loginFailures.get(failureKey);
-    if (prior?.blockedUntil > now) return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
-    if (!prior && this.loginFailures.size >= 1024) return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
+    const legacyFailureKey = this.legacyLoginFailureKey(sourceIp);
+    const currentPrior = this.loginFailures.get(failureKey);
+    const legacyPrior = this.loginFailures.get(legacyFailureKey);
+    if (currentPrior?.blockedUntil > now || legacyPrior?.blockedUntil > now) {
+      return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
+    }
+    if (!currentPrior && !legacyPrior && this.loginFailures.size >= 1024) {
+      return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
+    }
+    const selectedFailureKey = currentPrior ? failureKey : legacyPrior ? legacyFailureKey : failureKey;
+    const selectedKeyVersion = currentPrior ? 2 : legacyPrior ? 1 : 2;
     const validIdentity = email !== undefined ? normalizeEmail(email) === this.state.email : username === 'Admin';
     const validPassword = matches(password, this.state.passwordHash);
-    if (!validIdentity || !validPassword) return this.recordLoginFailure(failureKey, now, maxFailures, lockoutMs);
-    if (prior) {
+    if (!validIdentity || !validPassword) {
+      return this.recordLoginFailure(selectedFailureKey, now, maxFailures, lockoutMs, selectedKeyVersion);
+    }
+    if (currentPrior || legacyPrior) {
       this.loginFailures.delete(failureKey);
+      this.loginFailures.delete(legacyFailureKey);
       try { this.save(); }
-      catch (error) { if (!error.committed) this.loginFailures.set(failureKey, prior); throw error; }
+      catch (error) {
+        if (!error.committed) {
+          if (currentPrior) this.loginFailures.set(failureKey, currentPrior);
+          if (legacyPrior) this.loginFailures.set(legacyFailureKey, legacyPrior);
+        }
+        throw error;
+      }
     }
     for (const [key, session] of this.sessions) if (session.expiresAt <= this.now()) this.sessions.delete(key);
     if (this.sessions.size >= 4096) return { ok: false, code: 'OWNER_SESSION_LIMIT_REACHED' };

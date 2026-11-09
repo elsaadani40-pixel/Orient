@@ -32,6 +32,12 @@ For a forgotten or compromised permanent password, use the documented owner iden
 
 A bootstrap secret supplied after the owner-state file has already been initialized does not reset the account. Recovery must be an explicit operator-controlled action with an audited backup and rollback plan. Rotate the permanent password from the authenticated owner workspace whenever possible, then revoke all other owner sessions.
 
+## Lockout key and backup integrity
+
+The owner state file is accompanied by a separate `owner.json.lockout-key` file in the same protected data directory. The sidecar contains a randomly generated 256-bit key used only to HMAC source-address identifiers in persisted login-failure records. It is not derived from the owner password verifier and is not stored in the owner JSON. Protect it with owner-only filesystem permissions and include it in every encrypted backup/restore operation together with `owner.json`.
+
+Existing version-1 failure records created by older builds remain enforced during migration. If the sidecar is missing while version-2 lockout records exist, ORIENT fails startup closed; do not delete or regenerate the key as a recovery shortcut. Restore the matching sidecar from the same backup as the owner state. Password rotation clears active lockout records but does not replace the sidecar key.
+
 ## Android boundary
 
 The Android companion currently authenticates to the local ORIENT Runtime using the Runtime owner-session contract. That local Runtime authority is intentionally not silently converted into a public website/customer login. Any future cross-device public identity bridge must explicitly define token audience, device binding, revocation, offline behavior, and owner-vs-customer authorization before implementation.
