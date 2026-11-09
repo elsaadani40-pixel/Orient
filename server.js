@@ -514,7 +514,8 @@ function createOwnerServer(options = {}) {
     }
 
     if (req.method === 'GET' && url.pathname === '/owner.html') {
-      res.writeHead(302, { Location: '/account.html', 'Cache-Control': 'no-store' });
+      const target = sessionFor(req) ? '/account.html' : '/auth';
+      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
       return res.end();
     }
 
