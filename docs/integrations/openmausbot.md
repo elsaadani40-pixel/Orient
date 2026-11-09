@@ -2,7 +2,7 @@
 
 **Status:** Phase 1 read-only adapter implemented on a review branch; not enabled by default and not yet accepted as a release capability.
 
-ORIENT can optionally inspect a separately running [OpenMausBot](https://github.com/milind-soni/OpenMausBot) agent fleet through its MCP stdio server. OpenMausBot is not installed, vendored, or required by ORIENT.
+ORIENT can optionally inspect a separately running [OpenMausBot](https://github.com/milind-soni/OpenMausBot) agent fleet through its MCP stdio server. OpenMausBot is not installed, vendored, or required by ORIENT. The application consumes a provider-neutral external-agent contract; the OpenMausBot-specific MCP protocol and tool names are confined to its infrastructure adapter. This keeps future providers from requiring changes to ORIENT's runtime or planner.
 
 ## Enable read-only discovery
 
