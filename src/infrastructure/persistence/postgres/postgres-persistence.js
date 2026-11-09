@@ -319,14 +319,50 @@ class PostgresEventRepository {
     return inserted;
   }
 
-  async appendMissionEvent(event, { tenantId = null } = {}) {
+  async appendMissionEvent(event, { tenantId = null, persistencePrincipal = null } = {}) {
     if (!event?.aggregateId) throw new TypeError('aggregateId is required');
+    const effectiveTenant = tenantOrLocal(tenantId || persistencePrincipal?.tenantId);
+    const owner = persistencePrincipal ? assertPersistencePrincipal(persistencePrincipal) : null;
+    if (owner && owner.tenantId !== effectiveTenant) {
+      throw Object.assign(new Error('Mission event tenant does not match the owner principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
     const compareTimestamp = typeof event.timestamp === 'string' && event.timestamp.length > 0;
-    const normalized = this.normalize(event, tenantId);
-    return this.db.transaction(async client => {
+    const normalized = this.normalize(event, effectiveTenant);
+    const persist = async client => {
+      if (owner) {
+        const ownedWorkflow = await client.query(
+          "SELECT 1 FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 FOR UPDATE",
+          [normalized.aggregateId, effectiveTenant, owner.ownerId]
+        );
+        if (!ownedWorkflow.rowCount) {
+          throw Object.assign(new Error('Workflow not found for the authenticated owner'), {
+            code: 'WORKFLOW_NOT_FOUND'
+          });
+        }
+        const activeClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>NOW() LIMIT 1',
+          [normalized.aggregateId, effectiveTenant]
+        );
+        if (activeClaim.rowCount) {
+          throw Object.assign(new Error('Mission event append rejected while a worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
+        const activeLease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>NOW() LIMIT 1',
+          [normalized.aggregateId, effectiveTenant]
+        );
+        if (activeLease.rowCount) {
+          throw Object.assign(new Error('Mission event append rejected while a worker lease is active'), {
+            code: 'WORKFLOW_LEASE_HELD'
+          });
+        }
+      }
       await client.query(
         'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
-        [normalized.data.tenantId, normalized.aggregateId]
+        [effectiveTenant, normalized.aggregateId]
       );
       const existing = await client.query(
         'SELECT tenant_id,aggregate_id,payload FROM events WHERE event_id=$1 LIMIT 1',
@@ -335,24 +371,27 @@ class PostgresEventRepository {
       if (existing.rows.length) {
         const row = existing.rows[0];
         const prior = row.payload;
-        if (row.tenant_id !== normalized.data.tenantId || row.aggregate_id !== normalized.aggregateId ||
+        if (row.tenant_id !== effectiveTenant || row.aggregate_id !== normalized.aggregateId ||
             prior.type !== normalized.type || prior.executionId !== normalized.executionId ||
-            prior.goalId !== normalized.goalId || (compareTimestamp && prior.timestamp !== normalized.timestamp) ||
+            prior.goalId !== normalized.goalId ||
+            (compareTimestamp && prior.timestamp !== normalized.timestamp) ||
             !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
-          throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
+          throw Object.assign(new Error('Mission event identity conflict'), {
+            code: 'MISSION_EVENT_ID_CONFLICT'
+          });
         }
         return prior;
       }
       const sequenceResult = await client.query(
         'SELECT COALESCE(MAX(sequence),0)::bigint + 1 AS next_sequence FROM events WHERE tenant_id=$1 AND aggregate_id=$2',
-        [normalized.data.tenantId, normalized.aggregateId]
+        [effectiveTenant, normalized.aggregateId]
       );
       normalized.sequence = Number(sequenceResult.rows[0].next_sequence);
       const inserted = await client.query(
         `INSERT INTO events(event_id,tenant_id,execution_id,goal_id,aggregate_id,sequence,type,timestamp,payload)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT(event_id) DO NOTHING RETURNING payload`,
-        [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId,
+        [normalized.id, effectiveTenant, normalized.executionId, normalized.goalId,
           normalized.aggregateId, normalized.sequence, normalized.type, normalized.timestamp, normalized]
       );
       if (inserted.rowCount === 1) return inserted.rows[0].payload;
@@ -361,15 +400,21 @@ class PostgresEventRepository {
         [normalized.id]
       );
       const prior = raced.rows[0]?.payload;
-      if (!prior || raced.rows[0].tenant_id !== normalized.data.tenantId ||
-          raced.rows[0].aggregate_id !== normalized.aggregateId || prior.type !== normalized.type ||
-          prior.executionId !== normalized.executionId || prior.goalId !== normalized.goalId ||
+      if (!prior || raced.rows[0].tenant_id !== effectiveTenant ||
+          raced.rows[0].aggregate_id !== normalized.aggregateId ||
+          prior.type !== normalized.type || prior.executionId !== normalized.executionId ||
+          prior.goalId !== normalized.goalId ||
           (compareTimestamp && prior.timestamp !== normalized.timestamp) ||
           !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
-        throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
+        throw Object.assign(new Error('Mission event identity conflict'), {
+          code: 'MISSION_EVENT_ID_CONFLICT'
+        });
       }
       return prior;
-    });
+    };
+    return owner
+      ? withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Mission event principal', persist)
+      : this.db.transaction(persist);
   }
 
   async findByAggregateId(id, { tenantId = null } = {}) {
