@@ -50,12 +50,14 @@ internal class OwnerSessionClient(
                 expiry != null
         }
 
-    suspend fun login(password: String): String = withContext(Dispatchers.IO) {
+    suspend fun login(email: String, password: String): String = withContext(Dispatchers.IO) {
+        val normalizedEmail = email.trim().lowercase()
+        require(normalizedEmail.length in 3..254 && normalizedEmail.contains('@')) { "أدخل البريد الإلكتروني المعتمد." }
         require(password.isNotEmpty() && password.length <= 1024) { "أدخل كلمة مرور صالحة." }
         val response = request(
             method = "POST",
             path = "/owner/login",
-            body = JSONObject().put("password", password).toString(),
+            body = JSONObject().put("email", normalizedEmail).put("password", password).toString(),
             requiresSession = false
         )
         val json = JSONObject(response.body)
