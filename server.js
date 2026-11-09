@@ -247,32 +247,48 @@ function createOwnerServer(options = {}) {
         const nextSignup = signupAttempt.until > Date.now() ? signupAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
         nextSignup.count += 1;
         registrationAttempts.set(ip, nextSignup);
-        const username = typeof body.username === 'string' ? body.username.trim() : '';
+        const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+        const suppliedUsername = typeof body.username === 'string' ? body.username.trim() : '';
         const password = body.password;
-        if (!/^[A-Za-z0-9_ -]{3,32}$/.test(username)) return sendJson(res, 400, { error: 'اسم المستخدم يجب أن يكون من 3 إلى 32 حرفًا أو رقمًا.' });
-        if (username.toLowerCase() === 'admin') return sendJson(res, 400, { error: 'اسم المستخدم محجوز.' });
-        if (typeof password !== 'string' || password.length < 12 || password.length > 1024) return sendJson(res, 400, { error: 'استخدم كلمة مرور لا تقل عن 12 حرفًا.' });
-        if (users.some(user => user.username.toLowerCase() === username.toLowerCase())) return sendJson(res, 409, { error: 'اسم المستخدم مستخدم بالفعل.' });
-        const user = { id: crypto.randomUUID(), username, password: hashPassword(password), role: 'user', createdAt: new Date().toISOString(), disabled: false };
+        if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email) || email.length > 254) {
+          return sendJson(res, 400, { error: 'أدخل بريدًا إلكترونيًا صحيحًا.' });
+        }
+        if (suppliedUsername && !/^[A-Za-z0-9_ -]{3,32}$/.test(suppliedUsername)) {
+          return sendJson(res, 400, { error: 'اسم المستخدم يجب أن يكون من 3 إلى 32 حرفًا أو رقمًا.' });
+        }
+        if (typeof password !== 'string' || password.length < 12 || password.length > 1024) {
+          return sendJson(res, 400, { error: 'استخدم كلمة مرور لا تقل عن 12 حرفًا.' });
+        }
+        if (users.some(user => user.email?.toLowerCase() === email)) {
+          return sendJson(res, 409, { error: 'هذا البريد الإلكتروني مسجل بالفعل.' });
+        }
+        const localPart = email.split('@')[0].replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 20) || 'orient_user';
+        const username = suppliedUsername || (localPart + '_' + crypto.randomBytes(3).toString('hex'));
+        if (username.toLowerCase() === 'admin' || users.some(user => user.username.toLowerCase() === username.toLowerCase())) {
+          return sendJson(res, 409, { error: 'اسم المستخدم مستخدم بالفعل.' });
+        }
+        const user = { id: crypto.randomUUID(), email, username, password: hashPassword(password), role: 'user', createdAt: new Date().toISOString(), disabled: false, emailVerified: false };
         try { persistUsers([...users, user]); }
         catch { return sendJson(res, 500, { error: 'تعذر حفظ الحساب بأمان.' }); }
         const token = crypto.randomBytes(32).toString('base64url');
-        userSessions.set(token, { userId: user.id, username: user.username, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
-        return sendJson(res, 201, { ok: true, username, role: 'user' }, { 'Set-Cookie': userCookie(token, req) });
+        userSessions.set(token, { userId: user.id, username: user.username, email: user.email, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+        return sendJson(res, 201, { ok: true, email, username, role: 'user', emailVerified: false }, { 'Set-Cookie': userCookie(token, req) });
       }
 
       if (url.pathname === '/api/auth/login') {
-        if (typeof body.username !== 'string' || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل اسم المستخدم وكلمة المرور.' });
-        const user = users.find(item => item.username.toLowerCase() === body.username.trim().toLowerCase());
+        const identifier = typeof body.email === 'string' ? body.email.trim().toLowerCase()
+          : typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
+        if (!identifier || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل البريد الإلكتروني وكلمة المرور.' });
+        const user = users.find(item => (item.email && item.email.toLowerCase() === identifier) || item.username.toLowerCase() === identifier);
         if (!user || user.disabled || !verifyPassword(body.password, user.password)) {
           const next = authAttempt.until > Date.now() ? authAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
           next.count += 1; attempts.set(ip, next);
-          return sendJson(res, 401, { error: 'اسم المستخدم أو كلمة المرور غير صحيحة.' });
+          return sendJson(res, 401, { error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة.' });
         }
         attempts.delete(ip);
         const token = crypto.randomBytes(32).toString('base64url');
-        userSessions.set(token, { userId: user.id, username: user.username, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
-        return sendJson(res, 200, { ok: true, username: user.username, role: 'user' }, { 'Set-Cookie': userCookie(token, req) });
+        userSessions.set(token, { userId: user.id, username: user.username, email: user.email || null, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+        return sendJson(res, 200, { ok: true, email: user.email || null, username: user.username, role: 'user', emailVerified: user.emailVerified === true }, { 'Set-Cookie': userCookie(token, req) });
       }
 
       if (url.pathname === '/api/auth/password') {
