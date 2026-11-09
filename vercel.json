@@ -1,3 +1,4 @@
 {
-  "outputDirectory": "website"
+  "buildCommand": "npm run build:vercel",
+  "outputDirectory": ".vercel-static"
 }
