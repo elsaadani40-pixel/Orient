@@ -76,7 +76,7 @@ test('repairs a semantically divergent snapshot without inventing a new event re
   const snapshot = s.workflows.findById(mission.workflowId, 'tenant-a');
   snapshot.state = 'WAITING';
   snapshot.checkpoint.revision = 2;
-  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\\n');
+  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
   const result = await recovery.reconcile(mission.workflowId, 'tenant-a');
   assert.equal(result.status, 'REPAIRED');
