@@ -1,6 +1,6 @@
 # ADR: Governed OpenMausBot integration
 
-- **Status:** Proposed; documentation-only change
+- **Status:** Proposed; Phase 1 read-only adapter implementation is under review
 - **Date:** 2026-11-09
 - **Related issue:** [#371](https://github.com/elsaadani40-pixel/Orient/issues/371)
 - **Upstream:** [milind-soni/OpenMausBot](https://github.com/milind-soni/OpenMausBot)
@@ -44,6 +44,8 @@ An ORIENT approval to dispatch a message is not an approval for every subsequent
 This ADR and issue #371 establish the protocol boundary, security assumptions, licensing constraints, and acceptance gates. No runtime dependency or upstream source is added in this phase.
 
 ### Phase 1 — read-only discovery
+
+The review branch implements an optional, disabled-by-default adapter with a native Node.js stdio MCP client, a minimal child-process environment, a strict allowlist, bounded frames/responses/timeouts, endpoint identity verification, and four governed ToolRegistry tools. It introduces no runtime package dependency and does not change ORIENT's Node.js floor. This implementation is not considered shipped until its exact-head CI and security tests pass and the PR is reviewed.
 
 Expose only these upstream MCP tools through ORIENT's governed adapter:
 
