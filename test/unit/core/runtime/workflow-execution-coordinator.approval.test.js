@@ -284,3 +284,163 @@ test('approval resume appends a replayable snapshot event before durable state r
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('approval workflow reconciliation forwards the authenticated owner principal to repository reads and writes', async () => {
+  const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a'
+  });
+  const definition = new WorkflowDefinition({
+    id: 'orient.request.execution', version: 1, name: 'ORIENT Request Execution',
+    steps: [{ id: 'agent-runtime', agent: 'ORIENT_RUNTIME' }]
+  });
+  const instance = new WorkflowInstance({
+    definition, workflowId: 'workflow-owner-approval', tenantId: 'tenant-a',
+    userId: 'owner-a', workspaceId: 'workspace-a', input: { text: 'guarded work' }
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  instance.transition('WAITING');
+  instance.metadata = {
+    ...instance.metadata, approvalBlocked: true,
+    approvalExecutionId: 'execution-owner-approval',
+    approvalId: 'approval-old'
+  };
+  const calls = [];
+  const workflowRepository = {
+    async findAll() { return [instance.toJSON()]; },
+    async findByApprovalExecutionId(options) {
+      calls.push(['find', options]);
+      return instance.toJSON();
+    },
+    async save(value, tenantId, options) {
+      calls.push(['save', tenantId, options]);
+      return value.toJSON();
+    }
+  };
+  const coordinator = new WorkflowExecutionCoordinator({
+    scheduler: {}, workflowRepository, tenantId: 'tenant-a',
+    userId: 'owner-a', workspaceId: 'workspace-a', executeRequest: async () => ({})
+  });
+
+  assert.equal(await coordinator.updateApprovalChallenge(
+    'execution-owner-approval', 'approval-new', principal
+  ), true);
+  assert.equal(calls[0][0], 'find');
+  assert.strictEqual(calls[0][1].persistencePrincipal, principal);
+  assert.equal(calls[1][0], 'save');
+  assert.equal(calls[1][1], 'tenant-a');
+  assert.strictEqual(calls[1][2].persistencePrincipal, principal);
+});
+
+
+test('shared mission event sink receives owner principal during approval snapshot replacement', async () => {
+  const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a'
+  });
+  const instance = new WorkflowInstance({
+    definition: new WorkflowDefinition({
+      id: 'owner-approval-sink', version: 1, name: 'Owner approval sink',
+      steps: [{ id: 'work', tool: 'work' }]
+    }),
+    workflowId: 'workflow-owner-sink',
+    tenantId: 'tenant-a',
+    userId: 'owner-a'
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  instance.transition('WAITING');
+  instance.metadata = { ...instance.metadata, approvalBlocked: true, approvalExecutionId: 'execution-owner-sink' };
+  const calls = [];
+  const workflowRepository = {
+    async findByApprovalExecutionId() { return instance.toJSON(); },
+    async findAll() { return [instance.toJSON()]; },
+    async save() { throw new Error('shared mission event sink should own the durable write'); }
+  };
+  const missionEventSink = {
+    async recordSnapshot(value, reason, options) {
+      calls.push({ workflowId: value.workflowId, reason, persistencePrincipal: options.persistencePrincipal });
+    }
+  };
+  const coordinator = new WorkflowExecutionCoordinator({
+    scheduler: {}, workflowRepository, missionEventSink, tenantId: 'tenant-a',
+    userId: 'owner-a', workspaceId: 'workspace-a', executeRequest: async () => ({})
+  });
+  await coordinator.updateApprovalChallenge('execution-owner-sink', 'approval-new', principal);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].reason, 'approval_resolution');
+  assert.strictEqual(calls[0].persistencePrincipal, principal);
+});
+
+
+test('approval resume, expiry, and cancellation consistently propagate owner persistence authority', async () => {
+  const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-owner-a'
+  });
+
+  async function runCase(action) {
+    const definition = new WorkflowDefinition({
+      id: 'owner-approval-lifecycle', version: 1, name: 'Owner approval lifecycle',
+      steps: [{ id: 'agent-runtime', agent: 'ORIENT_RUNTIME' }]
+    });
+    const instance = new WorkflowInstance({
+      definition, workflowId: `workflow-owner-${action}`, tenantId: 'tenant-a',
+      userId: 'owner-a', workspaceId: 'workspace-a', input: { text: 'guarded operation' }
+    });
+    instance.transition('QUEUED');
+    instance.transition('RUNNING');
+    instance.transition('WAITING');
+    instance.metadata = {
+      ...instance.metadata, approvalBlocked: true,
+      approvalExecutionId: `execution-owner-${action}`,
+      approvalId: `approval-owner-${action}`
+    };
+
+    const calls = [];
+    const workflowRepository = {
+      async findAll() { return [instance.toJSON()]; },
+      async findByApprovalExecutionId(options) {
+        calls.push({ kind: 'find', options });
+        return instance.toJSON();
+      },
+      async save(value, tenantId, options) {
+        calls.push({ kind: 'save', tenantId, options });
+        return value.toJSON();
+      }
+    };
+    const coordinator = new WorkflowExecutionCoordinator({
+      scheduler: {}, workflowRepository, tenantId: 'tenant-a',
+      userId: 'owner-a', workspaceId: 'workspace-a', executeRequest: async () => ({})
+    });
+
+    if (action === 'resume') {
+      await coordinator.reconcileApprovalResume(`execution-owner-${action}`, {
+        result: { ok: true },
+        execution: { executionId: `execution-owner-${action}`, status: 'completed' }
+      }, principal);
+    } else if (action === 'expire') {
+      await coordinator.expireApprovalWorkflow(
+        `execution-owner-${action}`, `approval-owner-${action}`, principal
+      );
+    } else {
+      await coordinator.cancelApprovalWorkflow(
+        `execution-owner-${action}`, 'owner_rejected', principal
+      );
+    }
+
+    const find = calls.find(call => call.kind === 'find');
+    const save = calls.find(call => call.kind === 'save');
+    assert.ok(find, `${action} must perform an owner-scoped read`);
+    assert.ok(save, `${action} must perform an owner-scoped write`);
+    assert.strictEqual(find.options.persistencePrincipal, principal);
+    assert.strictEqual(save.options.persistencePrincipal, principal);
+    assert.equal(save.tenantId, 'tenant-a');
+  }
+
+  await runCase('resume');
+  await runCase('expire');
+  await runCase('cancel');
+});

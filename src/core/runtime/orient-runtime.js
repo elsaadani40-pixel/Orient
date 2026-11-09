@@ -254,10 +254,10 @@ class OrientRuntime {
     return this.requestExecutionCoordinator.execute(input, options);
   }
 
-  async isCurrentApprovalChallenge(executionId, approvalId) {
+  async isCurrentApprovalChallenge(executionId, approvalId, persistencePrincipal = null) {
     if (!executionId || !approvalId ||
         typeof this.workflowExecutionCoordinator?.findApprovalBlockedWorkflow !== 'function') return true;
-    const workflow = await this.workflowExecutionCoordinator.findApprovalBlockedWorkflow(executionId);
+    const workflow = await this.workflowExecutionCoordinator.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!workflow) return true;
     return workflow.metadata?.approvalId === approvalId;
   }
@@ -269,11 +269,11 @@ class OrientRuntime {
         ownerSessionContext,
         persistencePrincipal
       });
-      await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result);
+      await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result, persistencePrincipal);
       return result;
     } catch (error) {
       if (error?.code === 'APPROVAL_EXPIRED' && error.approvalId) {
-        if (!(await this.isCurrentApprovalChallenge(executionId, error.approvalId))) {
+        if (!(await this.isCurrentApprovalChallenge(executionId, error.approvalId, persistencePrincipal))) {
           throw error;
         }
         try {
@@ -292,7 +292,7 @@ class OrientRuntime {
               code: 'EXECUTION_NOT_FOUND'
             });
           }
-          await this.workflowExecutionCoordinator.expireApprovalWorkflow(executionId, error.approvalId);
+          await this.workflowExecutionCoordinator.expireApprovalWorkflow(executionId, error.approvalId, persistencePrincipal);
         } catch (reconciliationError) {
           throw Object.assign(new Error('Expired approval could not be reconciled safely'), {
             code: 'APPROVAL_EXPIRY_RECONCILIATION_FAILED',
@@ -303,12 +303,13 @@ class OrientRuntime {
       } else if (error?.code === 'APPROVAL_REQUIRED' && error.executionContext?.approvalId) {
         await this.workflowExecutionCoordinator.updateApprovalChallenge(
           executionId,
-          error.executionContext.approvalId
+          error.executionContext.approvalId,
+          persistencePrincipal
         );
       } else if (typeof this.persistence?.executions?.findById === 'function') {
         const durable = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         if (durable && ['completed', 'failed', 'cancelled'].includes(String(durable.status || '').toLowerCase())) {
-          await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, { execution: durable });
+          await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, { execution: durable }, persistencePrincipal);
         }
       }
       throw error;
@@ -338,7 +339,7 @@ class OrientRuntime {
       });
     }
 
-    await this.workflowExecutionCoordinator.cancelApprovalWorkflow(executionId, reason);
+    await this.workflowExecutionCoordinator.cancelApprovalWorkflow(executionId, reason, persistencePrincipal);
 
     return {
       executionId: requested.executionId,
@@ -436,7 +437,7 @@ class OrientRuntime {
       return await this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId, ...(options.persistencePrincipal ? { persistencePrincipal: options.persistencePrincipal } : {}) });
     } catch (error) {
       if (error?.code === 'APPROVAL_EXPIRED' && options.executionId && options.approvalId) {
-        if (!(await this.isCurrentApprovalChallenge(options.executionId, options.approvalId))) {
+        if (!(await this.isCurrentApprovalChallenge(options.executionId, options.approvalId, options.persistencePrincipal || null))) {
           throw error;
         }
         try {
@@ -449,7 +450,8 @@ class OrientRuntime {
           }
           await this.workflowExecutionCoordinator.expireApprovalWorkflow(
             options.executionId,
-            options.approvalId
+            options.approvalId,
+            options.persistencePrincipal || null
           );
         } catch (reconciliationError) {
           throw Object.assign(new Error('Expired approval could not be reconciled safely'), {

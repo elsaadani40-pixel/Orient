@@ -90,11 +90,11 @@ class WorkflowExecutionCoordinator {
     };
   }
 
-  async findApprovalBlockedWorkflow(executionId) {
+  async findApprovalBlockedWorkflow(executionId, persistencePrincipal = null) {
     if (!executionId || typeof this.workflowRepository?.findAll !== 'function') return null;
     const payload = typeof this.workflowRepository.findByApprovalExecutionId === 'function'
-      ? await this.workflowRepository.findByApprovalExecutionId({ executionId: String(executionId), tenantId: this.tenantId })
-      : (await this.workflowRepository.findAll({ tenantId: this.tenantId })).find(record =>
+      ? await this.workflowRepository.findByApprovalExecutionId({ executionId: String(executionId), tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
+      : (await this.workflowRepository.findAll({ tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })).find(record =>
           record?.tenantId === this.tenantId &&
           record?.metadata?.approvalBlocked === true &&
           String(record.metadata.approvalExecutionId || '') === String(executionId)
@@ -102,7 +102,7 @@ class WorkflowExecutionCoordinator {
     return payload ? WorkflowInstance.fromJSON(payload) : null;
   }
 
-  async persistApprovalWorkflow(instance, fromState = instance.state) {
+  async persistApprovalWorkflow(instance, fromState = instance.state, persistencePrincipal = null) {
     if (typeof this.workflowRepository?.save !== 'function') {
       throw Object.assign(new Error('Durable workflow storage is required to reconcile approval'), {
         code: 'WORKFLOW_STORAGE_REQUIRED'
@@ -115,16 +115,18 @@ class WorkflowExecutionCoordinator {
       delete instance.metadata.fencingToken;
     }
     if (this.missionEventSink) {
-      await this.missionEventSink.recordSnapshot(instance, 'approval_resolution');
+      await this.missionEventSink.recordSnapshot(instance, 'approval_resolution', {
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
+      });
     } else {
-      await this.workflowRepository.save(instance, this.tenantId);
+      await this.workflowRepository.save(instance, this.tenantId, persistencePrincipal ? { persistencePrincipal } : {});
     }
     return instance.toJSON();
   }
 
-  async updateApprovalChallenge(executionId, approvalId) {
+  async updateApprovalChallenge(executionId, approvalId, persistencePrincipal = null) {
     if (typeof approvalId !== 'string' || !approvalId) return false;
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance) return false;
     instance.metadata = {
       ...instance.metadata,
@@ -135,12 +137,12 @@ class WorkflowExecutionCoordinator {
       approvalId,
       approvalRequiredAt: new Date().toISOString()
     };
-    await this.persistApprovalWorkflow(instance);
+    await this.persistApprovalWorkflow(instance, instance.state, persistencePrincipal);
     return true;
   }
 
-  async reconcileApprovalResume(executionId, resumeResult) {
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+  async reconcileApprovalResume(executionId, resumeResult, persistencePrincipal = null) {
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance) return false;
     const execution = resumeResult?.execution || null;
     const status = String(execution?.status || '').toLowerCase();
@@ -189,13 +191,13 @@ class WorkflowExecutionCoordinator {
       approvalBlocked: false,
       approvalResolvedAt: new Date().toISOString()
     };
-    await this.persistApprovalWorkflow(instance, fromState);
+    await this.persistApprovalWorkflow(instance, fromState, persistencePrincipal);
     return instance.toJSON();
   }
 
-  async expireApprovalWorkflow(executionId, approvalId) {
+  async expireApprovalWorkflow(executionId, approvalId, persistencePrincipal = null) {
     if (!executionId || typeof approvalId !== 'string' || !approvalId) return false;
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance || instance.metadata?.approvalId !== approvalId) return false;
     if ([WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
       return instance.toJSON();
@@ -211,12 +213,12 @@ class WorkflowExecutionCoordinator {
       approvalResolvedAt: new Date().toISOString(),
       cancellationReason: 'approval_expired'
     };
-    await this.persistApprovalWorkflow(instance, fromState);
+    await this.persistApprovalWorkflow(instance, fromState, persistencePrincipal);
     return instance.toJSON();
   }
 
-  async cancelApprovalWorkflow(executionId, reason = 'owner_rejected') {
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+  async cancelApprovalWorkflow(executionId, reason = 'owner_rejected', persistencePrincipal = null) {
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance) return false;
     const fromState = instance.state;
     if (![WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
@@ -230,7 +232,7 @@ class WorkflowExecutionCoordinator {
       approvalResolvedAt: new Date().toISOString(),
       cancellationReason: String(reason).slice(0, 300)
     };
-    await this.persistApprovalWorkflow(instance, fromState);
+    await this.persistApprovalWorkflow(instance, fromState, persistencePrincipal);
     return instance.toJSON();
   }
 

@@ -36,18 +36,24 @@ class DurableMissionEventSink {
     };
   }
 
-  async append(instance, type, data = {}, { persist = true, workerPrincipal = null } = {}) {
+  async append(instance, type, data = {}, { persist = true, workerPrincipal = null, persistencePrincipal = null } = {}) {
     const event = this._event(instance, type, data);
     let persisted;
     try {
-      persisted = await this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
+      persisted = await this.eventRepository.appendMissionEvent(event, {
+        tenantId: instance.tenantId || this.tenantId,
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
+      });
     } catch (error) {
       error.code = error.code || 'MISSION_EVENT_PERSISTENCE_FAILED';
       throw error;
     }
     if (persist && this.workflowRepository?.save) {
       try {
-        await this.workflowRepository.save(instance, instance.tenantId || this.tenantId, { workerPrincipal });
+        await this.workflowRepository.save(instance, instance.tenantId || this.tenantId, {
+          ...(workerPrincipal ? { workerPrincipal } : {}),
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
+        });
       } catch (error) {
         error.code = error.code || 'MISSION_STATE_PERSISTENCE_FAILED_AFTER_EVENT';
         error.missionEventId = persisted.id;
