@@ -149,6 +149,8 @@ class OwnerSessionClientTest {
         val changeCookie = AtomicReference<String?>()
         val changeCsrf = AtomicReference<String?>()
         val changeBody = AtomicReference<String?>()
+        val rotatedLogoutCookie = AtomicReference<String?>()
+        val rotatedLogoutCsrf = AtomicReference<String?>()
         val server = startServer { exchange ->
             when (exchange.requestURI.path) {
                 "/owner/login" -> {
@@ -172,6 +174,11 @@ class OwnerSessionClientTest {
                     )
                 }
                 "/api/v1/tasks" -> respond(exchange, 200, """{"items":[]}""")
+                "/owner/logout" -> {
+                    rotatedLogoutCookie.set(exchange.requestHeaders.getFirst("Cookie"))
+                    rotatedLogoutCsrf.set(exchange.requestHeaders.getFirst("X-ORIENT-CSRF"))
+                    respond(exchange, 200, """{"ok":true}""")
+                }
                 else -> respond(exchange, 404, """{"code":"NOT_FOUND"}""")
             }
         }
@@ -193,6 +200,9 @@ class OwnerSessionClientTest {
             assertEquals("csrf-before-rotation", changeCsrf.get())
             assertTrue(changeBody.get()?.contains("A-secure-password-2026") == true)
             assertTrue(withApiDiagnostics("fetchTasks after rotation") { runBlocking { client.fetchTasks() } }.contains("items"))
+            runBlocking { client.logout() }
+            assertTrue(rotatedLogoutCookie.get()?.startsWith("orient_owner_session=eeee") == true)
+            assertEquals("csrf-after-rotation", rotatedLogoutCsrf.get())
         } finally {
             server.stop(0)
         }
