@@ -43,7 +43,7 @@ class MissionEventRecovery {
       );
     }
 
-    return { events, snapshot };
+    return { events, snapshot: validatedSnapshot };
   }
 
   _validateSnapshot(snapshot, workflowId, tenantId) {
@@ -82,13 +82,12 @@ class MissionEventRecovery {
   }
 
   async reconcile(workflowId, tenantId = 'local') {
-    const { events, snapshot: rawSnapshot } = await this._load(workflowId, tenantId);
+    const { events, snapshot } = await this._load(workflowId, tenantId);
     const lastSequence = Number(events[events.length - 1].sequence);
     if (!Number.isInteger(lastSequence) || lastSequence < 1) {
       throw recoveryError('Mission event sequence is invalid', 'MISSION_EVENT_SEQUENCE_INVALID');
     }
 
-    const snapshot = this._validateSnapshot(rawSnapshot, workflowId, tenantId);
     const snapshotRevision = Number(snapshot?.checkpoint?.revision || 0);
     if (!Number.isInteger(snapshotRevision) || snapshotRevision < 0) {
       throw recoveryError('Workflow checkpoint revision is invalid', 'MISSION_CHECKPOINT_MISMATCH');
