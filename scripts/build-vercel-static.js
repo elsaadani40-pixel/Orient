@@ -25,7 +25,7 @@ function buildStaticLandingPage() {
     throw new Error('The generated ORIENT landing page does not match its source.');
   }
 
-  process.stdout.write('Prepared ORIENT static landing page (' + outputStat.size + ' bytes).\\n');
+  process.stdout.write('Prepared ORIENT static landing page (' + outputStat.size + ' bytes).\n');
 }
 
 buildStaticLandingPage();
