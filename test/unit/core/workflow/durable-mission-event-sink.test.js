@@ -128,6 +128,7 @@ test('owner principal is propagated to both mission event append and snapshot pe
     tenantId: 'tenant-a'
   });
   const mission = instance();
+  mission.tenantId = 'tenant-a';
   mission.userId = 'owner-a';
   await sink.recordSnapshot(mission, 'approval_resolution', {
     persistencePrincipal: principal
