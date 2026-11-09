@@ -218,9 +218,10 @@ class OwnerIdentityService {
       try {
         // Open first, then validate the opened descriptor. On POSIX, O_NOFOLLOW
         // makes the open itself reject symlinks, avoiding a separate lstat/open
-        // check-then-use race. Node does not expose an equivalent portable flag
-        // on Windows; there the key remains confined to the owner-only data
-        // directory and the opened handle is still validated with fstat.
+        // check-then-use race. Node does not expose O_NOFOLLOW on Windows;
+        // there, protection against path replacement depends on the deployment
+        // ACL restricting this directory to the service account. chmod(0700)
+        // is not an ACL boundary on Windows; fstat still validates the handle.
         const noFollow = fs.constants.O_NOFOLLOW;
         try {
           fd = fs.openSync(
