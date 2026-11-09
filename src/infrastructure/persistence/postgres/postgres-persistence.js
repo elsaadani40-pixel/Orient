@@ -319,7 +319,7 @@ class PostgresEventRepository {
     return inserted;
   }
 
-  async appendMissionEvent(event, { tenantId = null, workerPrincipal = null, persistencePrincipal = null } = {}) {
+  async appendMissionEvent(event, { tenantId = null, workerPrincipal = null, persistencePrincipal = null, transactionClient = null } = {}) {
     if (!event?.aggregateId) throw new TypeError('aggregateId is required');
     if (workerPrincipal && persistencePrincipal) {
       throw Object.assign(new Error('Mission event writes must use either worker lease authority or owner authority, not both'), {
@@ -444,6 +444,10 @@ class PostgresEventRepository {
       }
       return prior;
     };
+    if (transactionClient) {
+      if (workerPrincipal) throw Object.assign(new Error('Worker events cannot reuse an owner creation transaction'), { code: 'MISSION_EVENT_AUTHORITY_AMBIGUOUS' });
+      return persist(transactionClient);
+    }
     if (workerPrincipal) {
       return this.db.transactionWithWorkerPrincipal(workerPrincipal, persist, { requireLease: true });
     }
@@ -928,6 +932,38 @@ class PostgresCheckpointRepository {
 
 class PostgresWorkflowRepository {
   constructor(db, workerRegistry = null) { this.db = db; this.workerRegistry = workerRegistry; }
+
+  async createWithEvents(instance, events, { persistencePrincipal = null } = {}) {
+    if (!this.eventRepository || typeof this.eventRepository.appendMissionEvent !== 'function') {
+      throw Object.assign(new Error('Atomic workflow creation requires a mission event repository'), { code: 'WORKFLOW_ATOMIC_EVENT_STORE_REQUIRED' });
+    }
+    if (!Array.isArray(events) || events.length < 1) throw new TypeError('Initial workflow events are required');
+    const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenant = tenantOrLocal(item.tenantId);
+    const owner = persistencePrincipal ? assertPersistencePrincipal(persistencePrincipal) : null;
+    if (owner && (owner.tenantId !== effectiveTenant || item.userId !== owner.ownerId)) {
+      throw Object.assign(new Error('Workflow identity does not match the owner persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+    }
+    const persist = async client => {
+      const inserted = await client.query(
+        `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
+         VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id`,
+        [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+      );
+      if (inserted.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow ID already exists; creation cannot overwrite another owner'), { code: 'WORKFLOW_ID_CONFLICT' });
+      }
+      for (const event of events) {
+        await this.eventRepository.appendMissionEvent(event, {
+          tenantId: effectiveTenant,
+          ...(owner ? { persistencePrincipal: owner } : {}),
+          transactionClient: client
+        });
+      }
+      return item;
+    };
+    return owner ? this.db.transactionWithPrincipal(owner, persist) : this.db.transaction(persist);
+  }
 
   async save(instance, tenantId = null, { workerPrincipal = null, persistencePrincipal = null } = {}) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
@@ -1751,6 +1787,7 @@ class PostgresPersistence {
     this.checkpoints = new PostgresCheckpointRepository(this.db);
     this.workers = new PostgresWorkerRegistryRepository(this.db);
     this.workflows = new PostgresWorkflowRepository(this.db, this.workers);
+    this.workflows.eventRepository = this.events;
     this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
     this.approvals = new PostgresApprovalRepository(this.db);
     this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);

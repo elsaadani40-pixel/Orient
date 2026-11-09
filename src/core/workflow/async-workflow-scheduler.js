@@ -200,7 +200,34 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
   }
   return recovered;
  }
- async enqueueDurable(instance,options={}){enforceInputQuota(instance,this.quotaPolicy);if(!this.accepting)throw new (require('../errors/AppError'))('Workflow scheduler is shutting down',503,'SCHEDULER_SHUTTING_DOWN');if(this.quotaRepository){try{await this.quotaRepository.reserveWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,policy:this.quotaPolicy,expiresAt:options.delayMs?new Date(this.clock()+options.delayMs+this.leaseDurationMs).toISOString():null});}catch(error){if(error?.code!=='TENANT_QUOTA_RESERVATION_EXISTS')throw error;}}super.enqueue(instance,options);if(this.workflowRepository?.save)await this.workflowRepository.save(instance,this.tenantId,{workerPrincipal:options.workerPrincipal||null});return instance;}
+ async enqueueDurable(instance,options={}){
+  enforceInputQuota(instance,this.quotaPolicy);
+  if(!this.accepting)throw new (require('../errors/AppError'))('Workflow scheduler is shutting down',503,'SCHEDULER_SHUTTING_DOWN');
+  if(!instance)throw new TypeError('Workflow instance is required');
+  if(this.tenantId&&instance.tenantId!==this.tenantId)throw Object.assign(new Error('Workflow tenant does not match scheduler tenant'),{code:'WORKFLOW_TENANT_MISMATCH'});
+  if(this.queue.length>=this.maxQueueDepth)throw Object.assign(new Error('Workflow queue capacity exceeded'),{code:'SCHEDULER_QUEUE_FULL'});
+  if(this.queue.some(item=>item.instance.workflowId===instance.workflowId)||this.active.has(instance.workflowId))throw Object.assign(new Error('Workflow is already queued or active'),{code:'WORKFLOW_ALREADY_SCHEDULED'});
+  if(instance.state==='CREATED'||instance.state==='WAITING'||instance.state==='RECOVERING')instance.transition('QUEUED');
+  else if(instance.state!=='QUEUED')throw Object.assign(new Error('Workflow is not queueable from its current state'),{code:'SCHEDULER_INVALID_STATE'});
+  instance.setDeadline(options.deadlineAt??null);
+  let quotaReserved=false;
+  if(this.quotaRepository){
+   try{await this.quotaRepository.reserveWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,policy:this.quotaPolicy,expiresAt:options.delayMs?new Date(this.clock()+options.delayMs+this.leaseDurationMs).toISOString():null});quotaReserved=true;}
+   catch(error){if(error?.code!=='TENANT_QUOTA_RESERVATION_EXISTS')throw error;}
+  }
+  try{
+   if(!options.durableAlreadyPersisted&&this.workflowRepository?.save){
+    await this.workflowRepository.save(instance,this.tenantId,{workerPrincipal:options.workerPrincipal||null});
+   }
+  }catch(error){
+   if(quotaReserved&&this.quotaRepository?.releaseWorkflow){try{await this.quotaRepository.releaseWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId});}catch(cleanupError){error.quotaCleanupError=cleanupError;}}
+   throw error;
+  }
+  const now=this.clock();
+  this.queue.push({instance,priority:Number(options.priority)||0,sequence:++this.sequence,enqueuedAt:now,availableAt:now+Math.max(0,Number(options.delayMs)||0),deadlineAt:options.deadlineAt||null});
+  this.sortQueue();
+  return instance;
+ }
  async leaseAsync(workerId='worker',workerCapabilities=[],workerPrincipal=null){await this.leaseStore.recoverExpired();if(this.active.size>=this.maxConcurrent)return null;this.sortQueue();const now=this.clock();const queuePassSize=this.queue.length;let inspected=0;while(this.queue.length&&inspected<queuePassSize){inspected++;const item=this.queue.shift(),instance=item.instance;if(!supportsCapabilities(instance,workerCapabilities)){this.queue.push(item);this.sortQueue();continue;}if(this.cancelled.has(instance.workflowId)||instance.cancelRequested){if(instance.state!=='CANCELLED')instance.transition('CANCELLED');await this.persistAsync(instance);continue;}if(item.availableAt>now){this.queue.unshift(item);return null;}if(item.deadlineAt&&new Date(item.deadlineAt).getTime()<=now){if(instance.state!=='FAILED')instance.transition('FAILED');instance.metadata.deadlineExceeded=true;instance.metadata.failureCode='WORKFLOW_DEADLINE_EXCEEDED';await this.persistAsync(instance);continue;}let lease;try{lease=await this.leaseStore.acquire(instance.workflowId,workerId,{tenantId:instance.tenantId,workflowId:instance.workflowId},workerPrincipal);}catch(error){if(error?.code==='WORKFLOW_LEASE_HELD'){this.queue.push(item);this.sortQueue();continue;}throw error;}if (!workerPrincipal || !Number.isSafeInteger(Number(lease.fencingToken)) || Number(lease.fencingToken) <= 0) {
  const error = Object.assign(new Error('Async worker dispatch requires a durable lease fencing token and trusted worker session'), { code: 'WORKER_DURABLE_FENCING_UNSUPPORTED', workflowId: instance.workflowId });
  try { await this.leaseStore.release(instance.workflowId, lease.leaseId, workerPrincipal); } catch (cause) { error.leaseCleanupError = cause; }

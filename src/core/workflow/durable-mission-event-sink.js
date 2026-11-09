@@ -70,8 +70,11 @@ class DurableMissionEventSink {
     return persisted;
   }
 
-  recordCreated(instance) {
-    return this.append(instance, 'workflow.created', {
+  recordCreation(instance, { persistencePrincipal = null } = {}) {
+    if (typeof this.workflowRepository?.createWithEvents !== 'function') {
+      throw Object.assign(new Error('Atomic workflow creation is required before durable dispatch'), { code: 'WORKFLOW_ATOMIC_CREATION_REQUIRED' });
+    }
+    const created = this._event(instance, 'workflow.created', {
       workflowId: instance.workflowId,
       tenantId: instance.tenantId,
       userId: instance.userId,
@@ -80,8 +83,18 @@ class DurableMissionEventSink {
       metadata: instance.metadata,
       definition: instance.definition.toJSON(),
       input: instance.input
-    }, { persist: false });
+    });
+    const queued = this._event(instance, 'workflow.state.changed', {
+      from: 'CREATED', to: instance.state, deadlineAt: instance.deadlineAt, metadata: instance.metadata
+    });
+    return this.workflowRepository.createWithEvents(instance, [created, queued], { persistencePrincipal });
   }
+
+  recordCreated(instance) { return this.append(instance, 'workflow.created', {
+      workflowId: instance.workflowId, tenantId: instance.tenantId, userId: instance.userId,
+      workspaceId: instance.workspaceId, createdAt: instance.createdAt, metadata: instance.metadata,
+      definition: instance.definition.toJSON(), input: instance.input
+    }, { persist: false }); }
 
   recordState(instance, from, to) {
     return this.append(instance, 'workflow.state.changed', {

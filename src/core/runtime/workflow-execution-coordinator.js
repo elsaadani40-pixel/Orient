@@ -62,7 +62,7 @@ class WorkflowExecutionCoordinator {
     return { instance, text };
   }
 
-  async enqueue(input, { priority = 0, deadlineAt = null, workflowId = undefined } = {}) {
+  async enqueue(input, { priority = 0, deadlineAt = null, workflowId = undefined, persistencePrincipal = null } = {}) {
     if (!this.scheduler.async || typeof this.scheduler.enqueueDurable !== 'function') {
       throw Object.assign(
         new Error('Durable asynchronous workflow scheduling requires an async scheduler'),
@@ -74,12 +74,14 @@ class WorkflowExecutionCoordinator {
     if (created.error) return created.error;
     const { instance } = created;
 
-    if (this.missionEventSink) await this.missionEventSink.recordCreated(instance);
-    const from = instance.state;
-    await this.scheduler.enqueueDurable(instance, { priority, deadlineAt });
-    if (this.missionEventSink && from !== instance.state) {
-      await this.missionEventSink.recordState(instance, from, instance.state);
+    instance.transition('QUEUED');
+    instance.setDeadline(deadlineAt);
+    let durableAlreadyPersisted = false;
+    if (this.missionEventSink) {
+      await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
+      durableAlreadyPersisted = true;
     }
+    await this.scheduler.enqueueDurable(instance, { priority, deadlineAt, durableAlreadyPersisted });
 
     return {
       workflowId: instance.workflowId,
@@ -240,24 +242,31 @@ class WorkflowExecutionCoordinator {
     approval = null,
     approvals = {},
     priority = 0,
-    deadlineAt = null
+    deadlineAt = null,
+    persistencePrincipal = null
   } = {}) {
     const created = this.createInstance(input, { priority, deadlineAt });
     if (created.error) return created.error;
     const { instance, text } = created;
 
-    if (this.missionEventSink) await this.missionEventSink.recordCreated(instance);
-
+    let durableAlreadyPersisted = false;
     if (this.scheduler.async) {
-      const from = instance.state;
-      await this.scheduler.enqueueDurable(instance, { priority, deadlineAt });
-      if (this.missionEventSink && from !== instance.state) await this.missionEventSink.recordState(instance, from, instance.state);
-    } else {
-      this.scheduler.enqueue(instance, { priority, deadlineAt });
+      instance.transition('QUEUED');
+      instance.setDeadline(deadlineAt);
       if (this.missionEventSink) {
-        await this.missionEventSink.recordState(instance, 'CREATED', 'QUEUED');
-      } else if (this.workflowRepository?.save) {
-        await this.workflowRepository.save(instance, this.tenantId);
+        await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
+        durableAlreadyPersisted = true;
+      }
+      await this.scheduler.enqueueDurable(instance, { priority, deadlineAt, durableAlreadyPersisted });
+    } else {
+      if (this.missionEventSink) {
+        instance.transition('QUEUED');
+        instance.setDeadline(deadlineAt);
+        await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
+        this.scheduler.enqueue(instance, { priority, deadlineAt });
+      } else {
+        this.scheduler.enqueue(instance, { priority, deadlineAt });
+        if (this.workflowRepository?.save) await this.workflowRepository.save(instance, this.tenantId);
       }
     }
 
