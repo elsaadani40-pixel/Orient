@@ -262,8 +262,18 @@ function createOwnerServer(options = {}) {
       }
 
       if (url.pathname === '/api/auth/login') {
-        if (typeof body.username !== 'string' || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل اسم المستخدم وكلمة المرور.' });
-        const user = users.find(item => item.username.toLowerCase() === body.username.trim().toLowerCase());
+        const identifier = typeof body.identifier === 'string' ? body.identifier.trim() : typeof body.username === 'string' ? body.username.trim() : '';
+        if (!identifier || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل البريد الإلكتروني أو اسم المستخدم وكلمة المرور.' });
+        const ownerStatus = identity ? identity.status() : null;
+        if (identity && identifier.toLowerCase() === String(ownerStatus.email || '').toLowerCase()) {
+          const result = await identity.login({ email: identifier, password: body.password });
+          if (!result.ok) return sendJson(res, 401, { error: 'بيانات الدخول غير صحيحة.' });
+          attempts.delete(ip);
+          const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+          return sendJson(res, 200, { ok: true, username: 'Admin', role: 'owner', email: ownerStatus.email, csrfToken: result.csrfToken, expiresAt: result.expiresAt, passwordChangeRequired: result.passwordChangeRequired },
+            { 'Set-Cookie': sessionCookie(result.token, req).replace('Max-Age=28800', 'Max-Age=' + maxAge) });
+        }
+        const user = users.find(item => item.username.toLowerCase() === identifier.toLowerCase());
         if (!user || user.disabled || !verifyPassword(body.password, user.password)) {
           const next = authAttempt.until > Date.now() ? authAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
           next.count += 1; attempts.set(ip, next);
