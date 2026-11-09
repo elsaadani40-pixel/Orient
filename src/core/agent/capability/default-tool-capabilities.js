@@ -11,7 +11,11 @@ function registerDefaultToolCapabilities(mapper) {
     'project.execute_change': 'workspace.write',
     'workspace.read': 'workspace.read',
     'workspace.list': 'workspace.read',
-    'workspace.search': 'workspace.read'
+    'workspace.search': 'workspace.read',
+    'openmausbot.health': 'external.agent.read',
+    'openmausbot.list_bots': 'external.agent.read',
+    'openmausbot.list_channels': 'external.agent.read',
+    'openmausbot.list_models': 'external.agent.read'
   };
 
   for (const [tool, capability] of Object.entries(mappings)) {
