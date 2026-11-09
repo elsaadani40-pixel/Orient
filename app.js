@@ -190,7 +190,7 @@ let ownerChatConversationStore;
 if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
   throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (exactly 10 digits). Set it in the protected environment before starting ORIENT.');
 }
-if (!fs.existsSync(ownerStateFile) && !/^\\d{10}$/.test(ownerBootstrapPassword || '')) {
+if (!fs.existsSync(ownerStateFile) && !/^\d{10}$/.test(ownerBootstrapPassword || '')) {
   throw new Error('ORIENT_OWNER_BOOTSTRAP_PASSWORD must contain exactly 10 numeric digits for first-run setup.');
 }
 const ownerIdentityService = new OwnerIdentityService({
