@@ -36,13 +36,19 @@ class DurableMissionEventSink {
     };
   }
 
-  async append(instance, type, data = {}, { persist = true, workerPrincipal = null, eventId = null, timestamp = null } = {}) {
+  async append(instance, type, data = {}, { persist = true, workerPrincipal = null, persistencePrincipal = null, eventId = null, timestamp = null } = {}) {
     const event = this._event(instance, type, data, { eventId, timestamp });
     let persisted;
     try {
+      if (workerPrincipal && persistencePrincipal) {
+        throw Object.assign(new Error('Mission event writes must use either worker lease authority or owner authority, not both'), {
+          code: 'MISSION_EVENT_AUTHORITY_AMBIGUOUS'
+        });
+      }
       persisted = await this.eventRepository.appendMissionEvent(event, {
         tenantId: instance.tenantId || this.tenantId,
-        ...(workerPrincipal ? { workerPrincipal } : {})
+        ...(workerPrincipal ? { workerPrincipal } : {}),
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
       });
     } catch (error) {
       error.code = error.code || 'MISSION_EVENT_PERSISTENCE_FAILED';
@@ -50,7 +56,10 @@ class DurableMissionEventSink {
     }
     if (persist && this.workflowRepository?.save) {
       try {
-        await this.workflowRepository.save(instance, instance.tenantId || this.tenantId, { workerPrincipal });
+        await this.workflowRepository.save(instance, instance.tenantId || this.tenantId, {
+          ...(workerPrincipal ? { workerPrincipal } : {}),
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
+        });
       } catch (error) {
         error.code = error.code || 'MISSION_STATE_PERSISTENCE_FAILED_AFTER_EVENT';
         error.missionEventId = persisted.id;
