@@ -42,6 +42,23 @@ test('reconciles snapshot behind durable event stream and repairs checkpoint', a
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
+test('awaits asynchronous PostgreSQL-style event, snapshot, and repair repositories', async () => {
+  const s = stores();
+  const mission = seed(s);
+  const asyncEvents = {
+    async findByAggregateId(...args) { return s.events.findByAggregateId(...args); }
+  };
+  const asyncWorkflows = {
+    async findById(...args) { return s.workflows.findById(...args); },
+    async repair(...args) { return s.workflows.repair(...args); }
+  };
+  const recovery = new MissionEventRecovery({ eventRepository: asyncEvents, workflowRepository: asyncWorkflows });
+  const result = await recovery.reconcile(mission.workflowId, 'tenant-a');
+  assert.equal(result.status, 'REPAIRED');
+  assert.equal(result.workflow.checkpoint.revision, 2);
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
+
 test('rejects snapshot ahead of durable event history', async () => {
   const s = stores();
   const mission = seed(s);
