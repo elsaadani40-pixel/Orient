@@ -16,24 +16,24 @@ function runtimeFixture(overrides = {}) {
     }
   };
   runtime.workflowExecutionCoordinator = {
-    async findApprovalBlockedWorkflow(executionId) {
-      calls.push({ kind: 'findBlocked', executionId });
+    async findApprovalBlockedWorkflow(executionId, persistencePrincipal) {
+      calls.push({ kind: 'findBlocked', executionId, persistencePrincipal });
       return { metadata: { approvalId: overrides.currentApprovalId || 'approval-a' } };
     },
-    async reconcileApprovalResume(executionId, result) {
-      calls.push({ kind: 'reconcileResume', executionId, result });
+    async reconcileApprovalResume(executionId, result, persistencePrincipal) {
+      calls.push({ kind: 'reconcileResume', executionId, result, persistencePrincipal });
       return true;
     },
-    async updateApprovalChallenge(executionId, approvalId) {
-      calls.push({ kind: 'updateChallenge', executionId, approvalId });
+    async updateApprovalChallenge(executionId, approvalId, persistencePrincipal) {
+      calls.push({ kind: 'updateChallenge', executionId, approvalId, persistencePrincipal });
       return true;
     },
-    async expireApprovalWorkflow(executionId, approvalId) {
-      calls.push({ kind: 'expireWorkflow', executionId, approvalId });
+    async expireApprovalWorkflow(executionId, approvalId, persistencePrincipal) {
+      calls.push({ kind: 'expireWorkflow', executionId, approvalId, persistencePrincipal });
       return true;
     },
-    async cancelApprovalWorkflow(executionId, reason) {
-      calls.push({ kind: 'cancelWorkflow', executionId, reason });
+    async cancelApprovalWorkflow(executionId, reason, persistencePrincipal) {
+      calls.push({ kind: 'cancelWorkflow', executionId, reason, persistencePrincipal });
       return true;
     }
   };
@@ -122,4 +122,37 @@ test('Runtime cancellation also reconciles a waiting approval workflow', async (
   assert.equal(result.executionId, 'execution-a');
   assert.ok(calls.some(call => call.kind === 'cancelWorkflow' &&
     call.executionId === 'execution-a' && call.reason === 'owner_cancelled'));
+});
+
+
+test('Runtime forwards authenticated owner authority through resume and approval reconciliation', async () => {
+  const { runtime, calls } = runtimeFixture();
+  const principal = { tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a' };
+  await runtime.resume('execution-a', {}, null, principal);
+  assert.strictEqual(calls.find(call => call.kind === 'reconcileResume').persistencePrincipal, principal);
+});
+
+test('Runtime forwards owner authority when refreshing and expiring approval challenges', async () => {
+  const principal = { tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a' };
+  const required = Object.assign(new Error('Approval required'), {
+    code: 'APPROVAL_REQUIRED', executionContext: { approvalId: 'approval-next' }
+  });
+  const first = runtimeFixture({ resumeError: required });
+  await assert.rejects(first.runtime.resume('execution-a', {}, null, principal), error => error === required);
+  assert.strictEqual(first.calls.find(call => call.kind === 'updateChallenge').persistencePrincipal, principal);
+
+  const expired = Object.assign(new Error('Approval expired'), {
+    code: 'APPROVAL_EXPIRED', approvalId: 'approval-a'
+  });
+  const second = runtimeFixture({ resumeError: expired });
+  await assert.rejects(second.runtime.resume('execution-a', {}, null, principal), error => error === expired);
+  assert.strictEqual(second.calls.find(call => call.kind === 'findBlocked').persistencePrincipal, principal);
+  assert.strictEqual(second.calls.find(call => call.kind === 'expireWorkflow').persistencePrincipal, principal);
+});
+
+test('Runtime forwards owner authority through explicit execution cancellation', async () => {
+  const { runtime, calls } = runtimeFixture();
+  const principal = { tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a' };
+  await runtime.cancelExecution('execution-a', { reason: 'owner_cancelled', persistencePrincipal: principal });
+  assert.strictEqual(calls.find(call => call.kind === 'cancelWorkflow').persistencePrincipal, principal);
 });
