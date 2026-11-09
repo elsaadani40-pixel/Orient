@@ -23,6 +23,7 @@ function fakeDb(responses = []) {
       return responses.shift() || { rows: [], rowCount: 0 };
     },
     async transactionWithWorkerPrincipal(principal, work) { return this.transaction(work); },
+    async transactionWithPrincipal(principal, work) { return this.transaction(work); },
     async transaction(work) {
       const client = {
         query: async (text, values = []) => {
@@ -43,6 +44,7 @@ test('PostgresPersistence exposes every durable repository without opening a dat
   assert.ok(persistence.idempotency);
   assert.ok(persistence.checkpoints);
   assert.ok(persistence.workflows);
+  assert.strictEqual(persistence.workflows.eventRepository, persistence.events);
   assert.ok(persistence.workflowLeases);
   assert.ok(persistence.approvals);
 });
@@ -479,4 +481,58 @@ test('Postgres mission event append rejects a worker principal for another workf
     error => error.code === 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
   );
   assert.equal(db.calls.length, 0);
+});
+
+
+test('Postgres workflow creation stores the initial snapshot and mission events in one transaction', async () => {
+  const calls = [];
+  const db = {
+    async transaction(work) {
+      calls.push('begin');
+      const client = { async query(text, values = []) {
+        calls.push({ text, values });
+        return { rows: [{ workflow_id: 'wf-atomic' }], rowCount: 1 };
+      }};
+      const result = await work(client);
+      calls.push('commit');
+      return result;
+    }
+  };
+  const repo = new PostgresWorkflowRepository(db);
+  repo.eventRepository = {
+    async appendMissionEvent(event, options) {
+      assert.ok(options.transactionClient);
+      calls.push(['event', event.type]);
+      return event;
+    }
+  };
+  const instance = {
+    workflowId: 'wf-atomic', tenantId: 'tenant-a', userId: 'owner-a', state: 'QUEUED',
+    updatedAt: '2026-11-09T12:00:00.000Z', toJSON() { return this; }
+  };
+  await repo.createWithEvents(instance, [
+    { id: 'evt-created', aggregateId: 'wf-atomic', type: 'workflow.created' },
+    { id: 'evt-queued', aggregateId: 'wf-atomic', type: 'workflow.state.changed' }
+  ]);
+  assert.equal(calls[0], 'begin');
+  assert.match(calls[1].text, /INSERT INTO workflows/);
+  assert.deepEqual(calls.slice(2), [
+    ['event', 'workflow.created'],
+    ['event', 'workflow.state.changed'],
+    'commit'
+  ]);
+});
+
+test('Postgres workflow creation rejects an existing workflow ID without overwriting it', async () => {
+  const db = fakeDb([{ rows: [], rowCount: 0 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  repo.eventRepository = { async appendMissionEvent() { throw new Error('must not append'); } };
+  await assert.rejects(
+    () => repo.createWithEvents({
+      workflowId: 'wf-existing', tenantId: 'tenant-a', userId: 'owner-a', state: 'QUEUED',
+      toJSON() { return this; }
+    }, [{ id: 'evt', aggregateId: 'wf-existing', type: 'workflow.created' }]),
+    error => error.code === 'WORKFLOW_ID_CONFLICT'
+  );
+  assert.equal(db.calls.length, 1);
 });

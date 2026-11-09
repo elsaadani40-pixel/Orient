@@ -157,3 +157,29 @@ test('async active cancellation records intent without bypassing the worker leas
     ['event', true, 'RUNNING', 'workflow_cancel_requested', false]
   ]);
 });
+
+
+test('async enqueue persists before exposing a workflow to the in-memory queue', async () => {
+  const instance = new WorkflowInstance({ definition: definition(), workflowId: 'enqueue-persist-failure', tenantId: 'tenant-a' });
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-a',
+    workflowRepository: { async save() { throw new Error('snapshot write failed'); } }
+  });
+  await assert.rejects(() => scheduler.enqueueDurable(instance), /snapshot write failed/);
+  assert.equal(scheduler.queue.length, 0);
+  assert.equal(scheduler.active.size, 0);
+  assert.equal(instance.state, 'QUEUED');
+});
+
+test('async enqueue does not rewrite a workflow already committed with its initial event history', async () => {
+  const instance = new WorkflowInstance({ definition: definition(), workflowId: 'enqueue-already-committed', tenantId: 'tenant-a' });
+  let saves = 0;
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-a',
+    workflowRepository: { async save() { saves += 1; } }
+  });
+  await scheduler.enqueueDurable(instance, { durableAlreadyPersisted: true });
+  assert.equal(saves, 0);
+  assert.equal(scheduler.queue.length, 1);
+  assert.equal(scheduler.queue[0].instance, instance);
+});
