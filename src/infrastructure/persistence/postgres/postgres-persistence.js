@@ -842,6 +842,15 @@ class PostgresWorkflowRepository {
             code: 'WORKFLOW_NOT_FOUND'
           });
         }
+        const activeDispatchClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeDispatchClaim.rowCount > 0) {
+          throw Object.assign(new Error('Owner workflow write rejected while a durable worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
         const activeLease = await client.query(
           'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
           [item.workflowId, effectiveTenant]
