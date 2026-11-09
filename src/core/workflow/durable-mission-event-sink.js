@@ -71,9 +71,6 @@ class DurableMissionEventSink {
   }
 
   recordCreation(instance, { persistencePrincipal = null } = {}) {
-    if (typeof this.workflowRepository?.createWithEvents !== 'function') {
-      throw Object.assign(new Error('Atomic workflow creation is required before durable dispatch'), { code: 'WORKFLOW_ATOMIC_CREATION_REQUIRED' });
-    }
     const created = this._event(instance, 'workflow.created', {
       workflowId: instance.workflowId,
       tenantId: instance.tenantId,
@@ -87,7 +84,20 @@ class DurableMissionEventSink {
     const queued = this._event(instance, 'workflow.state.changed', {
       from: 'CREATED', to: instance.state, deadlineAt: instance.deadlineAt, metadata: instance.metadata
     });
-    return this.workflowRepository.createWithEvents(instance, [created, queued], { persistencePrincipal });
+    if (typeof this.workflowRepository?.createWithEvents === 'function') {
+      return this.workflowRepository.createWithEvents(instance, [created, queued], { persistencePrincipal });
+    }
+    // JSON/SQLite use event-first recovery rather than claiming PostgreSQL-grade atomicity.
+    // Owner-scoped multi-user creation remains fail-closed unless the backend can transact both stores.
+    if (persistencePrincipal) {
+      throw Object.assign(new Error('This persistence backend cannot atomically enforce owner-scoped workflow creation'), { code: 'WORKFLOW_ATOMIC_CREATION_REQUIRED' });
+    }
+    if (typeof this.workflowRepository?.save !== 'function') {
+      throw Object.assign(new Error('Durable workflow snapshot storage is required'), { code: 'WORKFLOW_STORAGE_REQUIRED' });
+    }
+    await this.eventRepository.appendMissionEvent(created, { tenantId: instance.tenantId || this.tenantId });
+    await this.eventRepository.appendMissionEvent(queued, { tenantId: instance.tenantId || this.tenantId });
+    return this.workflowRepository.save(instance, instance.tenantId || this.tenantId);
   }
 
   recordCreated(instance) { return this.append(instance, 'workflow.created', {
