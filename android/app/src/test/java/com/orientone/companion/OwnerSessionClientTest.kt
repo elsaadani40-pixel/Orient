@@ -110,7 +110,7 @@ class OwnerSessionClientTest {
 
         try {
             val client = OwnerSessionClient(server.address.port)
-            assertTrue(withApiDiagnostics("login") { runBlocking { client.login("0123456789") } }.contains("بنجاح"))
+            assertTrue(withApiDiagnostics("login") { runBlocking { client.login("elsaadani40@gmail.com", "0123456789") } }.contains("بنجاح"))
             assertTrue(client.isAuthenticated)
             assertTrue(withApiDiagnostics("fetchExecutions") { runBlocking { client.fetchExecutions() } }.contains("executions"))
             assertTrue(withApiDiagnostics("fetchTasks") { runBlocking { client.fetchTasks() } }.contains("\"apiVersion\": \"v1\""))
@@ -178,10 +178,10 @@ class OwnerSessionClientTest {
 
         try {
             val client = OwnerSessionClient(server.address.port)
-            runBlocking { client.login("0123456789") }
+            runBlocking { client.login("elsaadani40@gmail.com", "0123456789") }
             assertTrue(client.isAuthenticated)
             assertTrue(client.mustChangePassword)
-            assertTrue(loginPassword.get()?.contains("0123456789") == true)
+            assertTrue(loginPassword.get()?.contains("0123456789") == true && loginPassword.get()?.contains("elsaadani40@gmail.com") == true)
             assertThrows(IllegalArgumentException::class.java) {
                 runBlocking { client.changePassword("short", "short") }
             }
@@ -214,7 +214,7 @@ class OwnerSessionClientTest {
 
         try {
             val client = OwnerSessionClient(server.address.port) { currentTime }
-            runBlocking { client.login("0123456789") }
+            runBlocking { client.login("elsaadani40@gmail.com", "0123456789") }
             assertTrue(client.isAuthenticated)
 
             currentTime = 1001L
@@ -243,7 +243,7 @@ class OwnerSessionClientTest {
         try {
             val client = OwnerSessionClient(server.address.port) { 2L }
             assertThrows(IllegalStateException::class.java) {
-                runBlocking { client.login("0123456789") }
+                runBlocking { client.login("elsaadani40@gmail.com", "0123456789") }
             }
             assertFalse(client.isAuthenticated)
         } finally {
@@ -259,7 +259,7 @@ class OwnerSessionClientTest {
 
         val client = OwnerSessionClient(port)
         assertThrows(IOException::class.java) {
-            runBlocking { client.login("0123456789") }
+            runBlocking { client.login("elsaadani40@gmail.com", "0123456789") }
         }
         assertFalse(client.isAuthenticated)
     }
