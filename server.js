@@ -250,8 +250,11 @@ function createOwnerServer(options = {}) {
         const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
         const suppliedUsername = typeof body.username === 'string' ? body.username.trim() : '';
         const password = body.password;
-        if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email) || email.length > 254) {
+        if (email && (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email) || email.length > 254)) {
           return sendJson(res, 400, { error: 'أدخل بريدًا إلكترونيًا صحيحًا.' });
+        }
+        if (!email && !suppliedUsername) {
+          return sendJson(res, 400, { error: 'أدخل البريد الإلكتروني.' });
         }
         if (suppliedUsername && !/^[A-Za-z0-9_ -]{3,32}$/.test(suppliedUsername)) {
           return sendJson(res, 400, { error: 'اسم المستخدم يجب أن يكون من 3 إلى 32 حرفًا أو رقمًا.' });
@@ -259,15 +262,15 @@ function createOwnerServer(options = {}) {
         if (typeof password !== 'string' || password.length < 12 || password.length > 1024) {
           return sendJson(res, 400, { error: 'استخدم كلمة مرور لا تقل عن 12 حرفًا.' });
         }
-        if (users.some(user => user.email?.toLowerCase() === email)) {
+        if (email && users.some(user => user.email?.toLowerCase() === email)) {
           return sendJson(res, 409, { error: 'هذا البريد الإلكتروني مسجل بالفعل.' });
         }
-        const localPart = email.split('@')[0].replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 20) || 'orient_user';
+        const localPart = email ? (email.split('@')[0].replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 20) || 'orient_user') : '';
         const username = suppliedUsername || (localPart + '_' + crypto.randomBytes(3).toString('hex'));
         if (username.toLowerCase() === 'admin' || users.some(user => user.username.toLowerCase() === username.toLowerCase())) {
           return sendJson(res, 409, { error: 'اسم المستخدم مستخدم بالفعل.' });
         }
-        const user = { id: crypto.randomUUID(), email, username, password: hashPassword(password), role: 'user', createdAt: new Date().toISOString(), disabled: false, emailVerified: false };
+        const user = { id: crypto.randomUUID(), ...(email ? { email, emailVerified: false } : {}), username, password: hashPassword(password), role: 'user', createdAt: new Date().toISOString(), disabled: false };
         try { persistUsers([...users, user]); }
         catch { return sendJson(res, 500, { error: 'تعذر حفظ الحساب بأمان.' }); }
         const token = crypto.randomBytes(32).toString('base64url');
