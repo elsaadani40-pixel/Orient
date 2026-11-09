@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const createOpenMausBotTools = require('../../../src/application/tools/openmausbot.tools');
+const createOpenMausBotTools = require('../../../../src/application/tools/openmausbot.tools');
 
 test('OpenMausBot tools expose only read-only discovery operations', () => {
   const calls = [];
