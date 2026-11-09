@@ -235,12 +235,26 @@ class OpenMausBotMcpClient {
     try {
       await session.initialize();
       const listed = await session.request('tools/list');
-      if (!listed || !Array.isArray(listed.tools) || !listed.tools.some(tool => tool?.name === name)) {
-        throw Object.assign(new Error('The configured OpenMausBot server does not expose the expected read-only tool'), {
+      if (!listed || !Array.isArray(listed.tools) ||
+          !listed.tools.some(tool => tool?.name === 'get_system_health') ||
+          !listed.tools.some(tool => tool?.name === name)) {
+        throw Object.assign(new Error('The configured OpenMausBot server does not expose the expected read-only tool set'), {
           code: 'OPENMAUSBOT_MCP_TOOL_UNAVAILABLE'
         });
       }
-      const result = await session.request('tools/call', { name, arguments: input });
+      const health = await session.request('tools/call', {
+        name: 'get_system_health',
+        arguments: {}
+      });
+      if (!health || health.isError === true ||
+          health.structuredContent?.app !== 'openmausbot') {
+        throw Object.assign(new Error('The configured MCP endpoint did not identify itself as OpenMausBot'), {
+          code: 'OPENMAUSBOT_MCP_IDENTITY_REJECTED'
+        });
+      }
+      const result = name === 'get_system_health'
+        ? health
+        : await session.request('tools/call', { name, arguments: input });
       if (!result || typeof result !== 'object' || !Array.isArray(result.content)) {
         throw Object.assign(new Error('OpenMausBot MCP returned an invalid tool result'), {
           code: 'OPENMAUSBOT_MCP_RESPONSE_INVALID'
