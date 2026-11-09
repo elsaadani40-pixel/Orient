@@ -55,6 +55,7 @@ private fun OrientCompanionApp() {
     val scope = rememberCoroutineScope()
 
     var portText by remember { mutableStateOf("8080") }
+    var ownerEmail by remember { mutableStateOf("elsaadani40@gmail.com") }
     var password by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var confirmNewPassword by remember { mutableStateOf("") }
@@ -137,6 +138,15 @@ private fun OrientCompanionApp() {
                                     enabled = !isBusy
                                 )
                                 OutlinedTextField(
+                                    value = ownerEmail,
+                                    onValueChange = { ownerEmail = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("البريد الإلكتروني للمالك") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                    enabled = !isBusy
+                                )
+                                OutlinedTextField(
                                     value = password,
                                     onValueChange = { password = it },
                                     modifier = Modifier.fillMaxWidth(),
@@ -162,7 +172,7 @@ private fun OrientCompanionApp() {
                                                 isBusy = true
                                                 scope.launch {
                                                     try {
-                                                        statusText = candidate.login(password)
+                                                        statusText = candidate.login(ownerEmail, password)
                                                         client = candidate
                                                         isAuthenticated = true
                                                         passwordChangeRequired = candidate.mustChangePassword
