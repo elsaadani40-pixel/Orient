@@ -319,11 +319,52 @@ class PostgresEventRepository {
     return inserted;
   }
 
-  async appendMissionEvent(event, { tenantId = null, workerPrincipal = null } = {}) {
+  async appendMissionEvent(event, { tenantId = null, workerPrincipal = null, persistencePrincipal = null } = {}) {
     if (!event?.aggregateId) throw new TypeError('aggregateId is required');
+    if (workerPrincipal && persistencePrincipal) {
+      throw Object.assign(new Error('Mission event writes must use either worker lease authority or owner authority, not both'), {
+        code: 'MISSION_EVENT_AUTHORITY_AMBIGUOUS'
+      });
+    }
+    const effectiveTenant = tenantOrLocal(tenantId || persistencePrincipal?.tenantId);
+    const owner = persistencePrincipal ? assertPersistencePrincipal(persistencePrincipal) : null;
+    if (owner && owner.tenantId !== effectiveTenant) {
+      throw Object.assign(new Error('Mission event tenant does not match the owner principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
     const compareTimestamp = typeof event.timestamp === 'string' && event.timestamp.length > 0;
-    const normalized = this.normalize(event, tenantId);
+    const normalized = this.normalize(event, effectiveTenant);
     const persist = async client => {
+      if (owner) {
+        const ownedWorkflow = await client.query(
+          "SELECT 1 FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 FOR UPDATE",
+          [normalized.aggregateId, effectiveTenant, owner.ownerId]
+        );
+        if (!ownedWorkflow.rowCount) {
+          throw Object.assign(new Error('Workflow not found for the authenticated owner'), {
+            code: 'WORKFLOW_NOT_FOUND'
+          });
+        }
+        const activeClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>NOW() LIMIT 1',
+          [normalized.aggregateId, effectiveTenant]
+        );
+        if (activeClaim.rowCount) {
+          throw Object.assign(new Error('Mission event append rejected while a worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
+        const activeLease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>NOW() LIMIT 1',
+          [normalized.aggregateId, effectiveTenant]
+        );
+        if (activeLease.rowCount) {
+          throw Object.assign(new Error('Mission event append rejected while a worker lease is active'), {
+            code: 'WORKFLOW_LEASE_HELD'
+          });
+        }
+      }
       if (workerPrincipal) {
         const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
         if (principal.tenantId !== normalized.data.tenantId ||
@@ -406,6 +447,9 @@ class PostgresEventRepository {
     if (workerPrincipal) {
       return this.db.transactionWithWorkerPrincipal(workerPrincipal, persist, { requireLease: true });
     }
+    if (owner) {
+      return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Mission event principal', persist);
+    }
     return this.db.transaction(persist);
   }
 
@@ -423,215 +467,176 @@ class PostgresEventRepository {
     return result.rows.map(row => row.payload);
   }
 
-  async findAll({ tenantId = null } = {}) {
-    const result = tenantId
-      ? await this.db.query('SELECT payload FROM events WHERE tenant_id=$1 ORDER BY timestamp ASC', [tenantId])
-      : await this.db.query('SELECT payload FROM events ORDER BY timestamp ASC');
-    return result.rows.map(row => row.payload);
-  }
-
-  async findByExecutionId(id, { tenantId = null, limit = null, persistencePrincipal = null } = {}) {
+  async findAll({ tenantId = null, persistencePrincipal = null } = {}) {
     const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
-    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Event principal', async client => {
-      const boundedLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : null;
-      if (!persistencePrincipal) {
-        if (boundedLimit) {
-          const result = await client.query(
-            effectiveTenant
-              ? 'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp DESC,event_id DESC LIMIT $3) recent ORDER BY timestamp ASC,event_id ASC'
-              : 'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE execution_id=$1 ORDER BY timestamp DESC,event_id DESC LIMIT $2) recent ORDER BY timestamp ASC,event_id ASC',
-            effectiveTenant ? [effectiveTenant, id, boundedLimit] : [id, boundedLimit]
-          );
-          return result.rows.map(row => row.payload);
-        }
-        const result = await client.query(
-          effectiveTenant
-            ? 'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2 ORDER BY timestamp ASC,event_id ASC'
-            : 'SELECT payload FROM events WHERE execution_id=$1 ORDER BY timestamp ASC,event_id ASC',
-          effectiveTenant ? [effectiveTenant, id] : [id]
-        );
-        return result.rows.map(row => row.payload);
-      }
-
-      const values = [effectiveTenant, id, persistencePrincipal.ownerId];
-      const ownerClause = " AND EXISTS (SELECT 1 FROM executions x WHERE x.execution_id=events.execution_id AND x.tenant_id=events.tenant_id AND x.payload->>'userId'=$3)";
-      if (boundedLimit) {
-        values.push(boundedLimit);
-        const result = await client.query(
-          'SELECT payload FROM (SELECT payload,timestamp,event_id FROM events WHERE tenant_id=$1 AND execution_id=$2' +
-          ownerClause + ' ORDER BY timestamp DESC,event_id DESC LIMIT $4) recent ORDER BY timestamp ASC,event_id ASC',
-          values
-        );
-        return result.rows.map(row => row.payload);
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const values = effectiveTenant ? [effectiveTenant] : [];
+      let where = effectiveTenant ? 'WHERE tenant_id=$1' : '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += (where ? ' AND ' : 'WHERE ') + 'payload->>\'userId\'=$' + values.length;
       }
       const result = await client.query(
-        'SELECT payload FROM events WHERE tenant_id=$1 AND execution_id=$2' +
-        ownerClause + ' ORDER BY timestamp ASC,event_id ASC',
+        'SELECT payload FROM executions ' + where + ' ORDER BY updated_at DESC',
         values
       );
       return result.rows.map(row => row.payload);
     });
   }
 
-  async findByGoalId(id, { tenantId = null } = {}) {
-    const result = await this.db.query(tenantId ? 'SELECT payload FROM events WHERE tenant_id=$1 AND goal_id=$2 ORDER BY timestamp ASC' : 'SELECT payload FROM events WHERE goal_id=$1 ORDER BY timestamp ASC', tenantId ? [tenantId,id] : [id]); return result.rows.map(row => row.payload);
+  async findPage({ tenantId = null, limit = 50, offset = 0, persistencePrincipal = null } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
+    const boundedOffset = Number.isInteger(offset) ? Math.max(0, Math.min(offset, 10000)) : 0;
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const values = effectiveTenant ? [effectiveTenant] : [];
+      let where = effectiveTenant ? 'WHERE tenant_id=$1' : '';
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += (where ? ' AND ' : 'WHERE ') + 'payload->>\'userId\'=$' + values.length;
+      }
+      const countResult = await client.query('SELECT COUNT(*)::int AS total FROM executions ' + where, values);
+      const pageValues = [...values, boundedLimit, boundedOffset];
+      const pageResult = await client.query(
+        'SELECT payload FROM executions ' + where +
+        ' ORDER BY updated_at DESC, execution_id DESC LIMIT $' + (values.length + 1) +
+        ' OFFSET $' + (values.length + 2),
+        pageValues
+      );
+      return {
+        total: Number(countResult.rows[0]?.total || 0),
+        limit: boundedLimit,
+        offset: boundedOffset,
+        executions: pageResult.rows.map(row => row.payload)
+      };
+    });
   }
 
-  async findByType(type, { tenantId = null } = {}) {
-    const result = await this.db.query(tenantId ? 'SELECT payload FROM events WHERE tenant_id=$1 AND type=$2 ORDER BY timestamp ASC' : 'SELECT payload FROM events WHERE type=$1 ORDER BY timestamp ASC', tenantId ? [tenantId,type] : [type]); return result.rows.map(row => row.payload);
+  async findByGoalId(goalId, { tenantId = null } = {}) {
+    const result = await this.db.query(tenantId ? 'SELECT payload FROM executions WHERE tenant_id=$1 AND payload->>\'goalId\'=$2 ORDER BY updated_at DESC' : 'SELECT payload FROM executions WHERE payload->>\'goalId\'=$1 ORDER BY updated_at DESC', tenantId ? [tenantId,goalId] : [goalId]); return result.rows.map(row => row.payload);
   }
 
-  async count({ tenantId = null } = {}) {
-    const result = tenantId
-      ? await this.db.query('SELECT COUNT(*)::int AS count FROM events WHERE tenant_id=$1', [tenantId])
-      : await this.db.query('SELECT COUNT(*)::int AS count FROM events');
-    return Number(result.rows[0].count);
-  }
-}
-
-class PostgresIdempotencyRepository {
-  constructor(db) { this.db = db; }
-
-  buildKey({ executionId, step, tool, planRevision = 1, operationId = null } = {}) {
-    if (!executionId) throw new TypeError('executionId is required');
-    if (step === undefined || step === null) throw new TypeError('step is required');
-    if (!tool) throw new TypeError('tool is required');
-    return operationId || `${executionId}:plan-${planRevision}:step-${step}:${tool}`;
-  }
-
-  async withPrincipal(persistencePrincipal, tenantId, work) {
-    if (!persistencePrincipal) {
-      return work({ query: (sql, values) => this.db.query(sql, values) });
-    }
-    const principal = assertPersistencePrincipal(persistencePrincipal);
-    assertTenant(principal.tenantId, tenantId, 'Idempotency principal');
-    if (typeof this.db.transactionWithPrincipal !== 'function') {
-      throw Object.assign(new Error('Principal-scoped PostgreSQL transactions are required'), {
-        code: 'PRINCIPAL_TRANSACTION_REQUIRED'
+  async insert(execution, { tenantId = null, persistencePrincipal = null } = {}) {
+    const generatedExecutionId = execution.id || execution.executionId || crypto.randomUUID();
+    const normalized = {
+      ...execution,
+      id: generatedExecutionId,
+      executionId: generatedExecutionId,
+      executionVersion: Number(execution.executionVersion || 1),
+      status: execution.status || 'created',
+      agentLifecycle: execution.agentLifecycle || 'created',
+      metadata: execution.metadata && typeof execution.metadata === 'object' ? { ...execution.metadata } : {},
+      steps: Array.isArray(execution.steps) ? [...execution.steps] : [],
+      observations: Array.isArray(execution.observations) ? [...execution.observations] : [],
+      events: Array.isArray(execution.events) ? [...execution.events] : [],
+      updatedAt: execution.updatedAt || new Date().toISOString(),
+      cancellationRequested: Boolean(execution.cancellationRequested),
+      cancellationReason: execution.cancellationReason || null
+    };
+    const effectiveTenant = tenantOrLocal(normalized.tenantId || normalized.metadata.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Execution');
+    normalized.tenantId = effectiveTenant;
+    if (persistencePrincipal && normalized.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Execution owner does not match persistence principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
       });
     }
-    return this.db.transactionWithPrincipal(principal, work);
+    await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', client =>
+      client.query(
+        'INSERT INTO executions(execution_id,tenant_id,payload,updated_at) VALUES($1,$2,$3,$4)',
+        [normalized.executionId, effectiveTenant, normalized, normalized.updatedAt]
+      )
+    );
+    return normalized;
   }
 
-  async findByKey(key, { tenantId = 'local', persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantOrLocal(tenantId);
-    return this.withPrincipal(persistencePrincipal, effectiveTenant, async client => {
-      const result = await client.query(
-        'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',
-        [key, effectiveTenant]
-      );
-      if (!result.rows.length) return null;
-      const record = result.rows[0].payload;
-      assertTenant(tenantOrLocal(record.tenantId), effectiveTenant, 'Idempotency');
-      return record;
-    });
-  }
-
-  async find(args) {
-    return this.findByKey(this.buildKey(args), {
-      tenantId: args?.tenantId || 'local',
-      persistencePrincipal: args?.persistencePrincipal || null
-    });
-  }
-
-  async begin(args) {
-    const key = this.buildKey(args);
-    const tenantId = tenantOrLocal(args?.tenantId);
-    const record = {
-      id: crypto.randomUUID(), key,
-      executionId: args.executionId, step: args.step, tool: args.tool,
-      planRevision: args.planRevision || 1, operationId: args.operationId || null,
-      tenantId, status: 'running', result: null, error: null,
-      startedAt: new Date().toISOString(), completedAt: null
-    };
-    return this.withPrincipal(args.persistencePrincipal || null, tenantId, async client => {
-      const result = await client.query(
-        `INSERT INTO idempotency(key,tenant_id,payload,status,updated_at)
-         VALUES($1,$2,$3,'running',$4)
-         ON CONFLICT(tenant_id,key) DO NOTHING`,
-        [key, tenantId, record, record.startedAt]
-      );
-      if (result.rowCount === 1) return { created: true, key, record };
-      const existing = await client.query(
-        'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',
-        [key, tenantId]
-      );
-      const existingRecord = existing.rows.length ? existing.rows[0].payload : null;
-      if (existingRecord) assertTenant(tenantOrLocal(existingRecord.tenantId), tenantId, 'Idempotency');
-      return { created: false, key, record: existingRecord };
-    });
-  }
-
-  async complete(key, result, { tenantId = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantOrLocal(tenantId);
-    return this.withPrincipal(persistencePrincipal, effectiveTenant, async client => {
+  async update(executionId, patch, { tenantId = null, persistencePrincipal = null } = {}) {
+    let requestedTenant = tenantId || patch?.tenantId;
+    if (!requestedTenant && !persistencePrincipal) {
+      const existing = await this.findById(executionId);
+      requestedTenant = existing?.tenantId || existing?.metadata?.tenantId || 'local';
+    }
+    const effectiveTenant = tenantOrLocal(requestedTenant);
+    if (persistencePrincipal) assertTenant(persistencePrincipal.tenantId, effectiveTenant, 'Execution principal');
+    if (persistencePrincipal && patch?.userId && patch.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Execution owner does not match persistence principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const ownerClause = persistencePrincipal ? " AND payload->>'userId'=$3" : '';
+      const values = persistencePrincipal ? [executionId, effectiveTenant, persistencePrincipal.ownerId] : [executionId, effectiveTenant];
       const selected = await client.query(
-        'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',
-        [key, effectiveTenant]
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' + ownerClause + ' LIMIT 1',
+        values
       );
       if (!selected.rows.length) return null;
-      const record = selected.rows[0].payload;
-      assertTenant(tenantOrLocal(record.tenantId), effectiveTenant, 'Idempotency');
-      if (record.status === 'completed') {
-        if (JSON.stringify(record.result) !== JSON.stringify(result ?? null)) {
-          const error = new Error('Idempotency record is already completed with a different result');
-          error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; error.status = 409; throw error;
-        }
-        return record;
-      }
-      if (record.status !== 'running') {
-        const error = new Error('Idempotency record is not running');
-        error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; error.status = 409; throw error;
-      }
-      record.status = 'completed';
-      record.result = result ?? null;
-      record.completedAt = new Date().toISOString();
-      const updated = await client.query(
-        'UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2 AND status=$6',
-        [key, effectiveTenant, record, record.status, record.completedAt, 'running']
-      );
-      if (updated.rowCount !== 1) {
-        const error = new Error('Idempotency terminal transition lost a race');
-        error.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; error.status = 409; throw error;
-      }
-      return record;
-    });
-  }
-
-  async fail(key, error, { tenantId = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantOrLocal(tenantId);
-    return this.withPrincipal(persistencePrincipal, effectiveTenant, async client => {
-      const selected = await client.query(
-        'SELECT payload FROM idempotency WHERE key=$1 AND tenant_id=$2 LIMIT 1',
-        [key, effectiveTenant]
-      );
-      if (!selected.rows.length) return null;
-      const record = selected.rows[0].payload;
-      assertTenant(tenantOrLocal(record.tenantId), effectiveTenant, 'Idempotency');
-      if (record.status === 'failed') return record;
-      if (record.status === 'completed') {
-        const conflict = new Error('Completed idempotency record cannot be failed');
-        conflict.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; conflict.status = 409; throw conflict;
-      }
-      if (record.status !== 'running') {
-        const conflict = new Error('Idempotency record is not running');
-        conflict.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; conflict.status = 409; throw conflict;
-      }
-      record.status = 'failed';
-      record.error = {
-        code: error?.code || 'EXECUTION_FAILED',
-        message: error?.message || String(error || '')
+      const current = selected.rows[0].payload;
+      const updated = {
+        ...current, ...patch,
+        ...(current.cancellationRequested ? { cancellationRequested: true, cancellationReason: current.cancellationReason || patch.cancellationReason || null } : {}),
+        id: current.id,
+        executionId: current.executionId,
+        tenantId: effectiveTenant,
+        updatedAt: new Date().toISOString()
       };
-      record.completedAt = new Date().toISOString();
-      const updated = await client.query(
-        'UPDATE idempotency SET payload=$3,status=$4,updated_at=$5 WHERE key=$1 AND tenant_id=$2 AND status=$6',
-        [key, effectiveTenant, record, record.status, record.completedAt, 'running']
+      const updateValues = [executionId, effectiveTenant, updated, updated.updatedAt, patch.status || ''];
+      const updateOwnerClause = persistencePrincipal ? ' AND payload->>\'userId\'=$6' : '';
+      if (persistencePrincipal) updateValues.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `UPDATE executions
+         SET payload=$3, updated_at=$4
+         WHERE execution_id=$1
+           AND tenant_id=$2${updateOwnerClause}
+           AND NOT (
+             COALESCE(payload->>'cancellationRequested', 'false') = 'true'
+             AND $5::text IN ('completed', 'failed')
+           )
+         RETURNING payload`,
+        updateValues
       );
-      if (updated.rowCount !== 1) {
-        const conflict = new Error('Idempotency terminal transition lost a race');
-        conflict.code = 'IDEMPOTENCY_TERMINAL_CONFLICT'; conflict.status = 409; throw conflict;
-      }
-      return record;
+      if (result.rows.length) return result.rows[0].payload;
+      const latest = await client.query(
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' + ownerClause + ' LIMIT 1',
+        values
+      );
+      return latest.rows.length ? latest.rows[0].payload : null;
+    });
+  }
+
+  async requestCancellation(executionId, reason = 'Execution cancellation requested', { tenantId = null, persistencePrincipal = null } = {}) {
+    if (!executionId) throw new TypeError('executionId is required');
+    const effectiveTenant = tenantOrLocal(tenantId);
+    const updatedAt = new Date().toISOString();
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
+      const ownerClause = persistencePrincipal ? " AND payload->>'userId'=$5" : '';
+      const values = [
+        executionId,
+        effectiveTenant,
+        String(reason || 'Execution cancellation requested'),
+        updatedAt
+      ];
+      if (persistencePrincipal) values.push(persistencePrincipal.ownerId);
+      const result = await client.query(
+        `UPDATE executions
+         SET payload = jsonb_set(
+           jsonb_set(payload, '{cancellationRequested}', 'true'::jsonb, true),
+           '{cancellationReason}', to_jsonb($3::text), true
+         ),
+         updated_at = $4
+         WHERE execution_id=$1
+           AND tenant_id=$2${ownerClause}
+           AND COALESCE(payload->>'status','created') NOT IN ('completed','failed','cancelled')
+         RETURNING payload`,
+        values
+      );
+      if (result.rows.length) return result.rows[0].payload;
+      const latest = await client.query(
+        'SELECT payload FROM executions WHERE execution_id=$1 AND tenant_id=$2' +
+        (persistencePrincipal ? " AND payload->>'userId'=$3" : '') + ' LIMIT 1',
+        persistencePrincipal ? [executionId, effectiveTenant, persistencePrincipal.ownerId] : [executionId, effectiveTenant]
+      );
+      return latest.rows.length ? latest.rows[0].payload : null;
     });
   }
 
@@ -885,10 +890,15 @@ class PostgresCheckpointRepository {
 class PostgresWorkflowRepository {
   constructor(db, workerRegistry = null) { this.db = db; this.workerRegistry = workerRegistry; }
 
-  async save(instance, tenantId = null, { workerPrincipal = null } = {}) {
+  async save(instance, tenantId = null, { workerPrincipal = null, persistencePrincipal = null } = {}) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenant = tenantOrLocal(item.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Workflow');
+    if (workerPrincipal && persistencePrincipal) {
+      throw Object.assign(new Error('Workflow writes must use either worker lease authority or owner authority, not both'), {
+        code: 'WORKFLOW_AUTHORITY_AMBIGUOUS'
+      });
+    }
     const fencingToken = Number(item.metadata?.fencingToken || 0);
     if (fencingToken > 0) {
       const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
@@ -934,6 +944,59 @@ class PostgresWorkflowRepository {
         }
         return item;
       }, { requireLease: true });
+    }
+    if (persistencePrincipal) {
+      const owner = assertPersistencePrincipal(persistencePrincipal);
+      if (owner.tenantId !== effectiveTenant || item.userId !== owner.ownerId) {
+        throw Object.assign(new Error('Workflow identity does not match the owner persistence principal'), {
+          code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+        });
+      }
+      return withPersistencePrincipal(this.db, owner, effectiveTenant, 'Workflow principal', async client => {
+        const current = await client.query(
+          "SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 FOR UPDATE",
+          [item.workflowId, effectiveTenant, owner.ownerId]
+        );
+        if (current.rowCount !== 1) {
+          const inserted = await client.query(
+            `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
+             VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id`,
+            [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+          );
+          if (inserted.rowCount === 1) return item;
+          throw Object.assign(new Error('Workflow not found for the authenticated owner'), {
+            code: 'WORKFLOW_NOT_FOUND'
+          });
+        }
+        const activeDispatchClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeDispatchClaim.rowCount > 0) {
+          throw Object.assign(new Error('Owner workflow write rejected while a durable worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
+        const activeLease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeLease.rowCount > 0) {
+          throw Object.assign(new Error('Owner workflow write rejected while a durable worker lease is active'), {
+            code: 'WORKFLOW_LEASE_HELD'
+          });
+        }
+        const updated = await client.query(
+          "UPDATE workflows SET state=$4,updated_at=$5,payload=$6 WHERE workflow_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3",
+          [item.workflowId, effectiveTenant, owner.ownerId, item.state, item.updatedAt || new Date().toISOString(), item]
+        );
+        if (updated.rowCount !== 1) {
+          throw Object.assign(new Error('Owner workflow write did not update its target row'), {
+            code: 'WORKFLOW_NOT_FOUND'
+          });
+        }
+        return item;
+      });
     }
     if (workerPrincipal) {
       throw Object.assign(new Error('A lease-bound workflow write requires a persisted fencing token'), {
@@ -1175,29 +1238,46 @@ class PostgresWorkflowRepository {
     });
   }
 
-  async findById(workflowId, tenantId = null) {
-    const result = await this.db.query(
-      tenantId ? 'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload FROM workflows WHERE workflow_id=$1 LIMIT 1',
-      tenantId ? [workflowId, tenantId] : [workflowId]
-    );
-    return result.rows.length ? result.rows[0].payload : null;
+  async findById(workflowId, tenantId = null, { persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
+      const values = [workflowId];
+      let where = 'workflow_id=$1';
+      if (effectiveTenant) {
+        values.push(effectiveTenant);
+        where += ' AND tenant_id=' + '$' + values.length;
+      }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += " AND payload->>'userId'=" + '$' + values.length;
+      }
+      const result = await client.query('SELECT payload FROM workflows WHERE ' + where + ' LIMIT 1', values);
+      return result.rows.length ? result.rows[0].payload : null;
+    });
   }
 
-  async findByApprovalExecutionId({ executionId, tenantId = null } = {}) {
+  async findByApprovalExecutionId({ executionId, tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId) return null;
     const values = [String(executionId)];
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
     let tenantClause = '';
-    if (tenantId) {
-      values.push(tenantId);
-      tenantClause = ' AND tenant_id=$' + values.length;
+    if (effectiveTenant) {
+      values.push(effectiveTenant);
+      tenantClause = ' AND tenant_id=' + '$' + values.length;
     }
-    const result = await this.db.query(
-      "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
-      "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
-      ' ORDER BY updated_at DESC LIMIT 1',
-      values
-    );
-    return result.rows.length ? result.rows[0].payload : null;
+    if (persistencePrincipal) {
+      values.push(persistencePrincipal.ownerId);
+      tenantClause += " AND payload->>'userId'=" + '$' + values.length;
+    }
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
+      const result = await client.query(
+        "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
+        "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
+        ' ORDER BY updated_at DESC LIMIT 1',
+        values
+      );
+      return result.rows.length ? result.rows[0].payload : null;
+    });
   }
 
   async findAll({ tenantId = null } = {}) {
