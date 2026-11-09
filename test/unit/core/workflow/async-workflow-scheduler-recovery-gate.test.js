@@ -55,7 +55,7 @@ test('recovery never dispatches workflows whose event reconciliation failed or w
     reconcile: async workflowId => {
       if (workflowId === blocked.workflowId) {
         throw Object.assign(new Error('checkpoint changed during recovery'), {
-          code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+          code: 'MISSION_EVENT_HISTORY_MISSING'
         });
       }
       return { status: 'HEALTHY' };
@@ -84,7 +84,7 @@ test('recovery fails closed when an unverified dispatch claim cannot be released
     snapshots: [blocked],
     claimed: [blocked],
     reconcile: async () => {
-      throw Object.assign(new Error('event history is not yet available'), {
+      throw Object.assign(new Error('checkpointed workflow lost its durable event history'), {
         code: 'WORKFLOW_CHECKPOINT_CONFLICT'
       });
     },
