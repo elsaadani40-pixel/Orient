@@ -105,3 +105,31 @@ test('async event append completes before the lease-scoped workflow snapshot wri
   });
   assert.deepEqual(order, ['event', 'snapshot']);
 });
+
+
+test('worker mission events preserve their stable identity and lease principal', async () => {
+  const workerPrincipal = { tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-a' };
+  const event = {
+    eventId: 'worker-event-stable-1',
+    type: 'workflow.state.changed',
+    timestamp: '2026-11-09T11:00:00.000Z',
+    payload: { from: 'QUEUED', to: 'RUNNING' },
+    workerPrincipal
+  };
+  let persistedEvent;
+  let persistedOptions;
+  const sink = new DurableMissionEventSink({
+    eventRepository: {
+      async appendMissionEvent(value, options) {
+        persistedEvent = value;
+        persistedOptions = options;
+        return { ...value, sequence: 1 };
+      }
+    }
+  });
+  await sink.recordWorkerEvent(instance(), event);
+  assert.equal(persistedEvent.id, event.eventId);
+  assert.equal(persistedEvent.timestamp, event.timestamp);
+  assert.strictEqual(persistedOptions.workerPrincipal, workerPrincipal);
+  assert.equal(persistedOptions.tenantId, 'local');
+});
