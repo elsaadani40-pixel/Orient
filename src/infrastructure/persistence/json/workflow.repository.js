@@ -184,7 +184,7 @@ class WorkflowRepository {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenantId = item.tenantId || 'local';
     if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
-    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 || !Number.isInteger(targetRevision) || targetRevision <= expectedRevision) {
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 || !Number.isInteger(targetRevision) || targetRevision < expectedRevision) {
       const error = new Error('Invalid workflow repair revision');
       error.code = 'WORKFLOW_REPAIR_REVISION_INVALID'; error.status = 409; throw error;
     }
