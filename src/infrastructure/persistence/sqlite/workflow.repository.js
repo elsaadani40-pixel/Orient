@@ -46,10 +46,17 @@ class SqliteWorkflowRepository {
       }
     } else {
       const updated = this.db.run(
-        "UPDATE workflows SET state=?,updated_at=?,payload=? WHERE workflow_id=? AND tenant_id=? AND COALESCE(CAST(json_extract(payload, '$.checkpoint.revision') AS INTEGER),0)=?",
-        [item.state,item.updatedAt || item.checkpoint.lastSavedAt,JSON.stringify(item),item.workflowId,effectiveTenantId,expectedRevision]
+        "UPDATE workflows SET state=?,updated_at=?,payload=? WHERE workflow_id=? AND tenant_id=? AND COALESCE(CAST(json_extract(payload, '$.checkpoint.revision') AS INTEGER),0)=? AND NOT EXISTS (SELECT 1 FROM workflow_leases WHERE workflow_id=? AND expires_at>?)",
+        [item.state,item.updatedAt || item.checkpoint.lastSavedAt,JSON.stringify(item),item.workflowId,effectiveTenantId,expectedRevision,item.workflowId,new Date().toISOString()]
       );
       if (Number(updated.changes) !== 1) {
+        const activeLease = this.db.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=? AND expires_at>? LIMIT 1',
+          [item.workflowId,new Date().toISOString()]
+        );
+        if (activeLease.length) {
+          throw Object.assign(new Error('Workflow repair rejected while a worker lease is active'), { code: 'WORKFLOW_LEASE_HELD' });
+        }
         throw Object.assign(new Error('Workflow checkpoint changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
       }
     }
