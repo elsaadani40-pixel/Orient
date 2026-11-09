@@ -12,6 +12,27 @@ function storePersistedExecution(persistedExecutions, executionId, tenantId = 't
   });
 }
 
+async function assertDelayedExecutionRecovery({ goal, idempotencyKey, status = 'completed', execute }) {
+  const fixture = createRuntime({
+    status,
+    persistExecution: false,
+    ...(execute ? { execute } : {})
+  });
+  await assert.rejects(
+    fixture.service.createTask({ goal, idempotencyKey }),
+    error => error.code === 'TASK_EXECUTION_NOT_DURABLE' && error.statusCode === 503
+  );
+  const [record] = [...fixture.records.values()];
+  assert.equal(record.status, 'running');
+  assert.equal(fixture.executions, 1);
+  storePersistedExecution(fixture.persistedExecutions, record.executionId);
+  const retry = await fixture.service.createTask({ goal, idempotencyKey });
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.task.id, record.executionId);
+  assert.equal(retry.task.status, status);
+  assert.equal(fixture.executions, 1);
+}
+
 function createRuntime({
   execute, status = 'completed', statusExecutionId,
   failFirstComplete = false, failFirstStatusLookup = false,
@@ -305,43 +326,22 @@ test('tenant-mismatched durable execution is rejected and remains non-replayable
 });
 
 test('task creation stays recoverable until the durable execution record is observable', async () => {
-  const fixture = createRuntime({ persistExecution: false });
-  await assert.rejects(
-    fixture.service.createTask({ goal: 'wait for durable execution visibility', idempotencyKey: 'request-key-durable-visibility-01' }),
-    error => error.code === 'TASK_EXECUTION_NOT_DURABLE' && error.statusCode === 503
-  );
-  const [record] = [...fixture.records.values()];
-  assert.equal(record.status, 'running');
-  assert.equal(fixture.executions, 1);
-  storePersistedExecution(fixture.persistedExecutions, record.executionId);
-  const retry = await fixture.service.createTask({ goal: 'wait for durable execution visibility', idempotencyKey: 'request-key-durable-visibility-01' });
-  assert.equal(retry.replayed, true);
-  assert.equal(retry.task.id, record.executionId);
-  assert.equal(retry.task.status, 'completed');
-  assert.equal(fixture.executions, 1);
+  await assertDelayedExecutionRecovery({
+    goal: 'wait for durable execution visibility',
+    idempotencyKey: 'request-key-durable-visibility-01'
+  });
 });
 
 test('approval-required task stays recoverable until its durable execution row is visible', async () => {
-  const fixture = createRuntime({
+  await assertDelayedExecutionRecovery({
+    goal: 'wait for approval execution durability',
+    idempotencyKey: 'request-key-approval-durable-visibility-01',
     status: 'awaiting_approval',
-    persistExecution: false,
     execute: async (_goal, options) => {
       throw Object.assign(new Error('Owner approval is required'), {
-        code: 'APPROVAL_REQUIRED', executionContext: { executionId: options.executionId }
+        code: 'APPROVAL_REQUIRED',
+        executionContext: { executionId: options.executionId }
       });
     }
   });
-  await assert.rejects(
-    fixture.service.createTask({ goal: 'wait for approval execution durability', idempotencyKey: 'request-key-approval-durable-visibility-01' }),
-    error => error.code === 'TASK_EXECUTION_NOT_DURABLE' && error.statusCode === 503
-  );
-  const [record] = [...fixture.records.values()];
-  assert.equal(record.status, 'running');
-  assert.equal(fixture.executions, 1);
-  storePersistedExecution(fixture.persistedExecutions, record.executionId);
-  const retry = await fixture.service.createTask({ goal: 'wait for approval execution durability', idempotencyKey: 'request-key-approval-durable-visibility-01' });
-  assert.equal(retry.replayed, true);
-  assert.equal(retry.task.id, record.executionId);
-  assert.equal(retry.task.status, 'awaiting_approval');
-  assert.equal(fixture.executions, 1);
 });
