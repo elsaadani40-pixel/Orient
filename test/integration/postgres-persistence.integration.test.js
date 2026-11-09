@@ -1720,6 +1720,115 @@ test('PostgreSQL workflow repository enforces owner isolation for reads and writ
   }
 });
 
+
+test('PostgreSQL atomically creates an owner-scoped workflow and its ordered initial mission events', async t => {
+  await persistence.initialize();
+  const tenantId = 'tenant-atomic-create-' + randomUUID();
+  const workflowId = 'workflow-atomic-create-' + randomUUID();
+  const ownerA = makeOwnerPrincipal(tenantId, 'owner-a');
+  const ownerB = makeOwnerPrincipal(tenantId, 'owner-b');
+  const instance = {
+    workflowId, tenantId, userId: 'owner-a', workspaceId: 'workspace-a',
+    state: 'QUEUED', updatedAt: new Date().toISOString(), metadata: {},
+    toJSON() { return { ...this }; }
+  };
+  const event = (id, type, data) => ({
+    id, aggregateId: workflowId, executionId: workflowId, type,
+    timestamp: new Date().toISOString(), data: { ...data, tenantId }
+  });
+  t.after(async () => {
+    await pool.query('DELETE FROM events WHERE tenant_id=$1 AND aggregate_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  });
+
+  await persistence.workflows.createWithEvents(instance, [
+    event(randomUUID(), 'workflow.created', { workflowId, userId: 'owner-a' }),
+    event(randomUUID(), 'workflow.state.changed', { from: 'CREATED', to: 'QUEUED' })
+  ], { persistencePrincipal: ownerA });
+
+  assert.equal((await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerA })).state, 'QUEUED');
+  assert.equal(await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerB }), null);
+  const history = await persistence.events.findByAggregateId(workflowId, { tenantId });
+  assert.deepEqual(history.map(item => item.type), ['workflow.created', 'workflow.state.changed']);
+  assert.deepEqual(history.map(item => item.sequence), [1, 2]);
+});
+
+test('PostgreSQL atomic workflow creation serializes same-ID races across different owners', async t => {
+  await persistence.initialize();
+  const tenantId = 'tenant-atomic-race-' + randomUUID();
+  const workflowId = 'workflow-atomic-race-' + randomUUID();
+  const owners = [makeOwnerPrincipal(tenantId, 'owner-a'), makeOwnerPrincipal(tenantId, 'owner-b')];
+  const create = (owner, index) => {
+    const instance = {
+      workflowId, tenantId, userId: owner.ownerId, state: 'QUEUED',
+      updatedAt: new Date().toISOString(), metadata: {}, toJSON() { return { ...this }; }
+    };
+    const event = (type, data) => ({
+      id: randomUUID(), aggregateId: workflowId, executionId: workflowId, type,
+      timestamp: new Date().toISOString(), data: { ...data, tenantId }
+    });
+    return persistence.workflows.createWithEvents(instance, [
+      event('workflow.created', { workflowId, userId: owner.ownerId, contender: index }),
+      event('workflow.state.changed', { from: 'CREATED', to: 'QUEUED' })
+    ], { persistencePrincipal: owner });
+  };
+  t.after(async () => {
+    await pool.query('DELETE FROM events WHERE tenant_id=$1 AND aggregate_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  });
+
+  const results = await Promise.allSettled(owners.map(create));
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  const rejected = results.find(result => result.status === 'rejected');
+  assert.equal(rejected.reason.code, 'WORKFLOW_ID_CONFLICT');
+  const ownerViews = await Promise.all(owners.map(owner =>
+    persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: owner })
+  ));
+  assert.equal(ownerViews.filter(Boolean).length, 1);
+  const history = await persistence.events.findByAggregateId(workflowId, { tenantId });
+  assert.deepEqual(history.map(item => item.type), ['workflow.created', 'workflow.state.changed']);
+  assert.equal(history[0].data.userId, ownerViews.find(Boolean).userId);
+});
+
+test('PostgreSQL atomic workflow creation rolls back the snapshot and prior events if a later event conflicts', async t => {
+  await persistence.initialize();
+  const tenantId = 'tenant-atomic-rollback-' + randomUUID();
+  const workflowId = 'workflow-atomic-rollback-' + randomUUID();
+  const conflictingId = randomUUID();
+  const owner = makeOwnerPrincipal(tenantId, 'owner-rollback');
+  const timestamp = new Date().toISOString();
+  const existingAggregate = 'existing-aggregate-' + randomUUID();
+  t.after(async () => {
+    await pool.query('DELETE FROM events WHERE tenant_id=$1 AND event_id=$2', [tenantId, conflictingId]);
+    await pool.query('DELETE FROM events WHERE tenant_id=$1 AND aggregate_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  });
+  await persistence.events.appendMissionEvent({
+    id: conflictingId, aggregateId: existingAggregate, executionId: existingAggregate,
+    type: 'workflow.created', timestamp, data: { tenantId, marker: 'preexisting' }
+  }, { tenantId });
+
+  const instance = {
+    workflowId, tenantId, userId: owner.ownerId, state: 'QUEUED',
+    updatedAt: timestamp, metadata: {}, toJSON() { return { ...this }; }
+  };
+  await assert.rejects(
+    persistence.workflows.createWithEvents(instance, [
+      {
+        id: randomUUID(), aggregateId: workflowId, executionId: workflowId,
+        type: 'workflow.created', timestamp, data: { tenantId, userId: owner.ownerId }
+      },
+      {
+        id: conflictingId, aggregateId: workflowId, executionId: workflowId,
+        type: 'workflow.state.changed', timestamp, data: { tenantId, from: 'CREATED', to: 'QUEUED' }
+      }
+    ], { persistencePrincipal: owner }),
+    error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+  );
+  assert.equal(await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: owner }), null);
+  assert.deepEqual(await persistence.events.findByAggregateId(workflowId, { tenantId }), []);
+});
+
 test('PostgreSQL owner workflow writes reject active worker dispatch claims', async () => {
   await persistence.initialize();
   const tenantId = 'tenant-workflow-claim-' + randomUUID();
