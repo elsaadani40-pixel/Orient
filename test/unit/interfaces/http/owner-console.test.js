@@ -314,7 +314,7 @@ test('canonical owner login lockout survives restart and persists only a keyed s
 
   const persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   assert.equal(persisted.loginFailures.length, 1);
-  assert.doesNotMatch(JSON.stringify(persisted), new RegExp(sourceIp.replaceAll('.', '\\\\.'), 'u'));
+  assert.equal(JSON.stringify(persisted).includes(sourceIp), false);
 
   const restartedIdentity = new OwnerIdentityService({ ...options, bootstrapPassword: undefined });
   const restartedAdapter = new OwnerIdentityRuntimeAdapter({
