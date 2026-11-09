@@ -1679,3 +1679,76 @@ test('PostgreSQL async mission recovery repairs then verifies a durable workflow
   assert.equal(healthy.status, 'HEALTHY');
   assert.equal(healthy.workflow.checkpoint.revision, 1);
 });
+
+
+test('PostgreSQL workflow repository enforces owner isolation for reads and writes', async () => {
+  await persistence.initialize();
+  const tenantId = 'tenant-workflow-owner-' + randomUUID();
+  const workflowId = 'workflow-owner-' + randomUUID();
+  const ownerA = makeOwnerPrincipal(tenantId, 'owner-a');
+  const ownerB = makeOwnerPrincipal(tenantId, 'owner-b');
+  const instance = {
+    workflowId, tenantId, userId: 'owner-a', workspaceId: 'workspace-a',
+    state: 'WAITING', updatedAt: new Date().toISOString(), metadata: { approvalBlocked: true, approvalExecutionId: workflowId },
+    toJSON() { return { ...this }; }
+  };
+  try {
+    await persistence.workflows.save(instance, tenantId, { persistencePrincipal: ownerA });
+    assert.equal((await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerA })).userId, 'owner-a');
+    assert.equal(await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerB }), null);
+    assert.deepEqual(await persistence.workflows.findAll({ tenantId, persistencePrincipal: ownerB }), []);
+    assert.equal((await persistence.workflows.findByApprovalExecutionId({
+      executionId: workflowId, tenantId, persistencePrincipal: ownerA
+    })).workflowId, workflowId);
+    assert.equal(await persistence.workflows.findByApprovalExecutionId({
+      executionId: workflowId, tenantId, persistencePrincipal: ownerB
+    }), null);
+
+    await assert.rejects(
+      persistence.workflows.save({ ...instance, userId: 'owner-b' }, tenantId, { persistencePrincipal: ownerB }),
+      error => error.code === 'WORKFLOW_NOT_FOUND'
+    );
+    await assert.rejects(
+      persistence.workflows.save({ ...instance, userId: 'owner-b', workflowId: workflowId + '-new' }, tenantId, { persistencePrincipal: ownerA }),
+      error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
+    );
+    const updated = { ...instance, state: 'COMPLETED', updatedAt: new Date().toISOString() };
+    await persistence.workflows.save(updated, tenantId, { persistencePrincipal: ownerA });
+    assert.equal((await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: ownerA })).state, 'COMPLETED');
+  } finally {
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  }
+});
+
+test('PostgreSQL owner workflow writes reject active worker dispatch claims', async () => {
+  await persistence.initialize();
+  const tenantId = 'tenant-workflow-claim-' + randomUUID();
+  const workflowId = 'workflow-claim-' + randomUUID();
+  const owner = makeOwnerPrincipal(tenantId, 'owner-claim');
+  const instance = {
+    workflowId, tenantId, userId: 'owner-claim', state: 'WAITING',
+    updatedAt: new Date().toISOString(), metadata: {},
+    toJSON() { return { ...this }; }
+  };
+  try {
+    await persistence.workflows.save(instance, tenantId, { persistencePrincipal: owner });
+    await pool.query(
+      `INSERT INTO workflow_dispatch_claims
+       (tenant_id,workflow_id,worker_id,worker_session_id,claimed_at,expires_at)
+       VALUES ($1,$2,$3,$4,NOW(),NOW()+INTERVAL '60 seconds')`,
+      [tenantId, workflowId, 'worker-claim', 'worker-session-claim']
+    );
+    await assert.rejects(
+      persistence.workflows.save({ ...instance, state: 'COMPLETED', updatedAt: new Date().toISOString() }, tenantId, { persistencePrincipal: owner }),
+      error => error.code === 'WORKFLOW_DISPATCH_CLAIM_HELD'
+    );
+    assert.equal(
+      (await persistence.workflows.findById(workflowId, tenantId, { persistencePrincipal: owner })).state,
+      'WAITING'
+    );
+  } finally {
+    await pool.query('DELETE FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  }
+});
+
