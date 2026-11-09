@@ -4,6 +4,15 @@ const assert = require('node:assert/strict');
 const RequestExecutionCoordinator = require('../../../../src/core/runtime/request-execution-coordinator');
 const AgentState = require('../../../../src/core/agent/state/agent-state');
 
+function plannedResult(intent = 'test', step = { step: 1, tool: 'test.tool' }) {
+  const normalizedStep = { ...step };
+  return {
+    plan: { intent, steps: [normalizedStep] },
+    validation: { valid: true, steps: [{ ...normalizedStep }] }
+  };
+}
+
+
 test('preserves plan identity validation and response classification', () => {
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {},
@@ -139,10 +148,7 @@ test('forwards request-local approval collection to execution without corrupting
   let received = null;
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {
-      plan: async () => ({
-        plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool' }] },
-        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
-      })
+      plan: async () => plannedResult('test')
     },
     agentExecutionCoordinator: {
       run: async (args) => {
@@ -287,10 +293,7 @@ test('execute returns durable cancellation when cancellation wins terminal compl
   let persistedEvents = [];
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {
-      plan: async () => ({
-        plan: { intent: 'test.execute-race', steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] },
-        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] }
-      })
+      plan: async () => plannedResult('test.execute-race', { step: 1, tool: 'test.tool', input: {}, dependsOn: null })
     },
     agentExecutionCoordinator: {
       run: async ({ context }) => {
@@ -299,7 +302,7 @@ test('execute returns durable cancellation when cancellation wins terminal compl
         context.transitionAgentTo(AgentState.LIFECYCLE.OBSERVING);
         context.transitionAgentTo(AgentState.LIFECYCLE.EVALUATING);
         return {
-          plan: { intent: 'test.execute-race', steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] },
+          plan: args.plan,
           loopResult: { result: { ok: true }, evaluation: { success: true } },
           replanningDecision: { toJSON: () => ({ outcome: 'done' }) }
         };
@@ -359,10 +362,7 @@ test('durable cancellation takes precedence over a concurrent tool failure', asy
   let persistedEvents = [];
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {
-      plan: async () => ({
-        plan: { intent: 'test.cancel-error-race', steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] },
-        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool', input: {}, dependsOn: null }] }
-      })
+      plan: async () => plannedResult('test.cancel-error-race', { step: 1, tool: 'test.tool', input: {}, dependsOn: null })
     },
     agentExecutionCoordinator: {
       run: async ({ context }) => {
@@ -691,10 +691,7 @@ test('cancels before the next tool step when the owner session is revoked mid-ex
   let observedReason = null;
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {
-      plan: async () => ({
-        plan: { intent: 'test.owner-session-revocation', steps: [{ step: 1, tool: 'test.tool' }] },
-        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
-      })
+      plan: async () => plannedResult('test.owner-session-revocation')
     },
     agentExecutionCoordinator: {
       run: async args => {
@@ -779,10 +776,7 @@ test('rejects approval challenges that claim a tenant different from the active 
   let eventPersistenceCalls = 0;
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {
-      plan: async () => ({
-        plan: { intent: 'test.cross-tenant-approval', steps: [{ step: 1, tool: 'test.tool' }] },
-        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
-      })
+      plan: async () => plannedResult('test.cross-tenant-approval')
     },
     agentExecutionCoordinator: {
       run: async ({ context }) => {
@@ -840,10 +834,7 @@ test('preserves the owner persistence principal when cancellation wins after fai
   const persistCalls = [];
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {
-      plan: async () => ({
-        plan: { intent: 'test.recovery-cancellation', steps: [{ step: 1, tool: 'test.tool' }] },
-        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
-      })
+      plan: async () => plannedResult('test.recovery-cancellation')
     },
     agentExecutionCoordinator: {
       run: async () => { throw Object.assign(new Error('tool failed'), { code: 'TOOL_FAILED' }); }
@@ -905,10 +896,7 @@ test('Runtime preserves a task-reserved execution ID in its durable ExecutionCon
   let executedSnapshot = null;
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {
-      plan: async () => ({
-        plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool' }] },
-        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
-      })
+      plan: async () => plannedResult('test')
     },
     agentExecutionCoordinator: {
       run: async args => {
@@ -953,10 +941,7 @@ test('Runtime admission evidence overrides a frozen downstream rejection marker 
   let insertCalls = 0;
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {
-      plan: async () => ({
-        plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool' }] },
-        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
-      })
+      plan: async () => plannedResult('test')
     },
     agentExecutionCoordinator: { run: async () => { throw downstreamError; } },
     recoveryCoordinator: { fail: async () => {} },
