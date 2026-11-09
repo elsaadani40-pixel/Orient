@@ -139,6 +139,56 @@ test('Postgres workflow writes reject stale fencing tokens', async () => {
 });
 
 
+test('Postgres workflow repair uses tenant-scoped revision compare-and-set', async () => {
+  const existing = { workflowId: 'wf-repair', tenantId: 'tenant-a', state: 'WAITING', checkpoint: { revision: 3 } };
+  const db = fakeDb([
+    { rows: [{ payload: existing }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowRepository(db);
+  const repaired = await repo.repair({
+    workflowId: 'wf-repair', tenantId: 'tenant-a', state: 'WAITING',
+    updatedAt: '2026-11-09T10:00:00.000Z',
+    checkpoint: { revision: 3 },
+    toJSON() { return this; }
+  }, { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 5 });
+  assert.equal(repaired.checkpoint.revision, 5);
+  assert.match(db.calls[0].text, /FOR UPDATE/);
+  assert.match(db.calls[1].text, /workflow_dispatch_claims/);
+  assert.match(db.calls[2].text, /workflow_leases/);
+  assert.match(db.calls[3].text, /checkpoint.*revision/);
+  assert.deepEqual(db.calls[3].values.slice(0, 2), ['wf-repair', 'tenant-a']);
+  assert.equal(db.calls[3].values[5], 3);
+});
+
+test('Postgres workflow repair refuses an active dispatch claim before updating', async () => {
+  const db = fakeDb([
+    { rows: [{ payload: { checkpoint: { revision: 3 } } }], rowCount: 1 },
+    { rows: [{}], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowRepository(db);
+  await assert.rejects(
+    () => repo.repair({ workflowId: 'wf-claimed', tenantId: 'tenant-a', state: 'WAITING', toJSON() { return this; } },
+      { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 4 }),
+    error => error.code === 'WORKFLOW_DISPATCH_CLAIM_HELD'
+  );
+  assert.equal(db.calls.length, 2);
+  assert.match(db.calls[1].text, /workflow_dispatch_claims/);
+});
+
+test('Postgres workflow repair rejects stale revisions without writing', async () => {
+  const db = fakeDb([{ rows: [{ payload: { checkpoint: { revision: 4 } } }], rowCount: 1 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  await assert.rejects(
+    () => repo.repair({ workflowId: 'wf-stale', tenantId: 'tenant-a', state: 'WAITING', toJSON() { return this; } },
+      { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 5 }),
+    error => error.code === 'WORKFLOW_CHECKPOINT_CONFLICT'
+  );
+  assert.equal(db.calls.length, 1);
+});
+
 test('PostgresPersistence exposes durable tenant quota repository', () => {
   const persistence = new PostgresPersistence({ pool: fakeDb() });
   assert.ok(persistence.tenantQuotas);

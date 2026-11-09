@@ -29,65 +29,97 @@ function seed(s) {
   return mission;
 }
 
-test('reconciles snapshot behind durable event stream and repairs checkpoint', () => {
+test('reconciles snapshot behind durable event stream and repairs checkpoint', async () => {
   const s = stores();
   const mission = seed(s);
   const before = s.workflows.findById(mission.workflowId, 'tenant-a');
   assert.equal(before.checkpoint.revision, 1);
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
-  const result = recovery.reconcile(mission.workflowId, 'tenant-a');
+  const result = await recovery.reconcile(mission.workflowId, 'tenant-a');
   assert.equal(result.status, 'REPAIRED');
   assert.equal(result.workflow.state, 'QUEUED');
   assert.equal(s.workflows.findById(mission.workflowId, 'tenant-a').checkpoint.revision, 2);
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
-test('rejects snapshot ahead of durable event history', () => {
+test('awaits asynchronous PostgreSQL-style event, snapshot, and repair repositories', async () => {
+  const s = stores();
+  const mission = seed(s);
+  const asyncEvents = {
+    async findByAggregateId(...args) { return s.events.findByAggregateId(...args); }
+  };
+  const asyncWorkflows = {
+    async findById(...args) { return s.workflows.findById(...args); },
+    async repair(...args) { return s.workflows.repair(...args); }
+  };
+  const recovery = new MissionEventRecovery({ eventRepository: asyncEvents, workflowRepository: asyncWorkflows });
+  const result = await recovery.reconcile(mission.workflowId, 'tenant-a');
+  assert.equal(result.status, 'REPAIRED');
+  assert.equal(result.workflow.checkpoint.revision, 2);
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
+
+test('rejects snapshot ahead of durable event history', async () => {
   const s = stores();
   const mission = seed(s);
   const snapshot = s.workflows.findById(mission.workflowId, 'tenant-a');
   snapshot.checkpoint.revision = 99;
   fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
-  assert.throws(() => recovery.reconcile(mission.workflowId, 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_AHEAD_OF_EVENTS');
+  await assert.rejects(() => recovery.reconcile(mission.workflowId, 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_AHEAD_OF_EVENTS');
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
-test('rebuilds a semantically corrupt snapshot from valid event history', () => {
+test('repairs a semantically divergent snapshot without inventing a new event revision', async () => {
+  const s = stores();
+  const mission = seed(s);
+  const snapshot = s.workflows.findById(mission.workflowId, 'tenant-a');
+  snapshot.state = 'WAITING';
+  snapshot.checkpoint.revision = 2;
+  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
+  const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
+  const result = await recovery.reconcile(mission.workflowId, 'tenant-a');
+  assert.equal(result.status, 'REPAIRED');
+  assert.equal(result.workflow.state, 'QUEUED');
+  assert.equal(result.workflow.checkpoint.revision, 2);
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
+
+test('rebuilds a semantically corrupt snapshot from valid event history', async () => {
   const s = stores();
   const mission = seed(s);
   const snapshot = s.workflows.findById(mission.workflowId, 'tenant-a');
   snapshot.state = 'NOT_A_STATE';
   fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
-  assert.throws(() => recovery.reconcile(mission.workflowId, 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_CORRUPT');
+  await assert.rejects(() => recovery.reconcile(mission.workflowId, 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_CORRUPT');
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
-test('detects missing event sequence and refuses silent repair', () => {
+test('detects missing event sequence and refuses silent repair', async () => {
   const s = stores();
   seed(s);
   const all = s.events.read();
   all[1].sequence = 3;
   fs.writeFileSync(s.events.filePath, JSON.stringify(all) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
-  assert.throws(() => recovery.reconcile('step-38-mission', 'tenant-a'), e => e.code === 'MISSION_EVENT_SEQUENCE_GAP');
+  await assert.rejects(() => recovery.reconcile('step-38-mission', 'tenant-a'), e => e.code === 'MISSION_EVENT_SEQUENCE_GAP');
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
-test('preserves tenant and aggregate boundaries during recovery', () => {
+test('preserves tenant and aggregate boundaries during recovery', async () => {
   const s = stores();
   seed(s);
   const snapshot = s.workflows.findById('step-38-mission', 'tenant-a');
   snapshot.tenantId = 'tenant-b';
   fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
-  assert.throws(() => recovery.reconcile('step-38-mission', 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_TENANT_MISMATCH');
+  await assert.rejects(() => recovery.reconcile('step-38-mission', 'tenant-a'), e => e.code === 'MISSION_SNAPSHOT_TENANT_MISMATCH');
   assert.equal(s.workflows.findById('step-38-mission', 'tenant-a'), null);
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
-test('duplicate event replay remains idempotent', () => {
+test('duplicate event replay remains idempotent', async () => {
   const s = stores();
   seed(s);
   const events = s.events.findByAggregateId('step-38-mission', { tenantId: 'tenant-a' });

@@ -186,3 +186,50 @@ test('sqlite transactions roll back all statements after an injected failure', (
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
   db.close();
 });
+
+test('SQLite workflow repair atomically advances only the expected tenant revision', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-workflow-repair-'));
+  const filePath = path.join(directory, 'orient.db');
+  const persistence = new SqlitePersistence({ filePath });
+  try {
+    persistence.workflows.save({
+      workflowId: 'wf-repair-sqlite', tenantId: 'tenant-a', state: 'WAITING',
+      updatedAt: '2026-11-09T10:00:00.000Z', checkpoint: { revision: 3 }
+    }, 'tenant-a');
+    const repaired = persistence.workflows.repair({
+      workflowId: 'wf-repair-sqlite', tenantId: 'tenant-a', state: 'WAITING',
+      updatedAt: '2026-11-09T10:00:01.000Z', checkpoint: { revision: 3 }
+    }, { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 5 });
+    assert.equal(repaired.checkpoint.revision, 5);
+    assert.equal(persistence.workflows.findById('wf-repair-sqlite', 'tenant-a').checkpoint.revision, 5);
+    persistence.workflowLeases.save({
+      workflowId: 'wf-repair-sqlite', leaseId: 'lease-repair-sqlite', workerId: 'worker-a',
+      acquiredAt: '2026-11-09T10:00:00.000Z', expiresAt: '2999-01-01T00:00:00.000Z',
+      metadata: { tenantId: 'tenant-a' }
+    }, 'tenant-a');
+    assert.throws(
+      () => persistence.workflows.repair({
+        workflowId: 'wf-repair-sqlite', tenantId: 'tenant-a', state: 'WAITING',
+        checkpoint: { revision: 5 }
+      }, { tenantId: 'tenant-a', expectedRevision: 5, targetRevision: 6 }),
+      error => error.code === 'WORKFLOW_LEASE_HELD'
+    );
+    assert.throws(
+      () => persistence.workflows.repair({
+        workflowId: 'wf-repair-sqlite', tenantId: 'tenant-a', state: 'WAITING',
+        checkpoint: { revision: 3 }
+      }, { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 6 }),
+      error => error.code === 'WORKFLOW_CHECKPOINT_CONFLICT'
+    );
+    assert.throws(
+      () => persistence.workflows.repair({
+        workflowId: 'wf-repair-sqlite', tenantId: 'tenant-b', state: 'WAITING',
+        checkpoint: { revision: 0 }
+      }, { tenantId: 'tenant-b', expectedRevision: 0, targetRevision: 2 }),
+      error => error.code === 'WORKFLOW_TENANT_MISMATCH' || error.code === 'WORKFLOW_CHECKPOINT_CONFLICT'
+    );
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

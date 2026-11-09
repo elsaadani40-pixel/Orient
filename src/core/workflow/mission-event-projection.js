@@ -5,6 +5,7 @@ const WorkflowInstance = require('./workflow-instance');
 const EVENT_TYPES = Object.freeze({
   CREATED: 'workflow.created',
   STATE_CHANGED: 'workflow.state.changed',
+  APPROVAL_REQUIRED: 'workflow.approval.required',
   STEP_RUNNING: 'workflow.step.running',
   STEP_COMPLETED: 'workflow.step.completed',
   STEP_FAILED: 'workflow.step.failed',
@@ -104,6 +105,17 @@ class MissionEventProjection {
       case EVENT_TYPES.STATE_CHANGED:
         if (!data.to) throw projectionError('State change target is required', 'MISSION_STATE_TARGET_REQUIRED');
         this._transition(instance, data.to);
+        break;
+      case EVENT_TYPES.APPROVAL_REQUIRED:
+        if (instance.state !== 'WAITING') this._transition(instance, 'WAITING');
+        instance.metadata = {
+          ...instance.metadata,
+          approvalBlocked: true,
+          approvalExecutionId: data.executionId || null,
+          approvalId: data.approvalId || null,
+          approvalStepId: data.stepId || null,
+          approvalRequiredAt: event.timestamp || null
+        };
         break;
       case EVENT_TYPES.STEP_RUNNING:
         instance.markStepRunning(data.stepId, this.clock);

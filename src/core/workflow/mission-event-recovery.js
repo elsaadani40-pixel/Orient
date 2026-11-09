@@ -20,11 +20,11 @@ class MissionEventRecovery {
     this.projection = new MissionEventProjection({ clock });
   }
 
-  _load(workflowId, tenantId) {
-    const events = this.eventRepository.findByAggregateId(workflowId, { tenantId });
+  async _load(workflowId, tenantId) {
+    const events = await this.eventRepository.findByAggregateId(workflowId, { tenantId });
     if (!events.length) throw recoveryError('Mission event history is required for recovery', 'MISSION_EVENT_HISTORY_REQUIRED');
-    let snapshot = this.workflowRepository.findById(workflowId, tenantId);
-    if (!snapshot) snapshot = this.workflowRepository.findById(workflowId);
+    let snapshot = await this.workflowRepository.findById(workflowId, tenantId);
+    if (!snapshot) snapshot = await this.workflowRepository.findById(workflowId);
     return { events, snapshot };
   }
 
@@ -51,7 +51,14 @@ class MissionEventRecovery {
       deadlineAt: snapshot.deadlineAt,
       recovery: snapshot.recovery,
       compensation: snapshot.compensation,
-      input: snapshot.input
+      input: snapshot.input,
+      approval: {
+        blocked: snapshot.metadata?.approvalBlocked === true,
+        executionId: snapshot.metadata?.approvalExecutionId || null,
+        approvalId: snapshot.metadata?.approvalId || null,
+        stepId: snapshot.metadata?.approvalStepId || null,
+        requiredAt: snapshot.metadata?.approvalRequiredAt || null
+      }
     }) === JSON.stringify({
       state: projected.state,
       steps: projected.steps,
@@ -60,12 +67,19 @@ class MissionEventRecovery {
       deadlineAt: projected.deadlineAt,
       recovery: projected.recovery,
       compensation: projected.compensation,
-      input: projected.input
+      input: projected.input,
+      approval: {
+        blocked: projected.metadata?.approvalBlocked === true,
+        executionId: projected.metadata?.approvalExecutionId || null,
+        approvalId: projected.metadata?.approvalId || null,
+        stepId: projected.metadata?.approvalStepId || null,
+        requiredAt: projected.metadata?.approvalRequiredAt || null
+      }
     });
   }
 
-  reconcile(workflowId, tenantId = 'local') {
-    const { events, snapshot: rawSnapshot } = this._load(workflowId, tenantId);
+  async reconcile(workflowId, tenantId = 'local') {
+    const { events, snapshot: rawSnapshot } = await this._load(workflowId, tenantId);
     const lastSequence = Number(events[events.length - 1].sequence);
     if (!Number.isInteger(lastSequence) || lastSequence < 1) {
       throw recoveryError('Mission event sequence is invalid', 'MISSION_EVENT_SEQUENCE_INVALID');
@@ -91,7 +105,7 @@ class MissionEventRecovery {
     const repaired = WorkflowInstance.fromJSON(projected.toJSON());
     repaired.setCheckpointRevision(snapshotRevision, snapshot?.checkpoint?.lastSavedAt || null);
     if (typeof this.workflowRepository.repair === 'function') {
-      this.workflowRepository.repair(repaired, {
+      await this.workflowRepository.repair(repaired, {
         tenantId,
         expectedRevision: snapshotRevision,
         targetRevision: lastSequence
@@ -103,8 +117,8 @@ class MissionEventRecovery {
     return { status: 'REPAIRED', workflow: repaired, lastSequence, snapshotRevision };
   }
 
-  reconstruct(workflowId, tenantId = 'local') {
-    return this.reconcile(workflowId, tenantId).workflow;
+  async reconstruct(workflowId, tenantId = 'local') {
+    return (await this.reconcile(workflowId, tenantId)).workflow;
   }
 }
 
