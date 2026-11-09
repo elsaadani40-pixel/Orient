@@ -11,7 +11,7 @@ const {
 } = require('../../../../src/infrastructure/agents/openmausbot-mcp-client');
 
 class FakeMcpChild extends EventEmitter {
-  constructor({ availableTools = [...ALLOWED_TOOLS], failMethod = null, malformed = false } = {}) {
+  constructor({ availableTools = [...ALLOWED_TOOLS], failMethod = null, malformed = false, identity = 'openmausbot' } = {}) {
     super();
     this.stdout = new PassThrough();
     this.stdin = new PassThrough();
@@ -21,6 +21,7 @@ class FakeMcpChild extends EventEmitter {
     this.availableTools = availableTools;
     this.failMethod = failMethod;
     this.malformed = malformed;
+    this.identity = identity;
     let buffer = '';
     this.stdin.on('data', chunk => {
       buffer += chunk.toString('utf8');
@@ -42,7 +43,13 @@ class FakeMcpChild extends EventEmitter {
         } else if (request.method === 'tools/list') {
           result = { tools: this.availableTools.map(name => ({ name, inputSchema: { type: 'object', properties: {}, additionalProperties: false } })) };
         } else if (request.method === 'tools/call') {
-          result = { content: [{ type: 'text', text: JSON.stringify({ ok: true, name: request.params.name }) }] };
+          const data = request.params.name === 'get_system_health'
+            ? { status: 'connected', app: this.identity }
+            : { ok: true, name: request.params.name };
+          result = {
+            content: [{ type: 'text', text: JSON.stringify(data) }],
+            structuredContent: data
+          };
         }
         this.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
       }
@@ -122,6 +129,15 @@ test('OpenMausBot MCP client rejects malformed JSON-RPC output', async () => {
   });
   await assert.rejects(client.callTool('get_system_health'), {
     code: 'OPENMAUSBOT_MCP_PROTOCOL_ERROR'
+  });
+});
+
+test('OpenMausBot MCP client rejects endpoints that do not identify as OpenMausBot', async () => {
+  const client = new OpenMausBotMcpClient({
+    spawnImpl: () => new FakeMcpChild({ identity: 'another-service' })
+  });
+  await assert.rejects(client.callTool('list_bots'), {
+    code: 'OPENMAUSBOT_MCP_IDENTITY_REJECTED'
   });
 });
 
