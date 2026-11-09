@@ -46,7 +46,7 @@ class OwnerIdentityService {
     this.state = this.read();
     if (!this.state) {
       const secret = bootstrapPassword || crypto.randomBytes(24).toString('base64url');
-      if (typeof secret !== 'string' || secret.length < MIN_PASSWORD || secret.length > 1024) throw new RangeError('Bootstrap password must be at least 14 characters');
+      if (typeof secret !== 'string' || secret.length > 1024 || (!/^\\d{10}$/.test(secret) && secret.length < MIN_PASSWORD)) throw new RangeError('Bootstrap password must be exactly 10 digits or at least 14 characters');
       this.state = { version: 1, username: 'Admin', email: this.ownerEmail, passwordHash: passwordHash(secret), mustChangePassword: true, sessions: [] };
       this._bootstrapPassword = secret;
       this.createdBootstrap = true;
