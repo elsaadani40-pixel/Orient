@@ -191,6 +191,7 @@ class OpenMausBotMcpClient {
     command = 'openmausbot',
     args = ['mcp'],
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxConcurrent = 2,
     spawnImpl = spawn,
     env = process.env
   } = {}) {
@@ -203,11 +204,16 @@ class OpenMausBotMcpClient {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > MAX_TIMEOUT_MS) {
       throw new RangeError('OpenMausBot MCP timeout must be between 1000 and 120000 milliseconds');
     }
+    if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) {
+      throw new RangeError('OpenMausBot MCP maxConcurrent must be between 1 and 8');
+    }
     if (typeof spawnImpl !== 'function') throw new TypeError('spawnImpl must be a function');
 
     this.command = command;
     this.args = [...args];
     this.timeoutMs = timeoutMs;
+    this.maxConcurrent = maxConcurrent;
+    this.activeCalls = 0;
     this.spawn = spawnImpl;
     this.env = buildChildEnvironment(env);
   }
@@ -223,16 +229,23 @@ class OpenMausBotMcpClient {
         code: 'OPENMAUSBOT_MCP_INPUT_INVALID'
       });
     }
+    if (this.activeCalls >= this.maxConcurrent) {
+      throw Object.assign(new Error('OpenMausBot MCP concurrency limit reached'), {
+        code: 'OPENMAUSBOT_MCP_BUSY'
+      });
+    }
 
-    const child = this.spawn(this.command, this.args, {
-      shell: false,
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'ignore'],
-      env: this.env
-    });
-    const session = new McpStdioSession(child, { timeoutMs: this.timeoutMs });
-
+    this.activeCalls += 1;
+    let session = null;
     try {
+      const child = this.spawn(this.command, this.args, {
+        shell: false,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'ignore'],
+        env: this.env
+      });
+      session = new McpStdioSession(child, { timeoutMs: this.timeoutMs });
+
       await session.initialize();
       const listed = await session.request('tools/list');
       if (!listed || !Array.isArray(listed.tools) ||
@@ -277,7 +290,11 @@ class OpenMausBotMcpClient {
         result
       });
     } finally {
-      await session.close();
+      try {
+        if (session) await session.close();
+      } finally {
+        this.activeCalls -= 1;
+      }
     }
   }
 }
