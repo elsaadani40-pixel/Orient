@@ -40,8 +40,7 @@ Future device adapters must request only permissions needed for user-requested f
 
 ## Next gates
 
-1. Persist bounded owner login-failure/lockout state in the canonical identity lifecycle so restart behavior matches the documented policy.
-2. Implement real tool capabilities only behind the canonical runtime's authorization, risk, approval, and audit gates.
-3. Add permission-state and API-contract tests for each Android adapter.
-4. Add emulator/instrumentation smoke tests before claiming device readiness.
-5. Produce a signed release artifact only after security review; no signing secrets belong in the repository.
+1. Implement real tool capabilities only behind the canonical runtime's authorization, risk, approval, and audit gates.
+2. Add permission-state and API-contract tests for each Android adapter.
+3. Add emulator/instrumentation smoke tests before claiming device readiness.
+4. Produce a signed release artifact only after security review; no signing secrets belong in the repository.
