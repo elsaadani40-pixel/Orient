@@ -230,10 +230,10 @@ class OwnerIdentityService {
     return { ok: false, code: 'OWNER_LOGIN_FAILED' };
   }
 
-  async login({ username = 'Admin', email, password, sourceIp = 'unknown', maxFailures = this.maxLoginFailures, lockoutMs = this.loginLockoutMs } = {}) {
+  async login({ username = 'Admin', email, password, sourceIp = 'unknown', maxFailures = this.maxLoginFailures, lockoutMs = this.loginLockoutMs, now = this.now() } = {}) {
+    if (!Number.isSafeInteger(now) || now < 0) throw new RangeError('Invalid owner login clock');
     if (!Number.isInteger(maxFailures) || maxFailures < 1 || maxFailures > 100 ||
         !Number.isSafeInteger(lockoutMs) || lockoutMs < 1000 || lockoutMs > 86400000) throw new RangeError('Invalid owner login protection policy');
-    const now = this.now();
     this.pruneLoginFailures(now);
     const failureKey = this.loginFailureKey(sourceIp);
     const prior = this.loginFailures.get(failureKey);
