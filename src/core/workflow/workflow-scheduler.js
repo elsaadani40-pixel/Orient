@@ -118,7 +118,7 @@ class WorkflowScheduler {
       );
     }
 
-    if (this.queue.length + this.pendingEnqueues.size >= this.maxQueueDepth) {
+    if (this.queue.length + (this.pendingEnqueues?.size || 0) >= this.maxQueueDepth) {
       throw new AppError('Workflow queue capacity exceeded', 429, 'SCHEDULER_QUEUE_FULL');
     }
     if (this.pendingEnqueues?.has(instance.workflowId) ||
