@@ -12,26 +12,33 @@ function setExecutionAdmission(error, state) {
     return wrapped;
   }
   try {
-    const wrapped = Object.create(Object.getPrototypeOf(error));
-    for (const key of Reflect.ownKeys(error)) {
-      if (key === 'executionAdmission') continue;
-      const descriptor = Object.getOwnPropertyDescriptor(error, key);
-      if (descriptor) Object.defineProperty(wrapped, key, descriptor);
-    }
-    Object.defineProperty(wrapped, 'executionAdmission', {
+    Object.defineProperty(error, 'executionAdmission', {
       value: state, enumerable: false, configurable: true, writable: true
     });
-    return wrapped;
+    return error;
   } catch (_) {
-    const wrapped = new Error(error.message || String(error));
-    wrapped.name = error.name || 'Error';
-    for (const key of ['code', 'statusCode', 'executionContext']) {
-      try { if (error[key] !== undefined) wrapped[key] = error[key]; } catch (_) {}
+    try {
+      const wrapped = Object.create(Object.getPrototypeOf(error));
+      for (const key of Reflect.ownKeys(error)) {
+        if (key === 'executionAdmission') continue;
+        const descriptor = Object.getOwnPropertyDescriptor(error, key);
+        if (descriptor) Object.defineProperty(wrapped, key, descriptor);
+      }
+      Object.defineProperty(wrapped, 'executionAdmission', {
+        value: state, enumerable: false, configurable: true, writable: true
+      });
+      return wrapped;
+    } catch (_) {
+      const wrapped = new Error(error.message || String(error));
+      wrapped.name = error.name || 'Error';
+      for (const key of ['code', 'statusCode', 'executionContext']) {
+        try { if (error[key] !== undefined) wrapped[key] = error[key]; } catch (_) {}
+      }
+      wrapped.stack = error.stack || wrapped.stack;
+      wrapped.cause = error;
+      wrapped.executionAdmission = state;
+      return wrapped;
     }
-    wrapped.stack = error.stack || wrapped.stack;
-    wrapped.cause = error;
-    wrapped.executionAdmission = state;
-    return wrapped;
   }
 }
 
