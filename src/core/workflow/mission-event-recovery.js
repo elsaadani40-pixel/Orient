@@ -51,7 +51,14 @@ class MissionEventRecovery {
       deadlineAt: snapshot.deadlineAt,
       recovery: snapshot.recovery,
       compensation: snapshot.compensation,
-      input: snapshot.input
+      input: snapshot.input,
+      approval: {
+        blocked: snapshot.metadata?.approvalBlocked === true,
+        executionId: snapshot.metadata?.approvalExecutionId || null,
+        approvalId: snapshot.metadata?.approvalId || null,
+        stepId: snapshot.metadata?.approvalStepId || null,
+        requiredAt: snapshot.metadata?.approvalRequiredAt || null
+      }
     }) === JSON.stringify({
       state: projected.state,
       steps: projected.steps,
@@ -60,7 +67,14 @@ class MissionEventRecovery {
       deadlineAt: projected.deadlineAt,
       recovery: projected.recovery,
       compensation: projected.compensation,
-      input: projected.input
+      input: projected.input,
+      approval: {
+        blocked: projected.metadata?.approvalBlocked === true,
+        executionId: projected.metadata?.approvalExecutionId || null,
+        approvalId: projected.metadata?.approvalId || null,
+        stepId: projected.metadata?.approvalStepId || null,
+        requiredAt: projected.metadata?.approvalRequiredAt || null
+      }
     });
   }
 
