@@ -72,7 +72,7 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
 
  async recoverPersisted(workerId='worker',workerCapabilities=[],workerPrincipal=null) {
   if (!this.workflowRepository?.findAll && !this.workflowRepository?.claimQueued) return 0;
-  const availableQueueCapacity = Math.max(0, this.maxQueueDepth - this.queue.length);
+  const availableQueueCapacity = Math.max(0, this.maxQueueDepth - this.queue.length - (this.pendingEnqueues?.size || 0));
   if (!availableQueueCapacity || availableQueueCapacity < this.dispatchWindow) return 0;
 
   const tenantId = this.tenantId || 'local';
