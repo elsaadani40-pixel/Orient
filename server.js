@@ -513,11 +513,18 @@ function createOwnerServer(options = {}) {
       }
     }
 
-    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/owner.html' || url.pathname === '/dashboard.html')) {
-      const ownerSession = sessionFor(req);
-      const target = ownerSession ? '/account.html' : '/auth';
-      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+    if (req.method === 'GET' && url.pathname === '/owner.html') {
+      res.writeHead(302, { Location: '/account.html', 'Cache-Control': 'no-store' });
       return res.end();
+    }
+
+    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/dashboard.html')) {
+      const ownerSession = sessionFor(req);
+      const target = !ownerSession ? '/auth' : ownerPasswordChangeRequired() ? '/account.html' : '/dashboard.html';
+      if (url.pathname !== target) {
+        res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+        return res.end();
+      }
     }
 
 
