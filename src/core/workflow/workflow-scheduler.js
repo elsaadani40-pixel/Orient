@@ -117,8 +117,13 @@ class WorkflowScheduler {
       );
     }
 
-    if (this.queue.length >= this.maxQueueDepth) {
+    if (this.queue.length + this.pendingEnqueues.size >= this.maxQueueDepth) {
       throw new AppError('Workflow queue capacity exceeded', 429, 'SCHEDULER_QUEUE_FULL');
+    }
+    if (this.pendingEnqueues.has(instance.workflowId) ||
+        this.queue.some(item => item.instance.workflowId === instance.workflowId) ||
+        this.active.has(instance.workflowId)) {
+      throw new AppError('Workflow is already queued, active, or being admitted', 409, 'WORKFLOW_ALREADY_SCHEDULED');
     }
 
     instance.setDeadline(deadlineAt);
