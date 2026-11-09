@@ -47,13 +47,29 @@ test('owner-scoped workflow update rejects active worker leases and writes by ow
   const h = fixture([
     { rows: [{ workflow_id: 'workflow-a' }], rowCount: 1 },
     { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
     { rows: [{ workflow_id: 'workflow-a' }], rowCount: 1 }
   ]);
   await h.repo.save(h.instance, 'tenant-a', { persistencePrincipal: h.principal });
   assert.match(h.calls[0].sql, /payload->>'userId'/);
-  assert.match(h.calls[1].sql, /workflow_leases/);
-  assert.match(h.calls[2].sql, /payload->>'userId'=\$3/);
-  assert.deepEqual(h.calls[2].values.slice(0, 3), ['workflow-a', 'tenant-a', 'owner-a']);
+  assert.match(h.calls[1].sql, /workflow_dispatch_claims/);
+  assert.match(h.calls[2].sql, /workflow_leases/);
+  assert.match(h.calls[3].sql, /payload->>'userId'/);
+  assert.deepEqual(h.calls[3].values.slice(0, 3), ['workflow-a', 'tenant-a', 'owner-a']);
+});
+
+test('owner-scoped workflow update rejects an active worker dispatch claim', async () => {
+  const h = fixture([
+    { rows: [{ workflow_id: 'workflow-a' }], rowCount: 1 },
+    { rows: [{ active: 1 }], rowCount: 1 }
+  ]);
+  await assert.rejects(
+    h.repo.save(h.instance, 'tenant-a', { persistencePrincipal: h.principal }),
+    error => error.code === 'WORKFLOW_DISPATCH_CLAIM_HELD'
+  );
+  assert.equal(h.calls.length, 2);
+  assert.match(h.calls[0].sql, /FOR UPDATE/);
+  assert.match(h.calls[1].sql, /workflow_dispatch_claims/);
 });
 
 test('owner-scoped workflow save does not overwrite a workflow owned by another principal', async () => {
