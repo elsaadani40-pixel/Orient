@@ -133,3 +133,31 @@ test('worker mission events preserve their stable identity and lease principal',
   assert.strictEqual(persistedOptions.workerPrincipal, workerPrincipal);
   assert.equal(persistedOptions.tenantId, 'local');
 });
+
+
+test('owner authority is propagated through durable event append and workflow snapshot persistence', async () => {
+  const principal = { tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a' };
+  const calls = [];
+  const sink = new DurableMissionEventSink({
+    eventRepository: {
+      async appendMissionEvent(event, options) {
+        calls.push({ kind: 'event', principal: options.persistencePrincipal });
+        return { ...event, sequence: 1 };
+      }
+    },
+    workflowRepository: {
+      async save(_instance, tenantId, options) {
+        calls.push({ kind: 'snapshot', tenantId, principal: options.persistencePrincipal });
+      }
+    },
+    tenantId: 'tenant-a'
+  });
+  const mission = instance();
+  mission.tenantId = 'tenant-a';
+  mission.userId = 'owner-a';
+  await sink.recordSnapshot(mission, 'approval_resolution', { persistencePrincipal: principal });
+  assert.deepEqual(calls.map(call => call.kind), ['event', 'snapshot']);
+  assert.strictEqual(calls[0].principal, principal);
+  assert.strictEqual(calls[1].principal, principal);
+  assert.equal(calls[1].tenantId, 'tenant-a');
+});
