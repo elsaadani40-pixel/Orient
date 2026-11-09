@@ -267,7 +267,10 @@ function createOwnerServer(options = {}) {
         const ownerStatus = identity ? identity.status() : null;
         if (identity && identifier.toLowerCase() === String(ownerStatus.email || '').toLowerCase()) {
           const result = await identity.login({ email: identifier, password: body.password, sourceIp: ip });
-          if (!result.ok) return sendJson(res, 401, { error: 'بيانات الدخول غير صحيحة.' });
+          if (!result.ok) {
+            const status = result.code === 'OWNER_LOGIN_RATE_LIMITED' || result.code === 'OWNER_SESSION_LIMIT_REACHED' ? 429 : 401;
+            return sendJson(res, status, { error: 'بيانات الدخول غير صحيحة.' });
+          }
           attempts.delete(ip);
           const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
           return sendJson(res, 200, { ok: true, username: 'Admin', role: 'owner', email: ownerStatus.email, csrfToken: result.csrfToken, expiresAt: result.expiresAt, passwordChangeRequired: result.passwordChangeRequired },
