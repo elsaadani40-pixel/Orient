@@ -131,3 +131,31 @@ test('mission recovery awaits asynchronous event, snapshot, and repair repositor
   assert.deepEqual(calls, ['events', 'snapshot', 'repair']);
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
+
+
+test('does not downgrade a checkpointed workflow with missing events to legacy recovery', async () => {
+  const s = stores();
+  const mission = await seed(s);
+  assert.ok(s.workflows.findById(mission.workflowId, 'tenant-a').checkpoint.revision > 0);
+  s.events.write([]);
+  const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
+
+  await assert.rejects(
+    () => recovery.reconcile(mission.workflowId, 'tenant-a'),
+    error => error.code === 'MISSION_EVENT_HISTORY_MISSING'
+  );
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
+
+test('recognizes an uncheckpointed snapshot without events as a legacy workflow', async () => {
+  const s = stores();
+  const mission = make();
+  fs.writeFileSync(s.workflows.filePath, JSON.stringify([mission.toJSON()]) + '\\n');
+  const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
+
+  await assert.rejects(
+    () => recovery.reconcile(mission.workflowId, 'tenant-a'),
+    error => error.code === 'MISSION_EVENT_HISTORY_REQUIRED'
+  );
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
