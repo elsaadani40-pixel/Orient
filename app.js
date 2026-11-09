@@ -48,6 +48,11 @@ const createWorkspaceTools =
   require('./src/application/tools/workspace.tools');
 const createProjectTools =
   require('./src/application/tools/project.tools');
+
+const OpenMausBotMcpClient =
+  require('./src/infrastructure/agents/openmausbot-mcp-client').OpenMausBotMcpClient;
+const createOpenMausBotTools =
+  require('./src/application/tools/openmausbot.tools');
 const ProjectOperationReceiptStore =
   require('./src/infrastructure/execution/project-operation-receipt-store');
 
@@ -250,12 +255,37 @@ const projectTools = createProjectTools({
   operationReceiptStore: projectOperationReceiptStore
 });
 
+const openMausBotEnabled = process.env.ORIENT_OPENMAUSBOT_ENABLED === 'true';
+let openMausBotTools = [];
+if (openMausBotEnabled) {
+  let openMausBotArgs = ['mcp'];
+  if (process.env.ORIENT_OPENMAUSBOT_MCP_ARGS) {
+    try {
+      openMausBotArgs = JSON.parse(process.env.ORIENT_OPENMAUSBOT_MCP_ARGS);
+    } catch {
+      throw new Error('ORIENT_OPENMAUSBOT_MCP_ARGS must be a JSON array of strings');
+    }
+    if (!Array.isArray(openMausBotArgs) || openMausBotArgs.some(arg => typeof arg !== 'string')) {
+      throw new Error('ORIENT_OPENMAUSBOT_MCP_ARGS must be a JSON array of strings');
+    }
+  }
+  const timeoutMs = process.env.ORIENT_OPENMAUSBOT_TIMEOUT_MS === undefined
+    ? 15000
+    : Number(process.env.ORIENT_OPENMAUSBOT_TIMEOUT_MS);
+  const openMausBotClient = new OpenMausBotMcpClient({
+    command: process.env.ORIENT_OPENMAUSBOT_MCP_COMMAND || 'openmausbot',
+    args: openMausBotArgs,
+    timeoutMs
+  });
+  openMausBotTools = createOpenMausBotTools(openMausBotClient);
+}
+
 // Prefer the explicitly governed project tools over the legacy workspace
 // aliases with the same names. Registry registration remains startup-only.
 const projectToolNames = new Set(projectTools.map(tool => tool.name));
 const uniqueWorkspaceTools = workspaceTools.filter(tool => !projectToolNames.has(tool.name));
 
-for (const tool of [...memoryTools, ...uniqueWorkspaceTools, ...projectTools]) {
+for (const tool of [...memoryTools, ...uniqueWorkspaceTools, ...projectTools, ...openMausBotTools]) {
   toolRegistry.register(tool);
 }
 
