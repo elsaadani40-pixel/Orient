@@ -7,6 +7,8 @@ const path = require('node:path');
 const TOKEN = /^[A-Za-z0-9_-]{40,100}$/;
 const HASH = /^(?:[a-f0-9]{128}:[a-f0-9]{32}|legacy:[a-f0-9]{128}:[a-f0-9]{32})$/;
 const MIN_PASSWORD = 14;
+const DEFAULT_OWNER_EMAIL = 'elsaadani40@gmail.com';
+function normalizeEmail(value) { return typeof value === 'string' ? value.trim().toLowerCase() : ''; }
 
 function passwordHash(password, salt = crypto.randomBytes(16)) {
   return crypto.scryptSync(password, salt, 64).toString('hex') + ':' + salt.toString('hex');
@@ -30,10 +32,12 @@ function tokenDigest(token) {
  * Bootstrap plaintext is returned only once to the caller and is never persisted.
  */
 class OwnerIdentityService {
-  constructor({ stateFile, bootstrapPassword, sessionTtlMs = 30 * 60 * 1000, now = Date.now } = {}) {
+  constructor({ stateFile, bootstrapPassword, ownerEmail = process.env.ORIENT_OWNER_EMAIL || DEFAULT_OWNER_EMAIL, sessionTtlMs = 30 * 60 * 1000, now = Date.now } = {}) {
     if (typeof stateFile !== 'string' || !stateFile) throw new TypeError('stateFile is required');
     if (!Number.isSafeInteger(sessionTtlMs) || sessionTtlMs < 1000 || sessionTtlMs > 86400000) throw new RangeError('Invalid session TTL');
     this.stateFile = path.resolve(stateFile);
+    this.ownerEmail = normalizeEmail(ownerEmail);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.ownerEmail)) throw new TypeError('A valid canonical owner email is required');
     this.sessionTtlMs = sessionTtlMs;
     this.now = now;
     this.sessions = new Map();
@@ -43,11 +47,12 @@ class OwnerIdentityService {
     if (!this.state) {
       const secret = bootstrapPassword || crypto.randomBytes(24).toString('base64url');
       if (typeof secret !== 'string' || secret.length < MIN_PASSWORD || secret.length > 1024) throw new RangeError('Bootstrap password must be at least 14 characters');
-      this.state = { version: 1, username: 'Admin', passwordHash: passwordHash(secret), mustChangePassword: true, sessions: [] };
+      this.state = { version: 1, username: 'Admin', email: this.ownerEmail, passwordHash: passwordHash(secret), mustChangePassword: true, sessions: [] };
       this._bootstrapPassword = secret;
       this.createdBootstrap = true;
       this.save();
     } else {
+      if (this.state.email !== this.ownerEmail) { this.state = { ...this.state, email: this.ownerEmail }; this.save(); }
       for (const session of this.state.sessions) {
         if (!session || !/^[a-f0-9]{64}$/.test(session.digest) || !TOKEN.test(session.csrfToken) ||
             !Number.isSafeInteger(session.expiresAt) || session.expiresAt <= this.now()) continue;
@@ -82,6 +87,7 @@ class OwnerIdentityService {
       return {
         version: 1,
         username: 'Admin',
+        email: this.ownerEmail,
         passwordHash: 'legacy:' + value.password.hash + ':' + value.password.salt,
         mustChangePassword: value.mustChangePassword,
         sessions: []
@@ -159,8 +165,9 @@ class OwnerIdentityService {
     return { token, csrfToken, expiresAt };
   }
 
-  async login({ username = 'Admin', password } = {}) {
-    if (username !== 'Admin' || !matches(password, this.state.passwordHash)) return { ok: false, code: 'OWNER_LOGIN_FAILED' };
+  async login({ username = 'Admin', email, password } = {}) {
+    const validIdentity = email !== undefined ? normalizeEmail(email) === this.state.email : username === 'Admin';
+    if (!validIdentity || !matches(password, this.state.passwordHash)) return { ok: false, code: 'OWNER_LOGIN_FAILED' };
     for (const [key, session] of this.sessions) if (session.expiresAt <= this.now()) this.sessions.delete(key);
     if (this.sessions.size >= 4096) return { ok: false, code: 'OWNER_SESSION_LIMIT_REACHED' };
     return { ok: true, ...this.createSession(), passwordChangeRequired: this.state.mustChangePassword };
@@ -228,7 +235,7 @@ class OwnerIdentityService {
   }
 
   status() {
-    return { username: 'Admin', configured: true, passwordChangeRequired: this.state.mustChangePassword };
+    return { username: 'Admin', email: this.state.email, configured: true, passwordChangeRequired: this.state.mustChangePassword };
   }
 }
 
