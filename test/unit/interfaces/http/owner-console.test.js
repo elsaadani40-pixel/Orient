@@ -284,3 +284,83 @@ test('runtime owner login validates the canonical email against the shared owner
     assert.equal((await session.json()).passwordChangeRequired, true);
   });
 });
+
+
+test('canonical owner login lockout survives restart and persists only a keyed source digest', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-lockout-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const stateFile = path.join(dataDir, 'owner.json');
+  const sourceIp = '203.0.113.77';
+  const bootstrapPassword = String(crypto.randomInt(1000000000, 9999999999));
+  let now = 1_800_000_000_000;
+  const options = {
+    stateFile,
+    ownerEmail: 'owner@example.com',
+    bootstrapPassword,
+    maxLoginFailures: 3,
+    loginLockoutMs: 60_000,
+    now: () => now
+  };
+  const identity = new OwnerIdentityService(options);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await identity.login({
+      email: 'attacker@example.com',
+      password: 'incorrect',
+      sourceIp
+    });
+    assert.equal(result.code, 'OWNER_LOGIN_FAILED');
+  }
+
+  const persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  assert.equal(persisted.loginFailures.length, 1);
+  assert.doesNotMatch(JSON.stringify(persisted), new RegExp(sourceIp.replaceAll('.', '\\\\.'), 'u'));
+
+  const restartedIdentity = new OwnerIdentityService({ ...options, bootstrapPassword: undefined });
+  const restartedAdapter = new OwnerIdentityRuntimeAdapter({
+    identity: restartedIdentity,
+    maxFailures: 3,
+    lockoutMs: 60_000,
+    now: () => now
+  });
+  const blocked = await restartedAdapter.login({
+    email: 'owner@example.com',
+    password: bootstrapPassword,
+    sourceIp
+  });
+  assert.equal(blocked.code, 'OWNER_LOGIN_RATE_LIMITED');
+
+  const otherSource = await restartedAdapter.login({
+    email: 'owner@example.com',
+    password: bootstrapPassword,
+    sourceIp: '203.0.113.78'
+  });
+  assert.equal(otherSource.ok, true);
+
+  now += 60_001;
+  const afterExpiry = await restartedAdapter.login({
+    email: 'owner@example.com',
+    password: bootstrapPassword,
+    sourceIp
+  });
+  assert.equal(afterExpiry.ok, true);
+});
+
+test('concurrent owner failures cannot bypass the persisted per-source threshold', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-lockout-race-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const identity = new OwnerIdentityService({
+    stateFile: path.join(dataDir, 'owner.json'),
+    ownerEmail: 'owner@example.com',
+    bootstrapPassword: String(crypto.randomInt(1000000000, 9999999999)),
+    maxLoginFailures: 3,
+    loginLockoutMs: 60_000
+  });
+  const attempts = await Promise.all(Array.from({ length: 8 }, () => identity.login({
+    email: 'wrong@example.com',
+    password: 'incorrect',
+    sourceIp: '198.51.100.19'
+  })));
+  assert.equal(attempts.filter(result => result.code === 'OWNER_LOGIN_FAILED').length, 3);
+  assert.equal(attempts.filter(result => result.code === 'OWNER_LOGIN_RATE_LIMITED').length, 5);
+});
