@@ -28,6 +28,34 @@ function assertTaskExecutionIdentity(execution, executionId, tenantId) {
   }
 }
 
+async function completeTaskFromExecution(service, repository, key, executionId, tenantId, persistencePrincipal, replayed) {
+  const execution = await service.getExecutionStatus(executionId, { persistencePrincipal });
+  if (!execution || execution.executionId !== executionId) {
+    throw new AppError(
+      'Persisted execution status does not match the idempotency reservation',
+      502,
+      'TASK_EXECUTION_ID_MISMATCH'
+    );
+  }
+  const task = taskSummary(execution);
+  await repository.complete(key, task, {
+    tenantId,
+    ...(persistencePrincipal ? { persistencePrincipal } : {})
+  });
+  return { task, replayed };
+}
+
+async function failPreAdmissionReservation(repository, key, error, tenantId, persistencePrincipal) {
+  try {
+    await repository.fail(key, {
+      code: error?.code || 'TASK_CREATION_REJECTED',
+      message: error?.message || 'Task creation was rejected before admission'
+    }, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
+  } catch (_) {
+    // A failed terminal write leaves the reservation blocked, never replayable.
+  }
+}
+
 class AgentService {
   constructor(runtime) {
     this.runtime = runtime;
@@ -112,20 +140,9 @@ class AgentService {
         });
         if (persistedExecution) {
           assertTaskExecutionIdentity(persistedExecution, reservedExecutionId, tenantId);
-          const execution = await this.getExecutionStatus(reservedExecutionId, { persistencePrincipal });
-          if (!execution || execution.executionId !== reservedExecutionId) {
-            throw new AppError(
-              'Recovered execution status does not match the idempotency reservation',
-              502,
-              'TASK_EXECUTION_ID_MISMATCH'
-            );
-          }
-          const task = taskSummary(execution);
-          await repository.complete(begun.key, task, {
-            tenantId,
-            ...(persistencePrincipal ? { persistencePrincipal } : {})
-          });
-          return { task, replayed: true };
+          return completeTaskFromExecution(
+            this, repository, begun.key, reservedExecutionId, tenantId, persistencePrincipal, true
+          );
         }
       }
 
@@ -166,14 +183,7 @@ class AgentService {
         result = { execution: { executionId: approvalExecutionId }, awaitingApproval: true };
       } else {
         if (error?.executionAdmission === 'rejected') {
-          try {
-            await repository.fail(begun.key, {
-              code: error?.code || 'TASK_CREATION_REJECTED',
-              message: error?.message || 'Task creation was rejected before admission'
-            }, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
-          } catch (_) {
-            // Keep an uncertain reservation running rather than permitting replay.
-          }
+          await failPreAdmissionReservation(repository, begun.key, error, tenantId, persistencePrincipal);
         }
         throw error;
       }
@@ -186,12 +196,7 @@ class AgentService {
         result.code || 'TASK_ADMISSION_REJECTED'
       );
       rejection.executionAdmission = 'rejected';
-      try {
-        await repository.fail(begun.key, {
-          code: rejection.code,
-          message: rejection.message
-        }, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
-      } catch (_) {}
+      await failPreAdmissionReservation(repository, begun.key, rejection, tenantId, persistencePrincipal);
       throw rejection;
     }
 
@@ -223,20 +228,9 @@ class AgentService {
       assertTaskExecutionIdentity(persistedExecution, executionId, tenantId);
     }
 
-    const execution = await this.getExecutionStatus(executionId, { persistencePrincipal });
-    if (!execution || execution.executionId !== executionId) {
-      throw new AppError(
-        'Persisted execution status does not match the reserved task ID',
-        502,
-        'TASK_EXECUTION_ID_MISMATCH'
-      );
-    }
-    const task = taskSummary(execution);
-    await repository.complete(begun.key, task, {
-      tenantId,
-      ...(persistencePrincipal ? { persistencePrincipal } : {})
-    });
-    return { task, replayed: false };
+    return completeTaskFromExecution(
+      this, repository, begun.key, executionId, tenantId, persistencePrincipal, false
+    );
   }
 
 
