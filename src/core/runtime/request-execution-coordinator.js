@@ -19,7 +19,7 @@ function setExecutionAdmission(error, state) {
       if (descriptor) Object.defineProperty(wrapped, key, descriptor);
     }
     Object.defineProperty(wrapped, 'executionAdmission', {
-      value: state, enumerable: true, configurable: true, writable: true
+      value: state, enumerable: false, configurable: true, writable: true
     });
     return wrapped;
   } catch (_) {
