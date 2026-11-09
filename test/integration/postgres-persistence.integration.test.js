@@ -957,6 +957,47 @@ test('PostgreSQL durable claims require a live registered worker identity', asyn
   await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
 });
 
+test('PostgreSQL workflow repair serializes concurrent recovery writers with revision fencing', async () => {
+  const workflowId = 'mission-repair-race-' + randomUUID();
+  const tenantId = 'tenant-mission-repair';
+  const now = new Date().toISOString();
+  await pool.query(
+    'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,$4,$5)',
+    [workflowId, tenantId, 'WAITING', now, {
+      workflowId, tenantId, state: 'WAITING', updatedAt: now,
+      checkpoint: { revision: 2 }, metadata: {}
+    }]
+  );
+  const createSnapshot = () => ({
+    workflowId, tenantId, state: 'QUEUED', updatedAt: now,
+    checkpoint: { revision: 2 }, metadata: {},
+    toJSON() { return this; }
+  });
+  try {
+    const outcomes = await Promise.allSettled([
+      persistence.workflows.repair(createSnapshot(), {
+        tenantId, expectedRevision: 2, targetRevision: 3
+      }),
+      persistence.workflows.repair(createSnapshot(), {
+        tenantId, expectedRevision: 2, targetRevision: 3
+      })
+    ]);
+    assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 1);
+    const rejected = outcomes.find(item => item.status === 'rejected');
+    assert.equal(rejected.reason.code, 'WORKFLOW_CHECKPOINT_CONFLICT');
+    const stored = await pool.query(
+      'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2',
+      [workflowId, tenantId]
+    );
+    assert.equal(Number(stored.rows[0].payload.checkpoint.revision), 3);
+    assert.equal(stored.rows[0].payload.state, 'QUEUED');
+  } finally {
+    await pool.query('DELETE FROM workflow_dispatch_claims WHERE workflow_id=$1', [workflowId]);
+    await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+  }
+});
+
 test('PostgreSQL dispatch claims are exclusive across concurrent workers and expire safely', async () => {
   const workflowId = 'claim-wf-' + Date.now();
   await pool.query(
