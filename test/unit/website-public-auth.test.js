@@ -47,7 +47,7 @@ test('public registration creates a regular account and never grants owner dashb
   assert.equal(accountRoute.headers.get('location'), '/account.html');
   const accountPage = await fetch(base + '/account.html', { headers: { cookie }, redirect: 'manual' });
   assert.equal(accountPage.status, 200);
-  assert.match(await accountPage.text(), /PERSONAL ACCOUNT/);
+  assert.match(await accountPage.text(), /YOUR ORIENT WORKSPACE/);
 
   const ownerApi = await fetch(base + '/api/owner/users', { headers: { cookie } });
   assert.equal(ownerApi.status, 401);
