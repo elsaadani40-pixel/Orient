@@ -24,7 +24,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,9 +51,12 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun OrientCompanionApp() {
-    val background = Color(0xFF080D16)
-    val panel = Color(0xFF131D2B)
-    val muted = Color(0xFFB5C2D5)
+    val context = LocalContext.current
+    val preferences = remember(context) { context.getSharedPreferences("orient_ui_preferences", android.content.Context.MODE_PRIVATE) }
+    var isDarkTheme by remember { mutableStateOf(preferences.getBoolean("dark_theme", true)) }
+    val background = if (isDarkTheme) Color(0xFF0C121A) else Color(0xFFF5F7FA)
+    val panel = if (isDarkTheme) Color(0xFF141E29) else Color(0xFFFFFFFF)
+    val muted = if (isDarkTheme) Color(0xFFA5B2C2) else Color(0xFF596779)
     val scope = rememberCoroutineScope()
 
     var portText by remember { mutableStateOf("8080") }
@@ -72,26 +77,35 @@ private fun OrientCompanionApp() {
         }
     }
 
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Color(0xFF8AB4FF),
-            background = background,
-            surface = panel,
-            onBackground = Color(0xFFEAF1FB),
-            onSurface = Color(0xFFEAF1FB)
-        )
-    ) {
+    val orientColorScheme = if (isDarkTheme) {
+        darkColorScheme(primary = Color(0xFF73CFC1), onPrimary = Color(0xFF08211E), background = background, surface = panel,
+            surfaceVariant = Color(0xFF192634), onBackground = Color(0xFFEAF0F6), onSurface = Color(0xFFEAF0F6),
+            onSurfaceVariant = Color(0xFFA5B2C2))
+    } else {
+        lightColorScheme(primary = Color(0xFF187C76), onPrimary = Color.White, background = background, surface = panel,
+            surfaceVariant = Color(0xFFEEF2F6), onBackground = Color(0xFF17212F), onSurface = Color(0xFF17212F),
+            onSurfaceVariant = Color(0xFF596779))
+    }
+    MaterialTheme(colorScheme = orientColorScheme) {
         Surface(modifier = Modifier.fillMaxSize(), color = background) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 22.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    Text("ORIENT", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("المرافق التنفيذي", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("اتصال محلي مصادق عليه · Android", color = Color(0xFF9BAAC0), fontSize = 13.sp)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column {
+                            Text("ORIENT", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(6.dp))
+                            Text("المرافق التنفيذي", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(6.dp))
+                            Text("اتصال محلي مصادق عليه · Android", color = muted, fontSize = 13.sp)
+                        }
+                        TextButton(onClick = {
+                            isDarkTheme = !isDarkTheme
+                            preferences.edit().putBoolean("dark_theme", isDarkTheme).apply()
+                        }) { Text(if (isDarkTheme) "الوضع الفاتح" else "الوضع الداكن") }
+                    }
                 }
 
                 item {
