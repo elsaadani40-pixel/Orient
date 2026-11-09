@@ -216,12 +216,26 @@ class OwnerIdentityService {
     const readExisting = () => {
       let fd;
       try {
-        const linkStat = fs.lstatSync(this.loginFailureKeyFile);
-        if (linkStat.isSymbolicLink()) {
-          throw Object.assign(new Error('Owner lockout key file must not be a symbolic link'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
+        // Open first, then validate the opened descriptor. On POSIX, O_NOFOLLOW
+        // makes the open itself reject symlinks, avoiding a separate lstat/open
+        // check-then-use race. Node does not expose an equivalent portable flag
+        // on Windows; there the key remains confined to the owner-only data
+        // directory and the opened handle is still validated with fstat.
+        const noFollow = fs.constants.O_NOFOLLOW;
+        try {
+          fd = fs.openSync(
+            this.loginFailureKeyFile,
+            fs.constants.O_RDONLY | (typeof noFollow === 'number' ? noFollow : 0)
+          );
+        } catch (error) {
+          if (error.code === 'ELOOP' || error.code === 'EMLINK') {
+            throw Object.assign(new Error('Owner lockout key file must not be a symbolic link'), {
+              code: 'OWNER_LOCKOUT_KEY_INVALID',
+              cause: error
+            });
+          }
+          throw error;
         }
-        const noFollow = fs.constants.O_NOFOLLOW || 0;
-        fd = fs.openSync(this.loginFailureKeyFile, fs.constants.O_RDONLY | noFollow);
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size !== 64) {
           throw Object.assign(new Error('Owner lockout key file is invalid'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
