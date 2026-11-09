@@ -232,7 +232,7 @@ class WorkflowExecutionCoordinator {
       approvalResolvedAt: new Date().toISOString(),
       cancellationReason: String(reason).slice(0, 300)
     };
-    await this.persistApprovalWorkflow(instance, fromState);
+    await this.persistApprovalWorkflow(instance, fromState, persistencePrincipal);
     return instance.toJSON();
   }
 
