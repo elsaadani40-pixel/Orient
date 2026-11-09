@@ -95,3 +95,60 @@ test('recovery never re-enqueues a persisted approval-blocked workflow', async (
   assert.equal(scheduler.queue.length, 0);
   assert.equal(scheduler.active.size, 0);
 });
+
+
+test('worker awaits durable event writes before executing and completing a step', async () => {
+  const definition = new WorkflowDefinition({
+    id: 'async-event-write-order',
+    version: 1,
+    name: 'Async event write order',
+    steps: [{ id: 'work', tool: 'work' }]
+  });
+  const instance = new WorkflowInstance({
+    definition,
+    workflowId: 'async-event-write-order',
+    tenantId: 'tenant-a'
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  const persistedEvents = [];
+  let released = false;
+  const scheduler = {
+    tenantId: 'tenant-a',
+    leaseDurationMs: 5000,
+    async leaseAsync() {
+      return {
+        workflowId: instance.workflowId,
+        instance,
+        leaseId: 'lease-async-events',
+        workerId: 'worker-async-events',
+        previousState: 'QUEUED',
+        cancelled: false
+      };
+    },
+    async renewAsync() {},
+    async assertCurrentAsync() {},
+    async persistAsync() {
+      assert.ok(persistedEvents.includes('workflow.step.completed'));
+      assert.ok(persistedEvents.includes('workflow.state.changed'));
+    },
+    async releaseAsync() { released = true; },
+    async retryAsync() { throw new Error('unexpected retry'); }
+  };
+  const worker = new AsyncWorkflowWorker({
+    scheduler,
+    workerId: 'worker-async-events',
+    eventSink: async event => {
+      await Promise.resolve();
+      persistedEvents.push(event.type);
+    },
+    executor: async () => {
+      assert.ok(persistedEvents.includes('workflow.step.started'));
+      return { ok: true };
+    }
+  });
+  const result = await worker.tick();
+  assert.equal(result.state, 'COMPLETED');
+  assert.equal(released, true);
+  assert.ok(persistedEvents.indexOf('workflow.step.started') < persistedEvents.indexOf('workflow.step.completed'));
+});

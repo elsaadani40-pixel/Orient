@@ -23,21 +23,21 @@ class WorkflowWorker {
     const lease = this.scheduler.lease(this.workerId);
     if (!lease) return null;
     const instance = lease.instance;
-    this.emit('workflow.lease.acquired', { workflowId: instance.workflowId, leaseId: lease.leaseId, workerId: this.workerId });
-    this.emitState(instance, lease.previousState || 'QUEUED', instance.state, lease);
     try {
+      await this.emit('workflow.lease.acquired', { workflowId: instance.workflowId, leaseId: lease.leaseId, workerId: this.workerId });
+      await this.emitState(instance, lease.previousState || 'QUEUED', instance.state, lease);
       while (true) {
         if (lease.cancelled || instance.cancelRequested) {
           const from = instance.state;
           if (instance.state !== 'CANCELLED') instance.transition('CANCELLED');
-          this.emitState(instance, from, instance.state, lease);
-          this.emit('workflow.cancelled', { workflowId: instance.workflowId, leaseId: lease.leaseId }); break;
+          await this.emitState(instance, from, instance.state, lease);
+          await this.emit('workflow.cancelled', { workflowId: instance.workflowId, leaseId: lease.leaseId }); break;
         }
         if (this.isDeadlineExceeded(lease)) {
           const from = instance.state;
           this.failDeadline(instance);
-          this.emitState(instance, from, instance.state, lease);
-          this.emit('workflow.deadline.exceeded', { workflowId: instance.workflowId, leaseId: lease.leaseId }); break;
+          await this.emitState(instance, from, instance.state, lease);
+          await this.emit('workflow.deadline.exceeded', { workflowId: instance.workflowId, leaseId: lease.leaseId }); break;
         }
 
         this.scheduler.renew(instance.workflowId, lease.leaseId);
@@ -47,7 +47,7 @@ class WorkflowWorker {
           const from = instance.state;
           if (allCompleted) instance.transition('COMPLETED');
           else if (instance.state !== 'FAILED' && instance.state !== 'CANCELLED') instance.transition('FAILED');
-          this.emitState(instance, from, instance.state, lease);
+          await this.emitState(instance, from, instance.state, lease);
           break;
         }
 
@@ -55,7 +55,7 @@ class WorkflowWorker {
         if (lease.fencingToken !== undefined) this.scheduler.assertCurrent(instance.workflowId, lease.leaseId, lease.fencingToken);
         instance.markStepRunning(step.id);
         instance.metadata.failedStepId = null;
-        this.emit('workflow.step.started', { workflowId: instance.workflowId, leaseId: lease.leaseId, fencingToken: lease.fencingToken, stepId: step.id, attempt: instance.steps[step.id].attempts });
+        await this.emit('workflow.step.started', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id, attempt: instance.steps[step.id].attempts });
 
         try {
           const result = await this.executor({ instance, step, lease });
@@ -63,18 +63,18 @@ class WorkflowWorker {
           if (instance.cancelRequested) {
             const from = instance.state;
             instance.cancelStep(step.id); instance.transition('CANCELLED');
-            this.emitState(instance, from, instance.state, lease);
-            this.emit('workflow.cancelled', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id }); break;
+            await this.emitState(instance, from, instance.state, lease);
+            await this.emit('workflow.cancelled', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id }); break;
           }
           if (this.isDeadlineExceeded(lease)) {
             instance.markStepFailed(step.id, Object.assign(new Error('Workflow deadline exceeded'), { code: 'WORKFLOW_DEADLINE_EXCEEDED' }));
             const from = instance.state;
             this.failDeadline(instance);
-            this.emitState(instance, from, instance.state, lease);
-            this.emit('workflow.deadline.exceeded', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id }); break;
+            await this.emitState(instance, from, instance.state, lease);
+            await this.emit('workflow.deadline.exceeded', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id }); break;
           }
           instance.markStepCompleted(step.id, result);
-          this.emit('workflow.step.completed', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id });
+          await this.emit('workflow.step.completed', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id });
         } catch (error) {
           if (error?.code === 'APPROVAL_REQUIRED') {
             // Approval is a durable pause, not a failed step or a retryable error.
@@ -92,47 +92,53 @@ class WorkflowWorker {
             };
             const from = instance.state;
             if (instance.state !== 'WAITING') instance.transition('WAITING');
-            this.emit('workflow.approval.required', {
+            await this.emit('workflow.approval.required', {
               workflowId: instance.workflowId,
               leaseId: lease.leaseId,
               stepId: step.id,
               executionId: instance.metadata.approvalExecutionId,
-              approvalId: instance.metadata.approvalId
+              approvalId: instance.metadata.approvalId,
+              approvalRequiredAt: instance.metadata.approvalRequiredAt
             });
-            this.emitState(instance, from, instance.state, lease);
+            await this.emitState(instance, from, instance.state, lease);
             break;
           }
           instance.markStepFailed(step.id, error); instance.metadata.failedStepId = step.id;
-          this.emit('workflow.step.failed', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id, error: { message: error?.message, code: error?.code } });
+          await this.emit('workflow.step.failed', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id, error: { message: error?.message, code: error?.code } });
           const retryable = this.retryClassifier(error, { instance, step, lease });
           const from = instance.state;
           const retried = retryable && this.scheduler.retry(instance, { error, priority: instance.metadata.priority || 0 });
           if (retried) {
-            if (from !== instance.state) this.emitState(instance, from, instance.state, lease);
-            if (instance.state === 'QUEUED') this.emitState(instance, 'WAITING', 'QUEUED', lease);
-            this.emit('workflow.retry.scheduled', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id, retryAttempt: instance.retry.attempt, nextAttemptAt: instance.retry.nextAttemptAt });
+            if (from !== instance.state) await this.emitState(instance, from, instance.state, lease);
+            if (instance.state === 'QUEUED') await this.emitState(instance, 'WAITING', 'QUEUED', lease);
+            await this.emit('workflow.retry.scheduled', { workflowId: instance.workflowId, leaseId: lease.leaseId, stepId: step.id, retryAttempt: instance.retry.attempt, nextAttemptAt: instance.retry.nextAttemptAt, retry: instance.retry });
           } else {
             if (instance.state !== 'FAILED') instance.transition('FAILED');
-            this.emitState(instance, from, instance.state, lease);
             instance.metadata.failureCode = error?.code || 'WORKFLOW_STEP_FAILED';
+            await this.emitState(instance, from, instance.state, lease);
           }
           break;
         }
       }
       return instance;
     } finally {
-      this.scheduler.release(instance.workflowId, lease.leaseId);
-      this.emit('workflow.lease.released', { workflowId: instance.workflowId, leaseId: lease.leaseId, workerId: this.workerId });
+      await this.scheduler.release(instance.workflowId, lease.leaseId);
+      await this.emit('workflow.lease.released', { workflowId: instance.workflowId, leaseId: lease.leaseId, workerId: this.workerId });
     }
   }
 
-  emit(type, payload) {
-    this.eventSink({ eventId: crypto.randomUUID(), type, timestamp: new Date(this.now()).toISOString(), payload });
+  async emit(type, payload) {
+    return this.eventSink({ eventId: crypto.randomUUID(), type, timestamp: new Date(this.now()).toISOString(), payload });
   }
 
-  emitState(instance, from, to, lease) {
+  async emitState(instance, from, to, lease) {
     if (from === to) return;
-    this.emit('workflow.state.changed', { workflowId: instance.workflowId, leaseId: lease.leaseId, from, to });
+    const metadata = { ...(instance.metadata || {}) };
+    delete metadata.fencingToken;
+    await this.emit('workflow.state.changed', {
+      workflowId: instance.workflowId, leaseId: lease.leaseId, from, to,
+      deadlineAt: instance.deadlineAt, metadata
+    });
   }
 }
 module.exports = WorkflowWorker;

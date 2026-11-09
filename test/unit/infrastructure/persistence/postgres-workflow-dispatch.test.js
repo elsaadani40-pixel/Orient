@@ -54,6 +54,7 @@ test('durable dispatch claim is bound to the registered worker session and capab
   const claimCall=h.calls.find(x=>x.sql.includes('FOR UPDATE SKIP LOCKED'));
   assert.match(claimCall.sql,/FOR UPDATE SKIP LOCKED/);
   assert.match(claimCall.sql,/requiredCapabilities/);
+  assert.match(claimCall.sql,/approvalBlocked/);
   assert.match(claimCall.sql,/worker_session_id/);
   assert.deepEqual(claimCall.values.slice(0,5),[
     'tenant-a',10,'worker-a',JSON.stringify(['web.search','calendar.read']),15000

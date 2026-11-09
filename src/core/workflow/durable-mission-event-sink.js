@@ -2,6 +2,8 @@ const crypto = require('crypto');
 
 const TYPE_MAP = Object.freeze({
   'workflow.step.started': 'workflow.step.running',
+  'workflow.state.changed': 'workflow.state.changed',
+  'workflow.approval.required': 'workflow.approval.required',
   'workflow.step.completed': 'workflow.step.completed',
   'workflow.step.failed': 'workflow.step.failed',
   'workflow.retry.scheduled': 'workflow.step.retry',
@@ -34,18 +36,18 @@ class DurableMissionEventSink {
     };
   }
 
-  append(instance, type, data = {}, { persist = true } = {}) {
+  async append(instance, type, data = {}, { persist = true, workerPrincipal = null } = {}) {
     const event = this._event(instance, type, data);
     let persisted;
     try {
-      persisted = this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
+      persisted = await this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
     } catch (error) {
       error.code = error.code || 'MISSION_EVENT_PERSISTENCE_FAILED';
       throw error;
     }
     if (persist && this.workflowRepository?.save) {
       try {
-        this.workflowRepository.save(instance);
+        await this.workflowRepository.save(instance, instance.tenantId || this.tenantId, { workerPrincipal });
       } catch (error) {
         error.code = error.code || 'MISSION_STATE_PERSISTENCE_FAILED_AFTER_EVENT';
         error.missionEventId = persisted.id;
@@ -62,13 +64,24 @@ class DurableMissionEventSink {
       tenantId: instance.tenantId,
       userId: instance.userId,
       workspaceId: instance.workspaceId,
+      createdAt: instance.createdAt,
+      metadata: instance.metadata,
       definition: instance.definition.toJSON(),
       input: instance.input
     }, { persist: false });
   }
 
   recordState(instance, from, to) {
-    return this.append(instance, 'workflow.state.changed', { from, to });
+    return this.append(instance, 'workflow.state.changed', {
+      from, to, deadlineAt: instance.deadlineAt, metadata: instance.metadata
+    });
+  }
+
+  recordSnapshot(instance, reason = 'workflow_reconciliation', options = {}) {
+    return this.append(instance, 'workflow.snapshot.replaced', {
+      reason,
+      snapshot: instance.toJSON()
+    }, options);
   }
 
   recordWorkerEvent(instance, event) {
@@ -86,11 +99,11 @@ class DurableMissionEventSink {
       ...(type === 'workflow.step.running' ? {
         attempt: instance.steps[payload.stepId]?.attempts ?? payload.attempt ?? 0
       } : {})
-    });
+    }, { workerPrincipal: event?.workerPrincipal || null });
   }
 
-  reconstruct(workflowId, tenantId = this.tenantId) {
-    const events = this.eventRepository.findByAggregateId(workflowId, { tenantId });
+  async reconstruct(workflowId, tenantId = this.tenantId) {
+    const events = await this.eventRepository.findByAggregateId(workflowId, { tenantId });
     if (!events.length) return null;
     const Projection = require('./mission-event-projection');
     return new Projection({ clock: this.clock }).rebuild(events);

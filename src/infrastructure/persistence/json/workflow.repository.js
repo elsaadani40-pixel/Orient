@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { validateAcknowledgement, prepareAcknowledgement } = require('../workflow-outbox-utils');
 
 class WorkflowRepository {
   ensureStorage() {
@@ -184,7 +185,7 @@ class WorkflowRepository {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenantId = item.tenantId || 'local';
     if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
-    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 || !Number.isInteger(targetRevision) || targetRevision <= expectedRevision) {
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 || !Number.isInteger(targetRevision) || targetRevision < expectedRevision) {
       const error = new Error('Invalid workflow repair revision');
       error.code = 'WORKFLOW_REPAIR_REVISION_INVALID'; error.status = 409; throw error;
     }
@@ -192,8 +193,12 @@ class WorkflowRepository {
       const items = this.read();
       const existing = items.find(candidate => candidate.workflowId === item.workflowId) || null;
       const currentRevision = Number(existing?.checkpoint?.revision || 0);
-      if (existing && (existing.tenantId || 'local') !== effectiveTenantId) throw new Error('Workflow tenant collision');
-      if (currentRevision !== expectedRevision) {
+      const expectedLastSavedAt = item.checkpoint?.lastSavedAt || null;
+      const currentLastSavedAt = existing?.checkpoint?.lastSavedAt || null;
+      if (existing && (existing.tenantId || 'local') !== effectiveTenantId) {
+        throw Object.assign(new Error('Workflow snapshot changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+      }
+      if (currentRevision !== expectedRevision || currentLastSavedAt !== expectedLastSavedAt) {
         const error = new Error('Stale workflow checkpoint during repair');
         error.code = 'WORKFLOW_CHECKPOINT_CONFLICT'; error.status = 409; throw error;
       }
@@ -232,6 +237,35 @@ class WorkflowRepository {
 
   findAll({ tenantId = null } = {}) {
     return this.read().filter(item => !tenantId || item.tenantId === tenantId);
+  }
+
+  findPendingPublications({ tenantId = null, limit = 100 } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 500)) : 100;
+    return this.read().filter(item =>
+      (!tenantId || (item.tenantId || 'local') === tenantId) &&
+      item.metadata?.approvalBlocked === true &&
+      Array.isArray(item.metadata?.pendingPublications) &&
+      item.metadata.pendingPublications.length > 0
+    ).slice(0, boundedLimit);
+  }
+
+  acknowledgePendingPublications(workflowId, tenantId, eventIds = []) {
+    const acknowledgedIds = validateAcknowledgement(workflowId, tenantId, eventIds);
+    return this.withLock(() => {
+      const items = this.read();
+      const index = items.findIndex(item => item.workflowId === workflowId);
+      if (index < 0 || (items[index].tenantId || 'local') !== tenantId) {
+        throw Object.assign(new Error('Workflow not found for outbox acknowledgement'), {
+          code: 'WORKFLOW_NOT_FOUND'
+        });
+      }
+      const { updated, receipt } = prepareAcknowledgement(items[index], acknowledgedIds);
+      if (!updated) return receipt;
+      const next = [...items];
+      next[index] = updated;
+      this.write(next);
+      return receipt;
+    });
   }
 
   delete(workflowId, tenantId = null) {

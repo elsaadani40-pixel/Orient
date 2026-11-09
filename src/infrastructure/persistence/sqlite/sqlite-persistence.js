@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { isDeepStrictEqual } = require('node:util');
 const SqliteDatabase = require('./sqlite-database');
 const { SqliteWorkflowRepository, SqliteWorkflowLeaseRepository } = require('./workflow.repository');
 const { SqliteMemoryRepository, SqliteMemoryAuditRepository } = require('./memory.repository');
@@ -86,63 +87,134 @@ class SqliteExecutionRepository {
 
 class SqliteEventRepository {
   constructor(db) { this.db = db; }
-  normalize(event) {
+  normalize(event, tenantId = null) {
+    const effectiveTenant = event?.data?.tenantId || tenantId || 'local';
+    if (tenantId && effectiveTenant !== tenantId) {
+      throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
+    }
     return {
       id: event.id || crypto.randomUUID(),
       type: event.type,
       executionId: event.executionId || null,
       goalId: event.goalId || null,
+      aggregateId: event.aggregateId || event.workflowId || null,
+      sequence: event.sequence == null ? null : Number(event.sequence),
       timestamp: event.timestamp || new Date().toISOString(),
-      data: event.data && typeof event.data === 'object' ? { ...event.data } : {}
+      data: { ...(event.data && typeof event.data === 'object' ? event.data : {}), tenantId: effectiveTenant }
     };
   }
   append(event, { tenantId = null } = {}) {
-    const normalized = this.normalize(event);
-    if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
-    if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
-    this.db.run('INSERT OR IGNORE INTO events(event_id,execution_id,goal_id,type,timestamp,payload) VALUES (?, ?, ?, ?, ?, ?)', [normalized.id, normalized.executionId, normalized.goalId, normalized.type, normalized.timestamp, JSON.stringify(normalized)]);
-    return normalized;
+    const normalized = this.normalize(event, tenantId);
+    this.db.run(
+      'INSERT OR IGNORE INTO events(event_id,tenant_id,execution_id,goal_id,aggregate_id,sequence,type,timestamp,payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId, normalized.aggregateId, normalized.sequence, normalized.type, normalized.timestamp, JSON.stringify(normalized)]
+    );
+    const row = this.db.query('SELECT tenant_id,payload FROM events WHERE event_id=? LIMIT 1', [normalized.id])[0];
+    if (!row || row.tenant_id !== normalized.data.tenantId) {
+      throw Object.assign(new Error('Event identity belongs to another tenant'), { code: 'EVENT_TENANT_MISMATCH' });
+    }
+    return JSON.parse(row.payload);
   }
   appendMany(events, { tenantId = null } = {}) {
     const unique = [];
     const statements = [];
+    const seen = new Map();
     for (const event of events || []) {
-      const normalized = this.normalize(event);
-      if (tenantId && normalized.data?.tenantId && normalized.data.tenantId !== tenantId) throw new Error('Event tenant mismatch');
-      if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
-      const exists = this.db.query('SELECT 1 FROM events WHERE event_id = ? LIMIT 1', [normalized.id]).length;
-      if (!exists) {
-        unique.push(normalized);
-        statements.push({ sql: 'INSERT INTO events(event_id,execution_id,goal_id,type,timestamp,payload) VALUES (?, ?, ?, ?, ?, ?)', params: [normalized.id, normalized.executionId, normalized.goalId, normalized.type, normalized.timestamp, JSON.stringify(normalized)] });
+      const normalized = this.normalize(event, tenantId);
+      const duplicate = seen.get(normalized.id);
+      if (duplicate) {
+        if (!isDeepStrictEqual(duplicate, normalized)) {
+          throw Object.assign(new Error('Event identity conflict in batch'), { code: 'EVENT_ID_CONFLICT' });
+        }
+        continue;
       }
+      seen.set(normalized.id, normalized);
+      const existing = this.db.query('SELECT tenant_id,payload FROM events WHERE event_id=? LIMIT 1', [normalized.id])[0];
+      if (existing) {
+        if (existing.tenant_id !== normalized.data.tenantId) {
+          throw Object.assign(new Error('Event identity belongs to another tenant'), { code: 'EVENT_TENANT_MISMATCH' });
+        }
+        // Legacy rows may predate aggregateId/sequence and explicit tenant metadata.
+        // Preserve their idempotent replay behavior while still enforcing tenant isolation.
+        continue;
+      }
+      unique.push(normalized);
+      statements.push({
+        sql: 'INSERT INTO events(event_id,tenant_id,execution_id,goal_id,aggregate_id,sequence,type,timestamp,payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        params: [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId, normalized.aggregateId, normalized.sequence, normalized.type, normalized.timestamp, JSON.stringify(normalized)]
+      });
     }
     if (statements.length) this.db.transaction(statements);
     return unique;
   }
-  findAll({ tenantId = null } = {}) { return this.db.query('SELECT payload FROM events ORDER BY timestamp ASC;').map(row => JSON.parse(row.payload)).filter(item => !tenantId || item.data?.tenantId === tenantId || (tenantId === 'local' && !item.data?.tenantId)); }
+  appendMissionEvent(event, { tenantId = null } = {}) {
+    if (!event?.aggregateId) throw new TypeError('aggregateId is required');
+    const compareTimestamp = typeof event.timestamp === 'string' && event.timestamp.length > 0;
+    const normalized = this.normalize(event, tenantId);
+    const existing = this.db.query('SELECT tenant_id,aggregate_id,payload FROM events WHERE event_id=? LIMIT 1', [normalized.id])[0];
+    if (existing) {
+      const prior = JSON.parse(existing.payload);
+      if (existing.tenant_id !== normalized.data.tenantId || existing.aggregate_id !== normalized.aggregateId ||
+          prior.type !== normalized.type || prior.executionId !== normalized.executionId ||
+          prior.goalId !== normalized.goalId || (compareTimestamp && prior.timestamp !== normalized.timestamp) ||
+          !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
+        throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
+      }
+      return prior;
+    }
+    this.db.run(
+      `INSERT INTO events(event_id,tenant_id,execution_id,goal_id,aggregate_id,sequence,type,timestamp,payload)
+       SELECT ?,?,?,?,?,COALESCE(MAX(sequence),0)+1,?,?,json_set(?, '$.sequence', COALESCE(MAX(sequence),0)+1)
+       FROM events WHERE tenant_id=? AND aggregate_id=?
+       ON CONFLICT(event_id) DO NOTHING`,
+      [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId,
+        normalized.aggregateId, normalized.type, normalized.timestamp, JSON.stringify(normalized),
+        normalized.data.tenantId, normalized.aggregateId]
+    );
+    const row = this.db.query('SELECT tenant_id,aggregate_id,payload FROM events WHERE event_id=? LIMIT 1', [normalized.id])[0];
+    const persisted = row ? JSON.parse(row.payload) : null;
+    if (!row || row.tenant_id !== normalized.data.tenantId || row.aggregate_id !== normalized.aggregateId ||
+        persisted.type !== normalized.type || persisted.executionId !== normalized.executionId ||
+        persisted.goalId !== normalized.goalId || (compareTimestamp && persisted.timestamp !== normalized.timestamp) ||
+        !isDeepStrictEqual(persisted.data || {}, normalized.data || {})) {
+      throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
+    }
+    return persisted;
+  }
+  findAll({ tenantId = null } = {}) {
+    const rows = tenantId
+      ? this.db.query('SELECT payload FROM events WHERE tenant_id=? ORDER BY timestamp ASC,event_id ASC', [tenantId])
+      : this.db.query('SELECT payload FROM events ORDER BY timestamp ASC,event_id ASC');
+    return rows.map(row => JSON.parse(row.payload));
+  }
   findByExecutionId(id, { tenantId = null, limit = null } = {}) {
     let where = ' WHERE execution_id = ?';
     const params = [id];
-    if (tenantId) {
-      where += tenantId === 'local'
-        ? " AND (json_extract(payload, '$.data.tenantId') = ? OR json_extract(payload, '$.data.tenantId') IS NULL)"
-        : " AND json_extract(payload, '$.data.tenantId') = ?";
-      params.push(tenantId);
-    }
+    if (tenantId) { where += ' AND tenant_id = ?'; params.push(tenantId); }
     if (Number.isInteger(limit) && limit > 0) {
       const boundedLimit = Math.min(limit, 200);
-      return this.db.query('SELECT payload FROM events' + where + ' ORDER BY timestamp DESC, event_id DESC LIMIT ?', [...params, boundedLimit])
+      return this.db.query('SELECT payload FROM events' + where + ' ORDER BY timestamp DESC,event_id DESC LIMIT ?', [...params, boundedLimit])
         .map(row => JSON.parse(row.payload)).reverse();
     }
-    return this.db.query('SELECT payload FROM events' + where + ' ORDER BY timestamp ASC, event_id ASC', params)
+    return this.db.query('SELECT payload FROM events' + where + ' ORDER BY timestamp ASC,event_id ASC', params)
       .map(row => JSON.parse(row.payload));
   }
+  findByAggregateId(id, { tenantId = null } = {}) {
+    if (!id) return [];
+    const rows = tenantId
+      ? this.db.query('SELECT payload FROM events WHERE tenant_id=? AND aggregate_id=? ORDER BY sequence ASC', [tenantId, id])
+      : this.db.query('SELECT payload FROM events WHERE aggregate_id=? ORDER BY tenant_id ASC,sequence ASC', [id]);
+    return rows.map(row => JSON.parse(row.payload));
+  }
   findByGoalId(id, { tenantId = null } = {}) { return this.findAll({ tenantId }).filter(item => item.goalId === id); }
-  findByType(type, { tenantId = null } = {}) { return this.findAll({ tenantId }).filter(item => item.type === type); }
-  count() { return this.db.query('SELECT COUNT(*) AS count FROM events;')[0].count; }
+  findByType(type, { tenantId = null } = {}) { return this.findAll().filter(item => item.type === type && (!tenantId || item.data?.tenantId === tenantId)); }
+  count({ tenantId = null } = {}) {
+    return tenantId
+      ? this.db.query('SELECT COUNT(*) AS count FROM events WHERE tenant_id=?', [tenantId])[0].count
+      : this.db.query('SELECT COUNT(*) AS count FROM events;')[0].count;
+  }
   clear() { this.db.run('DELETE FROM events;'); }
 }
-
 class SqliteIdempotencyRepository {
   constructor(db) { this.db = db; }
   buildKey({ executionId, step, tool, planRevision = 1, operationId = null } = {}) {

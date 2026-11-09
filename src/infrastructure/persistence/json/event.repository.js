@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { isDeepStrictEqual } = require('node:util');
 
 class EventRepository {
   constructor(filePath, { lockTimeoutMs = 30000 } = {}) {
@@ -257,6 +258,7 @@ class EventRepository {
 
   appendMissionEvent(event, { tenantId = null } = {}) {
     if (!event?.aggregateId) throw new TypeError('aggregateId is required');
+    const compareTimestamp = typeof event.timestamp === 'string' && event.timestamp.length > 0;
     return this.withLock(() => {
       const current = this.read();
       const normalized = this.normalize({ ...event });
@@ -267,8 +269,17 @@ class EventRepository {
 
       const existing = current.find(item => item.id === normalized.id);
       if (existing) {
-        if (!this.belongsToTenant(existing, tenantId)) {
+        if (!this.belongsToTenant(existing, normalized.data?.tenantId || tenantId)) {
           throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
+        }
+        if (existing.aggregateId !== normalized.aggregateId ||
+            existing.type !== normalized.type ||
+            existing.executionId !== normalized.executionId ||
+            existing.goalId !== normalized.goalId ||
+            (compareTimestamp && existing.timestamp !== normalized.timestamp) ||
+            (normalized.sequence != null && Number(existing.sequence) !== normalized.sequence) ||
+            !isDeepStrictEqual(existing.data || {}, normalized.data || {})) {
+          throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
         }
         return existing;
       }

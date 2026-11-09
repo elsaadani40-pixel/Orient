@@ -5,6 +5,10 @@ const { PostgresPersistence, PostgresOwnerChatConversationRepository, PostgresOw
 const { randomUUID } = require('node:crypto');
 const { createPersistencePrincipal } = require('../../src/infrastructure/persistence/postgres/persistence-principal');
 const { createWorkerPersistencePrincipal } = require('../../src/core/security/worker-persistence-principal');
+const DurableMissionEventSink = require('../../src/core/workflow/durable-mission-event-sink');
+const MissionEventRecovery = require('../../src/core/workflow/mission-event-recovery');
+const WorkflowDefinition = require('../../src/core/workflow/workflow-definition');
+const WorkflowInstance = require('../../src/core/workflow/workflow-instance');
 
 function makeOwnerPrincipal(tenantId, ownerId) {
   return createPersistencePrincipal({ tenantId, ownerId, sessionId: 'session-' + randomUUID() });
@@ -27,7 +31,7 @@ test('PostgreSQL initializes versioned schema idempotently on a real server', as
   await persistence.initialize();
   await persistence.initialize();
   const result = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  assert.deepEqual(result.rows.map(row => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   const workerColumns = await pool.query(
     "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=current_schema() AND ((table_name='worker_nodes' AND column_name='session_id') OR (table_name='workflow_dispatch_claims' AND column_name='worker_session_id') OR (table_name='workflow_leases' AND column_name='worker_session_id'))"
   );
@@ -1496,4 +1500,182 @@ test('PostgreSQL worker registry fences replaced process sessions', async t => {
   assert.equal(await persistence.workers.unregister(workerId, tenantId, {
     workerPrincipal: principalB
   }), true);
+});
+
+
+test('PostgreSQL durable mission events serialize aggregate sequences and isolate tenants', async t => {
+  await persistence.initialize();
+  const tenantA = 'mission-tenant-a-' + randomUUID();
+  const tenantB = 'mission-tenant-b-' + randomUUID();
+  const aggregateId = 'mission-aggregate-' + randomUUID();
+  const event = (id, tenantId, value) => ({
+    id, aggregateId, executionId: aggregateId,
+    type: 'workflow.state.changed',
+    timestamp: new Date().toISOString(),
+    data: { tenantId, value }
+  });
+  const idsA = [randomUUID(), randomUUID()];
+  const idsB = [randomUUID()];
+  const firstEvent = event(idsA[0], tenantA, 'first');
+  t.after(async () => {
+    await pool.query('DELETE FROM events WHERE tenant_id = ANY($1::text[])', [[tenantA, tenantB]]);
+  });
+  const writes = await Promise.all([
+    persistence.events.appendMissionEvent(firstEvent, { tenantId: tenantA }),
+    persistence.events.appendMissionEvent(event(idsA[1], tenantA, 'second'), { tenantId: tenantA }),
+    persistence.events.appendMissionEvent(event(idsB[0], tenantB, 'isolated'), { tenantId: tenantB })
+  ]);
+  assert.deepEqual(writes.filter(item => item.data.tenantId === tenantA).map(item => item.sequence).sort(), [1, 2]);
+  assert.equal(writes.find(item => item.data.tenantId === tenantB).sequence, 1);
+  const replay = await persistence.events.appendMissionEvent(
+    firstEvent,
+    { tenantId: tenantA }
+  );
+  assert.equal(replay.sequence, writes.find(item => item.id === idsA[0]).sequence);
+  await assert.rejects(
+    persistence.events.appendMissionEvent(event(idsA[0], tenantA, 'changed'), { tenantId: tenantA }),
+    error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+  );
+  const historyA = await persistence.events.findByAggregateId(aggregateId, { tenantId: tenantA });
+  const historyB = await persistence.events.findByAggregateId(aggregateId, { tenantId: tenantB });
+  assert.deepEqual(historyA.map(item => item.sequence), [1, 2]);
+  assert.deepEqual(historyB.map(item => item.sequence), [1]);
+});
+
+
+test('PostgreSQL workflow outbox is tenant-scoped and acknowledges under row lock', async t => {
+  await persistence.initialize();
+  const tenantId = 'outbox-tenant-' + randomUUID();
+  const workflowId = 'outbox-workflow-' + randomUUID();
+  t.after(async () => {
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  });
+  await persistence.workflows.save({
+    workflowId,
+    tenantId,
+    state: 'WAITING',
+    updatedAt: new Date().toISOString(),
+    checkpoint: { revision: 0 },
+    metadata: {
+      approvalBlocked: true,
+      pendingPublications: [{ eventId: 'outbox-event-1' }, { eventId: 'outbox-event-2' }]
+    }
+  }, tenantId);
+  const pending = await persistence.workflows.findPendingPublications({ tenantId, limit: 5 });
+  assert.deepEqual(pending.map(item => item.workflowId), [workflowId]);
+  const result = await persistence.workflows.acknowledgePendingPublications(
+    workflowId, tenantId, ['outbox-event-1']
+  );
+  assert.equal(result.acknowledged, 1);
+  assert.equal(result.revision, 1);
+  assert.deepEqual(result.pending, [{ eventId: 'outbox-event-2' }]);
+  await assert.rejects(
+    persistence.workflows.acknowledgePendingPublications(workflowId, 'another-tenant', ['outbox-event-2']),
+    error => error.code === 'WORKFLOW_NOT_FOUND'
+  );
+});
+
+
+test('PostgreSQL workflow repair serializes concurrent recovery writers with revision fencing', async t => {
+  await persistence.initialize();
+  const workflowId = 'mission-repair-race-' + randomUUID();
+  const tenantId = 'tenant-mission-repair-' + randomUUID();
+  const now = new Date().toISOString();
+  await pool.query(
+    'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,$4,$5)',
+    [workflowId, tenantId, 'WAITING', now, {
+      workflowId, tenantId, state: 'WAITING', updatedAt: now,
+      checkpoint: { revision: 2 }, metadata: {}
+    }]
+  );
+  const createSnapshot = () => ({
+    workflowId, tenantId, state: 'QUEUED', updatedAt: now,
+    checkpoint: { revision: 2 }, metadata: {},
+    toJSON() { return this; }
+  });
+  t.after(async () => {
+    await pool.query('DELETE FROM workflow_dispatch_claims WHERE workflow_id=$1', [workflowId]);
+    await pool.query('DELETE FROM workflow_leases WHERE workflow_id=$1', [workflowId]);
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+  });
+  const outcomes = await Promise.allSettled([
+    persistence.workflows.repair(createSnapshot(), {
+      tenantId, expectedRevision: 2, targetRevision: 3
+    }),
+    persistence.workflows.repair(createSnapshot(), {
+      tenantId, expectedRevision: 2, targetRevision: 3
+    })
+  ]);
+  assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 1);
+  const rejected = outcomes.find(item => item.status === 'rejected');
+  assert.equal(rejected.reason.code, 'WORKFLOW_CHECKPOINT_CONFLICT');
+  const stored = await pool.query(
+    'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2',
+    [workflowId, tenantId]
+  );
+  assert.equal(Number(stored.rows[0].payload.checkpoint.revision), 3);
+  assert.equal(stored.rows[0].payload.state, 'QUEUED');
+});
+
+
+test('PostgreSQL async mission recovery repairs then verifies a durable workflow snapshot', async t => {
+  await persistence.initialize();
+  const tenantId = 'mission-recovery-tenant-' + randomUUID();
+  const workflowId = 'mission-recovery-workflow-' + randomUUID();
+  const mission = new WorkflowInstance({
+    workflowId,
+    tenantId,
+    definition: new WorkflowDefinition({
+      id: 'mission-recovery-definition',
+      version: 1,
+      name: 'Mission recovery integration',
+      steps: [{ id: 'work', tool: 'work' }]
+    }),
+    input: { request: 'recover me' }
+  });
+  t.after(async () => {
+    await pool.query('DELETE FROM events WHERE tenant_id=$1', [tenantId]);
+    await pool.query('DELETE FROM workflows WHERE workflow_id=$1 AND tenant_id=$2', [workflowId, tenantId]);
+  });
+  const sink = new DurableMissionEventSink({
+    eventRepository: persistence.events,
+    workflowRepository: persistence.workflows,
+    tenantId
+  });
+  await sink.recordCreated(mission);
+  await persistence.workflows.save(mission, tenantId);
+  const recovery = new MissionEventRecovery({
+    eventRepository: persistence.events,
+    workflowRepository: persistence.workflows
+  });
+  const repaired = await recovery.reconcile(workflowId, tenantId);
+  assert.equal(repaired.status, 'REPAIRED');
+  assert.equal(repaired.workflow.workflowId, workflowId);
+  const storedSnapshot = await persistence.workflows.findById(workflowId, tenantId);
+  const storedEvents = await persistence.events.findByAggregateId(workflowId, { tenantId });
+  const projectedSnapshot = recovery.projection.rebuild(storedEvents);
+  const snapshotInstance = WorkflowInstance.fromJSON(storedSnapshot);
+  assert.equal(
+    recovery._isEquivalent(snapshotInstance, projectedSnapshot),
+    true,
+    JSON.stringify({
+      snapshotRevision: storedSnapshot.checkpoint?.revision,
+      lastSequence: storedEvents.at(-1)?.sequence,
+      snapshot: {
+        state: snapshotInstance.state, steps: snapshotInstance.steps, retry: snapshotInstance.retry,
+        cancelRequested: snapshotInstance.cancelRequested, deadlineAt: snapshotInstance.deadlineAt,
+        recovery: snapshotInstance.recovery, compensation: snapshotInstance.compensation,
+        input: snapshotInstance.input, metadata: snapshotInstance.metadata
+      },
+      projected: {
+        state: projectedSnapshot.state, steps: projectedSnapshot.steps, retry: projectedSnapshot.retry,
+        cancelRequested: projectedSnapshot.cancelRequested, deadlineAt: projectedSnapshot.deadlineAt,
+        recovery: projectedSnapshot.recovery, compensation: projectedSnapshot.compensation,
+        input: projectedSnapshot.input, metadata: projectedSnapshot.metadata
+      }
+    })
+  );
+  const healthy = await recovery.reconcile(workflowId, tenantId);
+  assert.equal(healthy.status, 'HEALTHY');
+  assert.equal(healthy.workflow.checkpoint.revision, 1);
 });

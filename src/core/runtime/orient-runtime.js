@@ -162,6 +162,7 @@ class OrientRuntime {
       scheduler: this.workflowScheduler,
       workflowRepository: this.workflowRepository,
       persistence: this.persistence,
+      missionEventSink: this.infrastructureCoordinator.missionEventSink,
       tenantId: this.tenantId,
       userId: this.userId,
       workspaceId: this.workspaceId,

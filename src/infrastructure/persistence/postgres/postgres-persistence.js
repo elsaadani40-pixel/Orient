@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const { isDeepStrictEqual } = require('node:util');
+const { validateAcknowledgement, prepareAcknowledgement } = require('../workflow-outbox-utils');
 const { assertPersistencePrincipal } = require('../../../core/security/persistence-principal');
 const { assertWorkerPersistencePrincipal } = require('../../../core/security/worker-persistence-principal');
 const { PostgresDatabase } = require('./postgres-database');
@@ -253,6 +255,8 @@ class PostgresEventRepository {
       type: event.type,
       executionId: event.executionId || null,
       goalId: event.goalId || null,
+      aggregateId: event.aggregateId || event.workflowId || null,
+      sequence: event.sequence == null ? null : Number(event.sequence),
       timestamp: event.timestamp || new Date().toISOString(),
       data: { ...(event.data || {}), tenantId: effectiveTenant }
     };
@@ -292,6 +296,19 @@ class PostgresEventRepository {
           [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId, normalized.type, normalized.timestamp, normalized]
         );
         if (result.rowCount === 1) inserted.push(normalized);
+        else {
+          const existing = await client.query(
+            'SELECT tenant_id,payload FROM events WHERE event_id=$1 LIMIT 1',
+            [normalized.id]
+          );
+          const prior = existing.rows[0]?.payload;
+          if (!prior || existing.rows[0].tenant_id !== normalized.data.tenantId ||
+              prior.type !== normalized.type || prior.executionId !== normalized.executionId ||
+              prior.goalId !== normalized.goalId || (event.timestamp && prior.timestamp !== normalized.timestamp) ||
+              !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
+            throw Object.assign(new Error('Event identity conflict'), { code: 'EVENT_ID_CONFLICT' });
+          }
+        }
       }
     };
     if (persistencePrincipal) {
@@ -300,6 +317,73 @@ class PostgresEventRepository {
       await this.db.transaction(persist);
     }
     return inserted;
+  }
+
+  async appendMissionEvent(event, { tenantId = null } = {}) {
+    if (!event?.aggregateId) throw new TypeError('aggregateId is required');
+    const compareTimestamp = typeof event.timestamp === 'string' && event.timestamp.length > 0;
+    const normalized = this.normalize(event, tenantId);
+    return this.db.transaction(async client => {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+        [normalized.data.tenantId, normalized.aggregateId]
+      );
+      const existing = await client.query(
+        'SELECT tenant_id,aggregate_id,payload FROM events WHERE event_id=$1 LIMIT 1',
+        [normalized.id]
+      );
+      if (existing.rows.length) {
+        const row = existing.rows[0];
+        const prior = row.payload;
+        if (row.tenant_id !== normalized.data.tenantId || row.aggregate_id !== normalized.aggregateId ||
+            prior.type !== normalized.type || prior.executionId !== normalized.executionId ||
+            prior.goalId !== normalized.goalId || (compareTimestamp && prior.timestamp !== normalized.timestamp) ||
+            !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
+          throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
+        }
+        return prior;
+      }
+      const sequenceResult = await client.query(
+        'SELECT COALESCE(MAX(sequence),0)::bigint + 1 AS next_sequence FROM events WHERE tenant_id=$1 AND aggregate_id=$2',
+        [normalized.data.tenantId, normalized.aggregateId]
+      );
+      normalized.sequence = Number(sequenceResult.rows[0].next_sequence);
+      const inserted = await client.query(
+        `INSERT INTO events(event_id,tenant_id,execution_id,goal_id,aggregate_id,sequence,type,timestamp,payload)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT(event_id) DO NOTHING RETURNING payload`,
+        [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId,
+          normalized.aggregateId, normalized.sequence, normalized.type, normalized.timestamp, normalized]
+      );
+      if (inserted.rowCount === 1) return inserted.rows[0].payload;
+      const raced = await client.query(
+        'SELECT tenant_id,aggregate_id,payload FROM events WHERE event_id=$1 LIMIT 1',
+        [normalized.id]
+      );
+      const prior = raced.rows[0]?.payload;
+      if (!prior || raced.rows[0].tenant_id !== normalized.data.tenantId ||
+          raced.rows[0].aggregate_id !== normalized.aggregateId || prior.type !== normalized.type ||
+          prior.executionId !== normalized.executionId || prior.goalId !== normalized.goalId ||
+          (compareTimestamp && prior.timestamp !== normalized.timestamp) ||
+          !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
+        throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
+      }
+      return prior;
+    });
+  }
+
+  async findByAggregateId(id, { tenantId = null } = {}) {
+    if (!id) return [];
+    const result = tenantId
+      ? await this.db.query(
+        'SELECT payload FROM events WHERE tenant_id=$1 AND aggregate_id=$2 ORDER BY sequence ASC',
+        [tenantId, id]
+      )
+      : await this.db.query(
+        'SELECT payload FROM events WHERE aggregate_id=$1 ORDER BY tenant_id ASC,sequence ASC',
+        [id]
+      );
+    return result.rows.map(row => row.payload);
   }
 
   async findAll({ tenantId = null } = {}) {
@@ -921,6 +1005,7 @@ class PostgresWorkflowRepository {
         `WITH candidates AS (
            SELECT w.workflow_id FROM workflows w
            WHERE w.tenant_id=$1 AND w.state IN ('QUEUED','WAITING','RECOVERING','RUNNING')
+             AND COALESCE(w.payload->'metadata'->>'approvalBlocked','false') <> 'true'
              AND COALESCE(w.payload->'metadata'->'requiredCapabilities','[]'::jsonb) <@ $4::jsonb
              AND NOT EXISTS (SELECT 1 FROM workflow_dispatch_claims c WHERE c.tenant_id=w.tenant_id AND c.workflow_id=w.workflow_id AND c.expires_at > NOW())
              AND NOT EXISTS (SELECT 1 FROM workflow_leases l WHERE l.tenant_id=w.tenant_id AND l.workflow_id=w.workflow_id AND l.expires_at > NOW())
@@ -957,6 +1042,83 @@ class PostgresWorkflowRepository {
       return result.rowCount===1;
     });
   }
+
+  async repair(instance, { tenantId = null, expectedRevision = 0, targetRevision } = {}) {
+    const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenant = tenantOrLocal(item.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Workflow');
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 ||
+        !Number.isInteger(targetRevision) || targetRevision < expectedRevision) {
+      throw Object.assign(new Error('Invalid workflow repair revision'), {
+        code: 'WORKFLOW_REPAIR_REVISION_INVALID'
+      });
+    }
+    return this.db.transaction(async client => {
+      const current = await client.query(
+        'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [item.workflowId, effectiveTenant]
+      );
+      if (current.rowCount) {
+        const revision = Number(current.rows[0].payload?.checkpoint?.revision || 0);
+        const expectedLastSavedAt = item.checkpoint?.lastSavedAt || null;
+        const currentLastSavedAt = current.rows[0].payload?.checkpoint?.lastSavedAt || null;
+        if (revision !== expectedRevision || currentLastSavedAt !== expectedLastSavedAt) {
+          throw Object.assign(new Error('Stale workflow checkpoint during repair'), {
+            code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+          });
+        }
+        const activeClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeClaim.rowCount > 0) {
+          throw Object.assign(new Error('Workflow repair rejected while a worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
+        const activeLease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeLease.rowCount > 0) {
+          throw Object.assign(new Error('Workflow repair rejected while a worker lease is active'), {
+            code: 'WORKFLOW_LEASE_HELD'
+          });
+        }
+      } else if (expectedRevision !== 0) {
+        throw Object.assign(new Error('Workflow snapshot disappeared during repair'), {
+          code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+        });
+      }
+      item.checkpoint = { revision: targetRevision, lastSavedAt: new Date().toISOString() };
+      if (!current.rowCount) {
+        const inserted = await client.query(
+          'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id',
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || item.checkpoint.lastSavedAt, item]
+        );
+        if (inserted.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow snapshot changed during repair'), {
+            code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+          });
+        }
+      } else {
+        const updated = await client.query(
+          "UPDATE workflows SET state=$3,updated_at=$4,payload=$5 WHERE workflow_id=$1 AND tenant_id=$2 AND COALESCE((payload->'checkpoint'->>'revision')::int,0)=$6",
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || item.checkpoint.lastSavedAt, item, expectedRevision]
+        );
+        if (updated.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow checkpoint changed during repair'), {
+            code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+          });
+        }
+      }
+      if (typeof instance?.setCheckpointRevision === 'function') {
+        instance.setCheckpointRevision(targetRevision, item.checkpoint.lastSavedAt);
+      }
+      return item;
+    });
+  }
+
   async requestCancellation(workflowId, tenantId = null) {
     const effectiveTenant = tenantOrLocal(tenantId);
     return this.db.transaction(async client => {
@@ -1006,6 +1168,54 @@ class PostgresWorkflowRepository {
       ? await this.db.query('SELECT payload FROM workflows WHERE tenant_id=$1 ORDER BY updated_at DESC', [tenantId])
       : await this.db.query('SELECT payload FROM workflows ORDER BY updated_at DESC');
     return result.rows.map(row => row.payload);
+  }
+
+  async findPendingPublications({ tenantId = null, limit = 100 } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 500)) : 100;
+    const pendingArray = `CASE
+      WHEN jsonb_typeof(payload->'metadata'->'pendingPublications')='array'
+      THEN jsonb_array_length(payload->'metadata'->'pendingPublications')
+      ELSE 0
+    END > 0`;
+    const result = tenantId
+      ? await this.db.query(
+        "SELECT payload FROM workflows WHERE tenant_id=$1 AND payload->'metadata'->>'approvalBlocked'='true' AND " +
+          pendingArray + ' ORDER BY updated_at ASC LIMIT $2',
+        [tenantId, boundedLimit]
+      )
+      : await this.db.query(
+        "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' AND " +
+          pendingArray + ' ORDER BY updated_at ASC LIMIT $1',
+        [boundedLimit]
+      );
+    return result.rows.map(row => row.payload);
+  }
+
+  async acknowledgePendingPublications(workflowId, tenantId, eventIds = []) {
+    const acknowledgedIds = validateAcknowledgement(workflowId, tenantId, eventIds);
+    return this.db.transaction(async client => {
+      const result = await client.query(
+        'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [workflowId, tenantId]
+      );
+      if (!result.rows.length) {
+        throw Object.assign(new Error('Workflow not found for outbox acknowledgement'), {
+          code: 'WORKFLOW_NOT_FOUND'
+        });
+      }
+      const { updated, receipt } = prepareAcknowledgement(result.rows[0].payload, acknowledgedIds);
+      if (!updated) return receipt;
+      const written = await client.query(
+        'UPDATE workflows SET payload=$3,updated_at=$4 WHERE workflow_id=$1 AND tenant_id=$2',
+        [workflowId, tenantId, updated, receipt.lastSavedAt]
+      );
+      if (written.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow outbox acknowledgement did not update its locked row'), {
+          code: 'WORKFLOW_OUTBOX_ACK_CONFLICT'
+        });
+      }
+      return receipt;
+    });
   }
 
   async delete(workflowId, tenantId = null) {

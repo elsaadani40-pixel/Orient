@@ -176,6 +176,36 @@ const MIGRATIONS = [
       ON workflow_leases(tenant_id, worker_id, worker_session_id, expires_at);
   `},
 
+  {version:12,sql:`
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS aggregate_id TEXT;
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS sequence BIGINT;
+    UPDATE events
+      SET tenant_id = COALESCE(payload->'data'->>'tenantId', tenant_id, 'local'),
+          aggregate_id = COALESCE(payload->>'aggregateId', payload->>'workflowId')
+      WHERE aggregate_id IS NULL;
+    WITH ranked AS (
+      SELECT event_id, ROW_NUMBER() OVER (
+        PARTITION BY tenant_id, aggregate_id ORDER BY timestamp ASC, event_id ASC
+      ) AS next_sequence
+      FROM events WHERE aggregate_id IS NOT NULL
+    )
+    UPDATE events e SET sequence = ranked.next_sequence
+      FROM ranked WHERE ranked.event_id=e.event_id AND e.sequence IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_events_tenant_aggregate
+      ON events(tenant_id, aggregate_id, sequence);
+    CREATE INDEX IF NOT EXISTS idx_workflows_pending_publications
+      ON workflows(tenant_id, updated_at)
+      WHERE payload->'metadata'->>'approvalBlocked'='true'
+        AND CASE
+          WHEN jsonb_typeof(payload->'metadata'->'pendingPublications')='array'
+          THEN jsonb_array_length(payload->'metadata'->'pendingPublications')
+          ELSE 0
+        END > 0;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_tenant_aggregate_sequence
+      ON events(tenant_id, aggregate_id, sequence)
+      WHERE aggregate_id IS NOT NULL AND sequence IS NOT NULL;
+  `},
+
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -194,7 +224,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9),($10),($11)',[1,2,3,4,5,6,7,8,9,10,11]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9),($10),($11),($12)',[1,2,3,4,5,6,7,8,9,10,11,12]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);

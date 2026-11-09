@@ -9,6 +9,7 @@ class WorkflowExecutionCoordinator {
     scheduler,
     workflowRepository = null,
     persistence = null,
+    missionEventSink = null,
     tenantId = 'local',
     userId = 'local',
     workspaceId = 'local',
@@ -26,9 +27,9 @@ class WorkflowExecutionCoordinator {
     this.userId = userId || 'local';
     this.workspaceId = workspaceId || 'local';
     this.executeRequest = executeRequest;
-    this.missionEventSink = this.persistence?.events?.appendMissionEvent
+    this.missionEventSink = missionEventSink || (this.persistence?.events?.appendMissionEvent
       ? new DurableMissionEventSink({ eventRepository: this.persistence.events, workflowRepository: this.workflowRepository, tenantId: this.tenantId })
-      : null;
+      : null);
   }
 
   createInstance(input, { priority = 0, deadlineAt = null, workflowId = undefined } = {}) {
@@ -113,9 +114,10 @@ class WorkflowExecutionCoordinator {
       instance.metadata = { ...instance.metadata };
       delete instance.metadata.fencingToken;
     }
-    await this.workflowRepository.save(instance, this.tenantId);
-    if (this.missionEventSink && fromState !== instance.state) {
-      await this.missionEventSink.recordState(instance, fromState, instance.state);
+    if (this.missionEventSink) {
+      await this.missionEventSink.recordSnapshot(instance, 'approval_resolution');
+    } else {
+      await this.workflowRepository.save(instance, this.tenantId);
     }
     return instance.toJSON();
   }
@@ -242,17 +244,19 @@ class WorkflowExecutionCoordinator {
     if (created.error) return created.error;
     const { instance, text } = created;
 
-    if (this.missionEventSink) this.missionEventSink.recordCreated(instance);
+    if (this.missionEventSink) await this.missionEventSink.recordCreated(instance);
 
     if (this.scheduler.async) {
       const from = instance.state;
       await this.scheduler.enqueueDurable(instance, { priority, deadlineAt });
-      if (this.missionEventSink && from !== instance.state) this.missionEventSink.recordState(instance, from, instance.state);
+      if (this.missionEventSink && from !== instance.state) await this.missionEventSink.recordState(instance, from, instance.state);
     } else {
-      if (this.workflowRepository?.save) this.workflowRepository.save(instance);
       this.scheduler.enqueue(instance, { priority, deadlineAt });
-      if (this.workflowRepository?.save) this.workflowRepository.save(instance);
-      if (this.missionEventSink) this.missionEventSink.recordState(instance, 'CREATED', 'QUEUED');
+      if (this.missionEventSink) {
+        await this.missionEventSink.recordState(instance, 'CREATED', 'QUEUED');
+      } else if (this.workflowRepository?.save) {
+        await this.workflowRepository.save(instance, this.tenantId);
+      }
     }
 
     const WorkerClass = this.scheduler.async
@@ -261,23 +265,28 @@ class WorkflowExecutionCoordinator {
 
     const worker = new WorkerClass({
       scheduler: this.scheduler,
-      eventSink: (event) => {
+      eventSink: async (event) => {
         if (this.missionEventSink) {
-          this.missionEventSink.recordWorkerEvent(instance, event);
-          return;
+          return this.missionEventSink.recordWorkerEvent(instance, event);
         }
 
-        if (this.workflowRepository?.save) this.workflowRepository.save(instance);
+        if (this.workflowRepository?.save) {
+          await this.workflowRepository.save(instance, this.tenantId, {
+            workerPrincipal: event.workerPrincipal || null
+          });
+        }
         if (this.persistence?.events?.append) {
-          this.persistence.events.append({
+          return this.persistence.events.append({
             id: event.eventId || crypto.randomUUID(),
             type: event.type,
             executionId: instance.workflowId,
             timestamp: event.timestamp || new Date().toISOString(),
             data: { ...(event.payload || event), tenantId: this.tenantId }
-          });
+          }, { tenantId: this.tenantId });
         }
+        return null;
       },
+      persistAfterTick: !(this.missionEventSink && this.workflowRepository?.save),
       executor: async () => this.executeRequest(text, { approval, approvals })
     });
 

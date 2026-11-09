@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { validateAcknowledgement, prepareAcknowledgement } = require('../workflow-outbox-utils');
 
 class SqliteWorkflowRepository {
   constructor(db) { this.db = db; }
@@ -16,6 +17,58 @@ class SqliteWorkflowRepository {
       'ON CONFLICT(workflow_id) DO UPDATE SET tenant_id=excluded.tenant_id,state=excluded.state,updated_at=excluded.updated_at,payload=excluded.payload',
       [item.workflowId, effectiveTenantId, item.state, item.updatedAt || new Date().toISOString(), JSON.stringify(item)]
     );
+    return item;
+  }
+
+
+  repair(instance, { tenantId = null, expectedRevision = 0, targetRevision } = {}) {
+    const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenantId = item.tenantId || 'local';
+    if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 ||
+        !Number.isInteger(targetRevision) || targetRevision < expectedRevision) {
+      throw Object.assign(new Error('Invalid workflow repair revision'), { code: 'WORKFLOW_REPAIR_REVISION_INVALID' });
+    }
+    const existing = this.findById(item.workflowId);
+    if (existing && (existing.tenantId || 'local') !== effectiveTenantId) {
+      throw Object.assign(new Error('Workflow snapshot changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+    }
+    const currentRevision = Number(existing?.checkpoint?.revision || 0);
+    const expectedLastSavedAt = item.checkpoint?.lastSavedAt || null;
+    const currentLastSavedAt = existing?.checkpoint?.lastSavedAt || null;
+    if (currentRevision !== expectedRevision || currentLastSavedAt !== expectedLastSavedAt) {
+      throw Object.assign(new Error('Stale workflow checkpoint during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+    }
+    item.checkpoint = { revision: targetRevision, lastSavedAt: new Date().toISOString() };
+    if (!existing) {
+      const inserted = this.db.run(
+        'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(workflow_id) DO NOTHING',
+        [item.workflowId, effectiveTenantId, item.state, item.updatedAt || item.checkpoint.lastSavedAt, JSON.stringify(item)]
+      );
+      if (Number(inserted.changes) !== 1) {
+        throw Object.assign(new Error('Workflow snapshot changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+      }
+    } else {
+      const now = new Date().toISOString();
+      const updated = this.db.run(
+        "UPDATE workflows SET state=?,updated_at=?,payload=? WHERE workflow_id=? AND tenant_id=? AND COALESCE(CAST(json_extract(payload, '$.checkpoint.revision') AS INTEGER),0)=? AND COALESCE(json_extract(payload, '$.checkpoint.lastSavedAt'),'')=? AND NOT EXISTS (SELECT 1 FROM workflow_leases WHERE workflow_id=? AND expires_at>?)",
+        [item.state, item.updatedAt || item.checkpoint.lastSavedAt, JSON.stringify(item),
+          item.workflowId, effectiveTenantId, expectedRevision, expectedLastSavedAt || '', item.workflowId, now]
+      );
+      if (Number(updated.changes) !== 1) {
+        const activeLease = this.db.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=? AND expires_at>? LIMIT 1',
+          [item.workflowId, now]
+        );
+        if (activeLease.length) {
+          throw Object.assign(new Error('Workflow repair rejected while a worker lease is active'), { code: 'WORKFLOW_LEASE_HELD' });
+        }
+        throw Object.assign(new Error('Workflow checkpoint changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+      }
+    }
+    if (typeof instance?.setCheckpointRevision === 'function') {
+      instance.setCheckpointRevision(targetRevision, item.checkpoint.lastSavedAt);
+    }
     return item;
   }
 
@@ -37,6 +90,47 @@ class SqliteWorkflowRepository {
       values
     );
     return rows.length ? JSON.parse(rows[0].payload) : null;
+  }
+
+  findPendingPublications({ tenantId = null, limit = 100 } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 500)) : 100;
+    const clauses = [
+      "json_extract(payload, '$.metadata.approvalBlocked') = 1",
+      "CASE WHEN json_type(payload, '$.metadata.pendingPublications') = 'array' " +
+        "THEN json_array_length(payload, '$.metadata.pendingPublications') ELSE 0 END > 0"
+    ];
+    const params = [];
+    if (tenantId) { clauses.push('tenant_id = ?'); params.push(tenantId); }
+    params.push(boundedLimit);
+    const rows = this.db.query(
+      'SELECT payload FROM workflows WHERE ' + clauses.join(' AND ') + ' ORDER BY updated_at ASC LIMIT ?',
+      params
+    );
+    return rows.map(row => JSON.parse(row.payload));
+  }
+
+  acknowledgePendingPublications(workflowId, tenantId, eventIds = []) {
+    const acknowledgedIds = validateAcknowledgement(workflowId, tenantId, eventIds);
+    const row = this.db.query(
+      'SELECT payload FROM workflows WHERE workflow_id=? AND tenant_id=? LIMIT 1',
+      [workflowId, tenantId]
+    )[0];
+    if (!row) {
+      throw Object.assign(new Error('Workflow not found for outbox acknowledgement'), { code: 'WORKFLOW_NOT_FOUND' });
+    }
+    const { updated, receipt } = prepareAcknowledgement(JSON.parse(row.payload), acknowledgedIds);
+    if (!updated) return receipt;
+    const lastSavedAt = receipt.lastSavedAt;
+    const result = this.db.run(
+      'UPDATE workflows SET payload=?,updated_at=? WHERE workflow_id=? AND tenant_id=? AND payload=?',
+      [JSON.stringify(updated), lastSavedAt, workflowId, tenantId, row.payload]
+    );
+    if (Number(result.changes) !== 1) {
+      throw Object.assign(new Error('Workflow outbox acknowledgement raced with another writer'), {
+        code: 'WORKFLOW_OUTBOX_ACK_CONFLICT'
+      });
+    }
+    return receipt;
   }
 
   findAll({ tenantId = null } = {}) {

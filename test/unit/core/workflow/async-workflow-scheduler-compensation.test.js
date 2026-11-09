@@ -41,3 +41,115 @@ test('async scheduler uses the active lease principal for workflow persistence',
   assert.equal(saved[1], tenantId);
   assert.equal(saved[2].workerPrincipal, principal);
 });
+
+
+test('async scheduler reconciles durable mission history before claiming queued work', async () => {
+  const calls = [];
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-recovery',
+    workflowRepository: {
+      async findAll() {
+        calls.push('snapshots');
+        return [{ workflowId: 'wf-recovery', tenantId: 'tenant-recovery', state: 'QUEUED', metadata: {} }];
+      },
+      async claimQueued() {
+        calls.push('claim');
+        return [];
+      }
+    },
+    missionEventRecovery: {
+      async reconcile(workflowId, tenantId) {
+        calls.push(['reconcile', workflowId, tenantId]);
+        return { status: 'HEALTHY' };
+      }
+    }
+  });
+  const recovered = await scheduler.recoverPersisted('worker-recovery', []);
+  assert.equal(recovered, 0);
+  assert.deepEqual(calls, [
+    'snapshots',
+    ['reconcile', 'wf-recovery', 'tenant-recovery'],
+    'claim'
+  ]);
+});
+
+test('async scheduler fails closed on corrupt durable mission history before dispatch', async () => {
+  let claims = 0;
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-recovery',
+    workflowRepository: {
+      async findAll() {
+        return [{ workflowId: 'wf-corrupt', tenantId: 'tenant-recovery', state: 'QUEUED', metadata: {} }];
+      },
+      async claimQueued() { claims += 1; return []; }
+    },
+    missionEventRecovery: {
+      async reconcile() {
+        throw Object.assign(new Error('event sequence gap'), { code: 'MISSION_EVENT_SEQUENCE_GAP' });
+      }
+    }
+  });
+  await assert.rejects(
+    () => scheduler.recoverPersisted('worker-recovery', []),
+    error => error.code === 'MISSION_EVENT_SEQUENCE_GAP'
+  );
+  assert.equal(claims, 0);
+});
+
+
+test('async queued cancellation is appended to mission history before snapshot persistence', async () => {
+  const definition = new WorkflowDefinition({
+    id: 'cancel-durable',
+    version: 1,
+    name: 'Cancel durable',
+    steps: [{ id: 'work', tool: 'work' }]
+  });
+  const instance = new WorkflowInstance({ definition, workflowId: 'wf-cancel-durable', tenantId: 'tenant-a' });
+  instance.transition('QUEUED');
+  const calls = [];
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-a',
+    workflowRepository: { async save() { calls.push('snapshot'); } },
+    missionEventSink: {
+      async recordSnapshot(snapshot, reason, options) {
+        calls.push(['event', snapshot.cancelRequested, snapshot.state, reason, options.persist]);
+      }
+    }
+  });
+  scheduler.queue.push({ instance, priority: 0 });
+  assert.equal(await scheduler.cancelAsync(instance.workflowId), true);
+  assert.deepEqual(calls, [
+    ['event', true, 'CANCELLED', 'workflow_cancel_requested', false],
+    'snapshot'
+  ]);
+  assert.equal(scheduler.queue.length, 0);
+});
+
+test('async active cancellation records intent without bypassing the worker lease fence', async () => {
+  const definition = new WorkflowDefinition({
+    id: 'cancel-active-durable',
+    version: 1,
+    name: 'Cancel active durable',
+    steps: [{ id: 'work', tool: 'work' }]
+  });
+  const instance = new WorkflowInstance({ definition, workflowId: 'wf-cancel-active', tenantId: 'tenant-a' });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  const calls = [];
+  const active = { instance, cancelled: false };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-a',
+    workflowRepository: { async save() { calls.push('snapshot'); } },
+    missionEventSink: {
+      async recordSnapshot(snapshot, reason, options) {
+        calls.push(['event', snapshot.cancelRequested, snapshot.state, reason, options.persist]);
+      }
+    }
+  });
+  scheduler.active.set(instance.workflowId, active);
+  assert.equal(await scheduler.cancelAsync(instance.workflowId), true);
+  assert.equal(active.cancelled, true);
+  assert.deepEqual(calls, [
+    ['event', true, 'RUNNING', 'workflow_cancel_requested', false]
+  ]);
+});

@@ -159,7 +159,7 @@ test('SQLite checkpoint sequencing remains monotonic and schema migration marker
   first.checkpoints.save({ executionId: 'exec-seq-1', status: 'running', currentStep: 2 });
 
   const migrationRows = first.db.query('SELECT version FROM schema_migrations ORDER BY version ASC;');
-  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1]);
+  assert.deepEqual(migrationRows.map(row => Number(row.version)), [1, 2]);
   assert.equal(first.checkpoints.findLatest('exec-seq-1').sequence, 2);
 
   const second = new SqlitePersistence({ filePath });
@@ -185,4 +185,174 @@ test('sqlite transactions roll back all statements after an injected failure', (
 
   assert.equal(db.query("SELECT COUNT(*) AS count FROM events WHERE event_id='rollback-event';")[0].count, 0);
   db.close();
+});
+
+
+test('SQLite mission event append assigns stable tenant-scoped sequences and rejects ID reuse', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-mission-events-'));
+  const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+  try {
+    const event = {
+      id: 'mission-sqlite-1', aggregateId: 'workflow-sqlite-1', executionId: 'workflow-sqlite-1',
+      type: 'workflow.approval.required', timestamp: '2026-11-09T10:00:00.000Z',
+      data: { tenantId: 'tenant-a', approvalId: 'approval-1' }
+    };
+    const first = persistence.events.appendMissionEvent(event, { tenantId: 'tenant-a' });
+    const replay = persistence.events.appendMissionEvent(event, { tenantId: 'tenant-a' });
+    const second = persistence.events.appendMissionEvent({
+      ...event, id: 'mission-sqlite-2', type: 'workflow.state.changed'
+    }, { tenantId: 'tenant-a' });
+    const isolated = persistence.events.appendMissionEvent({
+      ...event, id: 'mission-sqlite-b1', data: { tenantId: 'tenant-b' }
+    }, { tenantId: 'tenant-b' });
+    assert.equal(first.sequence, 1);
+    assert.equal(replay.sequence, 1);
+    assert.equal(second.sequence, 2);
+    assert.equal(isolated.sequence, 1);
+    assert.deepEqual(
+      persistence.events.findByAggregateId('workflow-sqlite-1', { tenantId: 'tenant-a' }).map(item => item.sequence),
+      [1, 2]
+    );
+    assert.throws(
+      () => persistence.events.appendMissionEvent({
+        ...event, type: 'workflow.step.failed'
+      }, { tenantId: 'tenant-a' }),
+      error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+    );
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite pending-publication index tolerates valid non-array legacy JSON', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-pending-json-'));
+  const SqliteDatabase = require('../../../src/infrastructure/persistence/sqlite/sqlite-database');
+  const db = new SqliteDatabase(path.join(directory, 'orient.db'));
+  try {
+    assert.doesNotThrow(() => db.run(
+      'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES(?,?,?,?,?)',
+      ['legacy-object', 'tenant-a', 'WAITING', '2026-11-09T10:00:00.000Z',
+        JSON.stringify({ workflowId: 'legacy-object', metadata: { approvalBlocked: true, pendingPublications: { malformed: true } } })]
+    ));
+    assert.doesNotThrow(() => db.run(
+      'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES(?,?,?,?,?)',
+      ['legacy-string', 'tenant-a', 'WAITING', '2026-11-09T10:00:01.000Z',
+        JSON.stringify({ workflowId: 'legacy-string', metadata: { approvalBlocked: true, pendingPublications: 'legacy' } })]
+    ));
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite workflow outbox is bounded, tenant-scoped, and revision-checked', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-workflow-outbox-'));
+  const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+  try {
+    persistence.workflows.save({
+      workflowId: 'wf-pending-a', tenantId: 'tenant-a', state: 'WAITING',
+      updatedAt: '2026-11-09T10:00:00.000Z',
+      checkpoint: { revision: 1 },
+      metadata: { approvalBlocked: true, pendingPublications: [{ eventId: 'event-a1' }, { eventId: 'event-a2' }] }
+    }, 'tenant-a');
+    persistence.workflows.save({
+      workflowId: 'wf-pending-b', tenantId: 'tenant-b', state: 'WAITING',
+      updatedAt: '2026-11-09T10:00:01.000Z',
+      checkpoint: { revision: 1 },
+      metadata: { approvalBlocked: true, pendingPublications: [{ eventId: 'event-b1' }] }
+    }, 'tenant-b');
+    assert.deepEqual(
+      persistence.workflows.findPendingPublications({ tenantId: 'tenant-a', limit: 1 }).map(item => item.workflowId),
+      ['wf-pending-a']
+    );
+    const ack = persistence.workflows.acknowledgePendingPublications('wf-pending-a', 'tenant-a', ['event-a1']);
+    assert.equal(ack.acknowledged, 1);
+    assert.equal(ack.revision, 2);
+    assert.deepEqual(ack.pending, [{ eventId: 'event-a2' }]);
+    assert.deepEqual(
+      persistence.workflows.findPendingPublications({ tenantId: 'tenant-a' }).map(item => item.workflowId),
+      ['wf-pending-a']
+    );
+    assert.throws(
+      () => persistence.workflows.acknowledgePendingPublications('wf-pending-a', 'tenant-b', ['event-a2']),
+      error => error.code === 'WORKFLOW_NOT_FOUND'
+    );
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('SQLite workflow repair uses revision compare-and-set and rejects stale writers', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-workflow-repair-'));
+  const filePath = path.join(directory, 'orient.db');
+  const first = new SqlitePersistence({ filePath });
+  const second = new SqlitePersistence({ filePath });
+  try {
+    const snapshot = {
+      workflowId: 'wf-repair-sqlite',
+      tenantId: 'tenant-a',
+      state: 'WAITING',
+      updatedAt: new Date().toISOString(),
+      checkpoint: { revision: 3 },
+      metadata: {}
+    };
+    first.workflows.save(snapshot, 'tenant-a');
+    const repaired = first.workflows.repair({
+      ...snapshot,
+      state: 'QUEUED',
+      toJSON() { return this; }
+    }, { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 3 });
+    assert.equal(repaired.checkpoint.revision, 3);
+    assert.equal(first.workflows.findById(snapshot.workflowId, 'tenant-a').state, 'QUEUED');
+    assert.throws(
+      () => second.workflows.repair({
+        ...snapshot,
+        state: 'RUNNING',
+        toJSON() { return this; }
+      }, { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 4 }),
+      error => error.code === 'WORKFLOW_CHECKPOINT_CONFLICT'
+    );
+  } finally {
+    first.close();
+    second.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQLite workflow repair refuses to overwrite an active worker lease', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-workflow-repair-lease-'));
+  const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+  try {
+    const snapshot = {
+      workflowId: 'wf-repair-leased',
+      tenantId: 'tenant-a',
+      state: 'RUNNING',
+      updatedAt: new Date().toISOString(),
+      checkpoint: { revision: 1 },
+      metadata: {}
+    };
+    persistence.workflows.save(snapshot, 'tenant-a');
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 60000).toISOString();
+    persistence.db.run(
+      'INSERT INTO workflow_leases(workflow_id,lease_id,worker_id,acquired_at,expires_at,payload) VALUES(?,?,?,?,?,?)',
+      [snapshot.workflowId, 'lease-active', 'worker-active', now, expiresAt,
+        JSON.stringify({ workflowId: snapshot.workflowId, leaseId: 'lease-active', metadata: { tenantId: 'tenant-a' } })]
+    );
+    assert.throws(
+      () => persistence.workflows.repair({
+        ...snapshot,
+        state: 'QUEUED',
+        toJSON() { return this; }
+      }, { tenantId: 'tenant-a', expectedRevision: 1, targetRevision: 2 }),
+      error => error.code === 'WORKFLOW_LEASE_HELD'
+    );
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

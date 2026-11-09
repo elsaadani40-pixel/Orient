@@ -2,6 +2,8 @@
 
 const WorkflowScheduler = require('../workflow/workflow-scheduler');
 const AsyncWorkflowScheduler = require('../workflow/async-workflow-scheduler');
+const MissionEventRecovery = require('../workflow/mission-event-recovery');
+const DurableMissionEventSink = require('../workflow/durable-mission-event-sink');
 const PostgresTenantQuotaRepository = require('../../infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 const WorkflowLeaseStore = require('../workflow/workflow-lease-store');
 const TenantQuotaPolicy = require('../security/tenant-quota-policy');
@@ -27,6 +29,20 @@ class RuntimeInfrastructureCoordinator {
     this.tenantId = tenantId || 'local';
 
     this.workflowRepository = persistence?.workflows || null;
+    this.missionEventSink = persistence?.events?.appendMissionEvent
+      ? new DurableMissionEventSink({
+          eventRepository: persistence.events,
+          workflowRepository: this.workflowRepository,
+          tenantId: this.tenantId
+        })
+      : null;
+    this.missionEventRecovery = persistence?.events?.findByAggregateId &&
+      this.workflowRepository?.findById && this.workflowRepository?.repair
+      ? new MissionEventRecovery({
+          eventRepository: persistence.events,
+          workflowRepository: this.workflowRepository
+        })
+      : null;
     this.tenantQuotaRepository =
       persistence?.tenantQuotas ||
       (persistence?.isAsync && persistence?.db
@@ -56,6 +72,8 @@ class RuntimeInfrastructureCoordinator {
             leaseDurationMs,
             tenantId: this.tenantId,
             workflowRepository: this.workflowRepository,
+            missionEventRecovery: this.missionEventRecovery,
+            missionEventSink: this.missionEventSink,
             leaseRepository: persistence.workflowLeases,
             quotaRepository: this.tenantQuotaRepository,
             quotaPolicy: this.tenantQuotaPolicy
@@ -76,6 +94,8 @@ class RuntimeInfrastructureCoordinator {
           }));
 
     if (this.workflowScheduler?.async) {
+      this.workflowScheduler.missionEventRecovery = this.missionEventRecovery;
+      this.workflowScheduler.missionEventSink = this.missionEventSink;
       this.workflowScheduler.quotaPolicy = this.tenantQuotaPolicy;
       this.workflowScheduler.quotaRepository = this.tenantQuotaRepository;
     }

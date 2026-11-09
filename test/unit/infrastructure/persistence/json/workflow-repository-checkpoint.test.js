@@ -58,3 +58,43 @@ test('stale workflow checkpoint is rejected instead of overwriting newer mission
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('JSON workflow outbox lookup and acknowledgement are tenant-scoped and revisioned', () => {
+  const { dir, repo } = makeRepo();
+  try {
+    repo.save({
+      workflowId: 'wf-outbox-a',
+      tenantId: 'tenant-a',
+      state: 'WAITING',
+      updatedAt: '2026-11-09T10:00:00.000Z',
+      checkpoint: { revision: 0 },
+      metadata: {
+        approvalBlocked: true,
+        pendingPublications: [{ eventId: 'event-a1' }, { eventId: 'event-a2' }]
+      }
+    }, 'tenant-a');
+    repo.save({
+      workflowId: 'wf-outbox-b',
+      tenantId: 'tenant-b',
+      state: 'WAITING',
+      updatedAt: '2026-11-09T10:00:01.000Z',
+      checkpoint: { revision: 0 },
+      metadata: { approvalBlocked: true, pendingPublications: [{ eventId: 'event-b1' }] }
+    }, 'tenant-b');
+    assert.deepEqual(
+      repo.findPendingPublications({ tenantId: 'tenant-a', limit: 1 }).map(item => item.workflowId),
+      ['wf-outbox-a']
+    );
+    const result = repo.acknowledgePendingPublications('wf-outbox-a', 'tenant-a', ['event-a1']);
+    assert.equal(result.acknowledged, 1);
+    assert.equal(result.revision, 2);
+    assert.deepEqual(result.pending, [{ eventId: 'event-a2' }]);
+    assert.throws(
+      () => repo.acknowledgePendingPublications('wf-outbox-a', 'tenant-b', ['event-a2']),
+      error => error.code === 'WORKFLOW_NOT_FOUND'
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

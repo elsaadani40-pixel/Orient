@@ -14,13 +14,16 @@ function enforceInputQuota(instance,policy){
  }
 }
 class AsyncWorkflowScheduler extends WorkflowScheduler{
- constructor(options={}){super({...options,leaseStore:new AsyncWorkflowLeaseStore({repository:options.leaseRepository||null,clock:options.clock,leaseDurationMs:options.leaseDurationMs,tenantId:options.tenantId})});this.async=true;this.quotaRepository=options.quotaRepository||null;this.quotaPolicy=options.quotaPolicy||null;this.workerRegistry=options.workerRegistry||options.workflowRepository?.workerRegistry||null;this.workerLeaseMs=Math.max(1000,Number(options.workerLeaseMs)||Math.max(this.leaseDurationMs*2,30000));this.dispatchWindow=Number.isInteger(options.dispatchWindow)&&options.dispatchWindow>0?options.dispatchWindow:Math.max(1,this.maxConcurrent*2);this.agingQuantumMs=Number.isInteger(options.agingQuantumMs)&&options.agingQuantumMs>0?options.agingQuantumMs:30000;}
+ constructor(options={}){super({...options,leaseStore:new AsyncWorkflowLeaseStore({repository:options.leaseRepository||null,clock:options.clock,leaseDurationMs:options.leaseDurationMs,tenantId:options.tenantId})});this.async=true;this.missionEventRecovery=options.missionEventRecovery||null;this.missionEventSink=options.missionEventSink||null;this.quotaRepository=options.quotaRepository||null;this.quotaPolicy=options.quotaPolicy||null;this.workerRegistry=options.workerRegistry||options.workflowRepository?.workerRegistry||null;this.workerLeaseMs=Math.max(1000,Number(options.workerLeaseMs)||Math.max(this.leaseDurationMs*2,30000));this.dispatchWindow=Number.isInteger(options.dispatchWindow)&&options.dispatchWindow>0?options.dispatchWindow:Math.max(1,this.maxConcurrent*2);this.agingQuantumMs=Number.isInteger(options.agingQuantumMs)&&options.agingQuantumMs>0?options.agingQuantumMs:30000;}
  async cancelAsync(workflowId) {
   const queued = this.queue.find(item => item.instance.workflowId === workflowId);
   const active = this.active.get(workflowId);
   if (queued) {
     queued.instance.requestCancel();
     if (queued.instance.state !== 'CANCELLED') queued.instance.transition('CANCELLED');
+    if (this.missionEventSink) {
+      await this.missionEventSink.recordSnapshot(queued.instance, 'workflow_cancel_requested', { persist: false });
+    }
     await this.persistAsync(queued.instance);
     this.queue = this.queue.filter(item => item.instance.workflowId !== workflowId);
     this.cancelled.add(workflowId);
@@ -29,19 +32,122 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
   if (active) {
     active.cancelled = true;
     active.instance.requestCancel();
-    await this.persistAsync(active.instance);
+    if (this.missionEventSink) {
+      await this.missionEventSink.recordSnapshot(active.instance, 'workflow_cancel_requested', { persist: false });
+    } else {
+      await this.persistAsync(active.instance);
+    }
     this.cancelled.add(workflowId);
     return true;
   }
   if (this.workflowRepository?.requestCancellation) {
-    const requested = await this.workflowRepository.requestCancellation(workflowId, this.tenantId || 'local');
+    const tenantId = this.tenantId || 'local';
+    const snapshot = this.missionEventSink && this.workflowRepository?.findById
+      ? await this.workflowRepository.findById(workflowId, tenantId)
+      : null;
+    if (this.missionEventSink && this.workflowRepository?.findById &&
+        (!snapshot || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(snapshot.state))) return false;
+    if (this.missionEventSink && snapshot) {
+      const WorkflowInstance = require('./workflow-instance');
+      const instance = WorkflowInstance.fromJSON(snapshot);
+      instance.requestCancel();
+      await this.missionEventSink.recordSnapshot(instance, 'workflow_cancel_requested', { persist: false });
+    }
+    const requested = await this.workflowRepository.requestCancellation(workflowId, tenantId);
+    if (!requested && this.missionEventSink) {
+      const latest = await this.workflowRepository.findById(workflowId, tenantId);
+      if (latest) {
+        const WorkflowInstance = require('./workflow-instance');
+        await this.missionEventSink.recordSnapshot(
+          WorkflowInstance.fromJSON(latest), 'workflow_cancel_reconciled', { persist: false }
+        );
+      }
+    }
     if (!requested) return false;
     this.cancelled.add(workflowId);
     return true;
   }
   return false;
  }
- async recoverPersisted(workerId='worker',workerCapabilities=[],workerPrincipal=null){if(!this.workflowRepository?.findAll&&!this.workflowRepository?.claimQueued)return 0;const availableQueueCapacity=Math.max(0,this.maxQueueDepth-this.queue.length);if(!availableQueueCapacity||availableQueueCapacity<this.dispatchWindow)return 0;const claimLimit=this.dispatchWindow;let recovered=0;const persisted=this.workflowRepository?.claimQueued?await this.workflowRepository.claimQueued({tenantId:this.tenantId||'local',workerId,limit:claimLimit,claimTtlMs:Math.max(this.leaseDurationMs,5000),workerCapabilities,agingQuantumMs:this.agingQuantumMs,workerPrincipal}):await this.workflowRepository.findAll({tenantId:this.tenantId});const WI=require('./workflow-instance');for(const payload of persisted){if(!payload||['COMPLETED','FAILED','CANCELLED'].includes(payload.state)||Boolean(payload.metadata&&payload.metadata.approvalBlocked))continue;if(this.queue.some(x=>x.instance.workflowId===payload.workflowId)||this.active.has(payload.workflowId))continue;const lease=await this.leaseStore.get(payload.workflowId);if(lease&&lease.expiresAt>this.clock())continue;const instance=WI.fromJSON(payload);try{enforceInputQuota(instance,this.quotaPolicy);}catch(error){instance.state='FAILED';instance.metadata={...instance.metadata,failureCode:error.code};await this.workflowRepository.save(instance);continue;}if(!supportsCapabilities(instance,workerCapabilities))continue;if(instance.state==='RUNNING'||instance.state==='RECOVERING')instance.state='RECOVERING';if(instance.metadata?.fencingToken!==undefined){instance.metadata={...instance.metadata};delete instance.metadata.fencingToken;}if(['CREATED','QUEUED','WAITING','RECOVERING'].includes(instance.state)){if(this.quotaRepository){if(this.quotaRepository.recoverWorkflow)await this.quotaRepository.recoverWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId});try{await this.quotaRepository.reserveWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,policy:this.quotaPolicy});}catch(error){if(error?.code!=='TENANT_QUOTA_RESERVATION_EXISTS')continue;}}super.enqueue(instance,{priority:Number(instance.metadata?.priority||0),deadlineAt:instance.deadlineAt});await this.workflowRepository.save(instance);recovered++;}}return recovered;}
+
+ async recoverPersisted(workerId='worker',workerCapabilities=[],workerPrincipal=null) {
+  if (!this.workflowRepository?.findAll && !this.workflowRepository?.claimQueued) return 0;
+  const availableQueueCapacity = Math.max(0, this.maxQueueDepth - this.queue.length);
+  if (!availableQueueCapacity || availableQueueCapacity < this.dispatchWindow) return 0;
+
+  const tenantId = this.tenantId || 'local';
+  if (this.missionEventRecovery && this.workflowRepository?.findAll) {
+    const snapshots = await this.workflowRepository.findAll({ tenantId });
+    for (const snapshot of snapshots) {
+      if (!snapshot?.workflowId || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(snapshot.state)) continue;
+      try {
+        await this.missionEventRecovery.reconcile(snapshot.workflowId, tenantId);
+      } catch (error) {
+        if (error?.code === 'MISSION_EVENT_HISTORY_REQUIRED' ||
+            error?.code === 'WORKFLOW_LEASE_HELD' ||
+            error?.code === 'WORKFLOW_DISPATCH_CLAIM_HELD' ||
+            error?.code === 'WORKFLOW_CHECKPOINT_CONFLICT') continue;
+        throw error;
+      }
+    }
+  }
+
+  const claimLimit = this.dispatchWindow;
+  const persisted = this.workflowRepository?.claimQueued
+    ? await this.workflowRepository.claimQueued({
+        tenantId, workerId, limit: claimLimit,
+        claimTtlMs: Math.max(this.leaseDurationMs, 5000),
+        workerCapabilities, agingQuantumMs: this.agingQuantumMs, workerPrincipal
+      })
+    : await this.workflowRepository.findAll({ tenantId });
+  const WorkflowInstance = require('./workflow-instance');
+  let recovered = 0;
+
+  for (const payload of persisted) {
+    if (!payload || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state) ||
+        Boolean(payload.metadata && payload.metadata.approvalBlocked)) continue;
+    if (this.queue.some(item => item.instance.workflowId === payload.workflowId) ||
+        this.active.has(payload.workflowId)) continue;
+
+    const lease = await this.leaseStore.get(payload.workflowId);
+    if (lease && lease.expiresAt > this.clock()) continue;
+
+    const instance = WorkflowInstance.fromJSON(payload);
+    try {
+      enforceInputQuota(instance, this.quotaPolicy);
+    } catch (error) {
+      instance.state = 'FAILED';
+      instance.metadata = { ...instance.metadata, failureCode: error.code };
+      await this.workflowRepository.save(instance);
+      continue;
+    }
+    if (!supportsCapabilities(instance, workerCapabilities)) continue;
+
+    if (instance.state === 'RUNNING' || instance.state === 'RECOVERING') instance.state = 'RECOVERING';
+    if (instance.metadata?.fencingToken !== undefined) {
+      instance.metadata = { ...instance.metadata };
+      delete instance.metadata.fencingToken;
+    }
+    if (['CREATED', 'QUEUED', 'WAITING', 'RECOVERING'].includes(instance.state)) {
+      if (this.quotaRepository) {
+        if (this.quotaRepository.recoverWorkflow) {
+          await this.quotaRepository.recoverWorkflow({ tenantId: this.tenantId, workflowId: instance.workflowId });
+        }
+        try {
+          await this.quotaRepository.reserveWorkflow({
+            tenantId: this.tenantId, workflowId: instance.workflowId, policy: this.quotaPolicy
+          });
+        } catch (error) {
+          if (error?.code !== 'TENANT_QUOTA_RESERVATION_EXISTS') continue;
+        }
+      }
+      super.enqueue(instance, { priority: Number(instance.metadata?.priority || 0), deadlineAt: instance.deadlineAt });
+      await this.workflowRepository.save(instance);
+      recovered++;
+    }
+  }
+  return recovered;
+ }
  async enqueueDurable(instance,options={}){enforceInputQuota(instance,this.quotaPolicy);if(!this.accepting)throw new (require('../errors/AppError'))('Workflow scheduler is shutting down',503,'SCHEDULER_SHUTTING_DOWN');if(this.quotaRepository){try{await this.quotaRepository.reserveWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,policy:this.quotaPolicy,expiresAt:options.delayMs?new Date(this.clock()+options.delayMs+this.leaseDurationMs).toISOString():null});}catch(error){if(error?.code!=='TENANT_QUOTA_RESERVATION_EXISTS')throw error;}}super.enqueue(instance,options);if(this.workflowRepository?.save)await this.workflowRepository.save(instance,this.tenantId,{workerPrincipal:options.workerPrincipal||null});return instance;}
  async leaseAsync(workerId='worker',workerCapabilities=[],workerPrincipal=null){await this.leaseStore.recoverExpired();if(this.active.size>=this.maxConcurrent)return null;this.sortQueue();const now=this.clock();const queuePassSize=this.queue.length;let inspected=0;while(this.queue.length&&inspected<queuePassSize){inspected++;const item=this.queue.shift(),instance=item.instance;if(!supportsCapabilities(instance,workerCapabilities)){this.queue.push(item);this.sortQueue();continue;}if(this.cancelled.has(instance.workflowId)||instance.cancelRequested){if(instance.state!=='CANCELLED')instance.transition('CANCELLED');await this.persistAsync(instance);continue;}if(item.availableAt>now){this.queue.unshift(item);return null;}if(item.deadlineAt&&new Date(item.deadlineAt).getTime()<=now){if(instance.state!=='FAILED')instance.transition('FAILED');instance.metadata.deadlineExceeded=true;instance.metadata.failureCode='WORKFLOW_DEADLINE_EXCEEDED';await this.persistAsync(instance);continue;}let lease;try{lease=await this.leaseStore.acquire(instance.workflowId,workerId,{tenantId:instance.tenantId,workflowId:instance.workflowId},workerPrincipal);}catch(error){if(error?.code==='WORKFLOW_LEASE_HELD'){this.queue.push(item);this.sortQueue();continue;}throw error;}const leasePrincipal = workerPrincipal && Number.isSafeInteger(Number(lease.fencingToken)) && Number(lease.fencingToken) > 0 ? createWorkerPersistencePrincipal({tenantId:workerPrincipal.tenantId,workerId:workerPrincipal.workerId,sessionId:workerPrincipal.sessionId,capabilities:workerPrincipal.capabilities,workflowId:instance.workflowId,leaseId:lease.leaseId,fencingToken:lease.fencingToken}) : null;const previousState=instance.state;try{instance.transition('RUNNING');}catch(error){await this.leaseStore.release(instance.workflowId,lease.leaseId,leasePrincipal);throw error;}instance.metadata = {...instance.metadata, fencingToken: lease.fencingToken}; if(this.quotaRepository){try{const reservation=await this.quotaRepository.promoteWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,expiresAt:lease.expiresAt,fencingToken:lease.fencingToken});if(!reservation){await this.leaseStore.release(instance.workflowId,lease.leaseId,leasePrincipal);this.queue.push(item);this.sortQueue();continue;}}catch(error){await this.leaseStore.release(instance.workflowId,lease.leaseId,leasePrincipal);if(error?.code==='TENANT_CONCURRENT_QUOTA_EXCEEDED'){this.queue.push(item);this.sortQueue();continue;}throw error;}} const record={workflowId:instance.workflowId,instance,leaseId:lease.leaseId,workerId:lease.workerId,workerSessionId:workerPrincipal?.sessionId||null,workerPrincipal:leasePrincipal,fencingToken:lease.fencingToken,issuedAt:lease.acquiredAt,expiresAt:lease.expiresAt,deadlineAt:item.deadlineAt,cancelled:false,previousState};this.active.set(record.workflowId,record);if(this.workflowRepository?.releaseDispatchClaim){await this.workflowRepository.releaseDispatchClaim(instance.workflowId,workerId,this.tenantId||'local',{workerPrincipal});}try{await this.persistAsync(instance,leasePrincipal);}catch(error){this.active.delete(record.workflowId);try{await this.leaseStore.release(instance.workflowId,lease.leaseId,leasePrincipal);}catch(cleanupError){error.cleanupError=cleanupError;}if(this.leaseStore.repository?.delete){try{await this.leaseStore.repository.delete(instance.workflowId,lease.leaseId,this.tenantId,{workerPrincipal:leasePrincipal});}catch(cleanupError){error.cleanupLeaseRepositoryError=cleanupError;}}if(this.quotaRepository){try{await this.quotaRepository.releaseWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,fencingToken:lease.fencingToken});}catch(cleanupError){error.quotaCleanupError=cleanupError;}}throw error;}return record;}return null;}
  async assertCurrentAsync(id,leaseId,fencingToken){const active=this.active.get(id);if(!active||active.leaseId!==leaseId||Number(active.fencingToken)!==Number(fencingToken))throw Object.assign(new Error('Current workflow fencing token is invalid'),{code:'WORKFLOW_FENCING_REJECTED'});await this.leaseStore.assertCurrent(id,leaseId,fencingToken,active.workerPrincipal);return true;}

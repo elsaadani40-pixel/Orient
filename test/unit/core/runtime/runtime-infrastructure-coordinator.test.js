@@ -93,3 +93,32 @@ test('PostgreSQL workflow recovery waits for a trusted worker principal', async 
   assert.equal(recoveryCalls, 0);
   await coordinator.shutdown();
 });
+
+
+test('runtime composes durable mission recovery into the async workflow scheduler', () => {
+  const persistence = {
+    isAsync: true,
+    db: {},
+    events: {
+      async findByAggregateId() { return []; },
+      async appendMissionEvent() { return null; }
+    },
+    workflows: {
+      async findAll() { return []; },
+      async findById() { return null; },
+      async repair() { return null; },
+      async claimQueued() { return []; },
+      async save() {}
+    },
+    workflowLeases: {},
+    tenantQuotas: { async ensureTenant() {} }
+  };
+  const coordinator = new RuntimeInfrastructureCoordinator({
+    persistence,
+    tenantId: 'tenant-durable-recovery'
+  });
+  assert.ok(coordinator.missionEventRecovery);
+  assert.equal(coordinator.workflowScheduler.missionEventRecovery, coordinator.missionEventRecovery);
+  assert.equal(coordinator.workflowScheduler.missionEventSink, coordinator.missionEventSink);
+  coordinator.shutdown();
+});
