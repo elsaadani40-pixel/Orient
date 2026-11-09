@@ -77,7 +77,7 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
 
   const tenantId = this.tenantId || 'local';
   let snapshots = null;
-  let reconciledWorkflowIds = null;
+  let dispatchEligibleWorkflowIds = null;
 
   if (this.missionEventRecovery) {
     if (typeof this.workflowRepository?.findAll !== 'function') {
@@ -88,13 +88,13 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
     }
 
     snapshots = await this.workflowRepository.findAll({ tenantId });
-    reconciledWorkflowIds = new Set();
+    dispatchEligibleWorkflowIds = new Set();
 
     for (const snapshot of snapshots) {
       if (!snapshot?.workflowId || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(snapshot.state)) continue;
       try {
         await this.missionEventRecovery.reconcile(snapshot.workflowId, tenantId);
-        reconciledWorkflowIds.add(snapshot.workflowId);
+        dispatchEligibleWorkflowIds.add(snapshot.workflowId);
       } catch (error) {
         if (
           error?.code === 'MISSION_EVENT_HISTORY_REQUIRED' ||
@@ -102,8 +102,11 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
           error?.code === 'WORKFLOW_DISPATCH_CLAIM_HELD' ||
           error?.code === 'WORKFLOW_CHECKPOINT_CONFLICT'
         ) {
-          // This workflow is deliberately excluded from this dispatch pass.
-          // A failed or deferred reconciliation is never evidence of a safe snapshot.
+          // Legacy snapshots without an event stream retain the documented
+          // pre-event recovery path. Ownership/lease conflicts remain ineligible.
+          if (error?.code === 'MISSION_EVENT_HISTORY_REQUIRED') {
+            dispatchEligibleWorkflowIds.add(snapshot.workflowId);
+          }
           continue;
         }
         throw error;
@@ -149,7 +152,7 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
     if (!payload || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state) ||
         Boolean(payload.metadata && payload.metadata.approvalBlocked)) continue;
 
-    if (reconciledWorkflowIds && !reconciledWorkflowIds.has(payload.workflowId)) {
+    if (dispatchEligibleWorkflowIds && !dispatchEligibleWorkflowIds.has(payload.workflowId)) {
       await releaseUnverifiedClaim(payload.workflowId);
       continue;
     }
