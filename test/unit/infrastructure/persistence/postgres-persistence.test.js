@@ -13,6 +13,7 @@ const {
 const PostgresTenantQuotaRepository = require('../../../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 const { MIGRATIONS } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
 const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
+const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
 
 function fakeDb(responses = []) {
   const calls = [];
@@ -418,4 +419,68 @@ test('Postgres workflow outbox acknowledgement locks and advances checkpoint rev
   assert.deepEqual(result.pending, [{ eventId: 'event-2' }]);
   assert.match(db.calls[0].text, /FOR UPDATE/);
   assert.match(db.calls[1].text, /UPDATE workflows SET payload=\$3/);
+});
+
+
+test('Postgres mission event append enforces owner principal and workflow ownership', async () => {
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a'
+  });
+  const calls = [];
+  const responses = [
+    { rows: [{}], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ next_sequence: '1' }], rowCount: 1 },
+    { rows: [{ payload: { id: 'mission-owner-event', sequence: 1 } }], rowCount: 1 }
+  ];
+  const client = {
+    async query(sql, values = []) {
+      calls.push({ sql, values });
+      return responses.shift();
+    }
+  };
+  const db = {
+    async transactionWithPrincipal(received, work) {
+      assert.strictEqual(received, principal);
+      return work(client);
+    },
+    async transaction() { throw new Error('Owner event writes require the owner principal transaction'); }
+  };
+  const repo = new PostgresEventRepository(db);
+  const event = {
+    id: 'mission-owner-event', aggregateId: 'workflow-owner-event',
+    type: 'workflow.snapshot.replaced', executionId: 'workflow-owner-event',
+    timestamp: '2026-11-09T10:00:00.000Z',
+    data: { tenantId: 'tenant-a', snapshot: { userId: 'owner-a' } }
+  };
+  await repo.appendMissionEvent(event, {
+    tenantId: 'tenant-a', persistencePrincipal: principal
+  });
+  assert.match(calls[0].sql, /payload->>'userId'=\\$3/);
+  assert.match(calls[1].sql, /workflow_dispatch_claims/);
+  assert.match(calls[2].sql, /workflow_leases/);
+  assert.match(calls[3].sql, /pg_advisory_xact_lock/);
+  assert.deepEqual(calls[0].values, ['workflow-owner-event', 'tenant-a', 'owner-a']);
+});
+
+test('Postgres mission event append rejects owner principal tenant mismatch before transaction', async () => {
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a'
+  });
+  let transactions = 0;
+  const repo = new PostgresEventRepository({
+    async transactionWithPrincipal() { transactions += 1; },
+    async transaction() { transactions += 1; }
+  });
+  await assert.rejects(
+    () => repo.appendMissionEvent({
+      id: 'mission-owner-event-mismatch', aggregateId: 'workflow-owner-event',
+      type: 'workflow.snapshot.replaced', data: { tenantId: 'tenant-b' }
+    }, { tenantId: 'tenant-b', persistencePrincipal: principal }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
+  );
+  assert.equal(transactions, 0);
 });
