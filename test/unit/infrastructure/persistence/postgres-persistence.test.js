@@ -459,7 +459,7 @@ test('Postgres mission event append enforces owner principal and workflow owners
   await repo.appendMissionEvent(event, {
     tenantId: 'tenant-a', persistencePrincipal: principal
   });
-  assert.match(calls[0].sql, /payload->>'userId'=\\$3/);
+  assert.match(calls[0].sql, /payload->>'userId'=\$3/);
   assert.match(calls[1].sql, /workflow_dispatch_claims/);
   assert.match(calls[2].sql, /workflow_leases/);
   assert.match(calls[3].sql, /pg_advisory_xact_lock/);
