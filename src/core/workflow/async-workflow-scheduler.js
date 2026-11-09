@@ -98,6 +98,7 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       } catch (error) {
         if (
           error?.code === 'MISSION_EVENT_HISTORY_REQUIRED' ||
+          error?.code === 'MISSION_EVENT_HISTORY_MISSING' ||
           error?.code === 'WORKFLOW_LEASE_HELD' ||
           error?.code === 'WORKFLOW_DISPATCH_CLAIM_HELD' ||
           error?.code === 'WORKFLOW_CHECKPOINT_CONFLICT'
