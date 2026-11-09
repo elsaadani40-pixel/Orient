@@ -23,7 +23,7 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   await ownerPage.goto(baseUrl + '/auth');
   await ownerPage.getByLabel('البريد الإلكتروني أو اسم المستخدم').fill(['elsaadani40','gmail.com'].join('@'));
   await ownerPage.getByLabel('كلمة المرور', { exact: true }).fill(bootstrapPassword);
-  await ownerPage.getByRole('button', { name: 'تسجيل الدخول' }).click();
+  await ownerPage.locator('#submit').click();
   await ownerPage.waitForURL('**/account.html');
 
   await ownerPage.getByLabel('كلمة المرور الجديدة').fill('orient-browser-owner-password-2026!');
