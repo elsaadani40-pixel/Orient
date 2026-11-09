@@ -302,7 +302,7 @@ test('execute returns durable cancellation when cancellation wins terminal compl
         context.transitionAgentTo(AgentState.LIFECYCLE.OBSERVING);
         context.transitionAgentTo(AgentState.LIFECYCLE.EVALUATING);
         return {
-          plan: args.plan,
+          plan,
           loopResult: { result: { ok: true }, evaluation: { success: true } },
           replanningDecision: { toJSON: () => ({ outcome: 'done' }) }
         };
