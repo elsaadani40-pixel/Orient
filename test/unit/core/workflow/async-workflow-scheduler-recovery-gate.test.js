@@ -85,7 +85,7 @@ test('recovery fails closed when an unverified dispatch claim cannot be released
     claimed: [blocked],
     reconcile: async () => {
       throw Object.assign(new Error('event history is not yet available'), {
-        code: 'MISSION_EVENT_HISTORY_REQUIRED'
+        code: 'WORKFLOW_CHECKPOINT_CONFLICT'
       });
     },
     releaseDispatchClaim: async () => {
@@ -129,4 +129,27 @@ test('durable recovery refuses to claim work when snapshots cannot be enumerated
     error => error.code === 'WORKFLOW_RECOVERY_SNAPSHOT_ENUMERATION_REQUIRED'
   );
   assert.equal(claimCalls, 0);
+});
+
+test('legacy workflows without an event history retain the documented recovery path', async () => {
+  const legacy = payload('legacy-without-event-history');
+  const value = scheduler({
+    snapshots: [legacy],
+    claimed: [legacy],
+    reconcile: async () => {
+      throw Object.assign(new Error('no durable event stream exists for this legacy workflow'), {
+        code: 'MISSION_EVENT_HISTORY_REQUIRED'
+      });
+    }
+  });
+
+  const recovered = await value.recoverPersisted('worker-a', [], {
+    tenantId: 'tenant-a',
+    workerId: 'worker-a',
+    sessionId: 'session-a',
+    capabilities: []
+  });
+
+  assert.equal(recovered, 1);
+  assert.deepEqual(value.queue.map(item => item.instance.workflowId), [legacy.workflowId]);
 });
