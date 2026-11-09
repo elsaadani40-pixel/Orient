@@ -24,7 +24,7 @@ class SqliteWorkflowRepository {
     const effectiveTenantId = item.tenantId || 'local';
     if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
     if (!Number.isInteger(expectedRevision) || expectedRevision < 0 ||
-        !Number.isInteger(targetRevision) || targetRevision <= expectedRevision) {
+        !Number.isInteger(targetRevision) || targetRevision < expectedRevision) {
       throw Object.assign(new Error('Invalid workflow repair revision'), { code: 'WORKFLOW_REPAIR_REVISION_INVALID' });
     }
     const existing = this.findById(item.workflowId);
