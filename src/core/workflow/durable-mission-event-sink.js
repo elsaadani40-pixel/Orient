@@ -25,22 +25,25 @@ class DurableMissionEventSink {
     this.clock = clock;
   }
 
-  _event(instance, type, data = {}) {
+  _event(instance, type, data = {}, { eventId = null, timestamp = null } = {}) {
     return {
-      id: crypto.randomUUID(),
+      id: eventId || crypto.randomUUID(),
       aggregateId: instance.workflowId,
       executionId: instance.workflowId,
       type,
-      timestamp: new Date(this.clock()).toISOString(),
+      timestamp: timestamp || new Date(this.clock()).toISOString(),
       data: { ...data, tenantId: instance.tenantId || this.tenantId }
     };
   }
 
-  async append(instance, type, data = {}, { persist = true, workerPrincipal = null } = {}) {
-    const event = this._event(instance, type, data);
+  async append(instance, type, data = {}, { persist = true, workerPrincipal = null, eventId = null, timestamp = null } = {}) {
+    const event = this._event(instance, type, data, { eventId, timestamp });
     let persisted;
     try {
-      persisted = await this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
+      persisted = await this.eventRepository.appendMissionEvent(event, {
+        tenantId: instance.tenantId || this.tenantId,
+        ...(workerPrincipal ? { workerPrincipal } : {})
+      });
     } catch (error) {
       error.code = error.code || 'MISSION_EVENT_PERSISTENCE_FAILED';
       throw error;
@@ -99,7 +102,11 @@ class DurableMissionEventSink {
       ...(type === 'workflow.step.running' ? {
         attempt: instance.steps[payload.stepId]?.attempts ?? payload.attempt ?? 0
       } : {})
-    }, { workerPrincipal: event?.workerPrincipal || null });
+    }, {
+      workerPrincipal: event?.workerPrincipal || null,
+      eventId: event?.eventId || null,
+      timestamp: event?.timestamp || null
+    });
   }
 
   async reconstruct(workflowId, tenantId = this.tenantId) {
