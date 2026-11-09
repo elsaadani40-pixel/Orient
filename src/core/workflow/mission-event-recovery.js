@@ -23,9 +23,27 @@ class MissionEventRecovery {
 
   async _load(workflowId, tenantId) {
     const events = await this.eventRepository.findByAggregateId(workflowId, { tenantId });
-    if (!events.length) throw recoveryError('Mission event history is required for recovery', 'MISSION_EVENT_HISTORY_REQUIRED');
     const snapshot = await this.workflowRepository.findById(workflowId, tenantId);
-    return { events, snapshot };
+    const validatedSnapshot = this._validateSnapshot(snapshot, workflowId, tenantId);
+
+    if (!events.length) {
+      const revision = Number(validatedSnapshot?.checkpoint?.revision || 0);
+      if (!Number.isInteger(revision) || revision < 0) {
+        throw recoveryError('Workflow checkpoint revision is invalid', 'MISSION_CHECKPOINT_MISMATCH');
+      }
+      if (revision > 0) {
+        throw recoveryError(
+          'Durable mission event history is missing for a checkpointed workflow',
+          'MISSION_EVENT_HISTORY_MISSING'
+        );
+      }
+      throw recoveryError(
+        'Mission event history is required for legacy workflow recovery',
+        'MISSION_EVENT_HISTORY_REQUIRED'
+      );
+    }
+
+    return { events, snapshot: validatedSnapshot };
   }
 
   _validateSnapshot(snapshot, workflowId, tenantId) {
