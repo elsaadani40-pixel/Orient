@@ -221,3 +221,51 @@ test('a public user can change their password, rotate the active session, and no
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8'));
   assert.equal(JSON.stringify(stored).includes(newPassword), false);
 });
+
+
+test('email registration and login use a unique normalized email identity', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-email-auth-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const instance = createOwnerServer({ dataDir, bootstrapPassword: 'temporary-owner-password-9F!x', log: () => {} });
+  const base = await listen(instance.server);
+  t.after(() => close(instance.server));
+
+  const email = 'Customer@Example.com';
+  const password = 'secure-email-password-123';
+  const registered = await fetch(base + '/api/auth/register', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  assert.equal(registered.status, 201);
+  const registeredBody = await registered.json();
+  assert.equal(registeredBody.email, 'customer@example.com');
+  assert.equal(registeredBody.role, 'user');
+  assert.equal(registeredBody.emailVerified, false);
+  const cookie = registered.headers.get('set-cookie').split(';')[0];
+
+  const duplicate = await fetch(base + '/api/auth/register', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'customer@example.com', password })
+  });
+  assert.equal(duplicate.status, 409);
+
+  const login = await fetch(base + '/api/auth/login', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: ' CUSTOMER@example.com ', password })
+  });
+  assert.equal(login.status, 200);
+  assert.equal((await login.json()).email, 'customer@example.com');
+
+  const invalid = await fetch(base + '/api/auth/register', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'not-an-email', password })
+  });
+  assert.equal(invalid.status, 400);
+
+  const me = await fetch(base + '/api/auth/me', { headers: { cookie } });
+  assert.equal(me.status, 200);
+  assert.equal((await me.json()).role, 'user');
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8'));
+  assert.equal(stored[0].email, 'customer@example.com');
+  assert.equal(JSON.stringify(stored).includes(password), false);
+});
