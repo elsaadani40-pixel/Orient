@@ -197,6 +197,7 @@ class OwnerIdentityService {
   }
 
   pruneLoginFailures(now = this.now()) {
+    const previous = new Map(this.loginFailures);
     let changed = false;
     for (const [key, failure] of this.loginFailures) {
       if (failure.windowStartedAt + this.loginLockoutMs <= now && failure.blockedUntil <= now) {
@@ -204,7 +205,13 @@ class OwnerIdentityService {
         changed = true;
       }
     }
-    if (changed) this.save();
+    if (changed) {
+      try { this.save(); }
+      catch (error) {
+        if (!error.committed) this.loginFailures = previous;
+        throw error;
+      }
+    }
   }
 
   recordLoginFailure(key, now, maxFailures, lockoutMs) {
@@ -223,7 +230,7 @@ class OwnerIdentityService {
     return { ok: false, code: 'OWNER_LOGIN_FAILED' };
   }
 
-  login({ username = 'Admin', email, password, sourceIp = 'unknown', maxFailures = this.maxLoginFailures, lockoutMs = this.loginLockoutMs } = {}) {
+  async login({ username = 'Admin', email, password, sourceIp = 'unknown', maxFailures = this.maxLoginFailures, lockoutMs = this.loginLockoutMs } = {}) {
     if (!Number.isInteger(maxFailures) || maxFailures < 1 || maxFailures > 100 ||
         !Number.isSafeInteger(lockoutMs) || lockoutMs < 1000 || lockoutMs > 86400000) throw new RangeError('Invalid owner login protection policy');
     const now = this.now();
