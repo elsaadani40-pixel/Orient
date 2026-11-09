@@ -962,7 +962,7 @@ class PostgresWorkflowRepository {
     const effectiveTenant = tenantOrLocal(item.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Workflow');
     if (!Number.isInteger(expectedRevision) || expectedRevision < 0 ||
-        !Number.isInteger(targetRevision) || targetRevision <= expectedRevision) {
+        !Number.isInteger(targetRevision) || targetRevision < expectedRevision) {
       throw Object.assign(new Error('Invalid workflow repair revision'), { code: 'WORKFLOW_REPAIR_REVISION_INVALID' });
     }
     return this.db.transaction(async client => {
