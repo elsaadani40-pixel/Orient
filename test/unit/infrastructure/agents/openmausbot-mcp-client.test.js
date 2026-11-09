@@ -11,7 +11,7 @@ const {
 } = require('../../../../src/infrastructure/agents/openmausbot-mcp-client');
 
 class FakeMcpChild extends EventEmitter {
-  constructor({ availableTools = [...ALLOWED_TOOLS], failMethod = null, malformed = false, identity = 'openmausbot' } = {}) {
+  constructor({ availableTools = [...ALLOWED_TOOLS], failMethod = null, malformed = false, identity = 'openmausbot', exitImmediately = false } = {}) {
     super();
     this.stdout = new PassThrough();
     this.stdin = new PassThrough();
@@ -22,8 +22,11 @@ class FakeMcpChild extends EventEmitter {
     this.failMethod = failMethod;
     this.malformed = malformed;
     this.identity = identity;
+    this.exitImmediately = exitImmediately;
+    if (exitImmediately) process.nextTick(() => { this.exitCode = 1; this.emit('exit', 1, null); });
     let buffer = '';
     this.stdin.on('data', chunk => {
+      if (this.exitImmediately) return;
       buffer += chunk.toString('utf8');
       let newline;
       while ((newline = buffer.indexOf('\n')) !== -1) {
@@ -168,11 +171,7 @@ test('OpenMausBot MCP client bounds concurrent child processes', async () => {
 
 test('OpenMausBot MCP client rejects a child process that exits during initialization', async () => {
   const client = new OpenMausBotMcpClient({
-    spawnImpl: () => {
-      const child = new FakeMcpChild();
-      process.nextTick(() => child.emit('exit', 1, null));
-      return child;
-    }
+    spawnImpl: () => new FakeMcpChild({ exitImmediately: true })
   });
   await assert.rejects(client.callTool('list_bots'), {
     code: 'OPENMAUSBOT_MCP_PROCESS_EXITED'
