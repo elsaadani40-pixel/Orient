@@ -70,6 +70,21 @@ test('rejects snapshot ahead of durable event history', async () => {
   fs.rmSync(s.dir, { recursive: true, force: true });
 });
 
+test('repairs a semantically divergent snapshot without inventing a new event revision', async () => {
+  const s = stores();
+  const mission = seed(s);
+  const snapshot = s.workflows.findById(mission.workflowId, 'tenant-a');
+  snapshot.state = 'WAITING';
+  snapshot.checkpoint.revision = 2;
+  fs.writeFileSync(s.workflows.filePath, JSON.stringify([snapshot]) + '\\n');
+  const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
+  const result = await recovery.reconcile(mission.workflowId, 'tenant-a');
+  assert.equal(result.status, 'REPAIRED');
+  assert.equal(result.workflow.state, 'QUEUED');
+  assert.equal(result.workflow.checkpoint.revision, 2);
+  fs.rmSync(s.dir, { recursive: true, force: true });
+});
+
 test('rebuilds a semantically corrupt snapshot from valid event history', async () => {
   const s = stores();
   const mission = seed(s);
