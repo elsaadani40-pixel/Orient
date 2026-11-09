@@ -14,6 +14,7 @@ const DEFAULT_TIMEOUT_MS = 15000;
 const MAX_TIMEOUT_MS = 120000;
 
 function buildChildEnvironment(source = process.env) {
+  if (!source || typeof source !== 'object') throw new TypeError('Environment source must be an object');
   const allowed = [
     'HOME', 'USERPROFILE', 'TMPDIR', 'TMP', 'TEMP', 'APPDATA',
     'LOCALAPPDATA', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
@@ -200,8 +201,8 @@ class OpenMausBotMcpClient {
     if (typeof command !== 'string' || !command.trim()) {
       throw new TypeError('OpenMausBot MCP command is required');
     }
-    if (!Array.isArray(args) || args.some(arg => typeof arg !== 'string')) {
-      throw new TypeError('OpenMausBot MCP arguments must be an array of strings');
+    if (!Array.isArray(args) || args.length === 0 || args.some(arg => typeof arg !== 'string')) {
+      throw new TypeError('OpenMausBot MCP arguments must be a non-empty array of strings');
     }
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > MAX_TIMEOUT_MS) {
       throw new RangeError('OpenMausBot MCP timeout must be between 1000 and 120000 milliseconds');
