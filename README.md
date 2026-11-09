@@ -16,7 +16,7 @@ ORIENT is being built as one coherent system for researching, planning, executin
 - **Repository:** [Source code](https://github.com/elsaadani40-pixel/Orient)
 - **Brand website source:** [`website/index.html`](website/index.html) — responsive English/Arabic landing page with RTL support. This is source in the repository; it is not a claim that a public website deployment is live.
 - **Engineering constitution:** [`AGENT.md`](AGENT.md)
-- **OpenMausBot agent-fleet integration (proposed):** [`ADR-OPENMAUSBOT-GOVERNED-INTEGRATION.md`](docs/architecture/ADR-OPENMAUSBOT-GOVERNED-INTEGRATION.md) — optional MCP adapter; ORIENT remains the canonical governance and execution authority.
+- **OpenMausBot agent-fleet integration:** [`Integration guide`](docs/integrations/openmausbot.md) and [`architecture decision`](docs/architecture/ADR-OPENMAUSBOT-GOVERNED-INTEGRATION.md) — optional read-only MCP adapter; ORIENT remains the canonical governance and execution authority.
 - **Product contract and cross-device roadmap:** [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md)
 - **Cross-platform implementation and release gates:** [`docs/architecture/cross-platform-product-contract.md`](docs/architecture/cross-platform-product-contract.md)
 - **Dashboard and control-plane contract:** [`docs/operations/DASHBOARD-CONTROL-PLANE.md`](docs/operations/DASHBOARD-CONTROL-PLANE.md)
