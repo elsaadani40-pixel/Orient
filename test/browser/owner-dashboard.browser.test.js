@@ -8,6 +8,7 @@ const { chromium } = require('playwright');
 const baseUrl = process.env.ORIENT_BASE_URL || 'http://127.0.0.1:8080';
 const bootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD;
 const dataDir = process.env.ORIENT_DATA_DIR;
+const rotatedPassword = require('node:crypto').randomBytes(24).toString('base64url') + '!A1';
 
 test('real Chromium owner first-run flow, dashboard runtime failure state, and public-user isolation', async t => {
   assert.ok(bootstrapPassword, 'ORIENT_OWNER_BOOTSTRAP_PASSWORD must be supplied by the isolated CI job');
@@ -26,8 +27,8 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   await ownerPage.locator('#submit').click();
   await ownerPage.waitForURL('**/account.html');
 
-  await ownerPage.getByLabel('كلمة المرور الجديدة').fill('orient-browser-owner-password-2026!');
-  await ownerPage.getByLabel('تأكيد كلمة المرور').fill('orient-browser-owner-password-2026!');
+  await ownerPage.locator('#ownerNewPassword').fill(rotatedPassword);
+  await ownerPage.locator('#ownerConfirmPassword').fill(rotatedPassword);
   await ownerPage.getByRole('button', { name: 'حفظ كلمة المرور والمتابعة' }).click();
   await ownerPage.locator('#advancedDashboard').waitFor({ state: 'visible' });
   await ownerPage.locator('#advancedDashboard').click();
