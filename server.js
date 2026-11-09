@@ -502,7 +502,7 @@ function createOwnerServer(options = {}) {
     if (req.method === 'GET' && (url.pathname === '/account' || url.pathname === '/account/' || url.pathname === '/account.html')) {
       const userSession = userSessionFor(req);
       const ownerSession = sessionFor(req);
-      const target = ownerSession ? '/owner' : userSession ? '/account.html' : '/auth';
+      const target = ownerSession || userSession ? '/account.html' : '/auth';
       if (url.pathname !== target && !(target === '/account.html' && url.pathname === '/account.html')) {
         res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
         return res.end();
@@ -515,20 +515,11 @@ function createOwnerServer(options = {}) {
 
     if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/owner.html' || url.pathname === '/dashboard.html')) {
       const ownerSession = sessionFor(req);
-      if (!ownerSession) {
-        res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
-        return res.end();
-      }
-      if (ownerPasswordChangeRequired()) {
-        if (url.pathname !== '/owner.html') {
-          res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
-          return res.end();
-        }
-      } else if (url.pathname !== '/dashboard.html') {
-        res.writeHead(302, { Location: '/dashboard.html', 'Cache-Control': 'no-store' });
-        return res.end();
-      }
+      const target = ownerSession ? '/account.html' : '/auth';
+      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+      return res.end();
     }
+
 
     const pathname = url.pathname === '/' ? '/index.html' : url.pathname === '/auth' || url.pathname === '/auth/' ? '/auth.html' : url.pathname === '/account' || url.pathname === '/account/' ? '/account.html' : url.pathname;
     let filePath;
