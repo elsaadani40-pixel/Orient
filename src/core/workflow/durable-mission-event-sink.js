@@ -2,6 +2,8 @@ const crypto = require('crypto');
 
 const TYPE_MAP = Object.freeze({
   'workflow.step.started': 'workflow.step.running',
+  'workflow.state.changed': 'workflow.state.changed',
+  'workflow.approval.required': 'workflow.approval.required',
   'workflow.step.completed': 'workflow.step.completed',
   'workflow.step.failed': 'workflow.step.failed',
   'workflow.retry.scheduled': 'workflow.step.retry',
@@ -23,29 +25,41 @@ class DurableMissionEventSink {
     this.clock = clock;
   }
 
-  _event(instance, type, data = {}) {
+  _event(instance, type, data = {}, { eventId = null, timestamp = null } = {}) {
     return {
-      id: crypto.randomUUID(),
+      id: eventId || crypto.randomUUID(),
       aggregateId: instance.workflowId,
       executionId: instance.workflowId,
       type,
-      timestamp: new Date(this.clock()).toISOString(),
+      timestamp: timestamp || new Date(this.clock()).toISOString(),
       data: { ...data, tenantId: instance.tenantId || this.tenantId }
     };
   }
 
-  append(instance, type, data = {}, { persist = true } = {}) {
-    const event = this._event(instance, type, data);
+  async append(instance, type, data = {}, { persist = true, workerPrincipal = null, persistencePrincipal = null, eventId = null, timestamp = null } = {}) {
+    const event = this._event(instance, type, data, { eventId, timestamp });
     let persisted;
     try {
-      persisted = this.eventRepository.appendMissionEvent(event, { tenantId: instance.tenantId || this.tenantId });
+      if (workerPrincipal && persistencePrincipal) {
+        throw Object.assign(new Error('Mission event writes must use either worker lease authority or owner authority, not both'), {
+          code: 'MISSION_EVENT_AUTHORITY_AMBIGUOUS'
+        });
+      }
+      persisted = await this.eventRepository.appendMissionEvent(event, {
+        tenantId: instance.tenantId || this.tenantId,
+        ...(workerPrincipal ? { workerPrincipal } : {}),
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
+      });
     } catch (error) {
       error.code = error.code || 'MISSION_EVENT_PERSISTENCE_FAILED';
       throw error;
     }
     if (persist && this.workflowRepository?.save) {
       try {
-        this.workflowRepository.save(instance);
+        await this.workflowRepository.save(instance, instance.tenantId || this.tenantId, {
+          ...(workerPrincipal ? { workerPrincipal } : {}),
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
+        });
       } catch (error) {
         error.code = error.code || 'MISSION_STATE_PERSISTENCE_FAILED_AFTER_EVENT';
         error.missionEventId = persisted.id;
@@ -56,19 +70,53 @@ class DurableMissionEventSink {
     return persisted;
   }
 
-  recordCreated(instance) {
-    return this.append(instance, 'workflow.created', {
+  async recordCreation(instance, { persistencePrincipal = null } = {}) {
+    const created = this._event(instance, 'workflow.created', {
       workflowId: instance.workflowId,
       tenantId: instance.tenantId,
       userId: instance.userId,
       workspaceId: instance.workspaceId,
+      createdAt: instance.createdAt,
+      metadata: instance.metadata,
       definition: instance.definition.toJSON(),
       input: instance.input
-    }, { persist: false });
+    });
+    const queued = this._event(instance, 'workflow.state.changed', {
+      from: 'CREATED', to: instance.state, deadlineAt: instance.deadlineAt, metadata: instance.metadata
+    });
+    if (typeof this.workflowRepository?.createWithEvents === 'function') {
+      return this.workflowRepository.createWithEvents(instance, [created, queued], { persistencePrincipal });
+    }
+    // JSON/SQLite use event-first recovery rather than claiming PostgreSQL-grade atomicity.
+    // Owner-scoped multi-user creation remains fail-closed unless the backend can transact both stores.
+    if (persistencePrincipal) {
+      throw Object.assign(new Error('This persistence backend cannot atomically enforce owner-scoped workflow creation'), { code: 'WORKFLOW_ATOMIC_CREATION_REQUIRED' });
+    }
+    if (typeof this.workflowRepository?.save !== 'function') {
+      throw Object.assign(new Error('Durable workflow snapshot storage is required'), { code: 'WORKFLOW_STORAGE_REQUIRED' });
+    }
+    await this.eventRepository.appendMissionEvent(created, { tenantId: instance.tenantId || this.tenantId });
+    await this.eventRepository.appendMissionEvent(queued, { tenantId: instance.tenantId || this.tenantId });
+    return this.workflowRepository.save(instance, instance.tenantId || this.tenantId);
   }
 
+  recordCreated(instance) { return this.append(instance, 'workflow.created', {
+      workflowId: instance.workflowId, tenantId: instance.tenantId, userId: instance.userId,
+      workspaceId: instance.workspaceId, createdAt: instance.createdAt, metadata: instance.metadata,
+      definition: instance.definition.toJSON(), input: instance.input
+    }, { persist: false }); }
+
   recordState(instance, from, to) {
-    return this.append(instance, 'workflow.state.changed', { from, to });
+    return this.append(instance, 'workflow.state.changed', {
+      from, to, deadlineAt: instance.deadlineAt, metadata: instance.metadata
+    });
+  }
+
+  recordSnapshot(instance, reason = 'workflow_reconciliation', options = {}) {
+    return this.append(instance, 'workflow.snapshot.replaced', {
+      reason,
+      snapshot: instance.toJSON()
+    }, options);
   }
 
   recordWorkerEvent(instance, event) {
@@ -86,11 +134,15 @@ class DurableMissionEventSink {
       ...(type === 'workflow.step.running' ? {
         attempt: instance.steps[payload.stepId]?.attempts ?? payload.attempt ?? 0
       } : {})
+    }, {
+      workerPrincipal: event?.workerPrincipal || null,
+      eventId: event?.eventId || null,
+      timestamp: event?.timestamp || null
     });
   }
 
-  reconstruct(workflowId, tenantId = this.tenantId) {
-    const events = this.eventRepository.findByAggregateId(workflowId, { tenantId });
+  async reconstruct(workflowId, tenantId = this.tenantId) {
+    const events = await this.eventRepository.findByAggregateId(workflowId, { tenantId });
     if (!events.length) return null;
     const Projection = require('./mission-event-projection');
     return new Projection({ clock: this.clock }).rebuild(events);

@@ -9,6 +9,7 @@ class WorkflowExecutionCoordinator {
     scheduler,
     workflowRepository = null,
     persistence = null,
+    missionEventSink = null,
     tenantId = 'local',
     userId = 'local',
     workspaceId = 'local',
@@ -26,9 +27,9 @@ class WorkflowExecutionCoordinator {
     this.userId = userId || 'local';
     this.workspaceId = workspaceId || 'local';
     this.executeRequest = executeRequest;
-    this.missionEventSink = this.persistence?.events?.appendMissionEvent
+    this.missionEventSink = missionEventSink || (this.persistence?.events?.appendMissionEvent
       ? new DurableMissionEventSink({ eventRepository: this.persistence.events, workflowRepository: this.workflowRepository, tenantId: this.tenantId })
-      : null;
+      : null);
   }
 
   createInstance(input, { priority = 0, deadlineAt = null, workflowId = undefined } = {}) {
@@ -61,7 +62,7 @@ class WorkflowExecutionCoordinator {
     return { instance, text };
   }
 
-  async enqueue(input, { priority = 0, deadlineAt = null, workflowId = undefined } = {}) {
+  async enqueue(input, { priority = 0, deadlineAt = null, workflowId = undefined, persistencePrincipal = null } = {}) {
     if (!this.scheduler.async || typeof this.scheduler.enqueueDurable !== 'function') {
       throw Object.assign(
         new Error('Durable asynchronous workflow scheduling requires an async scheduler'),
@@ -73,12 +74,14 @@ class WorkflowExecutionCoordinator {
     if (created.error) return created.error;
     const { instance } = created;
 
-    if (this.missionEventSink) await this.missionEventSink.recordCreated(instance);
-    const from = instance.state;
-    await this.scheduler.enqueueDurable(instance, { priority, deadlineAt });
-    if (this.missionEventSink && from !== instance.state) {
-      await this.missionEventSink.recordState(instance, from, instance.state);
-    }
+    instance.transition('QUEUED');
+    instance.setDeadline(deadlineAt);
+    await this.scheduler.enqueueDurable(instance, {
+      priority, deadlineAt,
+      beforePersist: this.missionEventSink
+        ? () => this.missionEventSink.recordCreation(instance, { persistencePrincipal })
+        : null
+    });
 
     return {
       workflowId: instance.workflowId,
@@ -89,11 +92,11 @@ class WorkflowExecutionCoordinator {
     };
   }
 
-  async findApprovalBlockedWorkflow(executionId) {
+  async findApprovalBlockedWorkflow(executionId, persistencePrincipal = null) {
     if (!executionId || typeof this.workflowRepository?.findAll !== 'function') return null;
     const payload = typeof this.workflowRepository.findByApprovalExecutionId === 'function'
-      ? await this.workflowRepository.findByApprovalExecutionId({ executionId: String(executionId), tenantId: this.tenantId })
-      : (await this.workflowRepository.findAll({ tenantId: this.tenantId })).find(record =>
+      ? await this.workflowRepository.findByApprovalExecutionId({ executionId: String(executionId), tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
+      : (await this.workflowRepository.findAll({ tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })).find(record =>
           record?.tenantId === this.tenantId &&
           record?.metadata?.approvalBlocked === true &&
           String(record.metadata.approvalExecutionId || '') === String(executionId)
@@ -101,7 +104,7 @@ class WorkflowExecutionCoordinator {
     return payload ? WorkflowInstance.fromJSON(payload) : null;
   }
 
-  async persistApprovalWorkflow(instance, fromState = instance.state) {
+  async persistApprovalWorkflow(instance, fromState = instance.state, persistencePrincipal = null) {
     if (typeof this.workflowRepository?.save !== 'function') {
       throw Object.assign(new Error('Durable workflow storage is required to reconcile approval'), {
         code: 'WORKFLOW_STORAGE_REQUIRED'
@@ -113,16 +116,19 @@ class WorkflowExecutionCoordinator {
       instance.metadata = { ...instance.metadata };
       delete instance.metadata.fencingToken;
     }
-    await this.workflowRepository.save(instance, this.tenantId);
-    if (this.missionEventSink && fromState !== instance.state) {
-      await this.missionEventSink.recordState(instance, fromState, instance.state);
+    if (this.missionEventSink) {
+      await this.missionEventSink.recordSnapshot(instance, 'approval_resolution', {
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
+      });
+    } else {
+      await this.workflowRepository.save(instance, this.tenantId, persistencePrincipal ? { persistencePrincipal } : {});
     }
     return instance.toJSON();
   }
 
-  async updateApprovalChallenge(executionId, approvalId) {
+  async updateApprovalChallenge(executionId, approvalId, persistencePrincipal = null) {
     if (typeof approvalId !== 'string' || !approvalId) return false;
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance) return false;
     instance.metadata = {
       ...instance.metadata,
@@ -133,12 +139,12 @@ class WorkflowExecutionCoordinator {
       approvalId,
       approvalRequiredAt: new Date().toISOString()
     };
-    await this.persistApprovalWorkflow(instance);
+    await this.persistApprovalWorkflow(instance, instance.state, persistencePrincipal);
     return true;
   }
 
-  async reconcileApprovalResume(executionId, resumeResult) {
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+  async reconcileApprovalResume(executionId, resumeResult, persistencePrincipal = null) {
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance) return false;
     const execution = resumeResult?.execution || null;
     const status = String(execution?.status || '').toLowerCase();
@@ -187,13 +193,13 @@ class WorkflowExecutionCoordinator {
       approvalBlocked: false,
       approvalResolvedAt: new Date().toISOString()
     };
-    await this.persistApprovalWorkflow(instance, fromState);
+    await this.persistApprovalWorkflow(instance, fromState, persistencePrincipal);
     return instance.toJSON();
   }
 
-  async expireApprovalWorkflow(executionId, approvalId) {
+  async expireApprovalWorkflow(executionId, approvalId, persistencePrincipal = null) {
     if (!executionId || typeof approvalId !== 'string' || !approvalId) return false;
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance || instance.metadata?.approvalId !== approvalId) return false;
     if ([WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
       return instance.toJSON();
@@ -209,12 +215,12 @@ class WorkflowExecutionCoordinator {
       approvalResolvedAt: new Date().toISOString(),
       cancellationReason: 'approval_expired'
     };
-    await this.persistApprovalWorkflow(instance, fromState);
+    await this.persistApprovalWorkflow(instance, fromState, persistencePrincipal);
     return instance.toJSON();
   }
 
-  async cancelApprovalWorkflow(executionId, reason = 'owner_rejected') {
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+  async cancelApprovalWorkflow(executionId, reason = 'owner_rejected', persistencePrincipal = null) {
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance) return false;
     const fromState = instance.state;
     if (![WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
@@ -228,7 +234,7 @@ class WorkflowExecutionCoordinator {
       approvalResolvedAt: new Date().toISOString(),
       cancellationReason: String(reason).slice(0, 300)
     };
-    await this.persistApprovalWorkflow(instance, fromState);
+    await this.persistApprovalWorkflow(instance, fromState, persistencePrincipal);
     return instance.toJSON();
   }
 
@@ -236,23 +242,43 @@ class WorkflowExecutionCoordinator {
     approval = null,
     approvals = {},
     priority = 0,
-    deadlineAt = null
+    deadlineAt = null,
+    persistencePrincipal = null
   } = {}) {
     const created = this.createInstance(input, { priority, deadlineAt });
     if (created.error) return created.error;
     const { instance, text } = created;
 
-    if (this.missionEventSink) this.missionEventSink.recordCreated(instance);
-
     if (this.scheduler.async) {
-      const from = instance.state;
-      await this.scheduler.enqueueDurable(instance, { priority, deadlineAt });
-      if (this.missionEventSink && from !== instance.state) this.missionEventSink.recordState(instance, from, instance.state);
+      instance.transition('QUEUED');
+      instance.setDeadline(deadlineAt);
+      await this.scheduler.enqueueDurable(instance, {
+        priority, deadlineAt,
+        beforePersist: this.missionEventSink
+          ? () => this.missionEventSink.recordCreation(instance, { persistencePrincipal })
+          : null
+      });
     } else {
-      if (this.workflowRepository?.save) this.workflowRepository.save(instance);
-      this.scheduler.enqueue(instance, { priority, deadlineAt });
-      if (this.workflowRepository?.save) this.workflowRepository.save(instance);
-      if (this.missionEventSink) this.missionEventSink.recordState(instance, 'CREATED', 'QUEUED');
+      if (this.missionEventSink) {
+        instance.transition('QUEUED');
+        instance.setDeadline(deadlineAt);
+        const reservation = typeof this.scheduler.reserveEnqueue === 'function'
+          ? this.scheduler.reserveEnqueue(instance) : null;
+        try {
+          await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
+          if (typeof this.scheduler.enqueuePersisted === 'function') {
+            this.scheduler.enqueuePersisted(instance, { priority, deadlineAt, ...(reservation ? { reservation } : {}) });
+          } else {
+            this.scheduler.enqueue(instance, { priority, deadlineAt });
+          }
+        } catch (error) {
+          if (reservation) this.scheduler.releaseEnqueueReservation(reservation);
+          throw error;
+        }
+      } else {
+        this.scheduler.enqueue(instance, { priority, deadlineAt });
+        if (this.workflowRepository?.save) await this.workflowRepository.save(instance, this.tenantId);
+      }
     }
 
     const WorkerClass = this.scheduler.async
@@ -261,23 +287,28 @@ class WorkflowExecutionCoordinator {
 
     const worker = new WorkerClass({
       scheduler: this.scheduler,
-      eventSink: (event) => {
+      eventSink: async (event) => {
         if (this.missionEventSink) {
-          this.missionEventSink.recordWorkerEvent(instance, event);
-          return;
+          return this.missionEventSink.recordWorkerEvent(instance, event);
         }
 
-        if (this.workflowRepository?.save) this.workflowRepository.save(instance);
+        if (this.workflowRepository?.save) {
+          await this.workflowRepository.save(instance, this.tenantId, {
+            workerPrincipal: event.workerPrincipal || null
+          });
+        }
         if (this.persistence?.events?.append) {
-          this.persistence.events.append({
+          return this.persistence.events.append({
             id: event.eventId || crypto.randomUUID(),
             type: event.type,
             executionId: instance.workflowId,
             timestamp: event.timestamp || new Date().toISOString(),
             data: { ...(event.payload || event), tenantId: this.tenantId }
-          });
+          }, { tenantId: this.tenantId });
         }
+        return null;
       },
+      persistAfterTick: !(this.missionEventSink && this.workflowRepository?.save),
       executor: async () => this.executeRequest(text, { approval, approvals })
     });
 

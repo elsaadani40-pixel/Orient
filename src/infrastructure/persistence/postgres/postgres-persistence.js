@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const { isDeepStrictEqual } = require('node:util');
+const { validateAcknowledgement, prepareAcknowledgement } = require('../workflow-outbox-utils');
 const { assertPersistencePrincipal } = require('../../../core/security/persistence-principal');
 const { assertWorkerPersistencePrincipal } = require('../../../core/security/worker-persistence-principal');
 const { PostgresDatabase } = require('./postgres-database');
@@ -253,6 +255,8 @@ class PostgresEventRepository {
       type: event.type,
       executionId: event.executionId || null,
       goalId: event.goalId || null,
+      aggregateId: event.aggregateId || event.workflowId || null,
+      sequence: event.sequence == null ? null : Number(event.sequence),
       timestamp: event.timestamp || new Date().toISOString(),
       data: { ...(event.data || {}), tenantId: effectiveTenant }
     };
@@ -292,6 +296,19 @@ class PostgresEventRepository {
           [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId, normalized.type, normalized.timestamp, normalized]
         );
         if (result.rowCount === 1) inserted.push(normalized);
+        else {
+          const existing = await client.query(
+            'SELECT tenant_id,payload FROM events WHERE event_id=$1 LIMIT 1',
+            [normalized.id]
+          );
+          const prior = existing.rows[0]?.payload;
+          if (!prior || existing.rows[0].tenant_id !== normalized.data.tenantId ||
+              prior.type !== normalized.type || prior.executionId !== normalized.executionId ||
+              prior.goalId !== normalized.goalId || (event.timestamp && prior.timestamp !== normalized.timestamp) ||
+              !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
+            throw Object.assign(new Error('Event identity conflict'), { code: 'EVENT_ID_CONFLICT' });
+          }
+        }
       }
     };
     if (persistencePrincipal) {
@@ -300,6 +317,158 @@ class PostgresEventRepository {
       await this.db.transaction(persist);
     }
     return inserted;
+  }
+
+  async appendMissionEvent(event, { tenantId = null, workerPrincipal = null, persistencePrincipal = null, transactionClient = null } = {}) {
+    if (!event?.aggregateId) throw new TypeError('aggregateId is required');
+    if (workerPrincipal && persistencePrincipal) {
+      throw Object.assign(new Error('Mission event writes must use either worker lease authority or owner authority, not both'), {
+        code: 'MISSION_EVENT_AUTHORITY_AMBIGUOUS'
+      });
+    }
+    const effectiveTenant = tenantOrLocal(tenantId || persistencePrincipal?.tenantId);
+    const owner = persistencePrincipal ? assertPersistencePrincipal(persistencePrincipal) : null;
+    if (owner && owner.tenantId !== effectiveTenant) {
+      throw Object.assign(new Error('Mission event tenant does not match the owner principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+    const compareTimestamp = typeof event.timestamp === 'string' && event.timestamp.length > 0;
+    const normalized = this.normalize(event, effectiveTenant);
+    const persist = async client => {
+      if (owner) {
+        const ownedWorkflow = await client.query(
+          "SELECT 1 FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 FOR UPDATE",
+          [normalized.aggregateId, effectiveTenant, owner.ownerId]
+        );
+        if (!ownedWorkflow.rowCount) {
+          throw Object.assign(new Error('Workflow not found for the authenticated owner'), {
+            code: 'WORKFLOW_NOT_FOUND'
+          });
+        }
+        const activeClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>NOW() LIMIT 1',
+          [normalized.aggregateId, effectiveTenant]
+        );
+        if (activeClaim.rowCount) {
+          throw Object.assign(new Error('Mission event append rejected while a worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
+        const activeLease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>NOW() LIMIT 1',
+          [normalized.aggregateId, effectiveTenant]
+        );
+        if (activeLease.rowCount) {
+          throw Object.assign(new Error('Mission event append rejected while a worker lease is active'), {
+            code: 'WORKFLOW_LEASE_HELD'
+          });
+        }
+      }
+      if (workerPrincipal) {
+        const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
+        if (principal.tenantId !== normalized.data.tenantId ||
+            principal.workflowId !== normalized.aggregateId) {
+          throw Object.assign(new Error('Worker principal does not match mission event identity'), {
+            code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+          });
+        }
+        const worker = await client.query(
+          `SELECT 1 FROM worker_nodes
+           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+             AND status='READY' AND expires_at > NOW()
+           FOR UPDATE`,
+          [principal.tenantId, principal.workerId, principal.sessionId]
+        );
+        if (worker.rowCount !== 1) {
+          throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+        }
+        const lease = await client.query(
+          `SELECT 1 FROM workflow_leases
+           WHERE tenant_id=$1 AND workflow_id=$2 AND lease_id=$3
+             AND worker_id=$4 AND worker_session_id=$5
+             AND fencing_token=$6 AND expires_at > NOW()
+           FOR UPDATE`,
+          [principal.tenantId, principal.workflowId, principal.leaseId,
+            principal.workerId, principal.sessionId, principal.fencingToken]
+        );
+        if (lease.rowCount !== 1) {
+          throw Object.assign(new Error('Mission event rejected by durable worker fencing'), {
+            code: 'WORKFLOW_FENCING_REJECTED'
+          });
+        }
+      }
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+        [normalized.data.tenantId, normalized.aggregateId]
+      );
+      const existing = await client.query(
+        'SELECT tenant_id,aggregate_id,payload FROM events WHERE event_id=$1 LIMIT 1',
+        [normalized.id]
+      );
+      if (existing.rows.length) {
+        const row = existing.rows[0];
+        const prior = row.payload;
+        if (row.tenant_id !== normalized.data.tenantId || row.aggregate_id !== normalized.aggregateId ||
+            prior.type !== normalized.type || prior.executionId !== normalized.executionId ||
+            prior.goalId !== normalized.goalId || (compareTimestamp && prior.timestamp !== normalized.timestamp) ||
+            !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
+          throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
+        }
+        return prior;
+      }
+      const sequenceResult = await client.query(
+        'SELECT COALESCE(MAX(sequence),0)::bigint + 1 AS next_sequence FROM events WHERE tenant_id=$1 AND aggregate_id=$2',
+        [normalized.data.tenantId, normalized.aggregateId]
+      );
+      normalized.sequence = Number(sequenceResult.rows[0].next_sequence);
+      const inserted = await client.query(
+        `INSERT INTO events(event_id,tenant_id,execution_id,goal_id,aggregate_id,sequence,type,timestamp,payload)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT(event_id) DO NOTHING RETURNING payload`,
+        [normalized.id, normalized.data.tenantId, normalized.executionId, normalized.goalId,
+          normalized.aggregateId, normalized.sequence, normalized.type, normalized.timestamp, normalized]
+      );
+      if (inserted.rowCount === 1) return inserted.rows[0].payload;
+      const raced = await client.query(
+        'SELECT tenant_id,aggregate_id,payload FROM events WHERE event_id=$1 LIMIT 1',
+        [normalized.id]
+      );
+      const prior = raced.rows[0]?.payload;
+      if (!prior || raced.rows[0].tenant_id !== normalized.data.tenantId ||
+          raced.rows[0].aggregate_id !== normalized.aggregateId || prior.type !== normalized.type ||
+          prior.executionId !== normalized.executionId || prior.goalId !== normalized.goalId ||
+          (compareTimestamp && prior.timestamp !== normalized.timestamp) ||
+          !isDeepStrictEqual(prior.data || {}, normalized.data || {})) {
+        throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
+      }
+      return prior;
+    };
+    if (transactionClient) {
+      if (workerPrincipal) throw Object.assign(new Error('Worker events cannot reuse an owner creation transaction'), { code: 'MISSION_EVENT_AUTHORITY_AMBIGUOUS' });
+      return persist(transactionClient);
+    }
+    if (workerPrincipal) {
+      return this.db.transactionWithWorkerPrincipal(workerPrincipal, persist, { requireLease: true });
+    }
+    if (owner) {
+      return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Mission event principal', persist);
+    }
+    return this.db.transaction(persist);
+  }
+
+  async findByAggregateId(id, { tenantId = null } = {}) {
+    if (!id) return [];
+    const result = tenantId
+      ? await this.db.query(
+        'SELECT payload FROM events WHERE tenant_id=$1 AND aggregate_id=$2 ORDER BY sequence ASC',
+        [tenantId, id]
+      )
+      : await this.db.query(
+        'SELECT payload FROM events WHERE aggregate_id=$1 ORDER BY tenant_id ASC,sequence ASC',
+        [id]
+      );
+    return result.rows.map(row => row.payload);
   }
 
   async findAll({ tenantId = null } = {}) {
@@ -764,10 +933,47 @@ class PostgresCheckpointRepository {
 class PostgresWorkflowRepository {
   constructor(db, workerRegistry = null) { this.db = db; this.workerRegistry = workerRegistry; }
 
-  async save(instance, tenantId = null, { workerPrincipal = null } = {}) {
+  async createWithEvents(instance, events, { persistencePrincipal = null } = {}) {
+    if (!this.eventRepository || typeof this.eventRepository.appendMissionEvent !== 'function') {
+      throw Object.assign(new Error('Atomic workflow creation requires a mission event repository'), { code: 'WORKFLOW_ATOMIC_EVENT_STORE_REQUIRED' });
+    }
+    if (!Array.isArray(events) || events.length < 1) throw new TypeError('Initial workflow events are required');
+    const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenant = tenantOrLocal(item.tenantId);
+    const owner = persistencePrincipal ? assertPersistencePrincipal(persistencePrincipal) : null;
+    if (owner && (owner.tenantId !== effectiveTenant || item.userId !== owner.ownerId)) {
+      throw Object.assign(new Error('Workflow identity does not match the owner persistence principal'), { code: 'PERSISTENCE_PRINCIPAL_MISMATCH' });
+    }
+    const persist = async client => {
+      const inserted = await client.query(
+        `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
+         VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id`,
+        [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+      );
+      if (inserted.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow ID already exists; creation cannot overwrite another owner'), { code: 'WORKFLOW_ID_CONFLICT' });
+      }
+      for (const event of events) {
+        await this.eventRepository.appendMissionEvent(event, {
+          tenantId: effectiveTenant,
+          ...(owner ? { persistencePrincipal: owner } : {}),
+          transactionClient: client
+        });
+      }
+      return item;
+    };
+    return owner ? this.db.transactionWithPrincipal(owner, persist) : this.db.transaction(persist);
+  }
+
+  async save(instance, tenantId = null, { workerPrincipal = null, persistencePrincipal = null } = {}) {
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenant = tenantOrLocal(item.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Workflow');
+    if (workerPrincipal && persistencePrincipal) {
+      throw Object.assign(new Error('Workflow writes must use either worker lease authority or owner authority, not both'), {
+        code: 'WORKFLOW_AUTHORITY_AMBIGUOUS'
+      });
+    }
     const fencingToken = Number(item.metadata?.fencingToken || 0);
     if (fencingToken > 0) {
       const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
@@ -813,6 +1019,59 @@ class PostgresWorkflowRepository {
         }
         return item;
       }, { requireLease: true });
+    }
+    if (persistencePrincipal) {
+      const owner = assertPersistencePrincipal(persistencePrincipal);
+      if (owner.tenantId !== effectiveTenant || item.userId !== owner.ownerId) {
+        throw Object.assign(new Error('Workflow identity does not match the owner persistence principal'), {
+          code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+        });
+      }
+      return withPersistencePrincipal(this.db, owner, effectiveTenant, 'Workflow principal', async client => {
+        const current = await client.query(
+          "SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3 FOR UPDATE",
+          [item.workflowId, effectiveTenant, owner.ownerId]
+        );
+        if (current.rowCount !== 1) {
+          const inserted = await client.query(
+            `INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload)
+             VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id`,
+            [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+          );
+          if (inserted.rowCount === 1) return item;
+          throw Object.assign(new Error('Workflow not found for the authenticated owner'), {
+            code: 'WORKFLOW_NOT_FOUND'
+          });
+        }
+        const activeDispatchClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeDispatchClaim.rowCount > 0) {
+          throw Object.assign(new Error('Owner workflow write rejected while a durable worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
+        const activeLease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeLease.rowCount > 0) {
+          throw Object.assign(new Error('Owner workflow write rejected while a durable worker lease is active'), {
+            code: 'WORKFLOW_LEASE_HELD'
+          });
+        }
+        const updated = await client.query(
+          "UPDATE workflows SET state=$4,updated_at=$5,payload=$6 WHERE workflow_id=$1 AND tenant_id=$2 AND payload->>'userId'=$3",
+          [item.workflowId, effectiveTenant, owner.ownerId, item.state, item.updatedAt || new Date().toISOString(), item]
+        );
+        if (updated.rowCount !== 1) {
+          throw Object.assign(new Error('Owner workflow write did not update its target row'), {
+            code: 'WORKFLOW_NOT_FOUND'
+          });
+        }
+        return item;
+      });
     }
     if (workerPrincipal) {
       throw Object.assign(new Error('A lease-bound workflow write requires a persisted fencing token'), {
@@ -921,6 +1180,7 @@ class PostgresWorkflowRepository {
         `WITH candidates AS (
            SELECT w.workflow_id FROM workflows w
            WHERE w.tenant_id=$1 AND w.state IN ('QUEUED','WAITING','RECOVERING','RUNNING')
+             AND COALESCE(w.payload->'metadata'->>'approvalBlocked','false') <> 'true'
              AND COALESCE(w.payload->'metadata'->'requiredCapabilities','[]'::jsonb) <@ $4::jsonb
              AND NOT EXISTS (SELECT 1 FROM workflow_dispatch_claims c WHERE c.tenant_id=w.tenant_id AND c.workflow_id=w.workflow_id AND c.expires_at > NOW())
              AND NOT EXISTS (SELECT 1 FROM workflow_leases l WHERE l.tenant_id=w.tenant_id AND l.workflow_id=w.workflow_id AND l.expires_at > NOW())
@@ -957,6 +1217,83 @@ class PostgresWorkflowRepository {
       return result.rowCount===1;
     });
   }
+
+  async repair(instance, { tenantId = null, expectedRevision = 0, targetRevision } = {}) {
+    const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenant = tenantOrLocal(item.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Workflow');
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 ||
+        !Number.isInteger(targetRevision) || targetRevision < expectedRevision) {
+      throw Object.assign(new Error('Invalid workflow repair revision'), {
+        code: 'WORKFLOW_REPAIR_REVISION_INVALID'
+      });
+    }
+    return this.db.transaction(async client => {
+      const current = await client.query(
+        'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [item.workflowId, effectiveTenant]
+      );
+      if (current.rowCount) {
+        const revision = Number(current.rows[0].payload?.checkpoint?.revision || 0);
+        const expectedLastSavedAt = item.checkpoint?.lastSavedAt || null;
+        const currentLastSavedAt = current.rows[0].payload?.checkpoint?.lastSavedAt || null;
+        if (revision !== expectedRevision || currentLastSavedAt !== expectedLastSavedAt) {
+          throw Object.assign(new Error('Stale workflow checkpoint during repair'), {
+            code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+          });
+        }
+        const activeClaim = await client.query(
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeClaim.rowCount > 0) {
+          throw Object.assign(new Error('Workflow repair rejected while a worker dispatch claim is active'), {
+            code: 'WORKFLOW_DISPATCH_CLAIM_HELD'
+          });
+        }
+        const activeLease = await client.query(
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          [item.workflowId, effectiveTenant]
+        );
+        if (activeLease.rowCount > 0) {
+          throw Object.assign(new Error('Workflow repair rejected while a worker lease is active'), {
+            code: 'WORKFLOW_LEASE_HELD'
+          });
+        }
+      } else if (expectedRevision !== 0) {
+        throw Object.assign(new Error('Workflow snapshot disappeared during repair'), {
+          code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+        });
+      }
+      item.checkpoint = { revision: targetRevision, lastSavedAt: new Date().toISOString() };
+      if (!current.rowCount) {
+        const inserted = await client.query(
+          'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id',
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || item.checkpoint.lastSavedAt, item]
+        );
+        if (inserted.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow snapshot changed during repair'), {
+            code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+          });
+        }
+      } else {
+        const updated = await client.query(
+          "UPDATE workflows SET state=$3,updated_at=$4,payload=$5 WHERE workflow_id=$1 AND tenant_id=$2 AND COALESCE((payload->'checkpoint'->>'revision')::int,0)=$6",
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || item.checkpoint.lastSavedAt, item, expectedRevision]
+        );
+        if (updated.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow checkpoint changed during repair'), {
+            code: 'WORKFLOW_CHECKPOINT_CONFLICT'
+          });
+        }
+      }
+      if (typeof instance?.setCheckpointRevision === 'function') {
+        instance.setCheckpointRevision(targetRevision, item.checkpoint.lastSavedAt);
+      }
+      return item;
+    });
+  }
+
   async requestCancellation(workflowId, tenantId = null) {
     const effectiveTenant = tenantOrLocal(tenantId);
     return this.db.transaction(async client => {
@@ -976,36 +1313,112 @@ class PostgresWorkflowRepository {
     });
   }
 
-  async findById(workflowId, tenantId = null) {
-    const result = await this.db.query(
-      tenantId ? 'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 LIMIT 1' : 'SELECT payload FROM workflows WHERE workflow_id=$1 LIMIT 1',
-      tenantId ? [workflowId, tenantId] : [workflowId]
-    );
-    return result.rows.length ? result.rows[0].payload : null;
+  async findById(workflowId, tenantId = null, { persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
+      const values = [workflowId];
+      let where = 'workflow_id=$1';
+      if (effectiveTenant) {
+        values.push(effectiveTenant);
+        where += ' AND tenant_id=' + '$' + values.length;
+      }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += " AND payload->>'userId'=" + '$' + values.length;
+      }
+      const result = await client.query('SELECT payload FROM workflows WHERE ' + where + ' LIMIT 1', values);
+      return result.rows.length ? result.rows[0].payload : null;
+    });
   }
 
-  async findByApprovalExecutionId({ executionId, tenantId = null } = {}) {
+  async findByApprovalExecutionId({ executionId, tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId) return null;
     const values = [String(executionId)];
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
     let tenantClause = '';
-    if (tenantId) {
-      values.push(tenantId);
-      tenantClause = ' AND tenant_id=$' + values.length;
+    if (effectiveTenant) {
+      values.push(effectiveTenant);
+      tenantClause = ' AND tenant_id=' + '$' + values.length;
     }
-    const result = await this.db.query(
-      "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
-      "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
-      ' ORDER BY updated_at DESC LIMIT 1',
-      values
-    );
-    return result.rows.length ? result.rows[0].payload : null;
+    if (persistencePrincipal) {
+      values.push(persistencePrincipal.ownerId);
+      tenantClause += " AND payload->>'userId'=" + '$' + values.length;
+    }
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
+      const result = await client.query(
+        "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' " +
+        "AND payload->'metadata'->>'approvalExecutionId'=$1" + tenantClause +
+        ' ORDER BY updated_at DESC LIMIT 1',
+        values
+      );
+      return result.rows.length ? result.rows[0].payload : null;
+    });
   }
 
-  async findAll({ tenantId = null } = {}) {
+  async findAll({ tenantId = null, persistencePrincipal = null } = {}) {
+    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
+    return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Workflow principal', async client => {
+      const values = [];
+      let where = '';
+      if (effectiveTenant) {
+        values.push(effectiveTenant);
+        where = 'WHERE tenant_id=' + '$' + values.length;
+      }
+      if (persistencePrincipal) {
+        values.push(persistencePrincipal.ownerId);
+        where += (where ? ' AND ' : 'WHERE ') + "payload->>'userId'=" + '$' + values.length;
+      }
+      const result = await client.query('SELECT payload FROM workflows ' + where + ' ORDER BY updated_at DESC', values);
+      return result.rows.map(row => row.payload);
+    });
+  }
+
+  async findPendingPublications({ tenantId = null, limit = 100 } = {}) {
+    const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 500)) : 100;
+    const pendingArray = `CASE
+      WHEN jsonb_typeof(payload->'metadata'->'pendingPublications')='array'
+      THEN jsonb_array_length(payload->'metadata'->'pendingPublications')
+      ELSE 0
+    END > 0`;
     const result = tenantId
-      ? await this.db.query('SELECT payload FROM workflows WHERE tenant_id=$1 ORDER BY updated_at DESC', [tenantId])
-      : await this.db.query('SELECT payload FROM workflows ORDER BY updated_at DESC');
+      ? await this.db.query(
+        "SELECT payload FROM workflows WHERE tenant_id=$1 AND payload->'metadata'->>'approvalBlocked'='true' AND " +
+          pendingArray + ' ORDER BY updated_at ASC LIMIT $2',
+        [tenantId, boundedLimit]
+      )
+      : await this.db.query(
+        "SELECT payload FROM workflows WHERE payload->'metadata'->>'approvalBlocked'='true' AND " +
+          pendingArray + ' ORDER BY updated_at ASC LIMIT $1',
+        [boundedLimit]
+      );
     return result.rows.map(row => row.payload);
+  }
+
+  async acknowledgePendingPublications(workflowId, tenantId, eventIds = []) {
+    const acknowledgedIds = validateAcknowledgement(workflowId, tenantId, eventIds);
+    return this.db.transaction(async client => {
+      const result = await client.query(
+        'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [workflowId, tenantId]
+      );
+      if (!result.rows.length) {
+        throw Object.assign(new Error('Workflow not found for outbox acknowledgement'), {
+          code: 'WORKFLOW_NOT_FOUND'
+        });
+      }
+      const { updated, receipt } = prepareAcknowledgement(result.rows[0].payload, acknowledgedIds);
+      if (!updated) return receipt;
+      const written = await client.query(
+        'UPDATE workflows SET payload=$3,updated_at=$4 WHERE workflow_id=$1 AND tenant_id=$2',
+        [workflowId, tenantId, updated, receipt.lastSavedAt]
+      );
+      if (written.rowCount !== 1) {
+        throw Object.assign(new Error('Workflow outbox acknowledgement did not update its locked row'), {
+          code: 'WORKFLOW_OUTBOX_ACK_CONFLICT'
+        });
+      }
+      return receipt;
+    });
   }
 
   async delete(workflowId, tenantId = null) {
@@ -1374,6 +1787,7 @@ class PostgresPersistence {
     this.checkpoints = new PostgresCheckpointRepository(this.db);
     this.workers = new PostgresWorkerRegistryRepository(this.db);
     this.workflows = new PostgresWorkflowRepository(this.db, this.workers);
+    this.workflows.eventRepository = this.events;
     this.workflowLeases = new PostgresWorkflowLeaseRepository(this.db);
     this.approvals = new PostgresApprovalRepository(this.db);
     this.tenantQuotas = new PostgresTenantQuotaRepository(this.db);
