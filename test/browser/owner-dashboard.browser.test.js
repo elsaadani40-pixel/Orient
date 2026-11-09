@@ -29,6 +29,8 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   await ownerPage.getByLabel('كلمة المرور الجديدة').fill('orient-browser-owner-password-2026!');
   await ownerPage.getByLabel('تأكيد كلمة المرور').fill('orient-browser-owner-password-2026!');
   await ownerPage.getByRole('button', { name: 'حفظ كلمة المرور والمتابعة' }).click();
+  await ownerPage.locator('#advancedDashboard').waitFor({ state: 'visible' });
+  await ownerPage.locator('#advancedDashboard').click();
   await ownerPage.waitForURL('**/dashboard.html');
 
   await ownerPage.getByRole('heading', { name: 'لوحة تحكم المالك' }).waitFor();
@@ -106,7 +108,7 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   assert.equal(await ownerPage.locator('.final-answer').getAttribute('aria-label'), 'إجابة ORIENT النهائية');
 
   // Return to the dashboard because the chat page has no dashboard logout control.
-  await ownerPage.goto(baseUrl + '/owner.html');
+  await ownerPage.goto(baseUrl + '/account.html');
   await ownerPage.getByRole('button', { name: 'تسجيل الخروج' }).waitFor({ timeout: 10000 });
 
   const ownerState = JSON.parse(fs.readFileSync(dataDir + '/owner.json', 'utf8'));
@@ -118,7 +120,7 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   assert.equal(JSON.stringify(ownerState).includes(bootstrapPassword), false);
 
   await ownerPage.getByRole('button', { name: 'تسجيل الخروج' }).click();
-  await ownerPage.waitForURL('**/auth?mode=owner');
+  await ownerPage.waitForURL('**/');
 
   const publicContext = await browser.newContext();
   t.after(() => publicContext.close());
@@ -132,7 +134,6 @@ test('real Chromium owner first-run flow, dashboard runtime failure state, and p
   await publicPage.waitForURL('**/account.html');
 
   await publicPage.goto(baseUrl + '/dashboard.html');
-  await publicPage.waitForURL('**/auth?mode=owner');
+  await publicPage.waitForURL('**/auth');
   assert.equal(new URL(publicPage.url()).pathname, '/auth');
-  assert.equal(new URL(publicPage.url()).searchParams.get('mode'), 'owner');
 });
