@@ -227,7 +227,7 @@ function createOwnerServer(options = {}) {
 
     if (req.method === 'GET' && url.pathname === '/api/auth/me') {
       const owner = sessionFor(req);
-      if (owner) return sendJson(res, 200, { username: 'Admin', role: 'owner', passwordChangeRequired: ownerPasswordChangeRequired() });
+      if (owner) return sendJson(res, 200, { username: 'Admin', email: identity ? identity.status().email : undefined, role: 'owner', passwordChangeRequired: ownerPasswordChangeRequired() });
       const session = userSessionFor(req);
       if (session) return sendJson(res, 200, { username: session.username, role: 'user' });
       return sendJson(res, 401, { error: 'Authentication required' });
