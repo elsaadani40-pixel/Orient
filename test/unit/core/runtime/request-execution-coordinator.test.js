@@ -296,7 +296,7 @@ test('execute returns durable cancellation when cancellation wins terminal compl
       plan: async () => plannedResult('test.execute-race', { step: 1, tool: 'test.tool', input: {}, dependsOn: null })
     },
     agentExecutionCoordinator: {
-      run: async ({ context }) => {
+      run: async ({ context, plan }) => {
         context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
         context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
         context.transitionAgentTo(AgentState.LIFECYCLE.OBSERVING);
