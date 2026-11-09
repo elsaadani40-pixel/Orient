@@ -142,3 +142,18 @@ Do not expand this integration merely to increase the agent count or feature lis
 **Positive:** ORIENT gains access to a mature multi-agent desktop workflow without building another Electron application, raising its Node floor, or taking on a large dependency tree. The protocol boundary is independently testable and can support other external agent fleets later.
 
 **Costs and limitations:** A second process must be installed and running; network/pairing configuration and version compatibility need support; upstream outages are possible; the first slice is read-only and will not deliver autonomous remote actions until the later approval and policy gates pass.
+
+
+## Provider-neutral boundary
+
+The application layer must not depend directly on an OpenMausBot MCP client or upstream tool names. External agent fleets are registered behind the normalized provider contract in `src/application/agents/external-agent-provider-registry.js`:
+
+- `id`: stable, lowercase provider identifier;
+- `health()`: provider health observation;
+- `listAgents()`: normalized agent inventory observation;
+- `listChannels()`: normalized channel inventory observation;
+- `listModels()`: normalized model inventory observation.
+
+Infrastructure adapters translate provider-specific protocols into this contract. The registry rejects malformed or duplicate providers and becomes immutable after startup registration. OpenMausBot is the first adapter; its MCP transport and upstream tool names remain isolated under `src/infrastructure/agents/`. The existing ORIENT ToolRegistry and capability governance remain the only path by which an agent can consume these observations.
+
+Adding another provider must add an adapter and contract tests, not provider-specific branches in the runtime or planner. A provider may expose only the operations explicitly implemented by its adapter; the presence of additional upstream tools never expands the ORIENT contract. Mutating/delegating methods are intentionally absent from this first contract and require a separate approval-bound extension.
