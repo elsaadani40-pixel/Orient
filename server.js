@@ -510,7 +510,7 @@ function createOwnerServer(options = {}) {
         res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
         return res.end();
       }
-      if (target === '/account.html' && !userSession) {
+      if (target === '/account.html' && !userSession && !ownerSession) {
         res.writeHead(302, { Location: '/auth', 'Cache-Control': 'no-store' });
         return res.end();
       }
