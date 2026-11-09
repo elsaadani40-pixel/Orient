@@ -897,3 +897,109 @@ test('preserves the owner persistence principal when cancellation wins after fai
   assert.deepEqual(persistCalls.map(call => call[0]), ['execution', 'events', 'checkpoint']);
   for (const call of persistCalls) assert.strictEqual(call[call.length - 1], principal);
 });
+
+
+test('Runtime preserves a task-reserved execution ID in its durable ExecutionContext', async () => {
+  const reservedExecutionId = 'reserved-task-execution-001';
+  let insertedSnapshot = null;
+  let executedSnapshot = null;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
+      })
+    },
+    agentExecutionCoordinator: {
+      run: async args => {
+        executedSnapshot = args.context.snapshot();
+        args.context.transitionAgentTo(AgentState.LIFECYCLE.VALIDATING);
+        args.context.transitionAgentTo(AgentState.LIFECYCLE.EXECUTING);
+        args.context.transitionAgentTo(AgentState.LIFECYCLE.OBSERVING);
+        args.context.transitionAgentTo(AgentState.LIFECYCLE.EVALUATING);
+        return {
+          plan: args.plan,
+          loopResult: { result: { ok: true }, evaluation: { success: true } },
+          replanningDecision: { toJSON: () => ({ replanned: false }) }
+        };
+      }
+    },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: {},
+    persistenceCoordinator: {
+      persistExecution: async (context, mode) => {
+        if (mode === 'insert') insertedSnapshot = context.snapshot();
+        return context.snapshot();
+      },
+      persistEvents: async () => {}
+    },
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    userId: 'owner-a',
+    workspaceId: 'workspace-a',
+    maxInputChars: 1000
+  });
+  const result = await coordinator.execute('run canonical task', { executionId: reservedExecutionId });
+  assert.equal(insertedSnapshot.executionId, reservedExecutionId);
+  assert.equal(executedSnapshot.executionId, reservedExecutionId);
+  assert.equal(result.execution.executionId, reservedExecutionId);
+});
+
+test('Runtime admission evidence overrides a frozen downstream rejection marker after durable insert', async () => {
+  const downstreamError = Object.freeze(Object.assign(new Error('tool failed after admission'), {
+    code: 'TOOL_FAILED', executionAdmission: 'rejected'
+  }));
+  let insertCalls = 0;
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {
+      plan: async () => ({
+        plan: { intent: 'test', steps: [{ step: 1, tool: 'test.tool' }] },
+        validation: { valid: true, steps: [{ step: 1, tool: 'test.tool' }] }
+      })
+    },
+    agentExecutionCoordinator: { run: async () => { throw downstreamError; } },
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: {},
+    persistenceCoordinator: {
+      persistExecution: async (_context, operation) => { if (operation === 'insert') insertCalls += 1; },
+      persistEvents: async () => {}
+    },
+    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000
+  });
+  await assert.rejects(
+    coordinator.execute('run a task'),
+    error => {
+      assert.equal(error.code, 'TOOL_FAILED');
+      assert.equal(error.executionAdmission, 'accepted');
+      assert.notStrictEqual(error, downstreamError);
+      return true;
+    }
+  );
+  assert.equal(insertCalls, 1);
+});
+
+test('Runtime preflight evidence overrides a frozen downstream acceptance marker', async () => {
+  const quotaError = Object.freeze(Object.assign(new Error('tenant quota rejected'), {
+    code: 'TENANT_QUOTA_EXCEEDED', executionAdmission: 'accepted'
+  }));
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {}, agentExecutionCoordinator: {}, recoveryCoordinator: {},
+    persistence: {}, persistenceCoordinator: {},
+    quotaService: { assertTenant: () => { throw quotaError; }, assertInputSize: () => {} },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a', maxInputChars: 1000
+  });
+  await assert.rejects(
+    coordinator.execute('run a task'),
+    error => {
+      assert.equal(error.code, 'TENANT_QUOTA_EXCEEDED');
+      assert.equal(error.executionAdmission, 'rejected');
+      assert.notStrictEqual(error, quotaError);
+      return true;
+    }
+  );
+});
