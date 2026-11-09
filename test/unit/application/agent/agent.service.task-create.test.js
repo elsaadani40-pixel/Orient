@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const AgentService = require('../../../../src/application/agent/agent.service');
 
-function persistExecution(persistedExecutions, executionId, tenantId = 'tenant-test') {
+function storePersistedExecution(persistedExecutions, executionId, tenantId = 'tenant-test') {
   persistedExecutions.set(executionId, {
     executionId,
     tenantId,
@@ -62,7 +62,7 @@ function createRuntime({
       executions += 1;
       if (execute) return execute(goal, options, persistedExecutions);
       if (persistExecution) {
-        persistExecution(persistedExecutions, options.executionId, persistedTenantId);
+        storePersistedExecution(persistedExecutions, options.executionId, persistedTenantId);
       }
       return { execution: { executionId: options.executionId } };
     },
@@ -171,7 +171,7 @@ test('approval-required execution is accepted as a durable task and does not ret
   const fixture = createRuntime({
     status: 'awaiting_approval',
     execute: async (_goal, options, persistedExecutions) => {
-      persistExecution(persistedExecutions, options.executionId);
+      storePersistedExecution(persistedExecutions, options.executionId);
       throw Object.assign(new Error('Owner approval is required'), {
         code: 'APPROVAL_REQUIRED',
         executionContext: { executionId: options.executionId }
@@ -313,7 +313,7 @@ test('task creation stays recoverable until the durable execution record is obse
   const [record] = [...fixture.records.values()];
   assert.equal(record.status, 'running');
   assert.equal(fixture.executions, 1);
-  persistExecution(fixture.persistedExecutions, record.executionId);
+  storePersistedExecution(fixture.persistedExecutions, record.executionId);
   const retry = await fixture.service.createTask({ goal: 'wait for durable execution visibility', idempotencyKey: 'request-key-durable-visibility-01' });
   assert.equal(retry.replayed, true);
   assert.equal(retry.task.id, record.executionId);
@@ -338,7 +338,7 @@ test('approval-required task stays recoverable until its durable execution row i
   const [record] = [...fixture.records.values()];
   assert.equal(record.status, 'running');
   assert.equal(fixture.executions, 1);
-  persistExecution(fixture.persistedExecutions, record.executionId);
+  storePersistedExecution(fixture.persistedExecutions, record.executionId);
   const retry = await fixture.service.createTask({ goal: 'wait for approval execution durability', idempotencyKey: 'request-key-approval-durable-visibility-01' });
   assert.equal(retry.replayed, true);
   assert.equal(retry.task.id, record.executionId);
