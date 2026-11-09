@@ -29,6 +29,8 @@ internal class OwnerSessionClient(
     private var sessionCookie: String? = null
     private var csrfToken: String? = null
     private var sessionExpiresAt: Long? = null
+    var mustChangePassword: Boolean = false
+        private set
 
     init {
         require(port in 1..65535) { "Port must be between 1 and 65535" }
@@ -49,7 +51,7 @@ internal class OwnerSessionClient(
         }
 
     suspend fun login(password: String): String = withContext(Dispatchers.IO) {
-        require(password.length in 16..1024) { "كلمة المرور يجب أن تكون 16 حرفًا على الأقل." }
+        require(password.isNotEmpty() && password.length <= 1024) { "أدخل كلمة مرور صالحة." }
         val response = request(
             method = "POST",
             path = "/owner/login",
@@ -70,7 +72,35 @@ internal class OwnerSessionClient(
         sessionCookie = cookie
         csrfToken = token
         sessionExpiresAt = expiresAt
-        "تم تسجيل الدخول إلى ORIENT بنجاح."
+        mustChangePassword = json.optBoolean("passwordChangeRequired", false)
+        if (mustChangePassword) "تم التحقق من الهوية. يجب تغيير كلمة المرور قبل استخدام Runtime."
+        else "تم تسجيل الدخول إلى ORIENT بنجاح."
+    }
+
+    suspend fun changePassword(password: String, confirmPassword: String): String = withContext(Dispatchers.IO) {
+        require(password.length in 14..1024) { "كلمة المرور الجديدة يجب ألا تقل عن 14 حرفًا." }
+        require(password == confirmPassword) { "كلمتا المرور غير متطابقتين." }
+        val response = request(
+            method = "POST",
+            path = "/owner/password",
+            body = JSONObject().put("password", password).put("confirmPassword", confirmPassword).toString(),
+            includeCsrf = true
+        )
+        val json = JSONObject(response.body)
+        val cookie = response.setCookie
+            ?.substringBefore(';')
+            ?.takeIf { it.startsWith("orient_owner_session=") && it.length > "orient_owner_session=".length }
+            ?: throw IllegalStateException("الخادم لم يُحدّث جلسة المالك بعد تغيير كلمة المرور.")
+        val token = json.optString("csrfToken").takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("الخادم لم يُصدر رمز حماية جديدًا.")
+        val expiresAt = json.optLong("expiresAt", -1L)
+        if (expiresAt <= now()) throw IllegalStateException("الجلسة الجديدة غير صالحة أو منتهية.")
+        sessionCookie = cookie
+        csrfToken = token
+        sessionExpiresAt = expiresAt
+        mustChangePassword = json.optBoolean("passwordChangeRequired", false)
+        if (mustChangePassword) throw IllegalStateException("الخادم لم يؤكد إتمام تغيير كلمة المرور.")
+        "تم تغيير كلمة المرور بنجاح."
     }
 
     suspend fun fetchTasks(): String = withContext(Dispatchers.IO) {
@@ -148,6 +178,7 @@ internal class OwnerSessionClient(
         sessionCookie = null
         csrfToken = null
         sessionExpiresAt = null
+        mustChangePassword = false
     }
 
     private fun request(
