@@ -12,6 +12,23 @@ function storePersistedExecution(persistedExecutions, executionId, tenantId = 't
   });
 }
 
+async function assertStatusLookupRecovery({ goal, idempotencyKey, status = 'completed', execute }) {
+  const fixture = createRuntime({
+    status,
+    failFirstStatusLookup: true,
+    ...(execute ? { execute } : {})
+  });
+  await assert.rejects(
+    fixture.service.createTask({ goal, idempotencyKey }),
+    /simulated transient status read failure/
+  );
+  assert.equal([...fixture.records.values()][0].status, 'running');
+  const retry = await fixture.service.createTask({ goal, idempotencyKey });
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.task.status, status);
+  assert.equal(fixture.executions, 1);
+}
+
 async function assertDelayedExecutionRecovery({ goal, idempotencyKey, status = 'completed', execute }) {
   const fixture = createRuntime({
     status,
@@ -257,40 +274,25 @@ test('task retry reconciles an execution persisted before idempotency completion
 });
 
 test('transient status lookup failure remains recoverable without a second Runtime execution', async () => {
-  const fixture = createRuntime({ failFirstStatusLookup: true });
-  await assert.rejects(
-    fixture.service.createTask({ goal: 'recover after status read failure', idempotencyKey: 'request-key-status-recovery-01' }),
-    /simulated transient status read failure/
-  );
-  assert.equal([...fixture.records.values()][0].status, 'running');
-  const retry = await fixture.service.createTask({ goal: 'recover after status read failure', idempotencyKey: 'request-key-status-recovery-01' });
-  assert.equal(retry.replayed, true);
-  assert.equal(retry.task.status, 'completed');
-  assert.equal(fixture.executions, 1);
+  await assertStatusLookupRecovery({
+    goal: 'recover after status read failure',
+    idempotencyKey: 'request-key-status-recovery-01'
+  });
 });
 
 test('approval pause survives transient status lookup failure without repeating the high-risk action', async () => {
-  const fixture = createRuntime({
+  await assertStatusLookupRecovery({
+    goal: 'pause for owner approval',
+    idempotencyKey: 'request-key-approval-recovery-02',
     status: 'awaiting_approval',
-    failFirstStatusLookup: true,
     execute: async (_goal, options, persistedExecutions) => {
-      persistedExecutions.set(options.executionId, {
-        executionId: options.executionId, tenantId: 'tenant-test', metadata: { tenantId: 'tenant-test' }
-      });
+      storePersistedExecution(persistedExecutions, options.executionId);
       throw Object.assign(new Error('Owner approval is required'), {
-        code: 'APPROVAL_REQUIRED', executionContext: { executionId: options.executionId }
+        code: 'APPROVAL_REQUIRED',
+        executionContext: { executionId: options.executionId }
       });
     }
   });
-  await assert.rejects(
-    fixture.service.createTask({ goal: 'pause for owner approval', idempotencyKey: 'request-key-approval-recovery-02' }),
-    /simulated transient status read failure/
-  );
-  assert.equal([...fixture.records.values()][0].status, 'running');
-  const retry = await fixture.service.createTask({ goal: 'pause for owner approval', idempotencyKey: 'request-key-approval-recovery-02' });
-  assert.equal(retry.replayed, true);
-  assert.equal(retry.task.status, 'awaiting_approval');
-  assert.equal(fixture.executions, 1);
 });
 
 test('unclassified Runtime error after durable admission is reconciled instead of terminalized', async () => {
