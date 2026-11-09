@@ -141,6 +141,29 @@ test('OpenMausBot MCP client rejects endpoints that do not identify as OpenMausB
   });
 });
 
+test('OpenMausBot MCP client times out when the upstream server stops responding', async () => {
+  const client = new OpenMausBotMcpClient({
+    timeoutMs: 1000,
+    spawnImpl: () => new FakeMcpChild({ failMethod: 'tools/list' })
+  });
+  await assert.rejects(client.callTool('list_bots'), {
+    code: 'OPENMAUSBOT_MCP_TIMEOUT'
+  });
+});
+
+test('OpenMausBot MCP client rejects a child process that exits during initialization', async () => {
+  const client = new OpenMausBotMcpClient({
+    spawnImpl: () => {
+      const child = new FakeMcpChild();
+      process.nextTick(() => child.emit('exit', 1, null));
+      return child;
+    }
+  });
+  await assert.rejects(client.callTool('list_bots'), {
+    code: 'OPENMAUSBOT_MCP_PROCESS_EXITED'
+  });
+});
+
 test('OpenMausBot MCP client rejects invalid command and timeout configuration', () => {
   assert.throws(() => new OpenMausBotMcpClient({ command: ' ' }), /command is required/);
   assert.throws(() => new OpenMausBotMcpClient({ timeoutMs: 999 }), /between 1000 and 120000/);
