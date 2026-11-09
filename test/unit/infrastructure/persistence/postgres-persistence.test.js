@@ -143,6 +143,8 @@ test('Postgres workflow repair uses tenant-scoped revision compare-and-set', asy
   const existing = { workflowId: 'wf-repair', tenantId: 'tenant-a', state: 'WAITING', checkpoint: { revision: 3 } };
   const db = fakeDb([
     { rows: [{ payload: existing }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
     { rows: [], rowCount: 1 }
   ]);
   const repo = new PostgresWorkflowRepository(db);
@@ -154,9 +156,26 @@ test('Postgres workflow repair uses tenant-scoped revision compare-and-set', asy
   }, { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 5 });
   assert.equal(repaired.checkpoint.revision, 5);
   assert.match(db.calls[0].text, /FOR UPDATE/);
-  assert.match(db.calls[1].text, /checkpoint.*revision/);
-  assert.deepEqual(db.calls[1].values.slice(0, 2), ['wf-repair', 'tenant-a']);
-  assert.equal(db.calls[1].values[5], 3);
+  assert.match(db.calls[1].text, /workflow_dispatch_claims/);
+  assert.match(db.calls[2].text, /workflow_leases/);
+  assert.match(db.calls[3].text, /checkpoint.*revision/);
+  assert.deepEqual(db.calls[3].values.slice(0, 2), ['wf-repair', 'tenant-a']);
+  assert.equal(db.calls[3].values[5], 3);
+});
+
+test('Postgres workflow repair refuses an active dispatch claim before updating', async () => {
+  const db = fakeDb([
+    { rows: [{ payload: { checkpoint: { revision: 3 } } }], rowCount: 1 },
+    { rows: [{}], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowRepository(db);
+  await assert.rejects(
+    () => repo.repair({ workflowId: 'wf-claimed', tenantId: 'tenant-a', state: 'WAITING', toJSON() { return this; } },
+      { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 4 }),
+    error => error.code === 'WORKFLOW_DISPATCH_CLAIM_HELD'
+  );
+  assert.equal(db.calls.length, 2);
+  assert.match(db.calls[1].text, /workflow_dispatch_claims/);
 });
 
 test('Postgres workflow repair rejects stale revisions without writing', async () => {
