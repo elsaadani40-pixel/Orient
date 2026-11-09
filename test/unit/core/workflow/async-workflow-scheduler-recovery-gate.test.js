@@ -24,7 +24,7 @@ function scheduler({ snapshots, claimed, reconcile, releaseDispatchClaim = async
   value.workflowRepository = {
     async findAll() { return snapshots; },
     async claimQueued() { return claimed; },
-    async releaseDispatchClaim,
+    releaseDispatchClaim,
     async save() {}
   };
   value.missionEventRecovery = { reconcile };
