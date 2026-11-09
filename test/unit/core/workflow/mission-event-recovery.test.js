@@ -150,7 +150,7 @@ test('does not downgrade a checkpointed workflow with missing events to legacy r
 test('recognizes an uncheckpointed snapshot without events as a legacy workflow', async () => {
   const s = stores();
   const mission = make();
-  fs.writeFileSync(s.workflows.filePath, JSON.stringify([mission.toJSON()]) + '\\n');
+  fs.writeFileSync(s.workflows.filePath, JSON.stringify([mission.toJSON()]) + '\n');
   const recovery = new MissionEventRecovery({ eventRepository: s.events, workflowRepository: s.workflows });
 
   await assert.rejects(
