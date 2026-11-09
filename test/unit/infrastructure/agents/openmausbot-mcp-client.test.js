@@ -151,6 +151,21 @@ test('OpenMausBot MCP client times out when the upstream server stops responding
   });
 });
 
+test('OpenMausBot MCP client bounds concurrent child processes', async () => {
+  const client = new OpenMausBotMcpClient({
+    timeoutMs: 1000,
+    maxConcurrent: 1,
+    spawnImpl: () => new FakeMcpChild({ failMethod: 'initialize' })
+  });
+  const first = client.callTool('list_bots');
+  await assert.rejects(client.callTool('list_bots'), {
+    code: 'OPENMAUSBOT_MCP_BUSY'
+  });
+  await assert.rejects(first, {
+    code: 'OPENMAUSBOT_MCP_TIMEOUT'
+  });
+});
+
 test('OpenMausBot MCP client rejects a child process that exits during initialization', async () => {
   const client = new OpenMausBotMcpClient({
     spawnImpl: () => {
@@ -164,10 +179,11 @@ test('OpenMausBot MCP client rejects a child process that exits during initializ
   });
 });
 
-test('OpenMausBot MCP client rejects invalid command and timeout configuration', () => {
+test('OpenMausBot MCP client rejects invalid command, timeout, and concurrency configuration', () => {
   assert.throws(() => new OpenMausBotMcpClient({ command: ' ' }), /command is required/);
   assert.throws(() => new OpenMausBotMcpClient({ timeoutMs: 999 }), /between 1000 and 120000/);
   assert.throws(() => new OpenMausBotMcpClient({ args: 'mcp' }), /array of strings/);
+  assert.throws(() => new OpenMausBotMcpClient({ maxConcurrent: 9 }), /between 1 and 8/);
 });
 
 test('OpenMausBot child environment excludes unrelated ORIENT secrets', () => {
