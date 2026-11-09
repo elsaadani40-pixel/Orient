@@ -167,6 +167,15 @@ test('website owner session creates and reads a task through the real Runtime', 
   const ownerPageHtml = await ownerPage.text();
   assert.match(ownerPageHtml, /Owner|ORIENT|owner/i);
   assert.ok(ownerPageHtml.includes('href="/chat"'), 'owner console must link to the protected chat workspace');
+  for (const [asset, contentType] of [
+    ['/orient-design-system.css', 'text/css'],
+    ['/orient-theme.js', 'javascript']
+  ]) {
+    const response = await fetch(origin + asset, { headers: { Cookie: ownerCookie } });
+    assert.equal(response.status, 200, asset + ' must be served by the unified listener');
+    assert.match(response.headers.get('content-type') || '', new RegExp(contentType));
+    assert.ok((await response.text()).length > 100, asset + ' must not be an empty asset');
+  }
   const workbench = await fetch(origin + '/workbench', { headers: { Cookie: ownerCookie }, redirect: 'manual' });
   assert.equal(workbench.status, 200);
   assert.match(await workbench.text(), /workbench|task|ORIENT/i);
