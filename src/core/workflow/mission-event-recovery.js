@@ -43,7 +43,7 @@ class MissionEventRecovery {
       );
     }
 
-    return { events, snapshot: validatedSnapshot };
+    return { events, snapshot };
   }
 
   _validateSnapshot(snapshot, workflowId, tenantId) {
