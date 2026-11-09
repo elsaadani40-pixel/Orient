@@ -266,7 +266,7 @@ function createOwnerServer(options = {}) {
         if (!identifier || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل البريد الإلكتروني أو اسم المستخدم وكلمة المرور.' });
         const ownerStatus = identity ? identity.status() : null;
         if (identity && identifier.toLowerCase() === String(ownerStatus.email || '').toLowerCase()) {
-          const result = await identity.login({ email: identifier, password: body.password });
+          const result = await identity.login({ email: identifier, password: body.password, sourceIp: ip });
           if (!result.ok) return sendJson(res, 401, { error: 'بيانات الدخول غير صحيحة.' });
           attempts.delete(ip);
           const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
