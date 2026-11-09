@@ -33,3 +33,15 @@ Concurrent or active-lease conflicts are retryable on a later recovery pass. Cor
 ## Operational boundary
 
 This code supplies durable persistence and recovery wiring. It does not activate the background worker service, enable external outbox publication, change hosted Supabase roles/policies/data, or authorize production deployment. Those remain separate, explicitly gated operational decisions.
+
+
+## Admission and atomic workflow creation
+
+A new workflow is admitted before its durable creation transaction begins:
+
+1. Reserve an in-memory queue slot synchronously. Pending reservations count against queue capacity and prevent duplicate workflow IDs from being admitted concurrently.
+2. Reserve tenant workflow quota. An existing reservation is treated as pre-existing and is not released by a failed retry.
+3. Persist the initial workflow snapshot and its ordered `workflow.created` / `CREATED → QUEUED` events. PostgreSQL performs these writes in one owner-scoped transaction; backends without a shared transaction use their documented recovery strategy and fail closed for owner-scoped creation when atomic enforcement is unavailable.
+4. Publish the workflow to the in-memory queue only after durable creation succeeds.
+
+If quota reservation or durable creation fails, the scheduler releases only the quota reservation it created and always releases its queue-slot reservation. Concurrent admissions therefore cannot overrun the configured queue depth, and queue-full or quota-denied requests cannot leave a durable queued workflow behind. Recovery capacity calculations include in-flight admission reservations.
