@@ -333,3 +333,43 @@ test('approval workflow reconciliation forwards the authenticated owner principa
   assert.equal(calls[1][1], 'tenant-a');
   assert.strictEqual(calls[1][2].persistencePrincipal, principal);
 });
+
+
+test('shared mission event sink receives owner principal during approval snapshot replacement', async () => {
+  const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a'
+  });
+  const instance = new WorkflowInstance({
+    definition: new WorkflowDefinition({
+      id: 'owner-approval-sink', version: 1, name: 'Owner approval sink',
+      steps: [{ id: 'work', tool: 'work' }]
+    }),
+    workflowId: 'workflow-owner-sink',
+    tenantId: 'tenant-a',
+    userId: 'owner-a'
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  instance.transition('WAITING');
+  instance.metadata = { ...instance.metadata, approvalBlocked: true, approvalExecutionId: 'execution-owner-sink' };
+  const calls = [];
+  const workflowRepository = {
+    async findByApprovalExecutionId() { return instance.toJSON(); },
+    async findAll() { return [instance.toJSON()]; },
+    async save() { throw new Error('shared mission event sink should own the durable write'); }
+  };
+  const missionEventSink = {
+    async recordSnapshot(value, reason, options) {
+      calls.push({ workflowId: value.workflowId, reason, persistencePrincipal: options.persistencePrincipal });
+    }
+  };
+  const coordinator = new WorkflowExecutionCoordinator({
+    scheduler: {}, workflowRepository, missionEventSink, tenantId: 'tenant-a',
+    userId: 'owner-a', workspaceId: 'workspace-a', executeRequest: async () => ({})
+  });
+  await coordinator.updateApprovalChallenge('execution-owner-sink', 'approval-new', principal);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].reason, 'approval_resolution');
+  assert.strictEqual(calls[0].persistencePrincipal, principal);
+});
