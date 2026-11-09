@@ -115,7 +115,7 @@ class OwnerIdentityService {
           !Number.isInteger(item.count) || item.count < 1 || item.count > 100 ||
           !Number.isSafeInteger(item.windowStartedAt) || item.windowStartedAt < 0 || item.windowStartedAt > this.now() ||
           !Number.isSafeInteger(item.blockedUntil) || item.blockedUntil < 0 ||
-          item.blockedUntil > this.now() + this.loginLockoutMs) {
+          item.blockedUntil > this.now() + 86400000) {
         throw Object.assign(new Error('Owner identity login-failure state is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
       }
       seenFailureKeys.add(item.key);
