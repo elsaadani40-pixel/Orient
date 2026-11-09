@@ -15,12 +15,16 @@ const MAX_TIMEOUT_MS = 120000;
 
 function buildChildEnvironment(source = process.env) {
   const allowed = [
-    'PATH', 'HOME', 'USERPROFILE', 'TMPDIR', 'TMP', 'TEMP',
-    'APPDATA', 'LOCALAPPDATA', 'ELECTRON_RUN_AS_NODE',
-    'OPENMAUSBOT_URL', 'OMB_PORT', 'OPENMAUSBOT_TOKEN',
-    'OPENMAUSBOT_MCP_TIMEOUT_MS'
+    'HOME', 'USERPROFILE', 'TMPDIR', 'TMP', 'TEMP', 'APPDATA',
+    'LOCALAPPDATA', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
+    'ELECTRON_RUN_AS_NODE', 'OPENMAUSBOT_URL', 'OMB_PORT',
+    'OPENMAUSBOT_TOKEN', 'OPENMAUSBOT_MCP_TIMEOUT_MS'
   ];
   const result = {};
+  const pathKey = Object.keys(source).find(key => key.toLowerCase() === 'path');
+  if (pathKey && typeof source[pathKey] === 'string' && source[pathKey].length > 0) {
+    result.PATH = source[pathKey];
+  }
   for (const key of allowed) {
     if (typeof source[key] === 'string' && source[key].length > 0) {
       result[key] = source[key];
