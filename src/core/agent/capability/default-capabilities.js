@@ -8,7 +8,8 @@ function registerDefaultCapabilities(registry) {
     new Capability({ name: 'memory.write', description: 'إضافة معلومات إلى ذاكرة ORIENT ONE', risk: 'medium' }),
     new Capability({ name: 'memory.delete', description: 'حذف معلومات من ذاكرة ORIENT ONE', risk: 'high' }),
     new Capability({ name: 'workspace.read', description: 'قراءة وتحليل مساحة عمل مسموحة دون تعديل', risk: 'low' }),
-    new Capability({ name: 'workspace.write', description: 'تعديل ملفات داخل مساحة عمل معتمدة', risk: 'high' })
+    new Capability({ name: 'workspace.write', description: 'تعديل ملفات داخل مساحة عمل معتمدة', risk: 'high' }),
+    new Capability({ name: 'external.agent.read', description: 'قراءة حالة وكلاء خارجيين متصلين عبر موصل معتمد', risk: 'low' })
   ];
 
   for (const capability of capabilities) {
