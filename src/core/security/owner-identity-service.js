@@ -32,22 +32,27 @@ function tokenDigest(token) {
  * Bootstrap plaintext is returned only once to the caller and is never persisted.
  */
 class OwnerIdentityService {
-  constructor({ stateFile, bootstrapPassword, ownerEmail = process.env.ORIENT_OWNER_EMAIL || DEFAULT_OWNER_EMAIL, sessionTtlMs = 30 * 60 * 1000, now = Date.now } = {}) {
+  constructor({ stateFile, bootstrapPassword, ownerEmail = process.env.ORIENT_OWNER_EMAIL || DEFAULT_OWNER_EMAIL, sessionTtlMs = 30 * 60 * 1000, maxLoginFailures = 5, loginLockoutMs = 15 * 60 * 1000, now = Date.now } = {}) {
     if (typeof stateFile !== 'string' || !stateFile) throw new TypeError('stateFile is required');
     if (!Number.isSafeInteger(sessionTtlMs) || sessionTtlMs < 1000 || sessionTtlMs > 86400000) throw new RangeError('Invalid session TTL');
     this.stateFile = path.resolve(stateFile);
     this.ownerEmail = normalizeEmail(ownerEmail);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.ownerEmail)) throw new TypeError('A valid canonical owner email is required');
+    if (!Number.isInteger(maxLoginFailures) || maxLoginFailures < 1 || maxLoginFailures > 100 ||
+        !Number.isSafeInteger(loginLockoutMs) || loginLockoutMs < 1000 || loginLockoutMs > 86400000) throw new RangeError('Invalid owner login protection policy');
     this.sessionTtlMs = sessionTtlMs;
+    this.maxLoginFailures = maxLoginFailures;
+    this.loginLockoutMs = loginLockoutMs;
     this.now = now;
     this.sessions = new Map();
     this.createdBootstrap = false;
     this._bootstrapPassword = null;
     this.state = this.read();
+    this.loginFailures = new Map((this.state?.loginFailures || []).map(({ key, ...failure }) => [key, failure]));
     if (!this.state) {
       const secret = bootstrapPassword || crypto.randomBytes(24).toString('base64url');
       if (typeof secret !== 'string' || secret.length > 1024 || (!/^\d{10}$/.test(secret) && secret.length < MIN_PASSWORD)) throw new RangeError('Bootstrap password must be exactly 10 digits or at least 14 characters');
-      this.state = { version: 1, username: 'Admin', email: this.ownerEmail, passwordHash: passwordHash(secret), mustChangePassword: true, sessions: [] };
+      this.state = { version: 1, username: 'Admin', email: this.ownerEmail, passwordHash: passwordHash(secret), mustChangePassword: true, sessions: [], loginFailures: [] };
       this._bootstrapPassword = secret;
       this.createdBootstrap = true;
       this.save();
@@ -90,7 +95,8 @@ class OwnerIdentityService {
         email: this.ownerEmail,
         passwordHash: 'legacy:' + value.password.hash + ':' + value.password.salt,
         mustChangePassword: value.mustChangePassword,
-        sessions: []
+        sessions: [],
+        loginFailures: []
       };
     }
 
@@ -99,13 +105,33 @@ class OwnerIdentityService {
         !Array.isArray(value.sessions) || value.sessions.length > 4096) {
       throw Object.assign(new Error('Owner identity state schema is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
     }
+    const failures = value.loginFailures === undefined ? [] : value.loginFailures;
+    if (!Array.isArray(failures) || failures.length > 1024) {
+      throw Object.assign(new Error('Owner identity login-failure state is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
+    }
+    const seenFailureKeys = new Set();
+    for (const item of failures) {
+      if (!item || !/^[a-f0-9]{64}$/.test(item.key || '') || seenFailureKeys.has(item.key) ||
+          !Number.isInteger(item.count) || item.count < 1 || item.count > 100 ||
+          !Number.isSafeInteger(item.windowStartedAt) || item.windowStartedAt < 0 || item.windowStartedAt > this.now() ||
+          !Number.isSafeInteger(item.blockedUntil) || item.blockedUntil < 0 ||
+          item.blockedUntil > this.now() + this.loginLockoutMs) {
+        throw Object.assign(new Error('Owner identity login-failure state is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
+      }
+      seenFailureKeys.add(item.key);
+    }
+    value.loginFailures = failures;
     return value;
   }
 
   save(next = this.state) {
     const dir = path.dirname(this.stateFile);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const value = { ...next, sessions: [...this.sessions].map(([digest, session]) => ({ digest, ...session })) };
+    const value = {
+      ...next,
+      sessions: [...this.sessions].map(([digest, session]) => ({ digest, ...session })),
+      loginFailures: [...this.loginFailures].map(([key, failure]) => ({ key, ...failure }))
+    };
     const tmp = this.stateFile + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
     let fd = null;
     let renamed = false;
@@ -165,9 +191,55 @@ class OwnerIdentityService {
     return { token, csrfToken, expiresAt };
   }
 
-  async login({ username = 'Admin', email, password } = {}) {
+  loginFailureKey(sourceIp) {
+    const ip = String(sourceIp || 'unknown').slice(0, 64);
+    return crypto.createHmac('sha256', this.state.passwordHash).update(ip).digest('hex');
+  }
+
+  pruneLoginFailures(now = this.now()) {
+    let changed = false;
+    for (const [key, failure] of this.loginFailures) {
+      if (failure.windowStartedAt + this.loginLockoutMs <= now && failure.blockedUntil <= now) {
+        this.loginFailures.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) this.save();
+  }
+
+  recordLoginFailure(key, now, maxFailures, lockoutMs) {
+    const previous = this.loginFailures.get(key);
+    if (!previous && this.loginFailures.size >= 1024) return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
+    const withinWindow = previous && now - previous.windowStartedAt < lockoutMs;
+    const count = withinWindow ? previous.count + 1 : 1;
+    const prior = previous;
+    this.loginFailures.set(key, {
+      count,
+      windowStartedAt: withinWindow ? previous.windowStartedAt : now,
+      blockedUntil: count >= maxFailures ? now + lockoutMs : 0
+    });
+    try { this.save(); }
+    catch (error) { if (!error.committed) { if (prior) this.loginFailures.set(key, prior); else this.loginFailures.delete(key); } throw error; }
+    return { ok: false, code: 'OWNER_LOGIN_FAILED' };
+  }
+
+  login({ username = 'Admin', email, password, sourceIp = 'unknown', maxFailures = this.maxLoginFailures, lockoutMs = this.loginLockoutMs } = {}) {
+    if (!Number.isInteger(maxFailures) || maxFailures < 1 || maxFailures > 100 ||
+        !Number.isSafeInteger(lockoutMs) || lockoutMs < 1000 || lockoutMs > 86400000) throw new RangeError('Invalid owner login protection policy');
+    const now = this.now();
+    this.pruneLoginFailures(now);
+    const failureKey = this.loginFailureKey(sourceIp);
+    const prior = this.loginFailures.get(failureKey);
+    if (prior?.blockedUntil > now) return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
+    if (!prior && this.loginFailures.size >= 1024) return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
     const validIdentity = email !== undefined ? normalizeEmail(email) === this.state.email : username === 'Admin';
-    if (!validIdentity || !matches(password, this.state.passwordHash)) return { ok: false, code: 'OWNER_LOGIN_FAILED' };
+    const validPassword = matches(password, this.state.passwordHash);
+    if (!validIdentity || !validPassword) return this.recordLoginFailure(failureKey, now, maxFailures, lockoutMs);
+    if (prior) {
+      this.loginFailures.delete(failureKey);
+      try { this.save(); }
+      catch (error) { if (!error.committed) this.loginFailures.set(failureKey, prior); throw error; }
+    }
     for (const [key, session] of this.sessions) if (session.expiresAt <= this.now()) this.sessions.delete(key);
     if (this.sessions.size >= 4096) return { ok: false, code: 'OWNER_SESSION_LIMIT_REACHED' };
     return { ok: true, ...this.createSession(), passwordChangeRequired: this.state.mustChangePassword };
@@ -214,9 +286,11 @@ class OwnerIdentityService {
     if (password !== confirmPassword) return { ok: false, code: 'OWNER_PASSWORD_CONFIRMATION_MISMATCH' };
     if (matches(password, this.state.passwordHash)) return { ok: false, code: 'OWNER_PASSWORD_REUSE_REJECTED' };
     const previous = this.sessions;
+    const previousFailures = this.loginFailures;
     this.sessions = new Map();
+    this.loginFailures = new Map();
     const next = { ...this.state, passwordHash: passwordHash(password), mustChangePassword: false, passwordChangedAt: new Date(this.now()).toISOString() };
-    try { this.save(next); } catch (error) { if (!error.committed) this.sessions = previous; throw error; }
+    try { this.save(next); } catch (error) { if (!error.committed) { this.sessions = previous; this.loginFailures = previousFailures; } throw error; }
     return { ok: true, ...this.createSession(), passwordChangeRequired: false };
   }
 
