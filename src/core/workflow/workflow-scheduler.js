@@ -114,6 +114,24 @@ class WorkflowScheduler {
     return instance;
   }
 
+  enqueuePersisted(
+    instance,
+    { priority = 0, deadlineAt = null, delayMs = 0 } = {}
+  ) {
+    if (!this.accepting) throw new AppError('Workflow scheduler is shutting down', 503, 'SCHEDULER_SHUTTING_DOWN');
+    if (!instance || instance.state !== 'QUEUED') throw new AppError('A durably persisted QUEUED workflow is required', 409, 'SCHEDULER_INVALID_STATE');
+    if (this.tenantId && instance.tenantId !== this.tenantId) throw new AppError('Workflow tenant does not match scheduler tenant', 403, 'WORKFLOW_TENANT_MISMATCH');
+    if (this.queue.length >= this.maxQueueDepth) throw new AppError('Workflow queue capacity exceeded', 429, 'SCHEDULER_QUEUE_FULL');
+    if (this.queue.some(item => item.instance.workflowId === instance.workflowId) || this.active.has(instance.workflowId)) {
+      throw new AppError('Workflow is already queued or active', 409, 'WORKFLOW_ALREADY_SCHEDULED');
+    }
+    instance.setDeadline(deadlineAt);
+    const now = this.clock();
+    this.queue.push({ instance, priority, sequence: ++this.sequence, enqueuedAt: now, availableAt: now + Math.max(0, delayMs), deadlineAt });
+    this.sortQueue();
+    return instance;
+  }
+
   sortQueue() {
     const now = this.clock();
 

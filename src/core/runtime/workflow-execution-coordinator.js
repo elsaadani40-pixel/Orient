@@ -263,7 +263,11 @@ class WorkflowExecutionCoordinator {
         instance.transition('QUEUED');
         instance.setDeadline(deadlineAt);
         await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
-        this.scheduler.enqueue(instance, { priority, deadlineAt });
+        if (typeof this.scheduler.enqueuePersisted === 'function') {
+          this.scheduler.enqueuePersisted(instance, { priority, deadlineAt });
+        } else {
+          this.scheduler.enqueue(instance, { priority, deadlineAt });
+        }
       } else {
         this.scheduler.enqueue(instance, { priority, deadlineAt });
         if (this.workflowRepository?.save) await this.workflowRepository.save(instance, this.tenantId);
