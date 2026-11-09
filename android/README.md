@@ -25,13 +25,13 @@ The GitHub Actions workflow `.github/workflows/strict-ci.yml` runs Android unit 
 
 ## Connect locally
 
-See [the owner console security guide](../docs/security/owner-console.md). Start the Node service with `ORIENT_OWNER_PASSWORD` configured, then enter that same password and the service port (default `8080`) in the Android app. The client only connects to `127.0.0.1`; it does not accept remote hosts. Password, session cookie, CSRF token, and the server-provided session expiry are kept in memory only. The client refuses to use an expired session and clears local credentials when the expiry is reached or the server returns HTTP 401. Reopen the app and sign in again after process restart.
+See [the owner identity bootstrap guide](../docs/security/OWNER-IDENTITY-BOOTSTRAP.md) and [owner console security guide](../docs/security/owner-console.md). Start the unified ORIENT service with `ORIENT_OWNER_BOOTSTRAP_PASSWORD` configured for first-run initialization. The owner can sign in locally with the same 10-digit bootstrap password; Android then requires password rotation before enabling Runtime tools. The permanent password must be at least 14 characters. After rotation, the same permanent password is used by the website and the local Android Runtime client. The client only connects to `127.0.0.1`; it does not accept remote hosts. Password, session cookie, CSRF token, and the server-provided session expiry are kept in memory only. The client refuses to use an expired session and clears local credentials when the expiry is reached or the server returns HTTP 401. Reopen the app and sign in again after process restart.
 
 The manifest grants only `INTERNET`. Network Security Config disables cleartext traffic by default and allows it only for loopback. No contacts, call-log, phone-state, microphone, notification-listener, accessibility, or background-service permissions are requested.
 
 ## Security boundary
 
-- The client calls `/owner/login`, `/agent`, and `/executions`; authorization and tool governance remain on the canonical server runtime.
+- The client calls `/owner/login`, `/owner/password`, `/owner/logout`, `/agent`, and `/executions`; the local Runtime routes authenticate against the same canonical owner identity store used by the website. The bootstrap session is restricted to password rotation: Runtime operations remain blocked until the permanent password is set. Authorization and tool governance remain on the canonical server runtime.
 - The runtime registers bounded local workspace listing, file reading, literal text search, and project audit tools. File changes are available only as a high-risk, approval-gated change set with precondition checks and verification; the deterministic no-model planner does not invent file contents.
 - A task result is displayed only when the HTTP service returns a response. Connection failures are shown as failures, not fabricated success.
 - The service remains loopback-bound. External web search, secure LAN/remote transport, caller identification, call actions, notifications, and microphone capture are not implemented in this release.
