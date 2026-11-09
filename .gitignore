@@ -3,6 +3,7 @@ node_modules/
 coverage/
 dist/
 build/
+.vercel-static/
 
 # Local configuration and secrets
 .env
