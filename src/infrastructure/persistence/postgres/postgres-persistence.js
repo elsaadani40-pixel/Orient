@@ -957,6 +957,52 @@ class PostgresWorkflowRepository {
       return result.rowCount===1;
     });
   }
+  async repair(instance, { tenantId = null, expectedRevision = 0, targetRevision } = {}) {
+    const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenant = tenantOrLocal(item.tenantId);
+    assertTenant(effectiveTenant, tenantId, 'Workflow');
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 ||
+        !Number.isInteger(targetRevision) || targetRevision <= expectedRevision) {
+      throw Object.assign(new Error('Invalid workflow repair revision'), { code: 'WORKFLOW_REPAIR_REVISION_INVALID' });
+    }
+    return this.db.transaction(async client => {
+      const current = await client.query(
+        'SELECT payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [item.workflowId, effectiveTenant]
+      );
+      if (current.rowCount) {
+        const revision = Number(current.rows[0].payload?.checkpoint?.revision || 0);
+        if (revision !== expectedRevision) {
+          throw Object.assign(new Error('Stale workflow checkpoint during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+        }
+      } else if (expectedRevision !== 0) {
+        throw Object.assign(new Error('Workflow snapshot disappeared during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+      }
+      item.checkpoint = { revision: targetRevision, lastSavedAt: new Date().toISOString() };
+      if (!current.rowCount) {
+        const inserted = await client.query(
+          'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(workflow_id) DO NOTHING RETURNING workflow_id',
+          [item.workflowId,effectiveTenant,item.state,item.updatedAt || item.checkpoint.lastSavedAt,item]
+        );
+        if (inserted.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow snapshot changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+        }
+      } else {
+        const updated = await client.query(
+          'UPDATE workflows SET state=$3,updated_at=$4,payload=$5 WHERE workflow_id=$1 AND tenant_id=$2 AND COALESCE((payload->\'checkpoint\'->>\'revision\')::int,0)=$6',
+          [item.workflowId,effectiveTenant,item.state,item.updatedAt || item.checkpoint.lastSavedAt,item,expectedRevision]
+        );
+        if (updated.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow checkpoint changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+        }
+      }
+      if (typeof instance?.setCheckpointRevision === 'function') {
+        instance.setCheckpointRevision(targetRevision, item.checkpoint.lastSavedAt);
+      }
+      return item;
+    });
+  }
+
   async requestCancellation(workflowId, tenantId = null) {
     const effectiveTenant = tenantOrLocal(tenantId);
     return this.db.transaction(async client => {
