@@ -161,6 +161,29 @@ test('legacy verifier-keyed lockout records remain enforced during key separatio
   );
 });
 
+
+test('owner lockout key rejects symbolic links at open time', t => {
+  if (process.platform === 'win32' || typeof fs.constants.O_NOFOLLOW !== 'number') {
+    t.skip('the platform does not expose POSIX O_NOFOLLOW through Node');
+    return;
+  }
+
+  const { directory, stateFile } = fixture(t);
+  const targetFile = path.join(directory, 'attacker-controlled-target');
+  const keyFile = stateFile + '.lockout-key';
+  fs.writeFileSync(targetFile, 'a'.repeat(64), { mode: 0o600 });
+  fs.symlinkSync(targetFile, keyFile);
+
+  assert.throws(
+    () => new OwnerIdentityService({
+      stateFile,
+      bootstrapPassword: 'temporary-owner-password-9F!x'
+    }),
+    { code: 'OWNER_LOCKOUT_KEY_INVALID' }
+  );
+  assert.equal(fs.readFileSync(targetFile, 'utf8'), 'a'.repeat(64));
+});
+
 test('concurrent failed owner logins enforce the configured threshold without exceeding the failure store', async t => {
   const { stateFile } = fixture(t);
   const identity = new OwnerIdentityService({ stateFile, bootstrapPassword: 'temporary-owner-password-9F!x' });
