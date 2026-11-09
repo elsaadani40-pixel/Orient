@@ -319,11 +319,44 @@ class PostgresEventRepository {
     return inserted;
   }
 
-  async appendMissionEvent(event, { tenantId = null } = {}) {
+  async appendMissionEvent(event, { tenantId = null, workerPrincipal = null } = {}) {
     if (!event?.aggregateId) throw new TypeError('aggregateId is required');
     const compareTimestamp = typeof event.timestamp === 'string' && event.timestamp.length > 0;
     const normalized = this.normalize(event, tenantId);
-    return this.db.transaction(async client => {
+    const persist = async client => {
+      if (workerPrincipal) {
+        const principal = assertWorkerPersistencePrincipal(workerPrincipal, { requireLease: true });
+        if (principal.tenantId !== normalized.data.tenantId ||
+            principal.workflowId !== normalized.aggregateId) {
+          throw Object.assign(new Error('Worker principal does not match mission event identity'), {
+            code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+          });
+        }
+        const worker = await client.query(
+          `SELECT 1 FROM worker_nodes
+           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+             AND status='READY' AND expires_at > NOW()
+           FOR UPDATE`,
+          [principal.tenantId, principal.workerId, principal.sessionId]
+        );
+        if (worker.rowCount !== 1) {
+          throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+        }
+        const lease = await client.query(
+          `SELECT 1 FROM workflow_leases
+           WHERE tenant_id=$1 AND workflow_id=$2 AND lease_id=$3
+             AND worker_id=$4 AND worker_session_id=$5
+             AND fencing_token=$6 AND expires_at > NOW()
+           FOR UPDATE`,
+          [principal.tenantId, principal.workflowId, principal.leaseId,
+            principal.workerId, principal.sessionId, principal.fencingToken]
+        );
+        if (lease.rowCount !== 1) {
+          throw Object.assign(new Error('Mission event rejected by durable worker fencing'), {
+            code: 'WORKFLOW_FENCING_REJECTED'
+          });
+        }
+      }
       await client.query(
         'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
         [normalized.data.tenantId, normalized.aggregateId]
@@ -369,7 +402,11 @@ class PostgresEventRepository {
         throw Object.assign(new Error('Mission event identity conflict'), { code: 'MISSION_EVENT_ID_CONFLICT' });
       }
       return prior;
-    });
+    };
+    if (workerPrincipal) {
+      return this.db.transactionWithWorkerPrincipal(workerPrincipal, persist, { requireLease: true });
+    }
+    return this.db.transaction(persist);
   }
 
   async findByAggregateId(id, { tenantId = null } = {}) {
