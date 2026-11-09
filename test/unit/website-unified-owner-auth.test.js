@@ -36,6 +36,12 @@ test('the common sign-in endpoint authenticates the canonical owner email and ke
   });
   assert.equal(wrongEmail.status, 401);
 
+  const wrongOwnerPassword = await fetch(base + '/api/auth/login', {
+    method: 'POST', headers: { 'content-type': 'application/json', origin: base },
+    body: JSON.stringify({ identifier: 'elsaadani40@gmail.com', password: 'wrong-bootstrap-password' })
+  });
+  assert.equal(wrongOwnerPassword.status, 401);
+
   const ownerLogin = await fetch(base + '/api/auth/login', {
     method: 'POST', headers: { 'content-type': 'application/json', origin: base },
     body: JSON.stringify({ identifier: '  ELSAADANI40@gmail.com ', password: '0123456789' })
