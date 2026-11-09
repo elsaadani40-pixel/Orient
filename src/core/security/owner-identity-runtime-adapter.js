@@ -25,7 +25,7 @@ class OwnerIdentityRuntimeAdapter {
     return this.identity.status().configured === true;
   }
 
-  async login({ password, sourceIp = 'unknown' } = {}) {
+  async login({ email, password, sourceIp = 'unknown' } = {}) {
     const ip = String(sourceIp || 'unknown').slice(0, 64);
     const now = this.now();
     const prior = this.failures.get(ip);
@@ -33,7 +33,7 @@ class OwnerIdentityRuntimeAdapter {
       return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
     }
 
-    const result = await this.identity.login({ username: 'Admin', password });
+    const result = await this.identity.login(email ? { email, password } : { username: 'Admin', password });
     if (result.ok) {
       this.failures.delete(ip);
       return result;
