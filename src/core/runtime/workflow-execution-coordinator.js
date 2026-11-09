@@ -142,7 +142,7 @@ class WorkflowExecutionCoordinator {
   }
 
   async reconcileApprovalResume(executionId, resumeResult, persistencePrincipal = null) {
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance) return false;
     const execution = resumeResult?.execution || null;
     const status = String(execution?.status || '').toLowerCase();
@@ -197,7 +197,7 @@ class WorkflowExecutionCoordinator {
 
   async expireApprovalWorkflow(executionId, approvalId, persistencePrincipal = null) {
     if (!executionId || typeof approvalId !== 'string' || !approvalId) return false;
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance || instance.metadata?.approvalId !== approvalId) return false;
     if ([WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
       return instance.toJSON();
@@ -213,12 +213,12 @@ class WorkflowExecutionCoordinator {
       approvalResolvedAt: new Date().toISOString(),
       cancellationReason: 'approval_expired'
     };
-    await this.persistApprovalWorkflow(instance, fromState);
+    await this.persistApprovalWorkflow(instance, fromState, persistencePrincipal);
     return instance.toJSON();
   }
 
   async cancelApprovalWorkflow(executionId, reason = 'owner_rejected', persistencePrincipal = null) {
-    const instance = await this.findApprovalBlockedWorkflow(executionId);
+    const instance = await this.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!instance) return false;
     const fromState = instance.state;
     if (![WorkflowInstance.STATES.CANCELLED, WorkflowInstance.STATES.COMPLETED, WorkflowInstance.STATES.FAILED].includes(instance.state)) {
