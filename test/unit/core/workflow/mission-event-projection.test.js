@@ -39,6 +39,21 @@ test('rebuild reconstructs mission state after restart', () => {
   assert.equal(restored.metadata.projection.lastSequence, 6);
 });
 
+test('approval-required event restores a blocked WAITING mission and approval identity', () => {
+  const events = stream();
+  events.push(
+    { id: 'e7', aggregateId: 'wf-36', sequence: 7, type: 'workflow.state.changed', timestamp: '2026-10-08T10:00:06.000Z', data: { from: 'RUNNING', to: 'WAITING' } },
+    { id: 'e8', aggregateId: 'wf-36', sequence: 8, type: 'workflow.approval.required', timestamp: '2026-10-08T10:00:07.000Z', data: { executionId: 'exec-approval-1', approvalId: 'approval-1', stepId: 'finish' } }
+  );
+  const restored = new MissionEventProjection().rebuild(events);
+  assert.equal(restored.state, 'WAITING');
+  assert.equal(restored.metadata.approvalBlocked, true);
+  assert.equal(restored.metadata.approvalExecutionId, 'exec-approval-1');
+  assert.equal(restored.metadata.approvalId, 'approval-1');
+  assert.equal(restored.metadata.approvalStepId, 'finish');
+  assert.equal(restored.metadata.approvalRequiredAt, '2026-10-08T10:00:07.000Z');
+});
+
 test('duplicate event ids are idempotent during replay', () => {
   const events = stream();
   events.splice(5, 0, { ...events[4] });
