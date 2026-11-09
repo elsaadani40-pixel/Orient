@@ -147,6 +147,11 @@ class AsyncWorkflowWorkerService {
           if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
           this.timer = null;
           this.heartbeatTimer = null;
+          try {
+            await this.unregisterWorker();
+          } catch (cleanupError) {
+            this.onError(cleanupError);
+          }
         }
         return null;
       } finally {

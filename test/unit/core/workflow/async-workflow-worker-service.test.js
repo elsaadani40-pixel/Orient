@@ -202,10 +202,23 @@ test('AsyncWorkflowWorkerService uses one trusted worker session for registratio
 });
 
 
-test('AsyncWorkflowWorkerService stops polling after durable worker fencing is unavailable', async () => {
+test('AsyncWorkflowWorkerService stops polling and unregisters its session when durable worker fencing is unavailable', async () => {
   const errors = [];
+  const calls = [];
+  const workerRegistry = {
+    async register(worker, tenantId) {
+      calls.push(['register', worker.workerId, tenantId]);
+      return worker;
+    },
+    async unregister(workerId, tenantId) {
+      calls.push(['unregister', workerId, tenantId]);
+      return true;
+    }
+  };
   const service = new AsyncWorkflowWorkerService({
-    scheduler: { async recoverPersisted() {} },
+    scheduler: { tenantId: 'tenant-fencing', async recoverPersisted() {} },
+    workerRegistry,
+    workerId: 'worker-fencing',
     workerFactory: () => ({
       async tick() {
         throw Object.assign(new Error('SQLite worker fencing is unavailable'), {
@@ -223,6 +236,11 @@ test('AsyncWorkflowWorkerService stops polling after durable worker fencing is u
   assert.equal(service.running, false);
   assert.equal(service.timer, null);
   assert.equal(service.heartbeatTimer, null);
+  assert.equal(service.workerRegistered, false);
+  assert.deepEqual(calls, [
+    ['register', 'worker-fencing', 'tenant-fencing'],
+    ['unregister', 'worker-fencing', 'tenant-fencing']
+  ]);
   assert.equal(errors.length, 1);
   assert.equal(errors[0].code, 'WORKER_DURABLE_FENCING_UNSUPPORTED');
 });
