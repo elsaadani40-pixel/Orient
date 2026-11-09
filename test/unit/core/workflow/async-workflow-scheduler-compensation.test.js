@@ -16,6 +16,9 @@ test('async scheduler compensates lease and durable quota when persistence fails
   await assert.rejects(()=>scheduler.leaseAsync('worker-a',[],workerPrincipal),/persistence unavailable/);
   assert.equal(scheduler.active.size,0,'active record leaked');
   assert.equal(leases.size,0,'durable lease leaked');
+  assert.equal(instance.state,'QUEUED','workflow state was not restored after failed persistence');
+  assert.equal(instance.metadata.fencingToken,undefined,'stale fencing token leaked into the queued instance');
+  assert.equal(scheduler.queue.length,1,'workflow was not returned to the dispatch queue');
   assert.equal(quotaCalls.length,1,'quota reservation leaked');
   assert.equal(quotaCalls[0].workflowId,instance.workflowId);
 });

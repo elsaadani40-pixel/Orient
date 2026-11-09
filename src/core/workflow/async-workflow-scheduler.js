@@ -208,7 +208,125 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
  this.queue.push(item); this.sortQueue();
  throw error;
 }
-const leasePrincipal = createWorkerPersistencePrincipal({tenantId:workerPrincipal.tenantId,workerId:workerPrincipal.workerId,sessionId:workerPrincipal.sessionId,capabilities:workerPrincipal.capabilities,workflowId:instance.workflowId,leaseId:lease.leaseId,fencingToken:lease.fencingToken});const previousState=instance.state;try{instance.transition('RUNNING');}catch(error){await this.leaseStore.release(instance.workflowId,lease.leaseId,leasePrincipal);throw error;}instance.metadata = {...instance.metadata, fencingToken: lease.fencingToken}; if(this.quotaRepository){try{const reservation=await this.quotaRepository.promoteWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,expiresAt:lease.expiresAt,fencingToken:lease.fencingToken});if(!reservation){await this.leaseStore.release(instance.workflowId,lease.leaseId,leasePrincipal);this.queue.push(item);this.sortQueue();continue;}}catch(error){await this.leaseStore.release(instance.workflowId,lease.leaseId,leasePrincipal);if(error?.code==='TENANT_CONCURRENT_QUOTA_EXCEEDED'){this.queue.push(item);this.sortQueue();continue;}throw error;}} const record={workflowId:instance.workflowId,instance,leaseId:lease.leaseId,workerId:lease.workerId,workerSessionId:workerPrincipal?.sessionId||null,workerPrincipal:leasePrincipal,fencingToken:lease.fencingToken,issuedAt:lease.acquiredAt,expiresAt:lease.expiresAt,deadlineAt:item.deadlineAt,cancelled:false,previousState};this.active.set(record.workflowId,record);if(this.workflowRepository?.releaseDispatchClaim){await this.workflowRepository.releaseDispatchClaim(instance.workflowId,workerId,this.tenantId||'local',{workerPrincipal});}try{await this.persistAsync(instance,leasePrincipal);}catch(error){this.active.delete(record.workflowId);try{await this.leaseStore.release(instance.workflowId,lease.leaseId,leasePrincipal);}catch(cleanupError){error.cleanupError=cleanupError;}if(this.leaseStore.repository?.delete){try{await this.leaseStore.repository.delete(instance.workflowId,lease.leaseId,this.tenantId,{workerPrincipal:leasePrincipal});}catch(cleanupError){error.cleanupLeaseRepositoryError=cleanupError;}}if(this.quotaRepository){try{await this.quotaRepository.releaseWorkflow({tenantId:this.tenantId,workflowId:instance.workflowId,fencingToken:lease.fencingToken});}catch(cleanupError){error.quotaCleanupError=cleanupError;}}throw error;}return record;}return null;}
+const leasePrincipal = createWorkerPersistencePrincipal({
+  tenantId: workerPrincipal.tenantId,
+  workerId: workerPrincipal.workerId,
+  sessionId: workerPrincipal.sessionId,
+  capabilities: workerPrincipal.capabilities,
+  workflowId: instance.workflowId,
+  leaseId: lease.leaseId,
+  fencingToken: lease.fencingToken
+});
+const previousState = instance.state;
+const previousMetadata = instance.metadata;
+const restoreQueuedItem = () => {
+  instance.state = previousState;
+  instance.metadata = previousMetadata;
+  if (!this.queue.some(queued => queued.instance.workflowId === instance.workflowId)) {
+    this.queue.push(item);
+    this.sortQueue();
+  }
+};
+try {
+  instance.transition('RUNNING');
+} catch (error) {
+  try {
+    await this.leaseStore.release(instance.workflowId, lease.leaseId, leasePrincipal);
+  } catch (cleanupError) {
+    error.cleanupError = cleanupError;
+  }
+  restoreQueuedItem();
+  throw error;
+}
+instance.metadata = { ...instance.metadata, fencingToken: lease.fencingToken };
+if (this.quotaRepository) {
+  try {
+    const reservation = await this.quotaRepository.promoteWorkflow({
+      tenantId: this.tenantId,
+      workflowId: instance.workflowId,
+      expiresAt: lease.expiresAt,
+      fencingToken: lease.fencingToken
+    });
+    if (!reservation) {
+      await this.leaseStore.release(instance.workflowId, lease.leaseId, leasePrincipal);
+      restoreQueuedItem();
+      continue;
+    }
+  } catch (error) {
+    try {
+      await this.leaseStore.release(instance.workflowId, lease.leaseId, leasePrincipal);
+    } catch (cleanupError) {
+      error.cleanupError = cleanupError;
+    }
+    restoreQueuedItem();
+    if (error?.code === 'TENANT_CONCURRENT_QUOTA_EXCEEDED') continue;
+    throw error;
+  }
+}
+const record = {
+  workflowId: instance.workflowId,
+  instance,
+  leaseId: lease.leaseId,
+  workerId: lease.workerId,
+  workerSessionId: workerPrincipal.sessionId,
+  workerPrincipal: leasePrincipal,
+  fencingToken: lease.fencingToken,
+  issuedAt: lease.acquiredAt,
+  expiresAt: lease.expiresAt,
+  deadlineAt: item.deadlineAt,
+  cancelled: false,
+  previousState
+};
+this.active.set(record.workflowId, record);
+let dispatchClaimReleased = false;
+try {
+  if (this.workflowRepository?.releaseDispatchClaim) {
+    await this.workflowRepository.releaseDispatchClaim(
+      instance.workflowId, workerId, this.tenantId || 'local', { workerPrincipal }
+    );
+    dispatchClaimReleased = true;
+  }
+  await this.persistAsync(instance, leasePrincipal);
+} catch (error) {
+  this.active.delete(record.workflowId);
+  try {
+    await this.leaseStore.release(instance.workflowId, lease.leaseId, leasePrincipal);
+  } catch (cleanupError) {
+    error.cleanupError = cleanupError;
+  }
+  if (this.leaseStore.repository?.delete) {
+    try {
+      await this.leaseStore.repository.delete(
+        instance.workflowId, lease.leaseId, this.tenantId, { workerPrincipal: leasePrincipal }
+      );
+    } catch (cleanupError) {
+      error.cleanupLeaseRepositoryError = cleanupError;
+    }
+  }
+  if (this.quotaRepository) {
+    try {
+      await this.quotaRepository.releaseWorkflow({
+        tenantId: this.tenantId,
+        workflowId: instance.workflowId,
+        fencingToken: lease.fencingToken
+      });
+    } catch (cleanupError) {
+      error.quotaCleanupError = cleanupError;
+    }
+  }
+  if (!dispatchClaimReleased && this.workflowRepository?.releaseDispatchClaim) {
+    try {
+      await this.workflowRepository.releaseDispatchClaim(
+        instance.workflowId, workerId, this.tenantId || 'local', { workerPrincipal }
+      );
+    } catch (cleanupError) {
+      error.dispatchClaimCleanupError = cleanupError;
+    }
+  }
+  restoreQueuedItem();
+  throw error;
+}
+return record;}return null;}
  async assertCurrentAsync(id,leaseId,fencingToken){const active=this.active.get(id);if(!active||active.leaseId!==leaseId||Number(active.fencingToken)!==Number(fencingToken))throw Object.assign(new Error('Current workflow fencing token is invalid'),{code:'WORKFLOW_FENCING_REJECTED'});await this.leaseStore.assertCurrent(id,leaseId,fencingToken,active.workerPrincipal);return true;}
  async renewAsync(id,leaseId){const active=this.active.get(id);if(!active||active.leaseId!==leaseId)throw new Error('Active workflow lease not found');const renewed=await this.leaseStore.renew(id,leaseId,active.workerPrincipal);active.expiresAt=renewed.expiresAt;if(this.quotaRepository)await this.quotaRepository.refreshWorkflow({tenantId:this.tenantId,workflowId:id,expiresAt:renewed.expiresAt,fencingToken:active.fencingToken});return active;}
  async releaseAsync(id,leaseId=null){const active=this.active.get(id);if(!active)return false;let released;try{released=await this.leaseStore.release(id,leaseId||active.leaseId,active.workerPrincipal);}catch(error){if(['WORKER_SESSION_LOST','WORKFLOW_LEASE_NOT_OWNER','WORKFLOW_LEASE_EXPIRED','WORKFLOW_FENCING_REJECTED'].includes(error?.code)){this.active.delete(id);return false;}throw error;}if(this.quotaRepository&&released.released!==false)await this.quotaRepository.releaseWorkflow({tenantId:this.tenantId,workflowId:id,fencingToken:active.fencingToken});this.active.delete(id);return released.released!==false;}
