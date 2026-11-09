@@ -19,6 +19,46 @@ class SqliteWorkflowRepository {
     return item;
   }
 
+  repair(instance, { tenantId = null, expectedRevision = 0, targetRevision } = {}) {
+    const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
+    const effectiveTenantId = item.tenantId || 'local';
+    if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0 ||
+        !Number.isInteger(targetRevision) || targetRevision <= expectedRevision) {
+      throw Object.assign(new Error('Invalid workflow repair revision'), { code: 'WORKFLOW_REPAIR_REVISION_INVALID' });
+    }
+    const existing = this.findById(item.workflowId);
+    if (existing && (existing.tenantId || 'local') !== effectiveTenantId) {
+      throw Object.assign(new Error('Workflow tenant collision'), { code: 'WORKFLOW_TENANT_MISMATCH' });
+    }
+    const currentRevision = Number(existing?.checkpoint?.revision || 0);
+    if (currentRevision !== expectedRevision) {
+      throw Object.assign(new Error('Stale workflow checkpoint during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+    }
+    item.checkpoint = { revision: targetRevision, lastSavedAt: new Date().toISOString() };
+    if (!existing) {
+      const inserted = this.db.run(
+        'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(workflow_id) DO NOTHING',
+        [item.workflowId,effectiveTenantId,item.state,item.updatedAt || item.checkpoint.lastSavedAt,JSON.stringify(item)]
+      );
+      if (Number(inserted.changes) !== 1) {
+        throw Object.assign(new Error('Workflow snapshot changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+      }
+    } else {
+      const updated = this.db.run(
+        "UPDATE workflows SET state=?,updated_at=?,payload=? WHERE workflow_id=? AND tenant_id=? AND COALESCE(CAST(json_extract(payload, '$.checkpoint.revision') AS INTEGER),0)=?",
+        [item.state,item.updatedAt || item.checkpoint.lastSavedAt,JSON.stringify(item),item.workflowId,effectiveTenantId,expectedRevision]
+      );
+      if (Number(updated.changes) !== 1) {
+        throw Object.assign(new Error('Workflow checkpoint changed during repair'), { code: 'WORKFLOW_CHECKPOINT_CONFLICT' });
+      }
+    }
+    if (typeof instance?.setCheckpointRevision === 'function') {
+      instance.setCheckpointRevision(targetRevision, item.checkpoint.lastSavedAt);
+    }
+    return item;
+  }
+
   findById(workflowId, tenantId = null) {
     const sql = 'SELECT payload FROM workflows WHERE workflow_id = ?' + (tenantId ? ' AND tenant_id = ?' : '') + ' LIMIT 1';
     const params = tenantId ? [workflowId, tenantId] : [workflowId];
