@@ -131,8 +131,6 @@ test('Runtime forwards authenticated owner principal through approval resume rec
   await runtime.resume('execution-a', {}, null, principal);
   const call = calls.find(item => item.kind === 'reconcileResume');
   assert.strictEqual(call.persistencePrincipal, principal);
-  const find = calls.find(item => item.kind === 'findBlocked');
-  assert.strictEqual(find.persistencePrincipal, principal);
 });
 
 test('Runtime forwards authenticated owner principal when persisting a new approval challenge', async () => {
@@ -145,4 +143,19 @@ test('Runtime forwards authenticated owner principal when persisting a new appro
   await assert.rejects(runtime.resume('execution-a', {}, null, principal), e => e === error);
   const call = calls.find(item => item.kind === 'updateChallenge');
   assert.strictEqual(call.persistencePrincipal, principal);
+});
+
+
+test('Runtime forwards authenticated owner principal through approval expiry reconciliation', async () => {
+  const error = Object.assign(new Error('Approval expired'), {
+    code: 'APPROVAL_EXPIRED',
+    approvalId: 'approval-a'
+  });
+  const { runtime, calls } = runtimeFixture({ resumeError: error });
+  const principal = { tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a' };
+  await assert.rejects(runtime.resume('execution-a', {}, null, principal), e => e === error);
+  const find = calls.find(item => item.kind === 'findBlocked');
+  const expire = calls.find(item => item.kind === 'expireWorkflow');
+  assert.strictEqual(find.persistencePrincipal, principal);
+  assert.strictEqual(expire.persistencePrincipal, principal);
 });
