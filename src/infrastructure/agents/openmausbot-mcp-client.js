@@ -21,13 +21,11 @@ function buildChildEnvironment(source = process.env) {
     'OPENMAUSBOT_TOKEN', 'OPENMAUSBOT_MCP_TIMEOUT_MS'
   ];
   const result = {};
-  const pathKey = Object.keys(source).find(key => key.toLowerCase() === 'path');
-  if (pathKey && typeof source[pathKey] === 'string' && source[pathKey].length > 0) {
-    result.PATH = source[pathKey];
-  }
-  for (const key of allowed) {
-    if (typeof source[key] === 'string' && source[key].length > 0) {
-      result[key] = source[key];
+  const sourceKeys = new Map(Object.keys(source).map(key => [key.toLowerCase(), key]));
+  for (const key of ['PATH', ...allowed]) {
+    const sourceKey = sourceKeys.get(key.toLowerCase());
+    if (sourceKey && typeof source[sourceKey] === 'string' && source[sourceKey].length > 0) {
+      result[key] = source[sourceKey];
     }
   }
   return result;
