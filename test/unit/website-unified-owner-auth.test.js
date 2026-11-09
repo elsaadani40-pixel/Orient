@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const OwnerIdentityService = require('../../src/core/security/owner-identity-service');
 const OwnerIdentityRuntimeAdapter = require('../../src/core/security/owner-identity-runtime-adapter');
 const { createOwnerServer } = require('../../server');
@@ -20,10 +21,13 @@ async function listen(server) {
 test('the common sign-in endpoint authenticates the canonical owner email and keeps public users separate', async t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-unified-owner-auth-'));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const bootstrapPassword = String(crypto.randomInt(1000000000, 9999999999));
+  const permanentPassword = crypto.randomBytes(24).toString('base64url') + '!A1';
+  const ordinaryUserPassword = crypto.randomBytes(24).toString('base64url') + '!A1';
   const identity = new OwnerIdentityService({
     stateFile: path.join(dataDir, 'owner.json'),
     ownerEmail: ' Elsaadani40@GMAIL.com ',
-    bootstrapPassword: '0123456789'
+    bootstrapPassword
   });
   const adapter = new OwnerIdentityRuntimeAdapter({ identity });
   const website = createOwnerServer({ dataDir, identity: adapter, log: () => {} });
@@ -32,7 +36,7 @@ test('the common sign-in endpoint authenticates the canonical owner email and ke
 
   const wrongEmail = await fetch(base + '/api/auth/login', {
     method: 'POST', headers: { 'content-type': 'application/json', origin: base },
-    body: JSON.stringify({ identifier: 'someone@example.com', password: '0123456789' })
+    body: JSON.stringify({ identifier: 'someone@example.com', password: bootstrapPassword })
   });
   assert.equal(wrongEmail.status, 401);
 
@@ -67,8 +71,8 @@ test('the common sign-in endpoint authenticates the canonical owner email and ke
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie: ownerCookie, origin: base, 'x-orient-csrf': ownerData.csrfToken },
     body: JSON.stringify({
-      password: 'a-strong-new-owner-password-2026!',
-      confirmPassword: 'a-strong-new-owner-password-2026!'
+      password: permanentPassword,
+      confirmPassword: permanentPassword
     })
   });
   assert.equal(rotate.status, 200);
@@ -80,7 +84,7 @@ test('the common sign-in endpoint authenticates the canonical owner email and ke
 
   const registered = await fetch(base + '/api/auth/register', {
     method: 'POST', headers: { 'content-type': 'application/json', origin: base },
-    body: JSON.stringify({ username: 'elsaadani40', password: 'ordinary-user-password-2026' })
+    body: JSON.stringify({ username: 'elsaadani40', password: ordinaryUserPassword })
   });
   assert.equal(registered.status, 201);
   const userCookie = registered.headers.get('set-cookie').split(';')[0];
