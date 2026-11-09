@@ -8,6 +8,7 @@ const WorkflowRepository = require('../../../../src/infrastructure/persistence/j
 const WorkflowDefinition = require('../../../../src/core/workflow/workflow-definition');
 const WorkflowInstance = require('../../../../src/core/workflow/workflow-instance');
 const DurableMissionEventSink = require('../../../../src/core/workflow/durable-mission-event-sink');
+const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
 
 function instance() {
   return new WorkflowInstance({
@@ -104,4 +105,34 @@ test('async event append completes before the lease-scoped workflow snapshot wri
     workerPrincipal
   });
   assert.deepEqual(order, ['event', 'snapshot']);
+});
+
+
+test('owner principal is propagated to both mission event append and snapshot persistence', async () => {
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a'
+  });
+  const calls = [];
+  const sink = new DurableMissionEventSink({
+    eventRepository: {
+      async appendMissionEvent(event, options) {
+        calls.push(['event', options.persistencePrincipal]);
+        return { ...event, sequence: 1 };
+      }
+    },
+    workflowRepository: {
+      async save(_instance, tenantId, options) {
+        calls.push(['snapshot', tenantId, options.persistencePrincipal]);
+      }
+    },
+    tenantId: 'tenant-a'
+  });
+  const mission = instance();
+  mission.userId = 'owner-a';
+  await sink.recordSnapshot(mission, 'approval_resolution', {
+    persistencePrincipal: principal
+  });
+  assert.strictEqual(calls[0][1], principal);
+  assert.equal(calls[1][1], 'tenant-a');
+  assert.strictEqual(calls[1][2], principal);
 });
