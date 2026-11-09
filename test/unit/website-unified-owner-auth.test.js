@@ -84,6 +84,6 @@ test('the common sign-in endpoint authenticates the canonical owner email and ke
   assert.equal((await fetch(base + '/api/owner/users', { headers: { cookie: userCookie } })).status, 401);
 
   const legacyOwnerPage = await fetch(base + '/dashboard.html', { headers: { cookie: rotatedCookie }, redirect: 'manual' });
-  assert.equal(legacyOwnerPage.status, 302);
-  assert.equal(legacyOwnerPage.headers.get('location'), '/account.html');
+  assert.equal(legacyOwnerPage.status, 200);
+  assert.match(await legacyOwnerPage.text(), /لوحة تحكم المالك/);
 });
