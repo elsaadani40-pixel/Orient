@@ -76,12 +76,12 @@ class WorkflowExecutionCoordinator {
 
     instance.transition('QUEUED');
     instance.setDeadline(deadlineAt);
-    let durableAlreadyPersisted = false;
-    if (this.missionEventSink) {
-      await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
-      durableAlreadyPersisted = true;
-    }
-    await this.scheduler.enqueueDurable(instance, { priority, deadlineAt, durableAlreadyPersisted });
+    await this.scheduler.enqueueDurable(instance, {
+      priority, deadlineAt,
+      beforePersist: this.missionEventSink
+        ? () => this.missionEventSink.recordCreation(instance, { persistencePrincipal })
+        : null
+    });
 
     return {
       workflowId: instance.workflowId,
@@ -249,24 +249,31 @@ class WorkflowExecutionCoordinator {
     if (created.error) return created.error;
     const { instance, text } = created;
 
-    let durableAlreadyPersisted = false;
     if (this.scheduler.async) {
       instance.transition('QUEUED');
       instance.setDeadline(deadlineAt);
-      if (this.missionEventSink) {
-        await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
-        durableAlreadyPersisted = true;
-      }
-      await this.scheduler.enqueueDurable(instance, { priority, deadlineAt, durableAlreadyPersisted });
+      await this.scheduler.enqueueDurable(instance, {
+        priority, deadlineAt,
+        beforePersist: this.missionEventSink
+          ? () => this.missionEventSink.recordCreation(instance, { persistencePrincipal })
+          : null
+      });
     } else {
       if (this.missionEventSink) {
         instance.transition('QUEUED');
         instance.setDeadline(deadlineAt);
-        await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
-        if (typeof this.scheduler.enqueuePersisted === 'function') {
-          this.scheduler.enqueuePersisted(instance, { priority, deadlineAt });
-        } else {
-          this.scheduler.enqueue(instance, { priority, deadlineAt });
+        const reservation = typeof this.scheduler.reserveEnqueue === 'function'
+          ? this.scheduler.reserveEnqueue(instance) : null;
+        try {
+          await this.missionEventSink.recordCreation(instance, { persistencePrincipal });
+          if (typeof this.scheduler.enqueuePersisted === 'function') {
+            this.scheduler.enqueuePersisted(instance, { priority, deadlineAt, ...(reservation ? { reservation } : {}) });
+          } else {
+            this.scheduler.enqueue(instance, { priority, deadlineAt });
+          }
+        } catch (error) {
+          if (reservation) this.scheduler.releaseEnqueueReservation(reservation);
+          throw error;
         }
       } else {
         this.scheduler.enqueue(instance, { priority, deadlineAt });
