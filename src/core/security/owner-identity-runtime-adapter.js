@@ -1,7 +1,7 @@
 'use strict';
 
 class OwnerIdentityRuntimeAdapter {
-  constructor({ identity, maxFailures = 5, lockoutMs = 15 * 60 * 1000, now = Date.now } = {}) {
+  constructor({ identity, maxFailures = 5, lockoutMs = 15 * 60 * 1000 } = {}) {
     if (!identity || typeof identity.login !== 'function' ||
         typeof identity.authenticate !== 'function' ||
         typeof identity.verifyCsrf !== 'function' ||
@@ -10,8 +10,7 @@ class OwnerIdentityRuntimeAdapter {
       throw new TypeError('A compatible OwnerIdentityService instance is required');
     }
     if (!Number.isInteger(maxFailures) || maxFailures < 1 || maxFailures > 100 ||
-        !Number.isSafeInteger(lockoutMs) || lockoutMs < 1000 || lockoutMs > 86400000 ||
-        typeof now !== 'function') {
+        !Number.isSafeInteger(lockoutMs) || lockoutMs < 1000 || lockoutMs > 86400000) {
       throw new RangeError('Invalid owner authentication adapter policy');
     }
     this.identity = identity;
