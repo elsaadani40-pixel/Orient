@@ -284,3 +284,52 @@ test('approval resume appends a replayable snapshot event before durable state r
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('approval workflow reconciliation forwards the authenticated owner principal to repository reads and writes', async () => {
+  const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a', ownerId: 'owner-a', sessionId: 'session-a'
+  });
+  const definition = new WorkflowDefinition({
+    id: 'orient.request.execution', version: 1, name: 'ORIENT Request Execution',
+    steps: [{ id: 'agent-runtime', agent: 'ORIENT_RUNTIME' }]
+  });
+  const instance = new WorkflowInstance({
+    definition, workflowId: 'workflow-owner-approval', tenantId: 'tenant-a',
+    userId: 'owner-a', workspaceId: 'workspace-a', input: { text: 'guarded work' }
+  });
+  instance.transition('QUEUED');
+  instance.transition('RUNNING');
+  instance.transition('WAITING');
+  instance.metadata = {
+    ...instance.metadata, approvalBlocked: true,
+    approvalExecutionId: 'execution-owner-approval',
+    approvalId: 'approval-old'
+  };
+  const calls = [];
+  const workflowRepository = {
+    async findAll() { return [instance.toJSON()]; },
+    async findByApprovalExecutionId(options) {
+      calls.push(['find', options]);
+      return instance.toJSON();
+    },
+    async save(value, tenantId, options) {
+      calls.push(['save', tenantId, options]);
+      return value.toJSON();
+    }
+  };
+  const coordinator = new WorkflowExecutionCoordinator({
+    scheduler: {}, workflowRepository, tenantId: 'tenant-a',
+    userId: 'owner-a', workspaceId: 'workspace-a', executeRequest: async () => ({})
+  });
+
+  assert.equal(await coordinator.updateApprovalChallenge(
+    'execution-owner-approval', 'approval-new', principal
+  ), true);
+  assert.equal(calls[0][0], 'find');
+  assert.strictEqual(calls[0][1].persistencePrincipal, principal);
+  assert.equal(calls[1][0], 'save');
+  assert.equal(calls[1][1], 'tenant-a');
+  assert.strictEqual(calls[1][2].persistencePrincipal, principal);
+});
