@@ -52,10 +52,11 @@ test('forwards the server-authenticated owner context into runtime execution', a
     userId: 'owner-a',
     persistence: {
       idempotency: {
-        begin: async () => ({ created: true, key: 'idempotency-key' }),
+        begin: async args => ({ created: true, key: 'idempotency-key', record: { executionId: args.executionId } }),
         complete: async () => {},
         fail: async () => {}
-      }
+      },
+      executions: { findById: async (id, options) => ({ executionId: id, tenantId: options.tenantId, metadata: { tenantId: options.tenantId } }) }
     },
     assertOwnerSessionContext: async context => {
       assert.equal(context.sessionId, 'active-session');
@@ -64,7 +65,9 @@ test('forwards the server-authenticated owner context into runtime execution', a
     execute: async (goal, options) => {
       assert.equal(goal, 'run a task');
       forwardedContext = options.ownerSessionContext;
-      return { execution: { executionId: 'execution-owner-session' } };
+      assert.equal(options.persistencePrincipal, persistencePrincipal);
+      assert.match(options.executionId, /^[0-9a-f-]{36}$/i);
+      return { execution: { executionId: options.executionId } };
     },
     getExecutionStatus: async executionId => ({
       executionId,
@@ -82,7 +85,7 @@ test('forwards the server-authenticated owner context into runtime execution', a
   });
 
   assert.strictEqual(forwardedContext, ownerSessionContext);
-  assert.equal(result.task.id, 'execution-owner-session');
+  assert.match(result.task.id, /^[0-9a-f-]{36}$/i);
 });
 
 test('binds task idempotency lifecycle to the same authenticated persistence principal', async () => {
@@ -99,7 +102,7 @@ test('binds task idempotency lifecycle to the same authenticated persistence pri
       idempotency: {
         begin: async args => {
           received.push({ method: 'begin', principal: args.persistencePrincipal });
-          return { created: true, key: 'principal-bound-key' };
+          return { created: true, key: 'principal-bound-key', record: { executionId: args.executionId } };
         },
         complete: async (key, result, options) => {
           received.push({ method: 'complete', principal: options.persistencePrincipal });
@@ -107,13 +110,14 @@ test('binds task idempotency lifecycle to the same authenticated persistence pri
         fail: async (key, error, options) => {
           received.push({ method: 'fail', principal: options.persistencePrincipal });
         }
-      }
+      },
+      executions: { findById: async (id, options) => ({ executionId: id, tenantId: options.tenantId, metadata: { tenantId: options.tenantId } }) }
     },
     assertOwnerSessionContext: async context => {
       assert.equal(context.sessionId, 'active-session');
       return true;
     },
-    execute: async () => ({ execution: { executionId: 'execution-principal-bound' } }),
+    execute: async (_goal, options) => ({ execution: { executionId: options.executionId } }),
     getExecutionStatus: async executionId => ({ executionId, status: 'completed' })
   };
 
