@@ -98,3 +98,26 @@ test('JSON workflow outbox lookup and acknowledgement are tenant-scoped and revi
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('JSON workflow repository rejects worker writes without durable worker fencing', () => {
+  const { dir, repo } = makeRepo();
+  try {
+    assert.throws(
+      () => repo.save({
+        workflowId: 'wf-worker-write', tenantId: 'tenant-a',
+        state: 'RUNNING', checkpoint: { revision: 0 },
+        metadata: { fencingToken: 1 }
+      }, 'tenant-a', {
+        workerPrincipal: {
+          tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-a',
+          workflowId: 'wf-worker-write', leaseId: 'lease-a', fencingToken: 1
+        }
+      }),
+      error => error.code === 'WORKER_DURABLE_FENCING_UNSUPPORTED' && error.status === 503
+    );
+    assert.equal(repo.findById('wf-worker-write', 'tenant-a'), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

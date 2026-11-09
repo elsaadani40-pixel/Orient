@@ -71,3 +71,24 @@ test('mission event replay is idempotent but rejects stable ID reuse with change
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('JSON mission-event repository rejects worker writes without durable worker fencing', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-mission-event-fencing-'));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+  try {
+    assert.throws(
+      () => repository.appendMissionEvent({
+        id: 'worker-event-1', aggregateId: 'workflow-1',
+        type: 'workflow.step.completed', data: { tenantId: 'tenant-a' }
+      }, {
+        tenantId: 'tenant-a',
+        workerPrincipal: { tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-a', workflowId: 'workflow-1', leaseId: 'lease-a', fencingToken: 1 }
+      }),
+      error => error.code === 'WORKER_DURABLE_FENCING_UNSUPPORTED' && error.status === 503
+    );
+    assert.deepEqual(repository.findByAggregateId('workflow-1', { tenantId: 'tenant-a' }), []);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -356,3 +356,34 @@ test('SQLite workflow repair refuses to overwrite an active worker lease', () =>
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test('SQLite rejects worker mission-event and workflow writes until atomic durable fencing is implemented', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sqlite-worker-fencing-'));
+  const persistence = new SqlitePersistence({ filePath: path.join(directory, 'orient.db') });
+  const workerPrincipal = {
+    tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-a',
+    workflowId: 'workflow-a', leaseId: 'lease-a', fencingToken: 1
+  };
+  try {
+    assert.throws(
+      () => persistence.events.appendMissionEvent({
+        id: 'worker-event-1', aggregateId: 'workflow-a',
+        type: 'workflow.step.completed', data: { tenantId: 'tenant-a' }
+      }, { tenantId: 'tenant-a', workerPrincipal }),
+      error => error.code === 'WORKER_DURABLE_FENCING_UNSUPPORTED' && error.status === 503
+    );
+    assert.throws(
+      () => persistence.workflows.save({
+        workflowId: 'workflow-a', tenantId: 'tenant-a', state: 'RUNNING',
+        metadata: { fencingToken: 1 }, checkpoint: { revision: 0 }
+      }, 'tenant-a', { workerPrincipal }),
+      error => error.code === 'WORKER_DURABLE_FENCING_UNSUPPORTED' && error.status === 503
+    );
+    assert.equal(persistence.events.findByAggregateId('workflow-a', { tenantId: 'tenant-a' }).length, 0);
+    assert.equal(persistence.workflows.findById('workflow-a', 'tenant-a'), null);
+  } finally {
+    persistence.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

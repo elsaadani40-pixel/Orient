@@ -147,7 +147,12 @@ class SqliteEventRepository {
     if (statements.length) this.db.transaction(statements);
     return unique;
   }
-  appendMissionEvent(event, { tenantId = null } = {}) {
+  appendMissionEvent(event, { tenantId = null, workerPrincipal = null } = {}) {
+    if (workerPrincipal) {
+      throw Object.assign(new Error('SQLite persistence cannot verify worker sessions and lease fencing for mission-event writes'), {
+        code: 'WORKER_DURABLE_FENCING_UNSUPPORTED', status: 503
+      });
+    }
     if (!event?.aggregateId) throw new TypeError('aggregateId is required');
     const compareTimestamp = typeof event.timestamp === 'string' && event.timestamp.length > 0;
     const normalized = this.normalize(event, tenantId);

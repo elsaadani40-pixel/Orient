@@ -153,3 +153,59 @@ test('legacy workflows without an event history retain the documented recovery p
   assert.equal(recovered, 1);
   assert.deepEqual(value.queue.map(item => item.instance.workflowId), [legacy.workflowId]);
 });
+
+
+test('scheduler refuses to dispatch a worker without a durable fencing token and releases its claim', async () => {
+  const WorkflowInstance = require('../../../../src/core/workflow/workflow-instance');
+  const instance = new WorkflowInstance({
+    workflowId: 'workflow-without-fencing',
+    tenantId: 'tenant-a',
+    definition: new WorkflowDefinition({
+      id: 'fencing-gate', version: 1, name: 'Fencing gate',
+      steps: [{ id: 'work', tool: 'work' }]
+    })
+  });
+  instance.transition('QUEUED');
+  const released = [];
+  const value = Object.create(AsyncWorkflowScheduler.prototype);
+  value.leaseStore = {
+    async recoverExpired() {},
+    async acquire(workflowId, workerId) {
+      return { workflowId, workerId, leaseId: 'lease-without-token', acquiredAt: Date.now(), expiresAt: Date.now() + 5000 };
+    },
+    async release(workflowId, leaseId) {
+      released.push(['lease', workflowId, leaseId]);
+      return { released: true };
+    }
+  };
+  value.active = new Map();
+  value.maxConcurrent = 1;
+  value.queue = [{ instance, availableAt: 0, deadlineAt: null, priority: 0, sequence: 1 }];
+  value.sortQueue = () => {};
+  value.clock = () => Date.now();
+  value.cancelled = new Set();
+  value.tenantId = 'tenant-a';
+  value.leaseDurationMs = 5000;
+  value.quotaRepository = null;
+  value.workflowRepository = {
+    async releaseDispatchClaim(workflowId, workerId, tenantId) {
+      released.push(['claim', workflowId, workerId, tenantId]);
+      return true;
+    }
+  };
+
+  await assert.rejects(
+    () => value.leaseAsync('worker-a', [], {
+      tenantId: 'tenant-a', workerId: 'worker-a',
+      sessionId: 'session-a', capabilities: []
+    }),
+    error => error.code === 'WORKER_DURABLE_FENCING_UNSUPPORTED'
+  );
+  assert.deepEqual(released, [
+    ['lease', 'workflow-without-fencing', 'lease-without-token'],
+    ['claim', 'workflow-without-fencing', 'worker-a', 'tenant-a']
+  ]);
+  assert.equal(value.queue.length, 1);
+  assert.equal(value.active.size, 0);
+  assert.equal(instance.state, 'QUEUED');
+});

@@ -143,7 +143,12 @@ class WorkflowRepository {
     }
   }
 
-  save(instance, tenantId = null) {
+  save(instance, tenantId = null, { workerPrincipal = null } = {}) {
+    if (workerPrincipal) {
+      throw Object.assign(new Error('JSON persistence cannot verify worker sessions and lease fencing for workflow writes'), {
+        code: 'WORKER_DURABLE_FENCING_UNSUPPORTED', status: 503
+      });
+    }
     const item = typeof instance.toJSON === 'function' ? instance.toJSON() : { ...instance };
     const effectiveTenantId = item.tenantId || 'local';
     if (tenantId && effectiveTenantId !== tenantId) throw new Error('Workflow tenant mismatch');
