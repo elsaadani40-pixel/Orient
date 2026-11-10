@@ -174,6 +174,34 @@ test('append reports a stable tenant mismatch code for caller-supplied tenant me
   assert.equal(repository.count(), 0);
 });
 
+test('tenant-scoped lookups never expose unscoped or local events to another tenant', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-local-tenant-isolation-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  repository.appendMissionEvent({ id: 'unscoped-1', aggregateId: 'shared-aggregate', type: 'mission.updated', data: {} });
+  repository.appendMissionEvent({ id: 'local-1', aggregateId: 'shared-aggregate', type: 'mission.updated', data: { tenantId: 'local' } });
+  repository.appendMissionEvent({ id: 'tenant-a-1', aggregateId: 'shared-aggregate', type: 'mission.updated', data: { tenantId: 'tenant-a' } });
+  repository.appendMissionEvent({ id: 'tenant-a-2', aggregateId: 'shared-aggregate', type: 'mission.updated', data: { tenantId: 'tenant-a' } });
+
+  assert.deepEqual(repository.findAll({ tenantId: 'tenant-a' }).map(event => event.id), ['tenant-a-1', 'tenant-a-2']);
+  assert.deepEqual(repository.findAll({ tenantId: 'local' }).map(event => event.id), ['unscoped-1', 'local-1']);
+  assert.deepEqual(repository.findByType('mission.updated', { tenantId: 'tenant-a' }).map(event => event.id), ['tenant-a-1', 'tenant-a-2']);
+  assert.deepEqual(repository.findByAggregateId('shared-aggregate', { tenantId: 'tenant-a' }).map(event => event.sequence), [1, 2]);
+  assert.deepEqual(repository.findByAggregateId('shared-aggregate', { tenantId: 'local' }).map(event => event.sequence), [1, 2]);
+});
+
+test('mission event writes preserve the tenant mismatch error contract', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-mission-tenant-mismatch-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  assert.throws(
+    () => repository.appendMissionEvent({ id: 'mismatch', aggregateId: 'aggregate', type: 'mission.updated', data: { tenantId: 'tenant-b' } }, { tenantId: 'tenant-a' }),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+});
+
 test('execution, goal, type and aggregate lookups never cross tenant boundaries', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-query-tenant-isolation-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
