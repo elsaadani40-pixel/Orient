@@ -36,11 +36,11 @@ test('event reads reject symbolic links without following them', t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.root, 'target.json'), '[]\\n', { mode: 0o600 });
   fs.symlinkSync(path.join(f.root, 'target.json'), f.filePath);
-  const repository = f.create();
   if (typeof fs.constants.O_NOFOLLOW !== 'number') {
-    assert.throws(() => repository.read(), error => error.code === 'EVENT_STORAGE_UNSAFE_FILESYSTEM');
+    assert.throws(() => f.create(), error => error.code === 'EVENT_STORAGE_UNSAFE_FILESYSTEM');
     return;
   }
+  const repository = f.create();
   assert.throws(() => repository.read(), error => error.code === 'EVENT_STORAGE_CORRUPT');
 });
 
