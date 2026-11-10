@@ -4,6 +4,10 @@
 
 Vercel hosts the public-facing ORIENT marketing landing page from the existing source at `website/index.html`. The static deployment is intentionally separate from the ORIENT Runtime API and owner account system.
 
+## Build runtime
+
+The Vercel project and package engine are both pinned to Node.js 22.x. The package engine must be explicit because Vercel gives `package.json` precedence over the project-level Node setting; a broad `>=22` range can silently select a newer major runtime. Strict CI runs Node 22 as the supported baseline and Node 24 as a forward-compatibility check.
+
 ## Build contract
 
 The repository build command is:
