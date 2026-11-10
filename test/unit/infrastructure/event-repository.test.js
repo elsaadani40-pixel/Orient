@@ -174,6 +174,21 @@ test('append reports a stable tenant mismatch code for caller-supplied tenant me
   assert.equal(repository.count(), 0);
 });
 
+test('execution, goal, type and aggregate lookups never cross tenant boundaries', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-query-tenant-isolation-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+  repository.appendMany([
+    { id: 'a-event', type: 'mission.updated', executionId: 'shared-execution', goalId: 'shared-goal', aggregateId: 'shared-aggregate', sequence: 1, data: { tenantId: 'tenant-a' } },
+    { id: 'b-event', type: 'mission.updated', executionId: 'shared-execution', goalId: 'shared-goal', aggregateId: 'shared-aggregate', sequence: 1, data: { tenantId: 'tenant-b' } }
+  ]);
+  const onlyA = { tenantId: 'tenant-a' };
+  assert.deepEqual(repository.findByExecutionId('shared-execution', onlyA).map(event => event.id), ['a-event']);
+  assert.deepEqual(repository.findByGoalId('shared-goal', onlyA).map(event => event.id), ['a-event']);
+  assert.deepEqual(repository.findByType('mission.updated', onlyA).map(event => event.id), ['a-event']);
+  assert.deepEqual(repository.findByAggregateId('shared-aggregate', onlyA).map(event => event.id), ['a-event']);
+});
+
 test('mission event sequencing derives tenant scope from metadata when option is omitted', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-tenant-metadata-scope-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
