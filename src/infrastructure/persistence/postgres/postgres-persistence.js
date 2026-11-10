@@ -13,6 +13,10 @@ function tenantOrLocal(value) {
   return value || 'local';
 }
 
+function resolveTenantId(tenantId, persistencePrincipal = null) {
+  return tenantId ? tenantOrLocal(tenantId) : (persistencePrincipal?.tenantId || null);
+}
+
 function assertTenant(actual, expected, label) {
   if (expected && actual !== expected) {
     const error = new Error(`${label} tenant mismatch`);
@@ -24,7 +28,8 @@ function assertTenant(actual, expected, label) {
 async function withPersistencePrincipal(db, persistencePrincipal, tenantId, label, work) {
   if (!persistencePrincipal) return work({ query: (sql, values) => db.query(sql, values) });
   const principal = assertPersistencePrincipal(persistencePrincipal);
-  assertTenant(principal.tenantId, tenantOrLocal(tenantId), label);
+  const effectiveTenant = resolveTenantId(tenantId, principal);
+  assertTenant(principal.tenantId, effectiveTenant, label);
   if (typeof db.transactionWithPrincipal !== 'function') {
     throw Object.assign(new Error('Principal-scoped PostgreSQL transactions are required'), {
       code: 'PRINCIPAL_TRANSACTION_REQUIRED'
@@ -37,7 +42,7 @@ class PostgresExecutionRepository {
   constructor(db) { this.db = db; }
 
   async findById(executionId, { tenantId = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
       const values = effectiveTenant ? [executionId, effectiveTenant] : [executionId];
       let where = effectiveTenant ? 'AND tenant_id=$2' : '';
@@ -54,7 +59,7 @@ class PostgresExecutionRepository {
   }
 
   async findAll({ tenantId = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
       const values = effectiveTenant ? [effectiveTenant] : [];
       let where = effectiveTenant ? 'WHERE tenant_id=$1' : '';
@@ -73,7 +78,7 @@ class PostgresExecutionRepository {
   async findPage({ tenantId = null, limit = 50, offset = 0, persistencePrincipal = null } = {}) {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
     const boundedOffset = Number.isInteger(offset) ? Math.max(0, Math.min(offset, 10000)) : 0;
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Execution principal', async client => {
       const values = effectiveTenant ? [effectiveTenant] : [];
       let where = effectiveTenant ? 'WHERE tenant_id=$1' : '';
@@ -479,7 +484,7 @@ class PostgresEventRepository {
   }
 
   async findByExecutionId(id, { tenantId = null, limit = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Event principal', async client => {
       const boundedLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : null;
       if (!persistencePrincipal) {
@@ -778,7 +783,7 @@ class PostgresCheckpointRepository {
   }
 
   async findLatest(executionId, { verify = true, tenantId = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     const result = await withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Checkpoint principal', client => {
       const values = [executionId];
       let where = 'execution_id=$1';
@@ -1633,7 +1638,7 @@ class PostgresApprovalRepository {
 
   async findByExecution({ executionId, step = null, tool = null, planRevision = null, tenantId = null, persistencePrincipal = null } = {}) {
     if (!executionId) return [];
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
       const values = [String(executionId)];
       const clauses = ['execution_id=$1'];
@@ -1655,7 +1660,7 @@ class PostgresApprovalRepository {
   async findPending({ tenantId = null, limit = 100, now = Date.now(), persistencePrincipal = null } = {}) {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
     const nowIso = new Date(now).toISOString();
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
       if (!persistencePrincipal) {
         const result = effectiveTenant
@@ -1696,7 +1701,7 @@ class PostgresApprovalRepository {
     });
   }
   async findById(approvalId, { tenantId = null, persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
       const values = [approvalId];
       let where = 'a.approval_id=$1';
@@ -1712,7 +1717,7 @@ class PostgresApprovalRepository {
     });
   }
   async consume(approvalId, usedAt, tenantId = null, { persistencePrincipal = null } = {}) {
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
       const values = [usedAt, approvalId];
       let where = 'approval_id=$2 AND used=FALSE AND expires_at>$1';
@@ -1731,7 +1736,7 @@ class PostgresApprovalRepository {
     const nowMs = typeof now === 'function' ? now() : now;
     if (!Number.isFinite(nowMs)) throw Object.assign(new Error('Invalid decision clock'), { code: 'APPROVAL_EXPIRED' });
     const nowIso = new Date(nowMs).toISOString();
-    const effectiveTenant = tenantId ? tenantOrLocal(tenantId) : null;
+    const effectiveTenant = resolveTenantId(tenantId, persistencePrincipal);
     return withPersistencePrincipal(this.db, persistencePrincipal, effectiveTenant, 'Approval principal', async client => {
       const selectValues = [approvalId];
       let selectWhere = 'a.approval_id=$1';

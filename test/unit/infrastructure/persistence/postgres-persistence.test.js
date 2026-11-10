@@ -13,6 +13,7 @@ const {
 const PostgresTenantQuotaRepository = require('../../../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 const { MIGRATIONS } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
 const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
+const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
 
 function fakeDb(responses = []) {
   const calls = [];
@@ -535,4 +536,75 @@ test('Postgres workflow creation rejects an existing workflow ID without overwri
     error => error.code === 'WORKFLOW_ID_CONFLICT'
   );
   assert.equal(db.calls.length, 1);
+});
+
+
+function makeOwnerPrincipal(tenantId, ownerId = 'owner-a') {
+  return createPersistencePrincipal({
+    tenantId,
+    ownerId,
+    sessionId: `session-${tenantId}-${ownerId}`
+  });
+}
+
+test('Postgres principal-scoped reads derive tenant from the validated principal when tenantId is omitted', async () => {
+  const principal = makeOwnerPrincipal('local');
+  const db = fakeDb();
+  const executions = new PostgresExecutionRepository(db);
+  const events = new PostgresEventRepository(db);
+  const checkpoints = new PostgresCheckpointRepository(db);
+  const approvals = new PostgresApprovalRepository(db);
+
+  await executions.findById('exec-local', { persistencePrincipal: principal });
+  await executions.findAll({ persistencePrincipal: principal });
+  await executions.findPage({ persistencePrincipal: principal, limit: 10 });
+  await events.findByExecutionId('exec-local', { persistencePrincipal: principal });
+  await checkpoints.findLatest('exec-local', { persistencePrincipal: principal });
+  await approvals.findByExecution({ executionId: 'exec-local', persistencePrincipal: principal });
+  await approvals.findPending({ persistencePrincipal: principal, limit: 10 });
+  await approvals.findById('approval-local', { persistencePrincipal: principal });
+  await approvals.consume('approval-local', '2026-11-10T00:00:00.000Z', null, { persistencePrincipal: principal });
+  await assert.rejects(
+    approvals.recordDecision(
+      'approval-local',
+      { status: 'approved', actorId: principal.sessionId, decidedAt: '2026-11-10T00:00:00.000Z' },
+      null,
+      () => Date.parse('2026-11-10T00:00:00.000Z'),
+      principal
+    ),
+    error => error.code === 'APPROVAL_NOT_FOUND'
+  );
+
+  assert.equal(db.calls.length, 11);
+  for (const [index, call] of db.calls.entries()) {
+    assert.ok(call.values.includes('local'), `query ${index + 1} must bind the principal tenant`);
+    assert.match(call.text, /tenant_id=\$\d+/, `query ${index + 1} must constrain tenant_id`);
+  }
+  assert.deepEqual(db.calls[0].values, ['exec-local', 'local', 'owner-a']);
+  assert.deepEqual(db.calls[1].values, ['local', 'owner-a']);
+  assert.deepEqual(db.calls[2].values, ['local', 'owner-a']);
+  assert.deepEqual(db.calls[3].values, ['local', 'owner-a', 10, 0]);
+  assert.deepEqual(db.calls[4].values, ['local', 'exec-local', 'owner-a']);
+  assert.deepEqual(db.calls[5].values, ['exec-local', 'local', 'owner-a']);
+  assert.deepEqual(db.calls[6].values, ['exec-local', 'local', 'owner-a']);
+  assert.deepEqual(db.calls[7].values.slice(1, 3), ['local', 'owner-a']);
+  assert.deepEqual(db.calls[8].values, ['approval-local', 'local', 'owner-a']);
+  assert.deepEqual(db.calls[9].values, ['2026-11-10T00:00:00.000Z', 'approval-local', 'local', 'owner-a']);
+  assert.deepEqual(db.calls[10].values, ['approval-local', 'local', 'owner-a']);
+});
+
+test('Postgres principal-scoped reads derive a non-local tenant and reject an explicit tenant mismatch', async () => {
+  const principal = makeOwnerPrincipal('tenant-a');
+  const db = fakeDb();
+  const executions = new PostgresExecutionRepository(db);
+
+  await executions.findAll({ persistencePrincipal: principal });
+  assert.deepEqual(db.calls[0].values, ['tenant-a', 'owner-a']);
+  assert.match(db.calls[0].text, /WHERE tenant_id=\$1 AND payload->>'userId'=\$2/);
+
+  await assert.rejects(
+    executions.findById('exec-other', { tenantId: 'tenant-b', persistencePrincipal: principal }),
+    error => error.code === 'TENANT_PERSISTENCE_MISMATCH'
+  );
+  assert.equal(db.calls.length, 1, 'a mismatched explicit tenant must fail before issuing SQL');
 });
