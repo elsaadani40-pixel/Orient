@@ -55,7 +55,7 @@ class FakeMcpChild extends EventEmitter {
             structuredContent: data
           };
         }
-        const responseFrame = JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n';
+        const responseFrame = JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n';
         if (this.responseDelayMs > 0) {
           setTimeout(() => this.stdout.write(responseFrame), this.responseDelayMs);
         } else {
