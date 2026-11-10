@@ -3,7 +3,7 @@
   "packageManager": "npm",
   "testRunner": "command",
   "commandRunner": {
-    "command": "node --test --test-timeout=120000 test/unit/infrastructure/event-repository.test.js test/unit/infrastructure/event-repository-hardening.test.js test/unit/infrastructure/mission-event-repository.test.js test/unit/infrastructure/persistence/json/event-repository.security.test.js"
+    "command": "node --test --test-timeout=120000 test/unit/infrastructure/event-repository.test.js test/unit/infrastructure/event-repository-hardening.test.js test/unit/infrastructure/mission-event-repository.test.js test/unit/infrastructure/persistence/json/event-repository.security.test.js test/unit/infrastructure/persistence/json/event-repository-tenant-boundaries.test.js"
   },
   "mutate": ["src/infrastructure/persistence/json/event.repository.js"],
   "reporters": ["clear-text", "html", "json"],
