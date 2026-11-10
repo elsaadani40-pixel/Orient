@@ -174,6 +174,21 @@ test('append reports a stable tenant mismatch code for caller-supplied tenant me
   assert.equal(repository.count(), 0);
 });
 
+test('mission event sequencing derives tenant scope from metadata when option is omitted', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-tenant-metadata-scope-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  repository.appendMissionEvent({ id: 'a-1', aggregateId: 'shared-aggregate', type: 'mission.started', data: { tenantId: 'tenant-a' } });
+  repository.appendMissionEvent({ id: 'b-1', aggregateId: 'shared-aggregate', type: 'mission.started', data: { tenantId: 'tenant-b' } });
+  repository.appendMissionEvent({ id: 'b-2', aggregateId: 'shared-aggregate', type: 'mission.progressed', data: { tenantId: 'tenant-b' } });
+
+  const tenantASecond = repository.appendMissionEvent({ id: 'a-2', aggregateId: 'shared-aggregate', sequence: 2, type: 'mission.progressed', data: { tenantId: 'tenant-a' } });
+  assert.equal(tenantASecond.sequence, 2);
+  assert.deepEqual(repository.findByAggregateId('shared-aggregate', { tenantId: 'tenant-a' }).map(event => event.sequence), [1, 2]);
+  assert.deepEqual(repository.findByAggregateId('shared-aggregate', { tenantId: 'tenant-b' }).map(event => event.sequence), [1, 2]);
+});
+
 test('findByType never returns another tenant events for a shared event type', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-type-tenant-filter-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
