@@ -118,3 +118,14 @@ test('event writes use unique exclusive temporary files and preserve append beha
   assert.deepEqual(repository.findAll({ tenantId: 'tenant-a' }).map(event => event.id), ['event-one', 'event-two']);
   assert.deepEqual(fs.readdirSync(f.root).filter(name => name.includes('.tmp.')), []);
 });
+
+
+test('event repository rejects a symlinked data directory', t => {
+  const f = fixture(t);
+  const alias = path.join(f.root, 'directory-alias');
+  fs.symlinkSync(f.root, alias, 'dir');
+  assert.throws(
+    () => new EventRepository(path.join(alias, 'events.json')),
+    error => error.code === 'EVENT_STORAGE_DIRECTORY_INVALID'
+  );
+});
