@@ -48,6 +48,7 @@ test('async recovery does not enqueue workflows requiring unsupported capabiliti
       payload('unsupported',['browser']),
       payload('generic',[])
     ];},
+    async releaseDispatchClaim(){return true;},
     async save(){}
   };
   const scheduler=new AsyncWorkflowScheduler({
