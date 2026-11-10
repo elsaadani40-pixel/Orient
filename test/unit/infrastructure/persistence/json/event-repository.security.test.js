@@ -517,3 +517,27 @@ test('appendMany rejects array-like objects instead of treating them as empty ba
   assert.throws(() => repository.appendMany({ length: 0 }), TypeError);
   assert.equal(repository.count(), 0);
 });
+
+
+test('storage fails closed if permission tightening does not make the directory private', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-chmod-noop-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const storage = path.join(root, 'storage');
+  fs.mkdirSync(storage, { mode: 0o755 });
+  fs.chmodSync(storage, 0o755);
+
+  const originalChmodSync = fs.chmodSync;
+  fs.chmodSync = function (target, mode, ...args) {
+    if (target === storage && mode === 0o700) return;
+    return originalChmodSync.call(this, target, mode, ...args);
+  };
+
+  try {
+    assert.throws(
+      () => new EventRepository(path.join(storage, 'events.json')),
+      error => error.code === 'EVENT_STORAGE_DIRECTORY_PERMISSIONS_INVALID'
+    );
+  } finally {
+    fs.chmodSync = originalChmodSync;
+  }
+});
