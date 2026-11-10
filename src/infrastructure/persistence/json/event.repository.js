@@ -34,6 +34,11 @@ class EventRepository {
   ensureStorage() {
     if (typeof fs.constants.O_NOFOLLOW !== 'number') fail('Safe JSON event storage is unsupported on this platform', 'EVENT_STORAGE_UNSAFE_FILESYSTEM');
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    // Normalize trusted platform aliases (notably Android /data/data) once,
+    // before deriving any file or lock path used by this adapter.
+    this.directory = fs.realpathSync(this.directory);
+    this.filePath = path.join(this.directory, path.basename(this.filePath));
+    this.lockPath = this.filePath + '.lock';
     const directoryStats = fs.lstatSync(this.directory, { bigint: true });
     const parentDirectory = path.dirname(this.directory);
     const parentStats = fs.lstatSync(parentDirectory, { bigint: true });
