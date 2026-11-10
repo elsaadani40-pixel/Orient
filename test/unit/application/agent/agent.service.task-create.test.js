@@ -593,7 +593,7 @@ test('owner task idempotency is isolated across owners in the same tenant', asyn
   const ownerB = createOwner('owner-b');
   const request = {
     goal: 'create a private task',
-    idempotencyKey: 'same-owner-independent-key-001'
+    idempotencyKey: 'request-key-001'
   };
 
   const firstA = await ownerA.service.createTask({
