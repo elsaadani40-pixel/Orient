@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 
 const EventRepository =
   require('../../../src/infrastructure/persistence/json/event.repository');
@@ -232,6 +233,27 @@ test('execution, goal, and type queries apply their filters', t => {
   assert.deepEqual(repository.findByExecutionId('').map(event => event.id), []);
   assert.deepEqual(repository.findByGoalId('').map(event => event.id), []);
   assert.deepEqual(repository.findByType('').map(event => event.id), []);
+});
+
+test('concurrent processes append without losing or overwriting events', { timeout: 15000 }, async t => {
+  const { filePath, repository } = fixture(t, { lockTimeoutMs: 10000 });
+  const modulePath = require.resolve('../../../src/infrastructure/persistence/json/event.repository');
+  const script = `const EventRepository = require(${JSON.stringify(modulePath)});\nconst repository = new EventRepository(process.argv[1], { lockTimeoutMs: 10000 });\nrepository.append({ id: process.argv[2], type: 'concurrent.write' });\n`;
+
+  const appendFromProcess = id => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script, filePath, id], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`child process exited with ${code}: ${stderr}`));
+    });
+  });
+
+  await Promise.all([appendFromProcess('concurrent-a'), appendFromProcess('concurrent-b')]);
+  assert.deepEqual(repository.findAll().map(event => event.id).sort(), ['concurrent-a', 'concurrent-b']);
 });
 
 test('clear removes all events while preserving a usable repository', t => {
