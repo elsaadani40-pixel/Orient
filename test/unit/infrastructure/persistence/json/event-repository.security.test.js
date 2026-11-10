@@ -129,3 +129,76 @@ test('event repository rejects a symlinked data directory', t => {
     error => error.code === 'EVENT_STORAGE_DIRECTORY_INVALID'
   );
 });
+
+
+test('existing permissive storage directories are tightened to mode 0700', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX directory mode checks are not available');
+    return;
+  }
+  const f = fixture(t);
+  fs.chmodSync(f.root, 0o755);
+  const repository = f.create();
+  assert.equal((fs.statSync(repository.directory).mode & 0o777), 0o700);
+});
+
+test('storage rejects a parent directory writable by other users without a sticky bit', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX parent permission checks are not available');
+    return;
+  }
+  const f = fixture(t);
+  const parent = path.join(f.root, 'untrusted-parent');
+  const storage = path.join(parent, 'storage');
+  fs.mkdirSync(parent, { mode: 0o700 });
+  fs.chmodSync(parent, 0o777);
+  try {
+    assert.throws(
+      () => new EventRepository(path.join(storage, 'events.json')),
+      error => error.code === 'EVENT_STORAGE_PARENT_UNTRUSTED'
+    );
+  } finally {
+    fs.chmodSync(parent, 0o700);
+  }
+});
+
+test('storage rejects a directory not owned by the application user', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX directory ownership checks are not available');
+    return;
+  }
+  const f = fixture(t);
+  const originalLstatSync = fs.lstatSync;
+  fs.lstatSync = function (target, ...args) {
+    const stats = originalLstatSync.call(this, target, ...args);
+    if (path.resolve(String(target)) !== path.resolve(f.root)) return stats;
+    const altered = Object.create(Object.getPrototypeOf(stats));
+    Object.assign(altered, stats);
+    Object.defineProperty(altered, 'uid', { value: BigInt(process.getuid()) + 1n });
+    return altered;
+  };
+  try {
+    assert.throws(
+      () => f.create(),
+      error => error.code === 'EVENT_STORAGE_DIRECTORY_OWNER_INVALID'
+    );
+  } finally {
+    fs.lstatSync = originalLstatSync;
+  }
+});
+
+test('event file and active lock use private filesystem permissions', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX filesystem mode checks are not available');
+    return;
+  }
+  const f = fixture(t);
+  const repository = f.create();
+  assert.equal((fs.statSync(repository.filePath).mode & 0o777), 0o600);
+  repository.withLock(() => {
+    assert.equal((fs.statSync(repository.lockPath).mode & 0o777), 0o700);
+    const ownerName = fs.readdirSync(repository.lockPath).find(name => name.startsWith('owner.'));
+    assert.ok(ownerName);
+    assert.equal((fs.statSync(path.join(repository.lockPath, ownerName)).mode & 0o777), 0o600);
+  });
+});
