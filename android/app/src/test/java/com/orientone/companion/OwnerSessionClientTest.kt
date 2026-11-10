@@ -22,6 +22,17 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [35])
 class OwnerSessionClientTest {
     @Test
+    fun manifestDeclaresOnlyInternetPermissionUntilDeviceAdaptersAreImplemented() {
+        val manifest = java.io.File("src/main/AndroidManifest.xml").readText()
+        val permissions = Regex("""<uses-permission\b[^>]*android:name="([^"]+)"""")
+            .findAll(manifest)
+            .map { it.groupValues[1] }
+            .toSet()
+
+        assertEquals(setOf("android.permission.INTERNET"), permissions)
+    }
+
+    @Test
     fun sessionStartsUnauthenticatedAndRejectsInvalidPorts() {
         assertFalse(OwnerSessionClient(8080).isAuthenticated)
         assertThrows(IllegalArgumentException::class.java) { OwnerSessionClient(0) }
@@ -99,7 +110,7 @@ class OwnerSessionClientTest {
 
         try {
             val client = OwnerSessionClient(server.address.port)
-            assertTrue(withApiDiagnostics("login") { runBlocking { client.login("0123456789abcdef") } }.contains("بنجاح"))
+            assertTrue(withApiDiagnostics("login") { runBlocking { client.login("elsaadani40@gmail.com", "0123456789") } }.contains("بنجاح"))
             assertTrue(client.isAuthenticated)
             assertTrue(withApiDiagnostics("fetchExecutions") { runBlocking { client.fetchExecutions() } }.contains("executions"))
             assertTrue(withApiDiagnostics("fetchTasks") { runBlocking { client.fetchTasks() } }.contains("\"apiVersion\": \"v1\""))
@@ -131,6 +142,73 @@ class OwnerSessionClientTest {
     }
 
     @Test
+    fun tenDigitBootstrapLoginRequiresAndCompletesPasswordRotationWithCsrf() {
+        val expiry = System.currentTimeMillis() + 60_000
+        val newExpiry = expiry + 60_000
+        val loginPassword = AtomicReference<String?>()
+        val changeCookie = AtomicReference<String?>()
+        val changeCsrf = AtomicReference<String?>()
+        val changeBody = AtomicReference<String?>()
+        val rotatedLogoutCookie = AtomicReference<String?>()
+        val rotatedLogoutCsrf = AtomicReference<String?>()
+        val server = startServer { exchange ->
+            when (exchange.requestURI.path) {
+                "/owner/login" -> {
+                    loginPassword.set(exchange.requestBody.bufferedReader().readText())
+                    respond(
+                        exchange,
+                        200,
+                        """{"ok":true,"csrfToken":"csrf-before-rotation","expiresAt":$expiry,"passwordChangeRequired":true}""",
+                        "orient_owner_session=dddddddddddddddddddddddddddddddddddddddddddddddd; Path=/; HttpOnly; SameSite=Strict"
+                    )
+                }
+                "/owner/password" -> {
+                    changeCookie.set(exchange.requestHeaders.getFirst("Cookie"))
+                    changeCsrf.set(exchange.requestHeaders.getFirst("X-ORIENT-CSRF"))
+                    changeBody.set(exchange.requestBody.bufferedReader().readText())
+                    respond(
+                        exchange,
+                        200,
+                        """{"ok":true,"csrfToken":"csrf-after-rotation","expiresAt":$newExpiry,"passwordChangeRequired":false}""",
+                        "orient_owner_session=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee; Path=/; HttpOnly; SameSite=Strict"
+                    )
+                }
+                "/api/v1/tasks" -> respond(exchange, 200, """{"items":[]}""")
+                "/owner/logout" -> {
+                    rotatedLogoutCookie.set(exchange.requestHeaders.getFirst("Cookie"))
+                    rotatedLogoutCsrf.set(exchange.requestHeaders.getFirst("X-ORIENT-CSRF"))
+                    respond(exchange, 200, """{"ok":true}""")
+                }
+                else -> respond(exchange, 404, """{"code":"NOT_FOUND"}""")
+            }
+        }
+
+        try {
+            val client = OwnerSessionClient(server.address.port)
+            runBlocking { client.login("elsaadani40@gmail.com", "0123456789") }
+            assertTrue(client.isAuthenticated)
+            assertTrue(client.mustChangePassword)
+            assertTrue(loginPassword.get()?.contains("0123456789") == true && loginPassword.get()?.contains("elsaadani40@gmail.com") == true)
+            assertThrows(IllegalArgumentException::class.java) {
+                runBlocking { client.changePassword("short", "short") }
+            }
+
+            runBlocking { client.changePassword("A-secure-password-2026", "A-secure-password-2026") }
+            assertFalse(client.mustChangePassword)
+            assertTrue(client.isAuthenticated)
+            assertTrue(changeCookie.get()?.startsWith("orient_owner_session=dddd") == true)
+            assertEquals("csrf-before-rotation", changeCsrf.get())
+            assertTrue(changeBody.get()?.contains("A-secure-password-2026") == true)
+            assertTrue(withApiDiagnostics("fetchTasks after rotation") { runBlocking { client.fetchTasks() } }.contains("items"))
+            runBlocking { client.logout() }
+            assertTrue(rotatedLogoutCookie.get()?.startsWith("orient_owner_session=eeee") == true)
+            assertEquals("csrf-after-rotation", rotatedLogoutCsrf.get())
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun expiredSessionIsClearedAndNoRequestIsSentWithIt() {
         var currentTime = 1_000L
         val requests = AtomicInteger()
@@ -146,7 +224,7 @@ class OwnerSessionClientTest {
 
         try {
             val client = OwnerSessionClient(server.address.port) { currentTime }
-            runBlocking { client.login("0123456789abcdef") }
+            runBlocking { client.login("elsaadani40@gmail.com", "0123456789") }
             assertTrue(client.isAuthenticated)
 
             currentTime = 1001L
@@ -175,7 +253,7 @@ class OwnerSessionClientTest {
         try {
             val client = OwnerSessionClient(server.address.port) { 2L }
             assertThrows(IllegalStateException::class.java) {
-                runBlocking { client.login("0123456789abcdef") }
+                runBlocking { client.login("elsaadani40@gmail.com", "0123456789") }
             }
             assertFalse(client.isAuthenticated)
         } finally {
@@ -191,7 +269,7 @@ class OwnerSessionClientTest {
 
         val client = OwnerSessionClient(port)
         assertThrows(IOException::class.java) {
-            runBlocking { client.login("0123456789abcdef") }
+            runBlocking { client.login("elsaadani40@gmail.com", "0123456789") }
         }
         assertFalse(client.isAuthenticated)
     }

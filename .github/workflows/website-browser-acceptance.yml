@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           check-latest: true
@@ -40,12 +40,12 @@ jobs:
       - name: Run isolated owner website with temporary credentials
         shell: bash
         env:
-          ORIENT_OWNER_BOOTSTRAP_PASSWORD: "temporary-owner-password-9F!x"
           PORT: "8080"
           HOST: "127.0.0.1"
           ORIENT_PERSISTENCE: "json"
         run: |
           set -euo pipefail
+          export ORIENT_OWNER_BOOTSTRAP_PASSWORD="$(node -p 'require("node:crypto").randomInt(1000000000,9999999999).toString()')"
           data_dir="$(mktemp -d)"
           log_file="$(mktemp)"
           export ORIENT_DATA_DIR="$data_dir"
@@ -60,7 +60,7 @@ jobs:
 
           ready=0
           for attempt in $(seq 1 40); do
-            if curl --silent --fail http://127.0.0.1:8080/auth?mode=owner >/dev/null; then
+            if curl --silent --fail http://127.0.0.1:8080/auth >/dev/null; then
               ready=1
               break
             fi

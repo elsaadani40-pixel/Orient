@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-ORIENT ONE is under active development and has not been represented as independently security-certified. Security controls and tests cover specific behaviors; they do not prove the absence of vulnerabilities.
+ORIENT is under active development and has not been represented as independently security-certified. Security controls and tests cover specific behaviors; they do not prove the absence of vulnerabilities.
 
 ## Reporting a vulnerability
 
@@ -30,7 +30,7 @@ Use environment variables or an approved secret manager. Keep privileges and acc
 
 ## Safe use
 
-- Run ORIENT ONE with test data until its security boundaries have been independently reviewed for your use case.
+- Run ORIENT with test data until its security boundaries have been independently reviewed for your use case.
 - The current HTTP interface is local-only: configuration rejects wildcard and remote bind addresses until a complete authentication/session boundary and transport protection are implemented and tested.
 - Keep network-facing services bound to localhost unless a reviewed deployment configuration explicitly requires otherwise.
 - Use least-privilege database credentials and separate test/development data from production data.

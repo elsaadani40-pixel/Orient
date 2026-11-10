@@ -2,8 +2,39 @@ name: ORIENT — Security Evidence (Mutation + Fuzzing)
 
 on:
   pull_request:
+    paths:
+      - ".github/workflows/security-evidence.yml"
+      - "stryker.config.json"
+      - "package.json"
+      - "package-lock.json"
+      - "fuzz/**"
+      - "corpus/**"
+      - "src/core/security/**"
+      - "src/core/runtime/**"
+      - "src/core/execution/**"
+      - "src/infrastructure/persistence/json/**"
+      - "test/unit/core/security/**"
+      - "test/unit/core/runtime/**"
+      - "test/unit/infrastructure/**"
   push:
     branches: ["main"]
+    paths:
+      - ".github/workflows/security-evidence.yml"
+      - "stryker.config.json"
+      - "package.json"
+      - "package-lock.json"
+      - "fuzz/**"
+      - "corpus/**"
+      - "src/core/security/**"
+      - "src/core/runtime/**"
+      - "src/core/execution/**"
+      - "src/infrastructure/persistence/json/**"
+      - "test/unit/core/security/**"
+      - "test/unit/core/runtime/**"
+      - "test/unit/infrastructure/**"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
 
 concurrency:
   group: orient-security-evidence-${{ github.event.pull_request.number || github.ref }}
@@ -57,7 +88,7 @@ jobs:
           const config = JSON.parse(fs.readFileSync('stryker.config.json', 'utf8'));
           config.mutate = [process.env.MUTATE_FILE];
           config.commandRunner.command = `node --test --test-timeout=120000 ${process.env.TEST_FILE}`;
-          config.concurrency = 1;
+          config.concurrency = 2;
           fs.writeFileSync('stryker.matrix.config.json', JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
           NODE
           npx --yes --package=@stryker-mutator/core@10.1.1 stryker run stryker.matrix.config.json 2>&1 | tee "artifacts/stryker-${{ matrix.name }}.log"

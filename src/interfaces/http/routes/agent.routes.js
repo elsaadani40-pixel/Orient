@@ -3,7 +3,7 @@ const { createRuntimeResponseV1, MAX_ASSISTANT_TEXT_CHARS } = require('../contra
 
 function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated = null } = {}) {
   return {
-    async createTask(req, res, body, ownerSessionContext = null) {
+    async createTask(req, res, body, ownerSessionContext = null, persistencePrincipal = null) {
       let payload;
       try {
         payload = typeof body === 'string' ? JSON.parse(body || '{}') : body;
@@ -18,7 +18,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       const result = await agentService.createTask({
         goal: payload.goal,
         idempotencyKey,
-        ownerSessionContext
+        ownerSessionContext,
+        persistencePrincipal
       });
       if (typeof onTaskCreated === 'function' && typeof result.task?.id === 'string' &&
           typeof req?.ownerChatMessageId === 'string') {
@@ -26,7 +27,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
           executionId: result.task.id,
           messageId: req.ownerChatMessageId,
           idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : null,
-          replayed: Boolean(result.replayed)
+          replayed: Boolean(result.replayed),
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
         });
       }
       const statusCode = result.replayed ? 200 : 201;
@@ -44,7 +46,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }));
     },
 
-    async tasks(req, res) {
+    async tasks(req, res, persistencePrincipal = null) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
       const offsetValue = url.searchParams.get('offset');
@@ -55,7 +57,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         throw new AppError('Invalid task pagination', 400, 'VALIDATION_ERROR');
       }
 
-      const result = await agentService.listExecutionSummaries({ limit, offset });
+      const result = await agentService.listExecutionSummaries({ limit, offset, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       const tasks = (result.executions || []).map(execution => ({
         id: execution.executionId,
         status: execution.status,
@@ -80,8 +82,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }));
     },
 
-    async task(req, res, executionId) {
-      const result = await agentService.getExecutionStatus(executionId);
+    async task(req, res, executionId, persistencePrincipal = null) {
+      const result = await agentService.getExecutionStatus(executionId, persistencePrincipal ? { persistencePrincipal } : {});
       // Deliberately omit tenant identifiers and raw execution results from the
       // cross-device task summary. Detailed output requires a separately governed API.
       const task = {
@@ -104,11 +106,11 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify({ apiVersion: 'v1', task }));
     },
 
-    async taskResponse(req, res, executionId) {
-      const result = await agentService.getExecutionStatus(executionId);
-      const events = await agentService.getExecutionEvents(executionId, { limit: 100 });
+    async taskResponse(req, res, executionId, persistencePrincipal = null) {
+      const result = await agentService.getExecutionStatus(executionId, persistencePrincipal ? { persistencePrincipal } : {});
+      const events = await agentService.getExecutionEvents(executionId, { limit: 100, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       const approvals = typeof agentService.getExecutionApprovals === 'function'
-        ? await agentService.getExecutionApprovals(executionId)
+        ? await agentService.getExecutionApprovals(executionId, persistencePrincipal ? { persistencePrincipal } : {})
         : [];
       const evidenceReferences = (Array.isArray(events) ? events : [])
         .filter(event => typeof event?.id === 'string' && event.id.length > 0)
@@ -122,7 +124,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       // results, plans, inputs, observations, and tool payloads never leave this boundary.
       let finalAnswer = { text: null, status: result.status === 'completed' ? 'unavailable' : 'pending' };
       if (result.status === 'completed' && typeof agentService.getFinalAnswer === 'function') {
-        const candidate = await agentService.getFinalAnswer(executionId);
+        const candidate = await agentService.getFinalAnswer(executionId, persistencePrincipal ? { persistencePrincipal } : {});
         // Treat the persistence adapter as a trust boundary too: malformed,
         // empty, or oversized answers must not turn a completed task into a 500
         // or leak an unvalidated value into the public response contract.
@@ -134,7 +136,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }
       if (result.status === 'completed' && finalAnswer.status === 'available' &&
           typeof onFinalAnswer === 'function') {
-        await onFinalAnswer({ executionId, text: finalAnswer.text });
+        await onFinalAnswer({ executionId, text: finalAnswer.text, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       }
       const response = createRuntimeResponseV1({
         assistantText: finalAnswer.text,
@@ -153,7 +155,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(response));
     },
 
-    async taskEvents(req, res, executionId) {
+    async taskEvents(req, res, executionId, persistencePrincipal = null) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
       const after = url.searchParams.get('after');
@@ -168,7 +170,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       // The service scopes the execution and its events to the runtime tenant.
       // Only the newest 200 events are currently retrievable; if a cursor falls
       // outside that window, report a gap instead of silently skipping history.
-      const events = await agentService.getExecutionEvents(executionId, { limit: 200 });
+      const events = await agentService.getExecutionEvents(executionId, { limit: 200, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       let startIndex = 0;
       if (after !== null) {
         const cursorIndex = events.findIndex(event => String(event.id) === after);
@@ -221,7 +223,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }));
     },
 
-    async executions(req, res) {
+    async executions(req, res, persistencePrincipal = null) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
       const offsetValue = url.searchParams.get('offset');
@@ -230,7 +232,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       if (!Number.isInteger(limit) || !Number.isInteger(offset) || limit < 1 || offset < 0) {
         throw new AppError('Invalid execution history pagination', 400, 'INVALID_PAGINATION');
       }
-      const result = await agentService.listExecutionSummaries({ limit, offset });
+      const result = await agentService.listExecutionSummaries({ limit, offset, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'X-Content-Type-Options': 'nosniff',
@@ -239,7 +241,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async decideApproval(req, res, approvalId, body, actorId) {
+    async decideApproval(req, res, approvalId, body, actorId, persistencePrincipal = null) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new AppError('Invalid approval decision body', 400, 'INVALID_JSON');
       }
@@ -253,7 +255,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }
       let result;
       try {
-        result = await agentService.decideApproval({ approvalId, executionId, decision, actorId });
+        result = await agentService.decideApproval({ approvalId, executionId, decision, actorId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       } catch (error) {
         const decisionErrors = {
           APPROVAL_NOT_FOUND: [404, 'Approval not found'],
@@ -282,14 +284,14 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify({ ok: true, ...result }));
     },
 
-    async pendingApprovals(req, res) {
+    async pendingApprovals(req, res, persistencePrincipal = null) {
       const url = new URL(req.url, 'http://localhost');
       const limitValue = url.searchParams.get('limit');
       const limit = limitValue === null ? 100 : Number(limitValue);
       if (!Number.isInteger(limit) || limit < 1) {
         throw new AppError('Invalid approval inbox limit', 400, 'INVALID_PAGINATION');
       }
-      const result = await agentService.listPendingApprovals({ limit });
+      const result = await agentService.listPendingApprovals({ limit, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'X-Content-Type-Options': 'nosniff',
@@ -298,8 +300,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async events(req, res, executionId) {
-      const initialEvents = await agentService.getExecutionEvents(executionId, { limit: 200 });
+    async events(req, res, executionId, persistencePrincipal = null) {
+      const initialEvents = await agentService.getExecutionEvents(executionId, { limit: 200, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -346,7 +348,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         if (closed || polling) return;
         polling = true;
         try {
-          const events = providedEvents || await agentService.getExecutionEvents(executionId, { limit: 200 });
+          const events = providedEvents || await agentService.getExecutionEvents(executionId, { limit: 200, persistencePrincipal });
           if (closed) return;
           let startIndex = 0;
           if (!initialized) {
@@ -406,8 +408,8 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       void poll(initialEvents);
     },
 
-    async status(req, res, executionId) {
-      const result = await agentService.getExecutionStatus(executionId);
+    async status(req, res, executionId, persistencePrincipal = null) {
+      const result = await agentService.getExecutionStatus(executionId, { persistencePrincipal });
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -418,9 +420,9 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async approvals(req, res, executionId) {
+    async approvals(req, res, executionId, persistencePrincipal = null) {
       const result =
-        await agentService.getExecutionApprovals(executionId);
+        await agentService.getExecutionApprovals(executionId, persistencePrincipal ? { persistencePrincipal } : {});
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -431,7 +433,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async resume(req, res, executionId, body, ownerSessionContext = null) {
+    async resume(req, res, executionId, body, ownerSessionContext = null, persistencePrincipal = null) {
       let options = {};
 
       if (body) {
@@ -453,7 +455,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         await agentService.assertOwnerSessionContext(ownerSessionContext);
       }
       const result =
-        await agentService.resumeExecution(executionId, options || {}, ownerSessionContext);
+        await agentService.resumeExecution(executionId, options || {}, ownerSessionContext, persistencePrincipal);
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -464,7 +466,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async cancel(req, res, executionId, body) {
+    async cancel(req, res, executionId, body, persistencePrincipal = null) {
       let options = {};
       if (body) {
         try {
@@ -474,7 +476,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
         }
       }
 
-      const result = await agentService.cancelExecution(executionId, options || {});
+      const result = await agentService.cancelExecution(executionId, { ...(options || {}), ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'X-Content-Type-Options': 'nosniff',

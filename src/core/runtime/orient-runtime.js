@@ -162,6 +162,7 @@ class OrientRuntime {
       scheduler: this.workflowScheduler,
       workflowRepository: this.workflowRepository,
       persistence: this.persistence,
+      missionEventSink: this.infrastructureCoordinator.missionEventSink,
       tenantId: this.tenantId,
       userId: this.userId,
       workspaceId: this.workspaceId,
@@ -183,15 +184,15 @@ class OrientRuntime {
     this.agentExecutionCoordinator = new AgentExecutionCoordinator({
       agentOrchestrator: this.agentOrchestrator,
       agentLoop: this.agentLoop,
-      checkpoint: (context, mode, reason) => this.checkpoint(context, mode, reason),
+      checkpoint: (context, mode, reason, persistencePrincipal) => this.checkpoint(context, mode, reason, persistencePrincipal),
       validateReplannedPlan: (nextPlan, previousFingerprint) => this.validateReplannedPlan(nextPlan, previousFingerprint)
     });
 
     this.executionRecoveryCoordinator = new ExecutionRecoveryCoordinator({
       agentOrchestrator: this.agentOrchestrator,
-      persistExecution: (context, mode) => this.persistExecution(context, mode),
-      persistEvents: (context) => this.persistEvents(context),
-      checkpoint: (context, mode, reason) => this.checkpoint(context, mode, reason)
+      persistExecution: (context, mode, persistencePrincipal) => this.persistExecution(context, mode, persistencePrincipal),
+      persistEvents: (context, persistencePrincipal) => this.persistEvents(context, persistencePrincipal),
+      checkpoint: (context, mode, reason, persistencePrincipal) => this.checkpoint(context, mode, reason, persistencePrincipal)
     });
 
     this.requestExecutionCoordinator = new RequestExecutionCoordinator({
@@ -217,16 +218,16 @@ class OrientRuntime {
       version;
   }
 
-  persistEvents(context) {
-    return this.persistenceCoordinator.persistEvents(context);
+  persistEvents(context, persistencePrincipal = null) {
+    return this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
   }
 
-  async persistExecution(context, mode = 'update') {
-    return this.persistenceCoordinator.persistExecution(context, mode);
+  async persistExecution(context, mode = 'update', persistencePrincipal = null) {
+    return this.persistenceCoordinator.persistExecution(context, mode, persistencePrincipal);
   }
 
-  async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint') {
-    return this.persistenceCoordinator.checkpoint(context, mode, reason);
+  async checkpoint(context, mode = 'update', reason = 'runtime_checkpoint', persistencePrincipal = null) {
+    return this.persistenceCoordinator.checkpoint(context, mode, reason, persistencePrincipal);
   }
 
   planFingerprint(plan) {
@@ -253,25 +254,26 @@ class OrientRuntime {
     return this.requestExecutionCoordinator.execute(input, options);
   }
 
-  async isCurrentApprovalChallenge(executionId, approvalId) {
+  async isCurrentApprovalChallenge(executionId, approvalId, persistencePrincipal = null) {
     if (!executionId || !approvalId ||
         typeof this.workflowExecutionCoordinator?.findApprovalBlockedWorkflow !== 'function') return true;
-    const workflow = await this.workflowExecutionCoordinator.findApprovalBlockedWorkflow(executionId);
+    const workflow = await this.workflowExecutionCoordinator.findApprovalBlockedWorkflow(executionId, persistencePrincipal);
     if (!workflow) return true;
     return workflow.metadata?.approvalId === approvalId;
   }
 
-  async resume(executionId, options = {}, ownerSessionContext = null) {
+  async resume(executionId, options = {}, ownerSessionContext = null, persistencePrincipal = null) {
     try {
       const result = await this.requestExecutionCoordinator.resume(executionId, {
         ...options,
-        ownerSessionContext
+        ownerSessionContext,
+        persistencePrincipal
       });
-      await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result);
+      await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, result, persistencePrincipal);
       return result;
     } catch (error) {
       if (error?.code === 'APPROVAL_EXPIRED' && error.approvalId) {
-        if (!(await this.isCurrentApprovalChallenge(executionId, error.approvalId))) {
+        if (!(await this.isCurrentApprovalChallenge(executionId, error.approvalId, persistencePrincipal))) {
           throw error;
         }
         try {
@@ -283,14 +285,14 @@ class OrientRuntime {
           const requested = await this.persistence.executions.requestCancellation(
             executionId,
             'approval_expired',
-            { tenantId: this.tenantId }
+            { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) }
           );
           if (!requested) {
             throw Object.assign(new Error('Expired approval execution was not found'), {
               code: 'EXECUTION_NOT_FOUND'
             });
           }
-          await this.workflowExecutionCoordinator.expireApprovalWorkflow(executionId, error.approvalId);
+          await this.workflowExecutionCoordinator.expireApprovalWorkflow(executionId, error.approvalId, persistencePrincipal);
         } catch (reconciliationError) {
           throw Object.assign(new Error('Expired approval could not be reconciled safely'), {
             code: 'APPROVAL_EXPIRY_RECONCILIATION_FAILED',
@@ -301,12 +303,13 @@ class OrientRuntime {
       } else if (error?.code === 'APPROVAL_REQUIRED' && error.executionContext?.approvalId) {
         await this.workflowExecutionCoordinator.updateApprovalChallenge(
           executionId,
-          error.executionContext.approvalId
+          error.executionContext.approvalId,
+          persistencePrincipal
         );
       } else if (typeof this.persistence?.executions?.findById === 'function') {
-        const durable = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
+        const durable = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         if (durable && ['completed', 'failed', 'cancelled'].includes(String(durable.status || '').toLowerCase())) {
-          await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, { execution: durable });
+          await this.workflowExecutionCoordinator.reconcileApprovalResume(executionId, { execution: durable }, persistencePrincipal);
         }
       }
       throw error;
@@ -314,7 +317,7 @@ class OrientRuntime {
   }
 
 
-  async cancelExecution(executionId, { reason = 'Execution cancellation requested' } = {}) {
+  async cancelExecution(executionId, { reason = 'Execution cancellation requested', persistencePrincipal = null } = {}) {
     if (!this.persistence?.executions?.requestCancellation) {
       throw Object.assign(new Error('Durable execution cancellation storage is required'), {
         code: 'EXECUTION_CANCELLATION_STORAGE_REQUIRED'
@@ -327,7 +330,7 @@ class OrientRuntime {
     const requested = await this.persistence.executions.requestCancellation(
       executionId,
       reason,
-      { tenantId: this.tenantId }
+      { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) }
     );
 
     if (!requested) {
@@ -336,7 +339,7 @@ class OrientRuntime {
       });
     }
 
-    await this.workflowExecutionCoordinator.cancelApprovalWorkflow(executionId, reason);
+    await this.workflowExecutionCoordinator.cancelApprovalWorkflow(executionId, reason, persistencePrincipal);
 
     return {
       executionId: requested.executionId,
@@ -348,7 +351,7 @@ class OrientRuntime {
     };
   }
 
-  async getExecutionApprovals(executionId) {
+  async getExecutionApprovals(executionId, { persistencePrincipal = null } = {}) {
     if (!this.approvalService?.listForExecution) {
       throw Object.assign(new Error('Approval service is required for approval status'), {
         code: 'APPROVAL_SERVICE_REQUIRED'
@@ -363,7 +366,8 @@ class OrientRuntime {
 
     if (this.persistence?.executions?.findById) {
       const execution = await this.persistence.executions.findById(executionId, {
-        tenantId: this.tenantId
+        tenantId: this.tenantId,
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
       });
       if (!execution) {
         throw Object.assign(new Error(`Execution not found: ${executionId}`), {
@@ -374,11 +378,12 @@ class OrientRuntime {
 
     return this.approvalService.listForExecution({
       executionId,
-      tenantId: this.tenantId
+      tenantId: this.tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
   }
 
-  async listExecutionSummaries({ limit = 50, offset = 0 } = {}) {
+  async listExecutionSummaries({ limit = 50, offset = 0, persistencePrincipal = null } = {}) {
     if (!this.persistence?.executions?.findAll) {
       throw Object.assign(new Error('Durable execution storage is required for history'), {
         code: 'EXECUTION_STORAGE_REQUIRED'
@@ -392,12 +397,13 @@ class OrientRuntime {
       const result = await this.persistence.executions.findPage({
         tenantId: this.tenantId,
         limit: boundedLimit,
-        offset: boundedOffset
+        offset: boundedOffset,
+        ...(persistencePrincipal ? { persistencePrincipal } : {})
       });
       total = result.total;
       page = result.executions;
     } else {
-      const executions = await this.persistence.executions.findAll({ tenantId: this.tenantId });
+      const executions = await this.persistence.executions.findAll({ tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       const ordered = executions.sort((a, b) =>
         Date.parse(b.updatedAt || b.startedAt || 0) - Date.parse(a.updatedAt || a.startedAt || 0)
       );
@@ -428,10 +434,10 @@ class OrientRuntime {
       throw Object.assign(new Error('Durable approval service is required'), { code: 'APPROVAL_SERVICE_REQUIRED' });
     }
     try {
-      return await this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId });
+      return await this.approvalService.decide({ ...options, tenantId: options.tenantId || this.tenantId, ...(options.persistencePrincipal ? { persistencePrincipal: options.persistencePrincipal } : {}) });
     } catch (error) {
       if (error?.code === 'APPROVAL_EXPIRED' && options.executionId && options.approvalId) {
-        if (!(await this.isCurrentApprovalChallenge(options.executionId, options.approvalId))) {
+        if (!(await this.isCurrentApprovalChallenge(options.executionId, options.approvalId, options.persistencePrincipal || null))) {
           throw error;
         }
         try {
@@ -439,12 +445,13 @@ class OrientRuntime {
             await this.persistence.executions.requestCancellation(
               options.executionId,
               'approval_expired',
-              { tenantId: options.tenantId || this.tenantId }
+              { tenantId: options.tenantId || this.tenantId, ...(options.persistencePrincipal ? { persistencePrincipal: options.persistencePrincipal } : {}) }
             );
           }
           await this.workflowExecutionCoordinator.expireApprovalWorkflow(
             options.executionId,
-            options.approvalId
+            options.approvalId,
+            options.persistencePrincipal || null
           );
         } catch (reconciliationError) {
           throw Object.assign(new Error('Expired approval could not be reconciled safely'), {
@@ -458,17 +465,17 @@ class OrientRuntime {
     }
   }
 
-  async listPendingApprovals({ limit = 100 } = {}) {
+  async listPendingApprovals({ limit = 100, persistencePrincipal = null } = {}) {
     if (!this.approvalService?.listPending) {
       throw Object.assign(new Error('Approval service is required for the pending inbox'), {
         code: 'APPROVAL_SERVICE_REQUIRED'
       });
     }
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
-    return this.approvalService.listPending({ tenantId: this.tenantId, limit: boundedLimit });
+    return this.approvalService.listPending({ tenantId: this.tenantId, limit: boundedLimit, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
   }
 
-  async getExecutionEvents(executionId, { limit = 200 } = {}) {
+  async getExecutionEvents(executionId, { limit = 200, persistencePrincipal = null } = {}) {
     if (!this.persistence?.events?.findByExecutionId) {
       throw Object.assign(new Error('Durable execution event storage is required'), {
         code: 'EXECUTION_EVENT_STORAGE_REQUIRED'
@@ -480,7 +487,8 @@ class OrientRuntime {
       });
     }
     const execution = await this.persistence?.executions?.findById?.(executionId, {
-      tenantId: this.tenantId
+      tenantId: this.tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
     if (!execution) {
       throw Object.assign(new Error(`Execution not found: ${executionId}`), {
@@ -490,12 +498,13 @@ class OrientRuntime {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 200)) : 200;
     const events = await this.persistence.events.findByExecutionId(executionId, {
       tenantId: this.tenantId,
-      limit: boundedLimit
+      limit: boundedLimit,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
     return events.slice(-boundedLimit);
   }
 
-  async getExecutionStatus(executionId) {
+  async getExecutionStatus(executionId, { persistencePrincipal = null } = {}) {
     if (!this.persistence?.executions?.findById) {
       throw Object.assign(new Error('Durable execution storage is required for status'), {
         code: 'EXECUTION_STORAGE_REQUIRED'
@@ -509,7 +518,8 @@ class OrientRuntime {
     }
 
     const execution = await this.persistence.executions.findById(executionId, {
-      tenantId: this.tenantId
+      tenantId: this.tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
 
     if (!execution) {

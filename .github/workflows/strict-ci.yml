@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           check-latest: true
@@ -177,7 +177,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           check-latest: true
@@ -191,6 +191,7 @@ jobs:
         run: |
           node --test --test-timeout=120000 test/integration/postgres-persistence.integration.test.js
           node --test --test-timeout=120000 test/integration/postgres-task-idempotency.integration.test.js
+          ORIENT_RUN_ROLE_PROVISIONING_INTEGRATION=1 node --test --test-timeout=120000 test/integration/postgres-role-provisioning.integration.test.js
 
   full-repository-suite:
     name: Full Repository Test Suite (Node 24 + PostgreSQL)
@@ -214,7 +215,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           check-latest: true
@@ -285,12 +286,12 @@ jobs:
         shell: bash
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orient_test
-          ORIENT_OWNER_BOOTSTRAP_PASSWORD: "temporary-owner-password-9F!x"
           PORT: "8080"
           HOST: "127.0.0.1"
           ORIENT_PERSISTENCE: "json"
         run: |
           set -euo pipefail
+          export ORIENT_OWNER_BOOTSTRAP_PASSWORD="$(node -p 'require("node:crypto").randomInt(1000000000,9999999999).toString()')"
           data_dir="$(mktemp -d)"
           log_file="$(mktemp)"
           export ORIENT_DATA_DIR="$data_dir"
@@ -305,7 +306,7 @@ jobs:
 
           ready=0
           for attempt in $(seq 1 40); do
-            if curl --silent --fail http://127.0.0.1:8080/auth?mode=owner >/dev/null; then
+            if curl --silent --fail http://127.0.0.1:8080/auth >/dev/null; then
               ready=1
               break
             fi
@@ -333,13 +334,13 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "9.6.0"
 
@@ -348,7 +349,7 @@ jobs:
         run: gradle --no-daemon testDebugUnitTest assembleDebug
 
       - name: Publish debug APK for device smoke testing
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: orient-one-android-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk

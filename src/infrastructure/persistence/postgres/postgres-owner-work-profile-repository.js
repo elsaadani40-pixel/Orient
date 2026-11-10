@@ -4,17 +4,14 @@ const {
   normalizeProfile,
   DEFAULT_PROFILE
 } = require('../owner-work-profile-store');
+const { assertPersistencePrincipal } = require('../../../core/security/persistence-principal');
 
 class PostgresOwnerWorkProfileRepository {
-  constructor(db, { ownerId = 'owner' } = {}) {
-    if (!db || typeof db.query !== 'function' || typeof db.transaction !== 'function') {
-      throw new TypeError('PostgreSQL owner profile repository requires a database adapter');
-    }
-    if (typeof ownerId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(ownerId)) {
-      throw new TypeError('ownerId is invalid');
+  constructor(db) {
+    if (!db || typeof db.transactionWithPrincipal !== 'function') {
+      throw new TypeError('PostgreSQL owner profile repository requires principal-scoped transactions');
     }
     this.db = db;
-    this.ownerId = ownerId;
   }
 
   mapRow(row) {
@@ -26,34 +23,39 @@ class PostgresOwnerWorkProfileRepository {
     };
   }
 
-  async get() {
-    const result = await this.db.query(
-      'SELECT mode, working_preferences, updated_at FROM owner_work_profiles WHERE owner_id=$1',
-      [this.ownerId]
-    );
-    if (!result.rows.length) return { ...DEFAULT_PROFILE };
-    return this.mapRow(result.rows[0]);
+  async get(principal) {
+    const identity = assertPersistencePrincipal(principal);
+    return this.db.transactionWithPrincipal(principal, async client => {
+      const result = await client.query(
+        'SELECT mode, working_preferences, updated_at FROM owner_work_profiles WHERE tenant_id=$1 AND owner_id=$2',
+        [identity.tenantId, identity.ownerId]
+      );
+      if (!result.rows.length) return { ...DEFAULT_PROFILE };
+      return this.mapRow(result.rows[0]);
+    });
   }
 
-  async update(input) {
-    return this.db.transaction(async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['owner-profile:' + this.ownerId]);
+  async update(input, principal) {
+    const identity = assertPersistencePrincipal(principal);
+    return this.db.transactionWithPrincipal(principal, async client => {
+      const scopeKey = 'owner-profile:' + identity.tenantId + ':' + identity.ownerId;
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [scopeKey]);
       const result = await client.query(
-        'SELECT mode, working_preferences, updated_at FROM owner_work_profiles WHERE owner_id=$1 FOR UPDATE',
-        [this.ownerId]
+        'SELECT mode, working_preferences, updated_at FROM owner_work_profiles WHERE tenant_id=$1 AND owner_id=$2 FOR UPDATE',
+        [identity.tenantId, identity.ownerId]
       );
       const current = result.rows.length ? this.mapRow(result.rows[0]) : { ...DEFAULT_PROFILE };
       const normalized = normalizeProfile(input, current);
       const updatedAt = new Date().toISOString();
       const saved = await client.query(
-        `INSERT INTO owner_work_profiles(owner_id, mode, working_preferences, updated_at)
-         VALUES($1,$2,$3,$4)
-         ON CONFLICT(owner_id) DO UPDATE SET
+        `INSERT INTO owner_work_profiles(tenant_id, owner_id, mode, working_preferences, updated_at)
+         VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(tenant_id, owner_id) DO UPDATE SET
            mode=EXCLUDED.mode,
            working_preferences=EXCLUDED.working_preferences,
            updated_at=EXCLUDED.updated_at
          RETURNING mode, working_preferences, updated_at`,
-        [this.ownerId, normalized.mode, normalized.workingPreferences, updatedAt]
+        [identity.tenantId, identity.ownerId, normalized.mode, normalized.workingPreferences, updatedAt]
       );
       return this.mapRow(saved.rows[0]);
     });

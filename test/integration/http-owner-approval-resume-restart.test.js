@@ -85,6 +85,7 @@ function createRuntime(root, persistence, ownerAuth) {
     approvalService: approvals,
     persistence,
     tenantId: TENANT,
+    userId: 'owner',
     agentRegistry: registry,
     approvalDecisionAuthorizer: ({ actorId }) => ownerAuth?.isActiveSession(actorId) === true,
     ownerSessionAuthorizer: sessionId => ownerAuth?.isActiveSession(sessionId) === true  });
@@ -213,8 +214,9 @@ test('owner HTTP decision resumes the same high-risk mission after runtime resta
       },
       body: JSON.stringify({ approval: { approvalId: challenge.approvalId } })
     });
-    assert.equal(resume.status, 200);
-    const resumed = await resume.json();
+    const resumeBody = await resume.text();
+    assert.equal(resume.status, 200, resumeBody);
+    const resumed = JSON.parse(resumeBody);
     assert.equal(resumed.resumed, true);
     assert.equal(resumed.execution.status, 'completed');
     assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts.test, 'node --test');

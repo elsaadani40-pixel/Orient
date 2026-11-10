@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const { assertPersistencePrincipal } = require('./persistence-principal');
+const { assertWorkerPersistencePrincipal } = require('../../../core/security/worker-persistence-principal');
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
@@ -35,6 +37,7 @@ CREATE TABLE IF NOT EXISTS worker_nodes (
   status TEXT NOT NULL,
   capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  session_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (tenant_id, worker_id)
 );
 CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_heartbeat ON worker_nodes(tenant_id, heartbeat_at);
@@ -76,6 +79,7 @@ const MIGRATIONS = [
       tenant_id TEXT NOT NULL,
       workflow_id TEXT NOT NULL,
       worker_id TEXT NOT NULL,
+      worker_session_id TEXT NOT NULL DEFAULT '',
       claimed_at TIMESTAMPTZ NOT NULL,
       expires_at TIMESTAMPTZ NOT NULL,
       PRIMARY KEY (tenant_id, workflow_id)
@@ -123,6 +127,85 @@ const MIGRATIONS = [
     );
   `},
 
+
+  {version:9,sql:`
+    ALTER TABLE owner_chat_messages
+      ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE owner_work_profiles
+      ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'local';
+
+    -- Keep the legacy local default until authenticated HTTP principal propagation
+    -- is complete; all new tenant-aware callers must still pass tenant_id explicitly.
+
+    ALTER TABLE owner_chat_messages
+      DROP CONSTRAINT IF EXISTS owner_chat_messages_pkey;
+    ALTER TABLE owner_chat_messages
+      ADD CONSTRAINT owner_chat_messages_pkey
+      PRIMARY KEY (tenant_id, owner_id, message_id);
+
+    ALTER TABLE owner_work_profiles
+      DROP CONSTRAINT IF EXISTS owner_work_profiles_pkey;
+    ALTER TABLE owner_work_profiles
+      ADD CONSTRAINT owner_work_profiles_pkey
+      PRIMARY KEY (tenant_id, owner_id);
+
+    DROP INDEX IF EXISTS idx_owner_chat_messages_order;
+    DROP INDEX IF EXISTS idx_owner_chat_messages_task;
+    CREATE INDEX IF NOT EXISTS idx_owner_chat_messages_tenant_order
+      ON owner_chat_messages(tenant_id, owner_id, created_at, message_id);
+    CREATE INDEX IF NOT EXISTS idx_owner_chat_messages_tenant_task
+      ON owner_chat_messages(tenant_id, owner_id, task_id)
+      WHERE task_id IS NOT NULL;
+  `},
+
+  {version:10,sql:`
+    ALTER TABLE worker_nodes
+      ADD COLUMN IF NOT EXISTS session_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE workflow_dispatch_claims
+      ADD COLUMN IF NOT EXISTS worker_session_id TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS idx_worker_nodes_tenant_session
+      ON worker_nodes(tenant_id, worker_id, session_id);
+    CREATE INDEX IF NOT EXISTS idx_workflow_dispatch_claims_worker_session
+      ON workflow_dispatch_claims(tenant_id, worker_id, worker_session_id, expires_at);
+  `},
+
+  {version:11,sql:`
+    ALTER TABLE workflow_leases
+      ADD COLUMN IF NOT EXISTS worker_session_id TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS idx_workflow_leases_worker_session
+      ON workflow_leases(tenant_id, worker_id, worker_session_id, expires_at);
+  `},
+
+  {version:12,sql:`
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS aggregate_id TEXT;
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS sequence BIGINT;
+    UPDATE events
+      SET tenant_id = COALESCE(payload->'data'->>'tenantId', tenant_id, 'local'),
+          aggregate_id = COALESCE(payload->>'aggregateId', payload->>'workflowId')
+      WHERE aggregate_id IS NULL;
+    WITH ranked AS (
+      SELECT event_id, ROW_NUMBER() OVER (
+        PARTITION BY tenant_id, aggregate_id ORDER BY timestamp ASC, event_id ASC
+      ) AS next_sequence
+      FROM events WHERE aggregate_id IS NOT NULL
+    )
+    UPDATE events e SET sequence = ranked.next_sequence
+      FROM ranked WHERE ranked.event_id=e.event_id AND e.sequence IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_events_tenant_aggregate
+      ON events(tenant_id, aggregate_id, sequence);
+    CREATE INDEX IF NOT EXISTS idx_workflows_pending_publications
+      ON workflows(tenant_id, updated_at)
+      WHERE payload->'metadata'->>'approvalBlocked'='true'
+        AND CASE
+          WHEN jsonb_typeof(payload->'metadata'->'pendingPublications')='array'
+          THEN jsonb_array_length(payload->'metadata'->'pendingPublications')
+          ELSE 0
+        END > 0;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_tenant_aggregate_sequence
+      ON events(tenant_id, aggregate_id, sequence)
+      WHERE aggregate_id IS NOT NULL AND sequence IS NOT NULL;
+  `},
+
 ];
 class PostgresDatabase {
   constructor({pool,schema=null}={}) {
@@ -141,7 +224,7 @@ class PostgresDatabase {
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
-        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8)',[1,2,3,4,5,6,7,8]);
+        await client.query('INSERT INTO schema_migrations(version) VALUES($1),($2),($3),($4),($5),($6),($7),($8),($9),($10),($11),($12)',[1,2,3,4,5,6,7,8,9,10,11,12]);
       } else {
         for(const migration of MIGRATIONS.filter(m=>m.version>version)){
           await client.query(migration.sql);
@@ -153,6 +236,62 @@ class PostgresDatabase {
   }
   async query(text,values=[]){return this.pool.query(text,values);}
   async transaction(work){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await work(client);await client.query('COMMIT');return result;}catch(error){try{await client.query('ROLLBACK');}catch{}throw error;}finally{client.release();}}
+  async transactionWithPrincipal(principal, work) {
+    const identity = assertPersistencePrincipal(principal);
+    if (typeof work !== 'function') throw new TypeError('transaction work callback is required');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_tenant_id', $1, true), " +
+        "set_config('app.orient_owner_id', $2, true), " +
+        "set_config('app.orient_session_id', $3, true)",
+        [identity.tenantId, identity.ownerId, identity.sessionId]
+      );
+      const result = await work(client, identity);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async transactionWithWorkerPrincipal(principal, work, { requireLease = false } = {}) {
+    const identity = assertWorkerPersistencePrincipal(principal, { requireLease });
+    if (typeof work !== 'function') throw new TypeError('transaction work callback is required');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        "SELECT set_config('app.orient_tenant_id', $1, true), " +
+        "set_config('app.orient_worker_id', $2, true), " +
+        "set_config('app.orient_worker_session_id', $3, true), " +
+        "set_config('app.orient_worker_capabilities', $4, true), " +
+        "set_config('app.orient_workflow_id', $5, true), " +
+        "set_config('app.orient_workflow_lease_id', $6, true), " +
+        "set_config('app.orient_workflow_fencing_token', $7, true)",
+        [
+          identity.tenantId,
+          identity.workerId,
+          identity.sessionId,
+          JSON.stringify(identity.capabilities),
+          identity.workflowId || '',
+          identity.leaseId || '',
+          identity.fencingToken === undefined ? '' : String(identity.fencingToken)
+        ]
+      );
+      const result = await work(client, identity);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   static json(value){return value===undefined?null:value;}
   static uuid(){return crypto.randomUUID();}
 }

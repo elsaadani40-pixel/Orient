@@ -5,6 +5,8 @@ const WorkflowInstance = require('./workflow-instance');
 const EVENT_TYPES = Object.freeze({
   CREATED: 'workflow.created',
   STATE_CHANGED: 'workflow.state.changed',
+  APPROVAL_REQUIRED: 'workflow.approval.required',
+  SNAPSHOT_REPLACED: 'workflow.snapshot.replaced',
   STEP_RUNNING: 'workflow.step.running',
   STEP_COMPLETED: 'workflow.step.completed',
   STEP_FAILED: 'workflow.step.failed',
@@ -86,6 +88,8 @@ class MissionEventProjection {
           now: this.clock
         });
         if (event.data.createdAt) instance.createdAt = event.data.createdAt;
+        instance.deadlineAt = event.data.deadlineAt || null;
+        instance.metadata = structuredClone(event.data.metadata || {});
         instance.updatedAt = event.timestamp || instance.updatedAt;
       } else {
         this.apply(instance, event);
@@ -104,18 +108,64 @@ class MissionEventProjection {
       case EVENT_TYPES.STATE_CHANGED:
         if (!data.to) throw projectionError('State change target is required', 'MISSION_STATE_TARGET_REQUIRED');
         this._transition(instance, data.to);
+        if (Object.prototype.hasOwnProperty.call(data, 'deadlineAt')) instance.deadlineAt = data.deadlineAt || null;
+        if (data.to === 'CANCELLED') instance.cancelRequested = true;
+        if (data.metadata && typeof data.metadata === 'object') instance.metadata = { ...instance.metadata, ...data.metadata };
         break;
       case EVENT_TYPES.STEP_RUNNING:
         instance.markStepRunning(data.stepId, this.clock);
         break;
+      case EVENT_TYPES.APPROVAL_REQUIRED: {
+        if (!data.stepId || !instance.steps[data.stepId]) {
+          throw projectionError('Approval event step is required', 'MISSION_APPROVAL_STEP_REQUIRED');
+        }
+        if (instance.steps[data.stepId].state === 'RUNNING') {
+          instance.resetStepForRetry(data.stepId);
+        }
+        instance.metadata = {
+          ...instance.metadata,
+          approvalBlocked: true,
+          approvalExecutionId: data.executionId || null,
+          approvalId: data.approvalId || null,
+          approvalRequiredAt: data.approvalRequiredAt || event.timestamp || this.clock().toISOString()
+        };
+        this._transition(instance, 'WAITING');
+        break;
+      }
+      case EVENT_TYPES.SNAPSHOT_REPLACED: {
+        if (!data.snapshot || typeof data.snapshot !== 'object') {
+          throw projectionError('Replacement workflow snapshot is required', 'MISSION_SNAPSHOT_REQUIRED');
+        }
+        let replacement;
+        try {
+          replacement = WorkflowInstance.fromJSON(data.snapshot);
+        } catch (error) {
+          const wrapped = projectionError('Replacement workflow snapshot is corrupt', 'MISSION_SNAPSHOT_CORRUPT');
+          wrapped.cause = error;
+          throw wrapped;
+        }
+        if (replacement.metadata?.fencingToken !== undefined) {
+          replacement.metadata = { ...replacement.metadata };
+          delete replacement.metadata.fencingToken;
+        }
+        if (replacement.workflowId !== instance.workflowId ||
+            (replacement.tenantId || 'local') !== (instance.tenantId || 'local')) {
+          throw projectionError('Replacement workflow snapshot identity mismatch', 'MISSION_PROJECTION_IDENTITY_MISMATCH');
+        }
+        Object.assign(instance, replacement);
+        break;
+      }
       case EVENT_TYPES.STEP_COMPLETED:
         instance.markStepCompleted(data.stepId, data.result, this.clock);
+        if (data.executionId) instance.metadata = { ...instance.metadata, executionId: data.executionId };
         break;
       case EVENT_TYPES.STEP_FAILED:
         instance.markStepFailed(data.stepId, data.error || new Error('Workflow step failed'), this.clock);
+        instance.metadata = { ...instance.metadata, failedStepId: data.stepId };
         break;
       case EVENT_TYPES.STEP_RETRY:
         instance.resetStepForRetry(data.stepId);
+        if (data.retry && typeof data.retry === 'object') instance.retry = structuredClone(data.retry);
         break;
       case EVENT_TYPES.RECOVERED:
         instance.recoverFromLeaseLoss(data.reason || 'EVENT_REPLAY', this.clock);

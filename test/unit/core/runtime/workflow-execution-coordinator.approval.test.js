@@ -9,6 +9,8 @@ const path = require('node:path');
 const WorkflowDefinition = require('../../../../src/core/workflow/workflow-definition');
 const WorkflowInstance = require('../../../../src/core/workflow/workflow-instance');
 const WorkflowRepository = require('../../../../src/infrastructure/persistence/json/workflow.repository');
+const EventRepository = require('../../../../src/infrastructure/persistence/json/event.repository');
+const MissionEventRecovery = require('../../../../src/core/workflow/mission-event-recovery');
 const WorkflowExecutionCoordinator = require('../../../../src/core/runtime/workflow-execution-coordinator');
 const WorkflowScheduler = require('../../../../src/core/workflow/workflow-scheduler');
 
@@ -164,6 +166,7 @@ test('synchronous workflow coordinator durably pauses and indexes an approval ch
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-sync-workflow-approval-e2e-'));
   try {
     const repository = new WorkflowRepository(path.join(root, 'workflows.json'));
+    const events = new EventRepository(path.join(root, 'events.json'));
     const scheduler = new WorkflowScheduler({
       workflowRepository: repository,
       tenantId: 'tenant-a',
@@ -172,6 +175,7 @@ test('synchronous workflow coordinator durably pauses and indexes an approval ch
     const coordinator = new WorkflowExecutionCoordinator({
       scheduler,
       workflowRepository: repository,
+      persistence: { workflows: repository, events },
       tenantId: 'tenant-a',
       executeRequest: async () => {
         throw Object.assign(new Error('Human approval is required'), {
@@ -203,6 +207,15 @@ test('synchronous workflow coordinator durably pauses and indexes an approval ch
     assert.equal(persisted.state, 'WAITING');
     assert.equal(persisted.metadata.approvalBlocked, true);
     assert.equal(persisted.metadata.approvalId, 'approval-sync-coordinator');
+
+    const missionEvents = events.findByAggregateId(result.workflowId, { tenantId: 'tenant-a' });
+    assert.ok(missionEvents.some(event => event.type === 'workflow.step.running'));
+    assert.ok(missionEvents.some(event => event.type === 'workflow.approval.required'));
+    const recovery = new MissionEventRecovery({ eventRepository: events, workflowRepository: repository });
+    const recovered = await recovery.reconcile(result.workflowId, 'tenant-a');
+    assert.equal(recovered.workflow.state, 'WAITING');
+    assert.equal(recovered.workflow.metadata.approvalBlocked, true);
+    assert.equal(recovered.workflow.steps['agent-runtime'].state, WorkflowDefinition.STEP_STATES.PENDING);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -231,6 +244,42 @@ test('workflow cancellation distinguishes owner rejection from general cancellat
     const ownerRejected = (await repository.findAll({ tenantId: 'tenant-a' }))
       .find(record => record.workflowId === 'workflow-owner-rejected');
     assert.equal(ownerRejected.metadata.approvalDecisionStatus, 'rejected');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('approval resume appends a replayable snapshot event before durable state replacement', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-approval-event-recovery-'));
+  try {
+    const workflows = new WorkflowRepository(path.join(root, 'workflows.json'));
+    const events = new EventRepository(path.join(root, 'events.json'));
+    const coordinator = new WorkflowExecutionCoordinator({
+      scheduler: {},
+      workflowRepository: workflows,
+      persistence: { workflows, events },
+      tenantId: 'tenant-a',
+      executeRequest: async () => ({ ok: true })
+    });
+    const instance = await saveApprovalBlockedWorkflow(workflows, {
+      workflowId: 'workflow-approval-event',
+      executionId: 'execution-approval-event',
+      approvalId: 'approval-event'
+    });
+    await coordinator.missionEventSink.recordCreated(instance);
+    const result = await coordinator.reconcileApprovalResume('execution-approval-event', {
+      result: { approved: true },
+      execution: { executionId: 'execution-approval-event', status: 'completed' }
+    });
+    assert.equal(result.state, WorkflowInstance.STATES.COMPLETED);
+    const eventTypes = events.findByAggregateId(instance.workflowId, { tenantId: 'tenant-a' }).map(event => event.type);
+    assert.deepEqual(eventTypes, ['workflow.created', 'workflow.snapshot.replaced']);
+    const recovery = new MissionEventRecovery({ eventRepository: events, workflowRepository: workflows });
+    const recovered = await recovery.reconcile(instance.workflowId, 'tenant-a');
+    assert.equal(recovered.status, 'HEALTHY');
+    assert.equal(recovered.workflow.state, WorkflowInstance.STATES.COMPLETED);
+    assert.equal(recovered.workflow.metadata.approvalBlocked, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

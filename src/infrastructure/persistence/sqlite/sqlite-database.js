@@ -156,6 +156,39 @@ class SqliteDatabase {
       CREATE INDEX IF NOT EXISTS idx_approvals_expiry ON approvals(expires_at);
       INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'));
     `);
+    const eventColumns = new Set(this.query('PRAGMA table_info(events)').map(column => column.name));
+    if (!eventColumns.has('tenant_id')) this.exec("ALTER TABLE events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'local';");
+    if (!eventColumns.has('aggregate_id')) this.exec('ALTER TABLE events ADD COLUMN aggregate_id TEXT;');
+    if (!eventColumns.has('sequence')) this.exec('ALTER TABLE events ADD COLUMN sequence INTEGER;');
+    this.exec(`
+      UPDATE events
+      SET tenant_id = COALESCE(json_extract(payload, '$.data.tenantId'), 'local'),
+          aggregate_id = COALESCE(json_extract(payload, '$.aggregateId'), json_extract(payload, '$.workflowId'))
+      WHERE aggregate_id IS NULL OR tenant_id IS NULL;
+      WITH ranked AS (
+        SELECT event_id, ROW_NUMBER() OVER (
+          PARTITION BY tenant_id, aggregate_id ORDER BY timestamp ASC, event_id ASC
+        ) AS next_sequence
+        FROM events WHERE aggregate_id IS NOT NULL
+      )
+      UPDATE events SET sequence = (
+        SELECT next_sequence FROM ranked WHERE ranked.event_id = events.event_id
+      ) WHERE aggregate_id IS NOT NULL AND sequence IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_events_tenant_aggregate
+        ON events(tenant_id, aggregate_id, sequence);
+      CREATE INDEX IF NOT EXISTS idx_workflows_pending_publications
+        ON workflows(tenant_id, updated_at)
+        WHERE json_extract(payload, '$.metadata.approvalBlocked') = 1
+          AND CASE
+            WHEN json_type(payload, '$.metadata.pendingPublications') = 'array'
+            THEN json_array_length(payload, '$.metadata.pendingPublications')
+            ELSE 0
+          END > 0;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_events_tenant_aggregate_sequence
+        ON events(tenant_id, aggregate_id, sequence)
+        WHERE aggregate_id IS NOT NULL AND sequence IS NOT NULL;
+    `);
+    this.exec("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));");
   }
 
   close() {

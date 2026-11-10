@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { OwnerChatConversationStore } = require('../../src/infrastructure/persistence/owner-chat-conversation-store');
 const PostgresOwnerChatConversationRepository = require('../../src/infrastructure/persistence/postgres/postgres-owner-chat-conversation-repository');
+const { createPersistencePrincipal } = require('../../src/core/security/persistence-principal');
 
 async function withJsonStore(run) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'orient-owner-chat-'));
@@ -55,28 +56,33 @@ test('PostgreSQL repository skips a late assistant answer after history is clear
   const client = {
     async query(sql, values = []) {
       if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
-      if (sql.includes('DELETE FROM owner_chat_messages WHERE owner_id=$1')) {
+      if (sql.includes('DELETE FROM owner_chat_messages WHERE tenant_id=$1 AND owner_id=$2')) {
         state.messages = [];
         return { rows: [], rowCount: 1 };
       }
-      if (sql.includes("role='user' AND task_id=$2")) {
+      if (sql.includes("role='user' AND task_id=$3")) {
         return { rows: state.messages.filter(message =>
-          message.owner_id === values[0] && message.role === 'user' && message.task_id === values[1]
+          message.tenant_id === values[0] && message.owner_id === values[1] &&
+          message.role === 'user' && message.task_id === values[2]
         ).map(message => ({ message_id: message.message_id })), rowCount: 0 };
       }
       throw new Error('Unexpected SQL in test: ' + sql);
     }
   };
   const db = {
-    query: (...args) => client.query(...args),
-    transaction: async callback => callback(client)
+    transactionWithPrincipal: async (principal, callback) => callback(client, principal)
   };
-  const repository = new PostgresOwnerChatConversationRepository(db, { ownerId: 'owner' });
+  const repository = new PostgresOwnerChatConversationRepository(db);
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-owner-chat-clear-race',
+    ownerId: 'owner',
+    sessionId: 'session-owner-chat-clear-race'
+  });
 
-  await repository.clear();
+  await repository.clear(principal);
   const result = await repository.appendAssistantForTask({
     id: 'assistant-task-3', role: 'assistant', content: 'late answer', taskId: 'task-3'
-  });
+  }, principal);
 
   assert.equal(result.skipped, true);
   assert.equal(result.message, null);
