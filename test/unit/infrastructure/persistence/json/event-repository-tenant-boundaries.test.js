@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const EventRepository = require('../../../../src/infrastructure/persistence/json/event.repository');
+const EventRepository = require('../../../../../src/infrastructure/persistence/json/event.repository');
 
 function createRepository(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-tenant-boundary-'));
