@@ -1,6 +1,5 @@
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
+const { prepareStoragePath, initializeJsonFile, readJsonFile, writeAtomic, withDirectoryLock } = require('./json-file-boundary');
 
 class ExecutionRepository {
   constructor(filePath, { lockTimeoutMs = 30_000 } = {}) {
@@ -13,37 +12,29 @@ class ExecutionRepository {
 
     this.lockTimeoutMs = lockTimeoutMs;
     this.filePath = filePath;
-    this.lockPath = `${filePath}.lock`;
     this.ensureStorage();
   }
 
   ensureStorage() {
-    const directory = path.dirname(this.filePath);
-
-    fs.mkdirSync(directory, { recursive: true });
-
-    if (!fs.existsSync(this.filePath)) {
-      fs.writeFileSync(this.filePath, '[]\n', 'utf8');
-    }
+    const storage = prepareStoragePath(this.filePath);
+    this.filePath = storage.filePath;
+    this.directory = storage.directory;
+    this.lockPath = storage.lockPath;
+    initializeJsonFile(this.filePath, '[]\\n', this.directory, { allowUnsupported: true });
   }
 
   readRaw() {
     try {
-      const raw = fs.readFileSync(this.filePath, 'utf8');
-
-      if (!raw.trim()) {
-        return [];
-      }
-
-      const parsed = JSON.parse(raw);
-
-      if (!Array.isArray(parsed)) {
-        throw new Error('Storage root must be an array');
-      }
-
-      return parsed;
+      return readJsonFile(this.filePath, {
+        label: 'Execution',
+        rootType: 'array',
+        emptyValue: () => []
+      });
     } catch (error) {
-      throw new Error(`Execution storage read failed: ${error.message}`);
+      throw Object.assign(new Error(`Execution storage read failed: ${error.message}`), {
+        code: error.code || 'EXECUTION_STORAGE_READ_FAILED',
+        cause: error
+      });
     }
   }
 
@@ -94,145 +85,21 @@ class ExecutionRepository {
   }
 
   withLock(operation) {
-    const timeoutMs = this.lockTimeoutMs;
-    const deadline = Date.now() + timeoutMs;
-    const hostname = require('os').hostname();
-
-    while (true) {
-      const token = crypto.randomUUID();
-      try {
-        fs.mkdirSync(this.lockPath);
-        const owner = {
-          token,
-          pid: process.pid,
-          hostname,
-          acquiredAt: new Date().toISOString()
-        };
-
-        try {
-          fs.writeFileSync(
-            path.join(this.lockPath, 'owner.json'),
-            JSON.stringify(owner) + '\n',
-            { encoding: 'utf8', flag: 'wx', mode: 0o600 }
-          );
-        } catch (error) {
-          // We created this directory, and without owner metadata nobody can
-          // safely reclaim it. Remove our incomplete acquisition immediately.
-          try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {}
-          throw error;
-        }
-
-        try {
-          return operation();
-        } finally {
-          try {
-            const currentOwner = JSON.parse(
-              fs.readFileSync(path.join(this.lockPath, 'owner.json'), 'utf8')
-            );
-            if (currentOwner.token === token) {
-              fs.rmSync(this.lockPath, { recursive: true, force: true });
-            }
-          } catch (cleanupError) {
-            // Preserve locks when ownership cannot be verified.
-          }
-        }
-      } catch (error) {
-        // Only mkdir contention is handled as a lock conflict. Errors thrown
-        // by the protected operation must propagate, not masquerade as EEXIST.
-        if (error.code !== 'EEXIST') throw error;
-      }
-
-      let owner = null;
-      try {
-        owner = JSON.parse(
-          fs.readFileSync(path.join(this.lockPath, 'owner.json'), 'utf8')
-        );
-      } catch (ownerError) {
-        if (ownerError.code !== 'ENOENT' && !(ownerError instanceof SyntaxError)) {
-          throw ownerError;
-        }
-      }
-
-      let stale = false;
-      if (owner && owner.hostname === hostname && Number.isInteger(owner.pid) && owner.pid > 0) {
-        try {
-          process.kill(owner.pid, 0);
-        } catch (processError) {
-          stale = processError.code === 'ESRCH';
-          if (processError.code !== 'ESRCH' && processError.code !== 'EPERM') {
-            throw processError;
-          }
-        }
-      }
-
-      if (stale) {
-        const quarantinePath = this.lockPath + '.stale.' + crypto.randomUUID();
-        try {
-          fs.renameSync(this.lockPath, quarantinePath);
-          let movedOwner = null;
-          try {
-            movedOwner = JSON.parse(fs.readFileSync(path.join(quarantinePath, 'owner.json'), 'utf8'));
-          } catch {}
-          if (movedOwner && movedOwner.token === owner.token &&
-              movedOwner.pid === owner.pid && movedOwner.hostname === owner.hostname) {
-            fs.rmSync(quarantinePath, { recursive: true, force: true });
-          } else {
-            try { fs.renameSync(quarantinePath, this.lockPath); } catch {}
-          }
-          continue;
-        } catch (reclaimError) {
-          if (reclaimError.code !== 'ENOENT' && reclaimError.code !== 'EEXIST') {
-            throw reclaimError;
-          }
-        }
-      }
-
-      if (Date.now() >= deadline) {
-        const error = new Error('Execution storage lock acquisition timed out');
-        error.code = 'EXECUTION_STORAGE_LOCK_TIMEOUT';
-        throw error;
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-    }
+    return withDirectoryLock(
+      this.lockPath,
+      this.lockTimeoutMs,
+      'EXECUTION_STORAGE_LOCK_TIMEOUT',
+      operation
+    );
   }
 
   write(executions) {
-    const temporaryFile = `${this.filePath}.tmp.${process.pid}.${crypto.randomUUID()}`;
-
-    try {
-      const payload = JSON.stringify(executions, null, 2) + '\n';
-      const fd = fs.openSync(temporaryFile, 'w', 0o600);
-
-      try {
-        fs.writeFileSync(fd, payload, 'utf8');
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
-
-      fs.renameSync(temporaryFile, this.filePath);
-
-      try {
-        const directoryFd = fs.openSync(path.dirname(this.filePath), 'r');
-        try {
-          fs.fsyncSync(directoryFd);
-        } finally {
-          fs.closeSync(directoryFd);
-        }
-      } catch (error) {
-        if (!['EINVAL', 'ENOTSUP', 'EPERM'].includes(error.code)) {
-          throw error;
-        }
-      }
-    } catch (error) {
-      try {
-        if (fs.existsSync(temporaryFile)) {
-          fs.unlinkSync(temporaryFile);
-        }
-      } catch {}
-
-      throw new Error(`Execution storage write failed: ${error.message}`);
-    }
+    return writeAtomic(
+      this.filePath,
+      JSON.stringify(executions, null, 2) + '\\n',
+      this.directory,
+      { label: 'Execution', allowUnsupportedDirectoryFsync: true }
+    );
   }
 
   findAll({ tenantId = null } = {}) {
@@ -372,7 +239,8 @@ class ExecutionRepository {
         return false;
       }
 
-      if (tenantId && executions[index]?.metadata?.tenantId !== tenantId) return false;
+      const recordTenantId = executions[index]?.metadata?.tenantId || null;
+      if (tenantId && recordTenantId !== tenantId && !(tenantId === 'local' && recordTenantId === null)) return false;
 
       executions.splice(index, 1);
       this.write(executions);
