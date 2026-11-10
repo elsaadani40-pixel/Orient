@@ -50,6 +50,17 @@ Every request starts a bounded MCP child process, performs MCP initialization, v
 
 Upstream results are marked untrusted. They are observations, not instructions, permissions, or proof that a user task was completed.
 
+## Operational validation
+
+Before enabling the adapter, verify the upstream MCP process independently and confirm that the configured endpoint is the intended OpenMausBot host. Then:
+
+1. Keep `ORIENT_OPENMAUSBOT_ENABLED` unset and start ORIENT once; native startup must not spawn or require OpenMausBot.
+2. Configure the operator-owned command/arguments and, when paired, an explicit `OPENMAUSBOT_URL` or `OMB_PORT` with the token in the protected environment.
+3. Enable the adapter and call `openmausbot.health` from an authenticated owner session. Confirm the result is marked `untrusted: true` and that no message, task, or profile mutation is exposed.
+4. Stop or misconfigure the upstream process and repeat the call. The MCP operation must fail within its total deadline while native ORIENT tasks remain available.
+
+The adapter does not keep a persistent child process: each discovery call owns and terminates its bounded MCP process. A missing or incompatible upstream CLI is therefore an integration failure, not an ORIENT startup dependency.
+
 ## Explicitly not enabled
 
 This first slice does **not** send messages, create agents, edit profiles, switch models, read transcripts, interrupt jobs, access computers/VMs, run shell commands, or invoke connected apps. No upstream tool is automatically exposed merely because it appears in `tools/list`.
