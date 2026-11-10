@@ -3,6 +3,18 @@ const path = require('path');
 const crypto = require('crypto');
 const { isDeepStrictEqual } = require('node:util');
 
+const MAX_EVENT_FILE_BYTES = 64 * 1024 * 1024;
+
+function fail(message, code) { const error = new Error(message); error.code = code; throw error; }
+
+function readBoundedFile(fd, maxBytes) {
+  const buffer = Buffer.allocUnsafe(maxBytes + 1);
+  let total = 0;
+  while (total < buffer.length) { const count = fs.readSync(fd, buffer, total, buffer.length - total, null); if (count === 0) break; total += count; }
+  if (total > maxBytes) fail('Event storage exceeds its maximum permitted size', 'EVENT_STORAGE_TOO_LARGE');
+  return buffer.subarray(0, total).toString('utf8');
+}
+
 class EventRepository {
   constructor(filePath, { lockTimeoutMs = 30000 } = {}) {
     if (!filePath) {
@@ -13,144 +25,108 @@ class EventRepository {
     }
 
     this.lockTimeoutMs = lockTimeoutMs;
-    this.filePath = filePath;
-    this.lockPath = filePath + '.lock';
+    this.directory = path.resolve(path.dirname(filePath));
+    this.filePath = path.join(this.directory, path.basename(filePath));
+    this.lockPath = this.filePath + '.lock';
     this.ensureStorage();
   }
 
   ensureStorage() {
-    const directory = path.dirname(this.filePath);
-    fs.mkdirSync(directory, { recursive: true });
-
-    try {
-      fs.writeFileSync(this.filePath, '[]\n', { encoding: 'utf8', flag: 'wx' });
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+    if (typeof fs.constants.O_NOFOLLOW !== 'number') fail('Safe JSON event storage is unsupported on this platform', 'EVENT_STORAGE_UNSAFE_FILESYSTEM');
+    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    const directoryStats = fs.lstatSync(this.directory, { bigint: true });
+    const parentDirectory = path.dirname(this.directory);
+    const parentStats = fs.lstatSync(parentDirectory, { bigint: true });
+    if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink() ||
+        !parentStats.isDirectory() || parentStats.isSymbolicLink() ||
+        fs.realpathSync(this.directory) !== this.directory ||
+        fs.realpathSync(parentDirectory) !== parentDirectory) {
+      fail('JSON event storage directory must be a real canonical directory', 'EVENT_STORAGE_DIRECTORY_INVALID');
     }
+    if (process.platform !== 'win32' && typeof process.getuid === 'function') {
+      if (directoryStats.uid !== BigInt(process.getuid())) fail('JSON event storage directory must be owned by the application user', 'EVENT_STORAGE_DIRECTORY_OWNER_INVALID');
+      if ((directoryStats.mode & 0o077n) !== 0n) fail('JSON event storage directory must be private (mode 0700)', 'EVENT_STORAGE_DIRECTORY_PERMISSIONS_INVALID');
+      const parentMode = parentStats.mode & 0o7777n;
+      if ((parentMode & 0o022n) !== 0n && (parentMode & 0o1000n) === 0n) fail('JSON event storage parent is writable by other users without sticky-bit protection', 'EVENT_STORAGE_PARENT_UNTRUSTED');
+    }
+    try {
+      const fd = fs.openSync(this.filePath, 'wx', 0o600);
+      try { fs.writeFileSync(fd, '[]\n', 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    } catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
 
   read() {
+    let descriptor;
     try {
-      const raw = fs.readFileSync(this.filePath, 'utf8');
-
-      if (!raw.trim()) {
-        return [];
-      }
-
+      descriptor = fs.openSync(this.filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stats = fs.fstatSync(descriptor);
+      if (!stats.isFile()) fail('Event storage must be a regular file', 'EVENT_STORAGE_CORRUPT');
+      if (stats.size > MAX_EVENT_FILE_BYTES) fail('Event storage exceeds its maximum permitted size', 'EVENT_STORAGE_TOO_LARGE');
+      const raw = readBoundedFile(descriptor, MAX_EVENT_FILE_BYTES);
+      if (!raw.trim()) return [];
       const parsed = JSON.parse(raw);
-
-      if (!Array.isArray(parsed)) {
-        throw new Error('Storage root must be an array');
-      }
-
+      if (!Array.isArray(parsed)) fail('Event storage root must be an array', 'EVENT_STORAGE_CORRUPT');
       return parsed;
     } catch (error) {
-      throw new Error(`Event storage read failed: ${error.message}`);
-    }
+      if (error.code === 'ELOOP') fail('Event storage must not be a symbolic link', 'EVENT_STORAGE_CORRUPT');
+      if (['EVENT_STORAGE_CORRUPT','EVENT_STORAGE_TOO_LARGE','EVENT_STORAGE_UNSAFE_FILESYSTEM'].includes(error.code)) throw error;
+      if (error instanceof SyntaxError) { const invalid = new Error('Event storage contains invalid JSON'); invalid.code = 'EVENT_STORAGE_CORRUPT'; invalid.cause = error; throw invalid; }
+      throw error;
+    } finally { if (descriptor !== undefined) { try { fs.closeSync(descriptor); } catch {} } }
   }
 
   write(events) {
-    const temporaryFile = `${this.filePath}.tmp`;
-
+    const temporaryFile = this.filePath + '.tmp.' + crypto.randomUUID();
+    let descriptor;
+    let created = false;
     try {
-      fs.writeFileSync(
-        temporaryFile,
-        JSON.stringify(events, null, 2) + '\n',
-        'utf8'
-      );
-
+      descriptor = fs.openSync(temporaryFile, 'wx', 0o600);
+      created = true;
+      fs.writeFileSync(descriptor, JSON.stringify(events, null, 2) + '\n', 'utf8');
+      fs.fsyncSync(descriptor);
+      fs.closeSync(descriptor);
+      descriptor = undefined;
       fs.renameSync(temporaryFile, this.filePath);
     } catch (error) {
-      try {
-        if (fs.existsSync(temporaryFile)) {
-          fs.unlinkSync(temporaryFile);
-        }
-      } catch {}
-
-      throw new Error(`Event storage write failed: ${error.message}`);
+      if (descriptor !== undefined) { try { fs.closeSync(descriptor); } catch {} }
+      if (created) { try { fs.unlinkSync(temporaryFile); } catch {} }
+      throw error;
     }
   }
 
   withLock(operation) {
-    const timeoutMs = this.lockTimeoutMs;
-    const deadline = Date.now() + timeoutMs;
-    const hostname = require('os').hostname();
-
+    const deadline = Date.now() + this.lockTimeoutMs;
     while (true) {
       const token = crypto.randomUUID();
-      let acquiredDirectory = false;
       try {
-        fs.mkdirSync(this.lockPath);
-        acquiredDirectory = true;
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-      }
-
-      if (acquiredDirectory) {
-        const ownerPath = path.join(this.lockPath, 'owner.json');
-        const owner = { token, pid: process.pid, hostname, acquiredAt: new Date().toISOString() };
+        fs.mkdirSync(this.lockPath, { mode: 0o700 });
+        const ownerPath = path.join(this.lockPath, 'owner.' + token + '.json');
+        let ownerFd;
         try {
-          fs.writeFileSync(ownerPath, JSON.stringify(owner) + '\n', {
-            encoding: 'utf8', flag: 'wx', mode: 0o600
-          });
+          ownerFd = fs.openSync(ownerPath, 'wx', 0o600);
+          fs.writeFileSync(ownerFd, JSON.stringify({ token, pid: process.pid, acquiredAt: new Date().toISOString() }) + '\n', 'utf8');
+          fs.fsyncSync(ownerFd);
         } catch (error) {
-          try { fs.rmSync(this.lockPath, { recursive: true, force: true }); } catch {}
+          if (ownerFd !== undefined) { try { fs.closeSync(ownerFd); } catch {} }
+          // An incomplete lock is retained; never recursively remove by pathname.
           throw error;
         }
-
+        fs.closeSync(ownerFd);
         try {
           return operation();
         } finally {
-          try {
-            const currentOwner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
-            if (currentOwner.token === token) {
-              fs.rmSync(this.lockPath, { recursive: true, force: true });
-            }
-          } catch {}
+          fs.unlinkSync(ownerPath);
+          fs.rmdirSync(this.lockPath);
         }
-      }
-
-      let owner = null;
-      try {
-        owner = JSON.parse(fs.readFileSync(path.join(this.lockPath, 'owner.json'), 'utf8'));
-      } catch (ownerError) {
-        if (ownerError.code !== 'ENOENT' && !(ownerError instanceof SyntaxError)) throw ownerError;
-      }
-
-      let stale = false;
-      if (owner && owner.hostname === hostname && Number.isInteger(owner.pid) && owner.pid > 0) {
-        try {
-          process.kill(owner.pid, 0);
-        } catch (processError) {
-          stale = processError.code === 'ESRCH';
-          if (processError.code !== 'ESRCH' && processError.code !== 'EPERM') throw processError;
+      } catch (error) {
+        if (error.code !== 'EEXIST' && error.code !== 'ENOTEMPTY') throw error;
+        if (Date.now() >= deadline) {
+          const lockError = new Error('Event storage lock timeout; existing lock was left untouched');
+          lockError.code = 'EVENT_STORAGE_LOCK_TIMEOUT';
+          throw lockError;
         }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
-
-      if (stale) {
-        const quarantinePath = this.lockPath + '.stale.' + crypto.randomUUID();
-        try {
-          fs.renameSync(this.lockPath, quarantinePath);
-          let movedOwner = null;
-          try { movedOwner = JSON.parse(fs.readFileSync(path.join(quarantinePath, 'owner.json'), 'utf8')); } catch {}
-          if (movedOwner && movedOwner.token === owner.token &&
-              movedOwner.pid === owner.pid && movedOwner.hostname === owner.hostname) {
-            fs.rmSync(quarantinePath, { recursive: true, force: true });
-          } else {
-            try { fs.renameSync(quarantinePath, this.lockPath); } catch {}
-          }
-          continue;
-        } catch (reclaimError) {
-          if (reclaimError.code !== 'ENOENT' && reclaimError.code !== 'EEXIST') throw reclaimError;
-        }
-      }
-
-      if (Date.now() >= deadline) {
-        const lockError = new Error('Event storage lock timeout');
-        lockError.code = 'EVENT_STORAGE_LOCK_TIMEOUT';
-        throw lockError;
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
   }
 
