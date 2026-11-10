@@ -4,7 +4,7 @@
 
 The JSON EventRepository is a local-development and single-host persistence adapter. It is not the production multi-instance persistence backend and must not be placed on a network/shared filesystem. Production deployments requiring concurrent instances must use the PostgreSQL persistence adapter.
 
-The event data directory must be a real canonical directory owned by the ORIENT service user with POSIX mode `0700`. Its parent must not be group/world writable unless the sticky bit protects directory entries (for example, a private child under `/tmp`). The adapter fails closed when these assumptions cannot be established.
+The adapter resolves the data-directory path once before deriving event and lock paths (including platform aliases such as Android `/data/data`). The resulting directory must be a real canonical directory owned by the ORIENT service user with POSIX mode `0700`. Its parent must not be group/world writable unless the sticky bit protects directory entries (for example, a private child under `/tmp`). The adapter fails closed when these assumptions cannot be established.
 
 Safe event-file reads require Node.js `O_NOFOLLOW`, a regular-file descriptor, and a bounded read (64 MiB). Standard Windows Node.js builds without `O_NOFOLLOW` are unsupported by this JSON adapter until a reparse-point-safe implementation is provided. Do not replace this with an `lstat`-then-open fallback.
 
