@@ -12,6 +12,7 @@ on:
       - "test/unit/infrastructure/event-repository-hardening.test.js"
       - "test/unit/infrastructure/mission-event-repository.test.js"
       - "test/unit/infrastructure/persistence/json/event-repository.security.test.js"
+      - "test/unit/infrastructure/persistence/json/event-repository-tenant-boundaries.test.js"
 
 permissions:
   contents: read
