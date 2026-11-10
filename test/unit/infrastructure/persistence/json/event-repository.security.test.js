@@ -129,3 +129,33 @@ test('event repository rejects a symlinked data directory', t => {
     error => error.code === 'EVENT_STORAGE_DIRECTORY_INVALID'
   );
 });
+
+
+test('an existing service-owned storage directory is tightened to mode 0700', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX directory permission checks are not available');
+    return;
+  }
+  const f = fixture(t);
+  const storageDirectory = path.join(f.root, 'permissive-storage');
+  fs.mkdirSync(storageDirectory, { mode: 0o755 });
+  fs.chmodSync(storageDirectory, 0o755);
+
+  new EventRepository(path.join(storageDirectory, 'events.json'));
+
+  assert.equal(fs.statSync(storageDirectory).mode & 0o777, 0o700);
+});
+
+test('storage refuses a parent directory writable by other users without sticky-bit protection', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX parent permission checks are not available');
+    return;
+  }
+  const f = fixture(t);
+  fs.chmodSync(f.root, 0o777);
+
+  assert.throws(
+    () => new EventRepository(path.join(f.root, 'events', 'events.json')),
+    error => error.code === 'EVENT_STORAGE_PARENT_UNTRUSTED'
+  );
+});
