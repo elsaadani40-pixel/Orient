@@ -15,23 +15,14 @@ function createRepository(t) {
 
 test('unscoped local aggregate events do not advance a tenant aggregate sequence', t => {
   const repository = createRepository(t);
-
   repository.appendMissionEvent({
-    id: 'local-unscoped-event',
-    aggregateId: 'shared-aggregate-id',
-    sequence: 1,
-    type: 'mission.local',
-    data: {}
+    id: 'local-unscoped-event', aggregateId: 'shared-aggregate-id', sequence: 1,
+    type: 'mission.local', data: {}
   });
-
   const tenantEvent = repository.appendMissionEvent({
-    id: 'tenant-a-event',
-    aggregateId: 'shared-aggregate-id',
-    sequence: 1,
-    type: 'mission.tenant',
-    data: { tenantId: 'tenant-a' }
+    id: 'tenant-a-event', aggregateId: 'shared-aggregate-id', sequence: 1,
+    type: 'mission.tenant', data: { tenantId: 'tenant-a' }
   }, { tenantId: 'tenant-a' });
-
   assert.equal(tenantEvent.sequence, 1);
   assert.deepEqual(
     repository.findByAggregateId('shared-aggregate-id', { tenantId: 'tenant-a' }).map(event => event.id),
@@ -41,26 +32,42 @@ test('unscoped local aggregate events do not advance a tenant aggregate sequence
 
 test('tenant-owned aggregate events do not advance the local aggregate sequence', t => {
   const repository = createRepository(t);
-
   repository.appendMissionEvent({
-    id: 'tenant-a-event',
-    aggregateId: 'shared-aggregate-id',
-    sequence: 1,
-    type: 'mission.tenant',
-    data: { tenantId: 'tenant-a' }
+    id: 'tenant-a-event', aggregateId: 'shared-aggregate-id', sequence: 1,
+    type: 'mission.tenant', data: { tenantId: 'tenant-a' }
   }, { tenantId: 'tenant-a' });
-
   const localEvent = repository.appendMissionEvent({
-    id: 'local-event',
-    aggregateId: 'shared-aggregate-id',
-    sequence: 1,
-    type: 'mission.local',
-    data: { tenantId: 'local' }
+    id: 'local-event', aggregateId: 'shared-aggregate-id', sequence: 1,
+    type: 'mission.local', data: { tenantId: 'local' }
   }, { tenantId: 'local' });
-
   assert.equal(localEvent.sequence, 1);
   assert.deepEqual(
     repository.findByAggregateId('shared-aggregate-id', { tenantId: 'local' }).map(event => event.id),
     ['local-event']
   );
+});
+
+test('an event id owned by another tenant cannot be replayed or overwritten', t => {
+  const repository = createRepository(t);
+  const original = repository.appendMissionEvent({
+    id: 'cross-tenant-stable-id',
+    aggregateId: 'tenant-a-aggregate',
+    sequence: 1,
+    type: 'mission.created',
+    data: { tenantId: 'tenant-a', state: 'original' }
+  }, { tenantId: 'tenant-a' });
+
+  assert.throws(
+    () => repository.appendMissionEvent({
+      id: 'cross-tenant-stable-id',
+      aggregateId: 'tenant-b-aggregate',
+      sequence: 1,
+      type: 'mission.created',
+      data: { tenantId: 'tenant-b', state: 'attacker-replay' }
+    }, { tenantId: 'tenant-b' }),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+
+  assert.deepEqual(repository.findByAggregateId('tenant-a-aggregate', { tenantId: 'tenant-a' }), [original]);
+  assert.deepEqual(repository.findByAggregateId('tenant-b-aggregate', { tenantId: 'tenant-b' }), []);
 });
