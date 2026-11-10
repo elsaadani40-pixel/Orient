@@ -951,6 +951,7 @@ test('Runtime admission evidence overrides a frozen downstream rejection marker 
   }));
   let insertCalls = 0;
   const coordinator = createAdmissionCoordinator({
+    agentOrchestrator: { plan: async () => plannedResult('test') },
     agentExecutionCoordinator: { run: async () => { throw downstreamError; } },
     persistenceCoordinator: {
       persistExecution: async (_context, operation) => { if (operation === 'insert') insertCalls += 1; },
