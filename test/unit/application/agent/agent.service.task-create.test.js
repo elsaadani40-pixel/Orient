@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { performance } = require('node:perf_hooks');
 const AgentService = require('../../../../src/application/agent/agent.service');
 
 function storePersistedExecution(persistedExecutions, executionId, tenantId = 'tenant-test') {
@@ -422,4 +423,92 @@ test('approval-required task stays recoverable until its durable execution row i
       });
     }
   });
+});
+
+test('task idempotency stays single-execution under a 250-request concurrent burst', async () => {
+  let releaseExecution;
+  let markAdmitted;
+  const executionGate = new Promise(resolve => { releaseExecution = resolve; });
+  const admitted = new Promise(resolve => { markAdmitted = resolve; });
+  const fixture = createRuntime({
+    execute: async (_goal, options, persistedExecutions) => {
+      storePersistedExecution(persistedExecutions, options.executionId);
+      markAdmitted();
+      await executionGate;
+      return { execution: { executionId: options.executionId } };
+    }
+  });
+  const request = {
+    goal: 'verify burst idempotency under concurrent task admission',
+    idempotencyKey: 'request-key-load-burst-0001'
+  };
+
+  const firstPromise = fixture.service.createTask(request);
+  await admitted;
+
+  const measureBurst = async operation => {
+    const durations = [];
+    const startedAt = performance.now();
+    const results = await Promise.allSettled(Array.from({ length: 250 }, async () => {
+      const requestStartedAt = performance.now();
+      try {
+        return await operation();
+      } finally {
+        durations.push(performance.now() - requestStartedAt);
+      }
+    }));
+    const elapsedMs = performance.now() - startedAt;
+    const sorted = durations.sort((left, right) => left - right);
+    const percentile = fraction => sorted[Math.min(
+      sorted.length - 1,
+      Math.ceil(sorted.length * fraction) - 1
+    )] || 0;
+    return {
+      results,
+      elapsedMs,
+      p50Ms: percentile(0.50),
+      p95Ms: percentile(0.95)
+    };
+  };
+
+  let inFlightBurst;
+  try {
+    inFlightBurst = await measureBurst(() => fixture.service.createTask(request));
+  } finally {
+    releaseExecution();
+  }
+
+  const first = await firstPromise;
+  const replayBurst = await measureBurst(() => fixture.service.createTask(request));
+
+  assert.equal(fixture.executions, 1);
+  assert.equal(inFlightBurst.results.length, 250);
+  assert.ok(inFlightBurst.results.every(result =>
+    result.status === 'rejected' &&
+    result.reason.code === 'TASK_EXECUTION_IN_PROGRESS'
+  ));
+  assert.equal(replayBurst.results.length, 250);
+  assert.ok(replayBurst.results.every(result =>
+    result.status === 'fulfilled' &&
+    result.value.replayed === true &&
+    result.value.task.id === first.task.id
+  ));
+  assert.ok(inFlightBurst.p95Ms < 5000, 'in-flight duplicate burst p95 must stay below 5 seconds');
+  assert.ok(replayBurst.p95Ms < 5000, 'completed replay burst p95 must stay below 5 seconds');
+
+  console.log(JSON.stringify({
+    metric: 'task-idempotency-burst',
+    concurrentRequests: 250,
+    runtimeExecutions: fixture.executions,
+    inFlight: {
+      elapsedMs: Number(inFlightBurst.elapsedMs.toFixed(2)),
+      p50Ms: Number(inFlightBurst.p50Ms.toFixed(2)),
+      p95Ms: Number(inFlightBurst.p95Ms.toFixed(2))
+    },
+    completedReplay: {
+      elapsedMs: Number(replayBurst.elapsedMs.toFixed(2)),
+      p50Ms: Number(replayBurst.p50Ms.toFixed(2)),
+      p95Ms: Number(replayBurst.p95Ms.toFixed(2))
+    }
+  }));
 });
