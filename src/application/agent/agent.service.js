@@ -6,18 +6,17 @@ function isApprovalPendingExecution(execution) {
   const hasPendingSteps = pendingSteps && typeof pendingSteps === 'object' &&
     !Array.isArray(pendingSteps) && Object.keys(pendingSteps).length > 0;
   const hasApprovalChallenge = Array.isArray(execution?.events) &&
-    execution.events.some(event => event?.type === 'approval.challenge.requested');
+    execution.events.some(event => event?.type === 'approval.challenge.persisted');
   return execution?.status === 'running' && hasPendingSteps && hasApprovalChallenge;
 }
 
-function isTaskCreationSettled(execution) {
+function isTaskCreationSettled(execution, approvalPending = false) {
   return ['completed', 'failed', 'cancelled', 'awaiting_approval'].includes(execution?.status) ||
-    isApprovalPendingExecution(execution);
+    approvalPending;
 }
 
-function taskSummary(execution) {
-  const awaitingApproval = execution.status === 'awaiting_approval' ||
-    isApprovalPendingExecution(execution);
+function taskSummary(execution, approvalPending = false) {
+  const awaitingApproval = execution.status === 'awaiting_approval' || approvalPending;
   return {
     id: execution.executionId,
     status: awaitingApproval ? 'awaiting_approval' : execution.status,
@@ -44,7 +43,7 @@ function assertTaskExecutionIdentity(execution, executionId, tenantId) {
   }
 }
 
-async function completeTaskFromExecution(service, repository, key, executionId, tenantId, persistencePrincipal, replayed) {
+async function completeTaskFromExecution(service, repository, key, executionId, tenantId, persistencePrincipal, replayed, approvalPending = false) {
   const execution = await service.getExecutionStatus(executionId, { persistencePrincipal });
   if (!execution || execution.executionId !== executionId) {
     throw new AppError(
@@ -53,14 +52,14 @@ async function completeTaskFromExecution(service, repository, key, executionId, 
       'TASK_EXECUTION_ID_MISMATCH'
     );
   }
-  if (!isTaskCreationSettled(execution)) {
+  if (!isTaskCreationSettled(execution, approvalPending)) {
     throw new AppError(
       'The reserved task is still executing; its idempotency record remains recoverable',
       409,
       'TASK_EXECUTION_IN_PROGRESS'
     );
   }
-  const task = taskSummary(execution);
+  const task = taskSummary(execution, approvalPending);
   await repository.complete(key, task, {
     tenantId,
     ...(persistencePrincipal ? { persistencePrincipal } : {})
@@ -163,8 +162,9 @@ class AgentService {
         });
         if (persistedExecution) {
           assertTaskExecutionIdentity(persistedExecution, reservedExecutionId, tenantId);
+          const approvalPending = isApprovalPendingExecution(persistedExecution);
           return completeTaskFromExecution(
-            this, repository, begun.key, reservedExecutionId, tenantId, persistencePrincipal, true
+            this, repository, begun.key, reservedExecutionId, tenantId, persistencePrincipal, true, approvalPending
           );
         }
       }
@@ -185,6 +185,7 @@ class AgentService {
     }
 
     let result;
+    let approvalPending = false;
     try {
       result = await this.execute(clean, {
         ownerSessionContext,
@@ -204,6 +205,7 @@ class AgentService {
           );
         }
         result = { execution: { executionId: approvalExecutionId }, awaitingApproval: true };
+        approvalPending = true;
       } else {
         if (error?.executionAdmission === 'rejected') {
           await failPreAdmissionReservation(repository, begun.key, error, tenantId, persistencePrincipal);
@@ -249,10 +251,11 @@ class AgentService {
         );
       }
       assertTaskExecutionIdentity(persistedExecution, executionId, tenantId);
+      approvalPending = approvalPending && isApprovalPendingExecution(persistedExecution);
     }
 
     return completeTaskFromExecution(
-      this, repository, begun.key, executionId, tenantId, persistencePrincipal, false
+      this, repository, begun.key, executionId, tenantId, persistencePrincipal, false, approvalPending
     );
   }
 
