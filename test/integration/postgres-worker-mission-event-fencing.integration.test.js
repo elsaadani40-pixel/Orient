@@ -225,7 +225,7 @@ test('PostgreSQL rejects a workflow write when its lease expires while the write
       "UPDATE workflow_leases SET expires_at=clock_timestamp()+INTERVAL '500 milliseconds' WHERE workflow_id=$1 AND tenant_id=$2",
       [workflowId, tenantId]
     );
-    await blocker.query('SELECT pg_sleep(0.8)');
+    await blocker.query('SELECT pg_sleep(2.3)');
     await blocker.query('COMMIT');
     blockerInTransaction = false;
 
@@ -289,7 +289,7 @@ test('PostgreSQL rejects a workflow write when the worker session expires while 
     });
 
     await pool.query(
-      "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '500 milliseconds' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
+      "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '2 seconds' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
       [tenantId, worker.workerId, worker.sessionId]
     );
 
