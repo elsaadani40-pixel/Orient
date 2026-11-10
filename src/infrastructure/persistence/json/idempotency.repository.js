@@ -17,7 +17,7 @@ class IdempotencyRepository {
     this.filePath = storage.filePath;
     this.directory = storage.directory;
     this.lockPath = storage.lockPath;
-    initializeJsonFile(this.filePath, '{}\\n', this.directory);
+    initializeJsonFile(this.filePath, '{}\n', this.directory);
   }
 
   read() {
@@ -39,7 +39,7 @@ class IdempotencyRepository {
   write(records) {
     return writeAtomic(
       this.filePath,
-      JSON.stringify(records, null, 2) + '\\n',
+      JSON.stringify(records, null, 2) + '\n',
       this.directory,
       { label: 'Idempotency' }
     );
