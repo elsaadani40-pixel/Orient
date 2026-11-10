@@ -100,24 +100,6 @@ class EventRepository {
       const token = crypto.randomUUID();
       try {
         fs.mkdirSync(this.lockPath, { mode: 0o700 });
-        const ownerPath = path.join(this.lockPath, 'owner.' + token + '.json');
-        let ownerFd;
-        try {
-          ownerFd = fs.openSync(ownerPath, 'wx', 0o600);
-          fs.writeFileSync(ownerFd, JSON.stringify({ token, pid: process.pid, acquiredAt: new Date().toISOString() }) + '\n', 'utf8');
-          fs.fsyncSync(ownerFd);
-        } catch (error) {
-          if (ownerFd !== undefined) { try { fs.closeSync(ownerFd); } catch {} }
-          // An incomplete lock is retained; never recursively remove by pathname.
-          throw error;
-        }
-        fs.closeSync(ownerFd);
-        try {
-          return operation();
-        } finally {
-          fs.unlinkSync(ownerPath);
-          fs.rmdirSync(this.lockPath);
-        }
       } catch (error) {
         if (error.code !== 'EEXIST' && error.code !== 'ENOTEMPTY') throw error;
         if (Date.now() >= deadline) {
@@ -126,10 +108,32 @@ class EventRepository {
           throw lockError;
         }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        continue;
+      }
+
+      const ownerPath = path.join(this.lockPath, 'owner.' + token + '.json');
+      let ownerFd;
+      try {
+        ownerFd = fs.openSync(ownerPath, 'wx', 0o600);
+        fs.writeFileSync(ownerFd, JSON.stringify({ token, pid: process.pid, acquiredAt: new Date().toISOString() }) + '\n', 'utf8');
+        fs.fsyncSync(ownerFd);
+      } catch (error) {
+        if (ownerFd !== undefined) { try { fs.closeSync(ownerFd); } catch {} }
+        // An incomplete lock is retained; never recursively remove by pathname.
+        throw error;
+      }
+      fs.closeSync(ownerFd);
+
+      try {
+        return operation();
+      } finally {
+        // Only the unique marker proves ownership. If it is absent, leave the
+        // lock directory untouched rather than risking a successor's lock.
+        fs.unlinkSync(ownerPath);
+        fs.rmdirSync(this.lockPath);
       }
     }
   }
-
   normalize(event) {
     if (!event || typeof event !== 'object') {
       throw new TypeError('event must be an object');
