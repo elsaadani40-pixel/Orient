@@ -395,6 +395,18 @@ class PostgresEventRepository {
         if (workflow.rowCount !== 1) {
           throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
         }
+        const currentWorker = await client.query(
+          `SELECT 1 FROM worker_nodes
+           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+             AND status='READY' AND expires_at > clock_timestamp()
+           FOR UPDATE`,
+          [principal.tenantId, principal.workerId, principal.sessionId]
+        );
+        if (currentWorker.rowCount !== 1) {
+          throw Object.assign(new Error('Worker session expired while waiting for the workflow lock'), {
+            code: 'WORKER_SESSION_LOST'
+          });
+        }
         const lease = await client.query(
           `SELECT 1 FROM workflow_leases
            WHERE tenant_id=$1 AND workflow_id=$2 AND lease_id=$3
@@ -1021,6 +1033,18 @@ class PostgresWorkflowRepository {
         if (workflow.rowCount !== 1) {
           throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
         }
+        const currentWorker = await client.query(
+          `SELECT 1 FROM worker_nodes
+           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+             AND status='READY' AND expires_at > clock_timestamp()
+           FOR UPDATE`,
+          [effectiveTenant, principal.workerId, principal.sessionId]
+        );
+        if (currentWorker.rowCount !== 1) {
+          throw Object.assign(new Error('Worker session expired while waiting for the workflow lock'), {
+            code: 'WORKER_SESSION_LOST'
+          });
+        }
 
         const lease = await client.query(
           `SELECT 1 FROM workflow_leases
@@ -1565,6 +1589,7 @@ class PostgresWorkflowLeaseRepository {
       if (workflow.rowCount !== 1) {
         throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
       }
+      await this.assertRegisteredWorkerSession(client, principal);
       const result = await client.query(
         `UPDATE workflow_leases SET expires_at=$1,payload=$2
          WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
@@ -1590,6 +1615,7 @@ class PostgresWorkflowLeaseRepository {
         [workflowId, principal.tenantId]
       );
       if (workflow.rowCount !== 1) return false;
+      await this.assertRegisteredWorkerSession(client, principal);
       const result = await client.query(
         `UPDATE workflow_leases SET expires_at=$1::timestamptz,
            payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
@@ -1612,6 +1638,7 @@ class PostgresWorkflowLeaseRepository {
         [workflowId, principal.tenantId]
       );
       if (workflow.rowCount !== 1) return false;
+      await this.assertRegisteredWorkerSession(client, principal);
       const result = await client.query(
         `SELECT 1 FROM workflow_leases
          WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
@@ -1650,6 +1677,7 @@ class PostgresWorkflowLeaseRepository {
         [workflowId, principal.tenantId]
       );
       if (workflow.rowCount !== 1) return false;
+      await this.assertRegisteredWorkerSession(client, principal);
       const result = await client.query(
         `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
          AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
