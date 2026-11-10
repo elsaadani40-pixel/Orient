@@ -243,3 +243,154 @@ test('directory-sync failure after rename does not restore revoked owner session
   assert.equal(relogin.ok, true, 'the committed password must match in-memory state');
 });
 
+test('owner identity state refuses symbolic links without reading their targets', t => {
+  const { directory, stateFile } = fixture(t);
+  new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+
+  const targetFile = path.join(directory, 'owner-state-target.json');
+  fs.renameSync(stateFile, targetFile);
+  fs.symlinkSync(targetFile, stateFile);
+
+  assert.throws(
+    () => new OwnerIdentityService({ stateFile }),
+    error => error.code === 'OWNER_IDENTITY_STATE_INVALID'
+  );
+  assert.equal(fs.lstatSync(stateFile).isSymbolicLink(), true);
+  assert.equal(fs.statSync(targetFile).isFile(), true);
+});
+
+test('owner identity state size is rejected from descriptor metadata before reading bytes', t => {
+  const { stateFile } = fixture(t);
+  fs.writeFileSync(stateFile, Buffer.alloc(2 * 1024 * 1024 + 1, 0x20), { mode: 0o600 });
+
+  const originalReadFileSync = fs.readFileSync;
+  fs.readFileSync = function (target, ...args) {
+    if (path.resolve(String(target)) === stateFile) {
+      throw new Error('state file must not be read before its size is checked');
+    }
+    return originalReadFileSync.call(this, target, ...args);
+  };
+  try {
+    assert.throws(
+      () => new OwnerIdentityService({ stateFile }),
+      error => error.code === 'OWNER_IDENTITY_STATE_INVALID'
+    );
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+});
+
+test('failed pre-rename logout preserves the committed session in memory and after restart', async t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  const login = await identity.login({
+    username: 'Admin',
+    password: 'temporary-owner-password-9F!x'
+  });
+  assert.equal(login.ok, true);
+
+  const originalFsync = fs.fsyncSync;
+  let failed = false;
+  fs.fsyncSync = function (fd) {
+    if (!failed && !fs.fstatSync(fd).isDirectory()) {
+      failed = true;
+      throw Object.assign(new Error('simulated owner-state file fsync failure'), { code: 'EIO' });
+    }
+    return originalFsync.call(fs, fd);
+  };
+  try {
+    assert.throws(
+      () => identity.logout(login.token),
+      error => error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.committed === false
+    );
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.equal(failed, true);
+  assert.ok(identity.authenticate(login.token), 'a failed logout must not leave memory more revoked than durable state');
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sessions.length, 1);
+  const restarted = new OwnerIdentityService({ stateFile });
+  assert.ok(restarted.authenticate(login.token), 'the still-committed session remains valid after restart');
+});
+
+test('failed pre-rename revoke-all restores every committed session in memory and after restart', async t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  const first = await identity.login({ username: 'Admin', password: 'temporary-owner-password-9F!x' });
+  const second = await identity.login({ username: 'Admin', password: 'temporary-owner-password-9F!x' });
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+
+  const originalFsync = fs.fsyncSync;
+  let failed = false;
+  fs.fsyncSync = function (fd) {
+    if (!failed && !fs.fstatSync(fd).isDirectory()) {
+      failed = true;
+      throw Object.assign(new Error('simulated owner-state file fsync failure'), { code: 'EIO' });
+    }
+    return originalFsync.call(fs, fd);
+  };
+  try {
+    assert.throws(
+      () => identity.revokeAllSessions(),
+      error => error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.committed === false
+    );
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.equal(failed, true);
+  assert.ok(identity.authenticate(first.token));
+  assert.ok(identity.authenticate(second.token));
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sessions.length, 2);
+  const restarted = new OwnerIdentityService({ stateFile });
+  assert.ok(restarted.authenticate(first.token));
+  assert.ok(restarted.authenticate(second.token));
+});
+
+test('post-rename logout durability error keeps the committed revocation applied', async t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  const login = await identity.login({
+    username: 'Admin',
+    password: 'temporary-owner-password-9F!x'
+  });
+  assert.equal(login.ok, true);
+
+  const originalFsync = fs.fsyncSync;
+  let failed = false;
+  fs.fsyncSync = function (fd) {
+    if (!failed && fs.fstatSync(fd).isDirectory()) {
+      failed = true;
+      throw Object.assign(new Error('simulated owner-state directory fsync failure'), { code: 'EIO' });
+    }
+    return originalFsync.call(fs, fd);
+  };
+  try {
+    assert.throws(
+      () => identity.logout(login.token),
+      error => error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.committed === true
+    );
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.equal(failed, true);
+  assert.equal(identity.authenticate(login.token), null);
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, 'utf8')).sessions, []);
+  const restarted = new OwnerIdentityService({ stateFile });
+  assert.equal(restarted.authenticate(login.token), null);
+});
