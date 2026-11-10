@@ -1,0 +1,57 @@
+name: ORIENT — EventRepository Mutation Evidence
+
+on:
+  push:
+    branches:
+      - security/event-repository-mutation-evidence
+    paths:
+      - ".github/workflows/event-repository-mutation-evidence.yml"
+      - "stryker.event-repository.config.json"
+      - "src/infrastructure/persistence/json/event.repository.js"
+      - "test/unit/infrastructure/event-repository.test.js"
+      - "test/unit/infrastructure/event-repository-hardening.test.js"
+      - "test/unit/infrastructure/mission-event-repository.test.js"
+      - "test/unit/infrastructure/persistence/json/event-repository.security.test.js"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orient-event-repository-mutation-evidence
+  cancel-in-progress: false
+
+jobs:
+  event-repository-mutation:
+    name: EventRepository StrykerJS (Node 22)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - name: Checkout exact evidence branch
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          check-latest: true
+
+      - name: Install locked application dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run isolated StrykerJS mutation analysis
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npx --yes --package=@stryker-mutator/core@10.1.1 stryker run stryker.event-repository.config.json 2>&1 | tee artifacts/stryker-event-repository.log
+
+      - name: Upload mutation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orient-event-repository-mutation-evidence
+          path: |
+            artifacts/stryker-event-repository.log
+            reports/mutation/**
+          if-no-files-found: warn
+          retention-days: 30
