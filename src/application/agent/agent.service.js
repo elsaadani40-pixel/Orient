@@ -130,7 +130,11 @@ class AgentService {
     const tenantId = this.runtime.tenantId || 'local';
     const digest = crypto.createHash('sha256').update(idempotencyKey, 'utf8').digest('hex');
     const requestDigest = crypto.createHash('sha256').update(clean, 'utf8').digest('hex');
-    const operationId = 'api-v1-task-create:' + tenantId + ':' + digest;
+    const ownerScope = persistencePrincipal
+      ? crypto.createHash('sha256').update(persistencePrincipal.ownerId, 'utf8').digest('hex')
+      : null;
+    const operationId = 'api-v1-task-create:' + tenantId + ':' +
+      (ownerScope ? ownerScope + ':' : '') + digest;
     const executionId = crypto.randomUUID();
     const beginOptions = {
       executionId,
