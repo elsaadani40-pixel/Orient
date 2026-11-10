@@ -9,6 +9,7 @@ on:
       - "stryker.event-repository.config.json"
       - "src/infrastructure/persistence/json/event.repository.js"
       - "test/unit/infrastructure/event-repository.test.js"
+      - "test/unit/infrastructure/event-repository-hardening.test.js"
 
 permissions:
   contents: read
