@@ -114,3 +114,31 @@ test('unleased workflow writes cannot overwrite a workflow with an active durabl
   assert.match(calls[0].sql, /FOR UPDATE/);
   assert.match(calls[1].sql, /workflow_leases/);
 });
+
+
+test('unleased workflow writes cannot overwrite a workflow with an active durable dispatch claim', async () => {
+  const calls = [];
+  const db = {
+    async transaction(work) {
+      return work({
+        async query(sql, values = []) {
+          calls.push({ sql, values });
+          if (sql.includes('SELECT workflow_id FROM workflows')) return { rowCount: 1, rows: [{ workflow_id: 'workflow-active-claim' }] };
+          if (sql.includes('FROM workflow_dispatch_claims')) return { rowCount: 1, rows: [{}] };
+          throw new Error('Unexpected SQL: ' + sql);
+        }
+      });
+    }
+  };
+  const repo = new PostgresWorkflowRepository(db);
+  await assert.rejects(
+    repo.save({
+      workflowId: 'workflow-active-claim', tenantId: 'tenant-a', state: 'QUEUED',
+      metadata: {}, updatedAt: new Date().toISOString()
+    }, 'tenant-a'),
+    error => error.code === 'WORKFLOW_DISPATCH_CLAIM_HELD'
+  );
+  assert.match(calls[0].sql, /FOR UPDATE/);
+  assert.match(calls[1].sql, /workflow_dispatch_claims/);
+  assert.equal(calls.length, 2, 'the workflow must not be updated while a dispatch claim is active');
+});
