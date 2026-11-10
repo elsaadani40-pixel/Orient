@@ -409,3 +409,114 @@ test('a safe non-writable parent directory is accepted', t => {
   const repository = new EventRepository(path.join(storage, 'events.json'));
   assert.equal(repository.directory, storage);
 });
+
+
+test('whitespace-only event files are treated as an empty event log', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  fs.writeFileSync(repository.filePath, '  \\n\\t  ');
+  assert.deepEqual(repository.read(), []);
+});
+
+test('tenant-scoped reads tolerate legacy events without a data object', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  repository.write([{ id: 'legacy-without-data', type: 'legacy.event' }]);
+  assert.deepEqual(repository.findAll({ tenantId: 'tenant-a' }), []);
+});
+
+test('empty lookup keys never match legacy records with empty identity fields', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  repository.write([{
+    id: 'legacy-empty-identities',
+    aggregateId: '',
+    executionId: '',
+    goalId: '',
+    type: '',
+    data: {}
+  }]);
+
+  assert.deepEqual(repository.findByExecutionId(''), []);
+  assert.deepEqual(repository.findByGoalId(''), []);
+  assert.deepEqual(repository.findByAggregateId(''), []);
+  assert.deepEqual(repository.findByType(''), []);
+});
+
+test('belongsToTenant handles missing events and an intentionally unscoped caller', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  assert.equal(repository.belongsToTenant(undefined, 'tenant-a'), false);
+  assert.equal(repository.belongsToTenant({ data: { tenantId: 'tenant-a' } }, null), true);
+});
+
+test('unscoped writes preserve the absence of tenant metadata', t => {
+  const f = fixture(t);
+  const repository = f.create();
+
+  const appended = repository.append({ id: 'unscoped-append', type: 'test.event', data: {} });
+  const batch = repository.appendMany([{ id: 'unscoped-batch', type: 'test.event', data: {} }]);
+  const mission = repository.appendMissionEvent({
+    id: 'unscoped-mission',
+    aggregateId: 'unscoped-aggregate',
+    type: 'mission.started',
+    data: {}
+  });
+
+  assert.equal(Object.hasOwn(appended.data, 'tenantId'), false);
+  assert.equal(Object.hasOwn(batch[0].data, 'tenantId'), false);
+  assert.equal(Object.hasOwn(mission.data, 'tenantId'), false);
+});
+
+test('append replay for the same tenant and event id remains idempotent', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const event = {
+    id: 'same-tenant-replay',
+    type: 'mission.checkpoint',
+    timestamp: '2026-11-10T12:00:00.000Z',
+    data: { tenantId: 'tenant-a', checkpoint: 1 }
+  };
+
+  const first = repository.append(event, { tenantId: 'tenant-a' });
+  const replay = repository.append(event, { tenantId: 'tenant-a' });
+
+  assert.deepEqual(replay, first);
+  assert.equal(repository.count(), 1);
+});
+
+test('mission event writes reject a missing aggregate id', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  assert.throws(
+    () => repository.appendMissionEvent({
+      id: 'missing-aggregate-id',
+      type: 'mission.started',
+      data: {}
+    }),
+    error => error instanceof TypeError
+  );
+  assert.equal(repository.count(), 0);
+});
+
+test('event normalization rejects primitive events and discards non-object data', t => {
+  const f = fixture(t);
+  const repository = f.create();
+
+  assert.throws(() => repository.append(null), TypeError);
+  assert.throws(() => repository.append('not-an-event'), TypeError);
+
+  const normalized = repository.append({
+    id: 'non-object-data',
+    type: 'test.event',
+    data: 'not-an-object'
+  });
+  assert.deepEqual(normalized.data, {});
+});
+
+test('appendMany rejects array-like objects instead of treating them as empty batches', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  assert.throws(() => repository.appendMany({ length: 0 }), TypeError);
+  assert.equal(repository.count(), 0);
+});

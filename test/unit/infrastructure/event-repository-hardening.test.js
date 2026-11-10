@@ -264,13 +264,16 @@ test('clear removes all events while preserving a usable repository', t => {
   assert.equal(repository.append({ id: 'after-clear', type: 'task.started', data: {} }).id, 'after-clear');
 });
 
-test('constructor rejects a missing file path and invalid lock timeout', t => {
+test('constructor rejects invalid arguments and accepts the minimum positive lock timeout', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-invalid-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   assert.throws(() => new EventRepository(''), TypeError);
   assert.throws(
-    () => new EventRepository(path.join(root, 'events.json'), { lockTimeoutMs: 0 }),
+    () => new EventRepository(path.join(root, 'invalid-timeout.json'), { lockTimeoutMs: 0 }),
     TypeError
+  );
+  assert.doesNotThrow(
+    () => new EventRepository(path.join(root, 'minimum-timeout.json'), { lockTimeoutMs: 1 })
   );
 });
