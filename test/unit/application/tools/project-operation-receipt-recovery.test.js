@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 
 const createProjectTools = require('../../../../src/application/tools/project.tools');
 const ProjectOperationReceiptStore = require('../../../../src/infrastructure/execution/project-operation-receipt-store');
@@ -26,6 +27,51 @@ async function withFixture(run) {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(receiptDirectory, { recursive: true, force: true });
   }
+}
+
+function waitForChildOutput(child, marker, timeoutMs = 8000) {
+  let output = '';
+  let stderr = '';
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('Timed out waiting for child marker ' + marker + '; stdout=' + output + '; stderr=' + stderr));
+    }, timeoutMs);
+    child.stdout.on('data', chunk => {
+      output += chunk.toString();
+      if (output.includes(marker)) {
+        clearTimeout(timeout);
+        resolve({ output, stderr });
+      }
+    });
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.once('error', error => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once('exit', (code, signal) => {
+      if (!output.includes(marker)) {
+        clearTimeout(timeout);
+        reject(new Error('Child exited before marker ' + marker + ' (code=' + code + ', signal=' + signal + '); stderr=' + stderr));
+      }
+    });
+  });
+}
+
+function waitForChildExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+  }
+  return new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
+}
+
+function receiptInput(operationId, tenantId = 'tenant-a') {
+  return {
+    operationId,
+    tenantId,
+    workspaceId: 'a'.repeat(64),
+    changeSetHash: 'b'.repeat(64),
+    result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+  };
 }
 
 test('project mutation declares receipt-backed reconciliation in tool metadata', async () => {
@@ -483,3 +529,169 @@ test('receipt storage rejects directories and parents that allow untrusted lock-
     fsSync.rmSync(parent, { recursive: true, force: true });
   }
 });
+
+
+test('concurrent receipt writers cannot enter a lock directory already owned by another process', async t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX child-process lock synchronization is required for this adversarial test');
+    return;
+  }
+  await withFixture(async ({ store }) => {
+    store.ensureDirectory();
+    const input = receiptInput('concurrent-writer');
+    const childCode = `
+      const fs = require('node:fs');
+      const Store = require('./src/infrastructure/execution/project-operation-receipt-store');
+      const originalWriteFileSync = fs.writeFileSync;
+      let paused = false;
+      fs.writeFileSync = function (target, ...args) {
+        if (typeof target === 'number' && !paused) {
+          paused = true;
+          fs.writeSync(1, 'LOCK_HELD\\n');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1800);
+        }
+        return originalWriteFileSync.call(this, target, ...args);
+      };
+      const store = new Store({ directory: process.argv[1] });
+      store.write({
+        operationId: 'concurrent-writer',
+        tenantId: 'tenant-a',
+        workspaceId: '${'a'.repeat(64)}',
+        changeSetHash: '${'b'.repeat(64)}',
+        result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+      });
+      fs.writeSync(1, 'CHILD_DONE\\n');
+    `;
+    const child = spawn(process.execPath, ['-e', childCode, store.directory], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    try {
+      await waitForChildOutput(child, 'LOCK_HELD');
+      assert.throws(
+        () => store.write(input),
+        error => error?.code === 'PROJECT_OPERATION_RECEIPT_LOCKED'
+      );
+      const exit = await waitForChildExit(child);
+      assert.equal(exit.code, 0, 'the lock owner must complete normally');
+      assert.ok(store.read(input), 'the winning process must leave a durable receipt');
+      assert.doesNotThrow(() => store.write(input), 'a later writer may proceed after the owner releases the lock');
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+        await waitForChildExit(child);
+      }
+    }
+  });
+});
+
+test('owner-marker cleanup cannot admit a successor before the lock directory is removed', async t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX child-process lock synchronization is required for this adversarial test');
+    return;
+  }
+  await withFixture(async ({ store }) => {
+    store.ensureDirectory();
+    const input = receiptInput('owner-cleanup-race');
+    const childCode = `
+      const fs = require('node:fs');
+      const Store = require('./src/infrastructure/execution/project-operation-receipt-store');
+      const originalUnlinkSync = fs.unlinkSync;
+      let paused = false;
+      fs.unlinkSync = function (target, ...args) {
+        const result = originalUnlinkSync.call(this, target, ...args);
+        if (!paused && /owner\\.[^/]+\\.json$/.test(String(target))) {
+          paused = true;
+          fs.writeSync(1, 'OWNER_MARKER_REMOVED\\n');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1800);
+        }
+        return result;
+      };
+      const store = new Store({ directory: process.argv[1] });
+      store.write({
+        operationId: 'owner-cleanup-race',
+        tenantId: 'tenant-a',
+        workspaceId: '${'a'.repeat(64)}',
+        changeSetHash: '${'b'.repeat(64)}',
+        result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+      });
+      fs.writeSync(1, 'CHILD_DONE\\n');
+    `;
+    const child = spawn(process.execPath, ['-e', childCode, store.directory], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const lockPath = store.receiptPath(input.operationId, input.tenantId) + '.lock';
+    try {
+      await waitForChildOutput(child, 'OWNER_MARKER_REMOVED');
+      assert.equal(fsSync.existsSync(lockPath), true, 'the lock directory remains the serialization primitive during cleanup');
+      assert.throws(
+        () => store.write(input),
+        error => error?.code === 'PROJECT_OPERATION_RECEIPT_LOCKED'
+      );
+      const exit = await waitForChildExit(child);
+      assert.equal(exit.code, 0);
+      assert.equal(fsSync.existsSync(lockPath), false, 'the owner removes its directory only after marker cleanup');
+      assert.doesNotThrow(() => store.write(input), 'a successor may proceed only after rmdir completes');
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+        await waitForChildExit(child);
+      }
+    }
+  });
+});
+
+test('a process crash after lock-directory creation but before owner-marker durability leaves a fail-closed orphan', async t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX child-process crash semantics are required for this adversarial test');
+    return;
+  }
+  await withFixture(async ({ store }) => {
+    store.ensureDirectory();
+    const input = receiptInput('crash-before-owner-marker');
+    const childCode = `
+      const fs = require('node:fs');
+      const Store = require('./src/infrastructure/execution/project-operation-receipt-store');
+      const originalOpenSync = fs.openSync;
+      fs.openSync = function (target, ...args) {
+        if (/\\.lock\\/owner\\.[^/]+\\.json$/.test(String(target))) {
+          fs.writeSync(1, 'LOCK_DIRECTORY_CREATED\\n');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);
+        }
+        return originalOpenSync.call(this, target, ...args);
+      };
+      const store = new Store({ directory: process.argv[1] });
+      store.write({
+        operationId: 'crash-before-owner-marker',
+        tenantId: 'tenant-a',
+        workspaceId: '${'a'.repeat(64)}',
+        changeSetHash: '${'b'.repeat(64)}',
+        result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+      });
+    `;
+    const child = spawn(process.execPath, ['-e', childCode, store.directory], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    try {
+      await waitForChildOutput(child, 'LOCK_DIRECTORY_CREATED');
+      child.kill('SIGKILL');
+      const exit = await waitForChildExit(child);
+      assert.equal(exit.signal, 'SIGKILL');
+      const lockPath = store.receiptPath(input.operationId, input.tenantId) + '.lock';
+      assert.equal(fsSync.statSync(lockPath).isDirectory(), true);
+      assert.deepEqual(fsSync.readdirSync(lockPath), [], 'the crash point leaves an empty lock directory, not a reclaimable owner');
+      assert.throws(
+        () => store.write(input),
+        error => error?.code === 'PROJECT_OPERATION_RECEIPT_LOCKED'
+      );
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+        await waitForChildExit(child);
+      }
+    }
+  });
+});
+
