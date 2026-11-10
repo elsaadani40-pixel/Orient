@@ -37,7 +37,7 @@ class PhoneNumberToolsTest {
 
     @Test
     fun manifestRequestsContactsOnlyForTheUserInitiatedLookupAndNeverRequestsDirectCalling() {
-        val context = RuntimeEnvironment.getApplication<android.app.Application>()
+        val context = RuntimeEnvironment.getApplication()
         val permissions = context.packageManager.getPackageInfo(
             context.packageName,
             PackageManager.GET_PERMISSIONS
