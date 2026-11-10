@@ -576,3 +576,68 @@ test('lock acquisition never follows a pre-existing owner-marker symlink', t => 
   assert.equal(fs.readFileSync(outside, 'utf8'), 'outside-data-must-remain-unchanged');
   assert.equal(fs.existsSync(repository.lockPath), true);
 });
+
+
+test('event file at the exact maximum size remains readable', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const maxBytes = 64 * 1024 * 1024;
+  const content = Buffer.alloc(maxBytes, 0x20);
+  content.write('[]', 0, 'utf8');
+  fs.writeFileSync(repository.filePath, content);
+  assert.deepEqual(repository.read(), []);
+});
+
+test('lock acquisition retries an ENOTEMPTY race without treating it as a fatal error', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const originalMkdirSync = fs.mkdirSync;
+  let attempts = 0;
+
+  fs.mkdirSync = function (target, ...args) {
+    if (target === repository.lockPath && attempts++ === 0) {
+      throw Object.assign(new Error('simulated directory creation race'), { code: 'ENOTEMPTY' });
+    }
+    return originalMkdirSync.call(this, target, ...args);
+  };
+
+  try {
+    assert.equal(repository.withLock(() => 'acquired'), 'acquired');
+  } finally {
+    fs.mkdirSync = originalMkdirSync;
+  }
+  assert.equal(attempts, 2);
+  assert.equal(fs.existsSync(repository.lockPath), false);
+});
+
+test('constructor accepts EEXIST when another creator wins the initial event-file race', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-create-race-'));
+  fs.chmodSync(root, 0o700);
+  t.after(() => {
+    fs.chmodSync(root, 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const filePath = path.join(root, 'events.json');
+  const originalOpenSync = fs.openSync;
+  let simulatedRace = false;
+
+  fs.openSync = function (target, flags, ...args) {
+    if (target === filePath && flags === 'wx' && !simulatedRace) {
+      simulatedRace = true;
+      const descriptor = originalOpenSync.call(this, target, flags, ...args);
+      fs.closeSync(descriptor);
+      throw Object.assign(new Error('another process created the event file'), { code: 'EEXIST' });
+    }
+    return originalOpenSync.call(this, target, flags, ...args);
+  };
+
+  let repository;
+  try {
+    repository = new EventRepository(filePath);
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert.equal(simulatedRace, true);
+  assert.deepEqual(repository.read(), []);
+});
