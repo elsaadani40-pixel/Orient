@@ -5,6 +5,7 @@ const { URL } = require('url');
 const AppError = require('../../core/errors/AppError');
 const logger = require('../../core/logging/logger');
 const { createAccessAuditEvent } = require('../../core/security/access-audit-event');
+const { createPersistencePrincipal } = require('../../core/security/persistence-principal');
 
 function readBody(req, maxBytes = 1024 * 1024) {
   return new Promise((resolve, reject) => {
@@ -74,7 +75,7 @@ function isSameOrigin(req) {
   }
 }
 
-function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null, unsandboxedExecution = false }) {
+function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth = null, ownerProfile = null, ownerChatStore = null, ownerChatHistoryResolver = null, websiteHandler = null, unsandboxedExecution = false, tenantId = 'local', ownerId = 'owner' }) {
   return http.createServer(async (req, res) => {
     const requestStartedAt = Date.now();
     const requestId = randomUUID();
@@ -177,6 +178,11 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
       const ownerSession = ownerAuth && ownerAuth.enabled
         ? ownerAuth.authenticate(ownerCookie)
         : null;
+      // Issue persistence identity from trusted server configuration and the
+      // authenticated session only; never trust request-supplied identity fields.
+      const ownerPersistencePrincipal = ownerSession
+        ? createPersistencePrincipal({ tenantId, ownerId, sessionId: ownerSession.sessionId })
+        : null;
 
       if (req.method === 'GET' &&
           (requestUrl.pathname === '/workbench' || requestUrl.pathname === '/workbench.js' || requestUrl.pathname === '/chat' || requestUrl.pathname === '/chat.js')) {
@@ -239,6 +245,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
         const result = await ownerAuth.login({
+          email: typeof payload.email === 'string' ? payload.email : undefined,
           password: payload.password,
           sourceIp: req.socket?.remoteAddress || 'unknown'
         });
@@ -320,10 +327,10 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           try {
-            let messages = await ownerChatStore.list();
+            let messages = await ownerChatStore.list(ownerPersistencePrincipal);
             if (typeof ownerChatHistoryResolver === 'function') {
-              await ownerChatHistoryResolver(messages);
-              messages = await ownerChatStore.list();
+              await ownerChatHistoryResolver(messages, ownerPersistencePrincipal);
+              messages = await ownerChatStore.list(ownerPersistencePrincipal);
             }
             sendJson(res, 200, { ok: true, messages });
           } catch (error) {
@@ -344,7 +351,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           try {
-            await ownerChatStore.clear();
+            await ownerChatStore.clear(ownerPersistencePrincipal);
             sendJson(res, 200, { ok: true, cleared: true });
           } catch (error) {
             logger.error('Owner chat history deletion failed', { code: error.code || 'OWNER_CHAT_DELETE_FAILED' });
@@ -360,7 +367,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           }
           if (req.method === 'GET') {
             try {
-              sendJson(res, 200, { ok: true, profile: await ownerProfile.get() });
+              sendJson(res, 200, { ok: true, profile: await ownerProfile.get(ownerPersistencePrincipal) });
             } catch (error) {
               logger.error('Owner work profile read failed', { code: error.code || 'OWNER_PROFILE_READ_FAILED' });
               sendJson(res, 503, { ok: false, code: 'OWNER_PROFILE_UNAVAILABLE', message: 'تعذر قراءة ملف عمل المالك.' });
@@ -388,7 +395,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             return;
           }
           try {
-            const profile = await ownerProfile.update(payload);
+            const profile = await ownerProfile.update(payload, ownerPersistencePrincipal);
             sendJson(res, 200, { ok: true, profile });
           } catch (error) {
             const invalid = String(error.code || '').startsWith('OWNER_PROFILE_') && error.code !== 'OWNER_PROFILE_STORAGE_INVALID';
@@ -407,7 +414,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'RUNTIME_RESPONSE_UNAVAILABLE', message: 'نتيجة Runtime غير متاحة حاليًا.' });
             return;
           }
-          await agentRoutes.taskResponse(req, res, ownerChatResponseMatch[1]);
+          await agentRoutes.taskResponse(req, res, ownerChatResponseMatch[1], ownerPersistencePrincipal);
           return;
         }
 
@@ -453,7 +460,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
               ? suppliedId
               : randomUUID();
             try {
-              await ownerChatStore.append({ id: messageId, role: 'user', content: displayMessage });
+              await ownerChatStore.append({ id: messageId, role: 'user', content: displayMessage }, ownerPersistencePrincipal);
               req.ownerChatMessageId = messageId;
             } catch (error) {
               if (error.code === 'OWNER_CHAT_IDEMPOTENCY_CONFLICT') {
@@ -467,7 +474,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           }
           await agentRoutes.createTask(req, res, JSON.stringify({ goal: message }), {
             sessionId: ownerSession.sessionId
-          });
+          }, ownerPersistencePrincipal);
           return;
         }
 
@@ -491,7 +498,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'APPROVAL_INBOX_UNAVAILABLE', message: 'صندوق الموافقات غير متاح.' });
             return;
           }
-          await agentRoutes.pendingApprovals(req, res);
+          await agentRoutes.pendingApprovals(req, res, ownerPersistencePrincipal);
           return;
         }
 
@@ -517,7 +524,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 503, { ok: false, code: 'APPROVAL_DECISION_UNAVAILABLE', message: 'اتخاذ قرار الموافقة غير متاح حاليًا.' });
             return;
           }
-          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, ownerSession.sessionId);
+          await agentRoutes.decideApproval(req, res, approvalDecisionMatch[1], payload, ownerSession.sessionId, ownerPersistencePrincipal);
           return;
         }
 
@@ -548,7 +555,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             res,
             ownerResumeMatch[1],
             { approval: { approvalId } },
-            { sessionId: ownerSession.sessionId }
+            { sessionId: ownerSession.sessionId },
+            ownerPersistencePrincipal
           );
           return;
         }
@@ -570,7 +578,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
             sendJson(res, 400, { ok: false, code: 'INVALID_JSON', message: 'صيغة الطلب غير صحيحة.' });
             return;
           }
-          await agentRoutes.cancel(req, res, ownerCancelMatch[1], { reason: 'owner_rejected', ...payload });
+          await agentRoutes.cancel(req, res, ownerCancelMatch[1], { reason: 'owner_rejected', ...payload }, ownerPersistencePrincipal);
           return;
         }
 
@@ -622,14 +630,14 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         const rawBody = await readBody(req, 8192);
         await agentRoutes.createTask(req, res, rawBody, {
           sessionId: ownerSession.sessionId
-        });
+        }, ownerPersistencePrincipal);
         return;
       }
 
       // Unified v1 task reads deliberately reuse the existing AgentService/runtime
       // and sit after the shared owner-session and origin protections above.
       if (req.method === 'GET' && requestUrl.pathname === '/api/v1/tasks') {
-        await agentRoutes.tasks(req, res);
+        await agentRoutes.tasks(req, res, ownerPersistencePrincipal);
         return;
       }
 
@@ -648,12 +656,12 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         ? v1TaskEventsId
         : null;
       if (req.method === 'GET' && v1TaskEventsMatch) {
-        await agentRoutes.taskEvents(req, res, v1TaskEventsMatch);
+        await agentRoutes.taskEvents(req, res, v1TaskEventsMatch, ownerPersistencePrincipal);
         return;
       }
 
       if (req.method === 'GET' && v1TaskMatch) {
-        await agentRoutes.task(req, res, v1TaskMatch[1]);
+        await agentRoutes.task(req, res, v1TaskMatch[1], ownerPersistencePrincipal);
         return;
       }
 
@@ -721,7 +729,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         await agentRoutes.events(
           req,
           res,
-          decodeURIComponent(executionEventsMatch[1])
+          decodeURIComponent(executionEventsMatch[1]),
+          ownerPersistencePrincipal
         );
         return;
       }
@@ -730,7 +739,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         req.method === 'GET' &&
         requestUrl.pathname === '/executions'
       ) {
-        await agentRoutes.executions(req, res);
+        await agentRoutes.executions(req, res, ownerPersistencePrincipal);
         return;
       }
 
@@ -752,7 +761,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         await agentRoutes.status(
           req,
           res,
-          decodeURIComponent(executionStatusMatch[1])
+          decodeURIComponent(executionStatusMatch[1]),
+          ownerPersistencePrincipal
         );
         return;
       }
@@ -767,7 +777,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         await agentRoutes.approvals(
           req,
           res,
-          decodeURIComponent(executionApprovalsMatch[1])
+          decodeURIComponent(executionApprovalsMatch[1]),
+          ownerPersistencePrincipal
         );
         return;
       }
@@ -784,7 +795,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           req,
           res,
           decodeURIComponent(executionCancelMatch[1]),
-          body
+          body,
+          ownerPersistencePrincipal
         );
         return;
       }
@@ -802,7 +814,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           res,
           decodeURIComponent(executionResumeMatch[1]),
           body,
-          ownerSession ? { sessionId: ownerSession.sessionId } : null
+          ownerSession ? { sessionId: ownerSession.sessionId } : null,
+          ownerPersistencePrincipal
         );
         return;
       }

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const AsyncWorkflowWorker = require('../../../../src/core/workflow/async-workflow-worker');
+const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
 
 test('AsyncWorkflowWorker renews the durable lease while a step runs', async () => {
   const renewals = [];
@@ -87,6 +88,8 @@ test('AsyncWorkflowWorker renews the durable lease while a step runs', async () 
 test('AsyncWorkflowWorker refreshes worker registry liveness during a long step', async () => {
   const registrations = [];
   const heartbeats = [];
+  let registeredPrincipal = null;
+  let leasePrincipal = null;
   let released = false;
   let stepCompleted = false;
   const step = { id: 'step-1' };
@@ -107,7 +110,7 @@ test('AsyncWorkflowWorker refreshes worker registry liveness during a long step'
   const lease = { workflowId: instance.workflowId, leaseId: 'lease-1', workerId: 'worker-1', fencingToken: 1, expiresAt: Date.now() + 3000, cancelled: false, deadlineAt: null, instance };
   const scheduler = {
     leaseDurationMs: 3000,
-    async leaseAsync() { return lease; },
+    async leaseAsync(workerId, capabilities, workerPrincipal) { leasePrincipal = workerPrincipal; return lease; },
     async renewAsync() { return lease; },
     async assertCurrentAsync() { return true; },
     async persistAsync() {},
@@ -115,7 +118,7 @@ test('AsyncWorkflowWorker refreshes worker registry liveness during a long step'
     async retryAsync() { throw new Error('unexpected retry'); }
   };
   const registry = {
-    async register(worker) { registrations.push(worker); return worker; },
+    async register(worker, tenantId, options) { registrations.push(worker); registeredPrincipal = options.workerPrincipal; return worker; },
     async heartbeat(workerId, payload) { heartbeats.push({ workerId, ...payload }); return registrations[0]; }
   };
   const worker = new AsyncWorkflowWorker({
@@ -136,6 +139,9 @@ test('AsyncWorkflowWorker refreshes worker registry liveness during a long step'
   assert.ok(heartbeats.length >= 1, 'expected worker registry heartbeat while step was running');
   assert.ok(heartbeats.every(call => call.workerId === 'worker-1'));
   assert.ok(heartbeats.every(call => call.tenantId === 'tenant-1'));
+  assert.equal(registeredPrincipal, worker.workerPrincipal);
+  assert.equal(leasePrincipal, worker.workerPrincipal);
+  assert.ok(heartbeats.every(call => call.workerPrincipal === worker.workerPrincipal));
 });
 
 test('AsyncWorkflowWorker stops safely when worker heartbeat fails', async () => {
@@ -239,4 +245,98 @@ test('AsyncWorkflowWorker refuses to commit a step after fencing is lost during 
   assert.equal(completed, false, 'stale worker must not commit completion');
   assert.equal(assertCalls, 2, 'fencing must be checked before and after the side effect');
   assert.equal(released, true);
+});
+
+
+test('AsyncWorkflowWorker treats a replaced registry session as lost lease and never commits the step', async () => {
+  let failed = false;
+  let completed = false;
+  let persisted = false;
+  let released = false;
+  const step = { id: 'step-session' };
+  const instance = {
+    workflowId: 'worker-session-replaced',
+    state: 'RUNNING',
+    cancelRequested: false,
+    deadlineAt: null,
+    definition: { steps: [step] },
+    steps: { 'step-session': { state: 'READY' } },
+    readySteps() { return completed || failed ? [] : [step]; },
+    markStepRunning() {},
+    markStepCompleted(id) { completed = true; this.steps[id].state = 'COMPLETED'; },
+    markStepFailed() { failed = true; },
+    transition(state) { this.state = state; }
+  };
+  const lease = {
+    workflowId: instance.workflowId, leaseId: 'lease-session', workerId: 'worker-session',
+    fencingToken: 51, expiresAt: Date.now() + 30000, instance
+  };
+  const scheduler = {
+    leaseDurationMs: 30000,
+    async leaseAsync() { return lease; },
+    async renewAsync() { throw Object.assign(new Error('worker session replaced'), { code: 'WORKER_SESSION_LOST' }); },
+    async persistAsync() { persisted = true; },
+    async releaseAsync() { released = true; throw Object.assign(new Error('worker session replaced'), { code: 'WORKER_SESSION_LOST' }); }
+  };
+  const worker = new AsyncWorkflowWorker({
+    scheduler,
+    workerId: 'worker-session',
+    executor: async () => ({ shouldNotRun: true })
+  });
+  const result = await worker.tick();
+  assert.equal(result, null);
+  assert.equal(completed, false);
+  assert.equal(failed, false);
+  assert.equal(persisted, false);
+  assert.equal(released, true);
+});
+
+
+test('AsyncWorkflowWorker forwards the acquired lease principal to durable workflow persistence', async () => {
+  let workerPrincipal;
+  let leasePrincipal;
+  let persistedPrincipal;
+  let completed = false;
+  const step = { id: 'step-persist' };
+  const instance = {
+    workflowId: 'workflow-persist-principal', tenantId: 'tenant-persist-principal',
+    state: 'RUNNING', cancelRequested: false, deadlineAt: null,
+    definition: { steps: [step] }, steps: { 'step-persist': { state: 'READY' } },
+    readySteps() { return completed ? [] : [step]; },
+    markStepRunning() {},
+    markStepCompleted(id) { completed = true; this.steps[id].state = 'COMPLETED'; },
+    markStepFailed() { throw new Error('unexpected step failure'); },
+    transition(state) { this.state = state; }
+  };
+  const scheduler = {
+    tenantId: 'tenant-persist-principal', leaseDurationMs: 30000,
+    async leaseAsync(workerId, capabilities, principal) {
+      workerPrincipal = principal;
+      leasePrincipal = createWorkerPersistencePrincipal({
+        tenantId: principal.tenantId, workerId: principal.workerId,
+        sessionId: principal.sessionId, capabilities: principal.capabilities,
+        workflowId: instance.workflowId, leaseId: 'lease-persist-principal', fencingToken: 91
+      });
+      return {
+        workflowId: instance.workflowId, leaseId: 'lease-persist-principal',
+        workerId, fencingToken: 91, workerPrincipal: leasePrincipal,
+        expiresAt: Date.now() + 30000, cancelled: false, instance
+      };
+    },
+    async renewAsync() { return true; },
+    async assertCurrentAsync() { return true; },
+    async persistAsync(value, principal) { assert.equal(value, instance); persistedPrincipal = principal; },
+    async releaseAsync() { return true; }
+  };
+  const worker = new AsyncWorkflowWorker({
+    scheduler, workerId: 'worker-persist-principal', tenantId: 'tenant-persist-principal',
+    executor: async () => ({ ok: true })
+  });
+  const result = await worker.tick();
+  assert.equal(result.state, 'COMPLETED');
+  assert.equal(workerPrincipal, worker.workerPrincipal);
+  assert.equal(persistedPrincipal, leasePrincipal);
+  assert.equal(persistedPrincipal.workflowId, instance.workflowId);
+  assert.equal(persistedPrincipal.leaseId, 'lease-persist-principal');
+  assert.equal(persistedPrincipal.fencingToken, 91);
 });

@@ -227,7 +227,7 @@ function createOwnerServer(options = {}) {
 
     if (req.method === 'GET' && url.pathname === '/api/auth/me') {
       const owner = sessionFor(req);
-      if (owner) return sendJson(res, 200, { username: 'Admin', role: 'owner', passwordChangeRequired: ownerPasswordChangeRequired() });
+      if (owner) return sendJson(res, 200, { username: 'Admin', email: identity ? identity.status().email : undefined, role: 'owner', passwordChangeRequired: ownerPasswordChangeRequired() });
       const session = userSessionFor(req);
       if (session) return sendJson(res, 200, { username: session.username, role: 'user' });
       return sendJson(res, 401, { error: 'Authentication required' });
@@ -262,8 +262,21 @@ function createOwnerServer(options = {}) {
       }
 
       if (url.pathname === '/api/auth/login') {
-        if (typeof body.username !== 'string' || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل اسم المستخدم وكلمة المرور.' });
-        const user = users.find(item => item.username.toLowerCase() === body.username.trim().toLowerCase());
+        const identifier = typeof body.identifier === 'string' ? body.identifier.trim() : typeof body.username === 'string' ? body.username.trim() : '';
+        if (!identifier || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل البريد الإلكتروني أو اسم المستخدم وكلمة المرور.' });
+        const ownerStatus = identity ? identity.status() : null;
+        if (identity && identifier.toLowerCase() === String(ownerStatus.email || '').toLowerCase()) {
+          const result = await identity.login({ email: identifier, password: body.password, sourceIp: ip });
+          if (!result.ok) {
+            const status = result.code === 'OWNER_LOGIN_RATE_LIMITED' || result.code === 'OWNER_SESSION_LIMIT_REACHED' ? 429 : 401;
+            return sendJson(res, status, { error: 'بيانات الدخول غير صحيحة.' });
+          }
+          attempts.delete(ip);
+          const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+          return sendJson(res, 200, { ok: true, username: 'Admin', role: 'owner', email: ownerStatus.email, csrfToken: result.csrfToken, expiresAt: result.expiresAt, passwordChangeRequired: result.passwordChangeRequired },
+            { 'Set-Cookie': sessionCookie(result.token, req).replace('Max-Age=28800', 'Max-Age=' + maxAge) });
+        }
+        const user = users.find(item => item.username.toLowerCase() === identifier.toLowerCase());
         if (!user || user.disabled || !verifyPassword(body.password, user.password)) {
           const next = authAttempt.until > Date.now() ? authAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
           next.count += 1; attempts.set(ip, next);
@@ -492,33 +505,32 @@ function createOwnerServer(options = {}) {
     if (req.method === 'GET' && (url.pathname === '/account' || url.pathname === '/account/' || url.pathname === '/account.html')) {
       const userSession = userSessionFor(req);
       const ownerSession = sessionFor(req);
-      const target = ownerSession ? '/owner' : userSession ? '/account.html' : '/auth';
+      const target = ownerSession || userSession ? '/account.html' : '/auth';
       if (url.pathname !== target && !(target === '/account.html' && url.pathname === '/account.html')) {
         res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
         return res.end();
       }
-      if (target === '/account.html' && !userSession) {
+      if (target === '/account.html' && !userSession && !ownerSession) {
         res.writeHead(302, { Location: '/auth', 'Cache-Control': 'no-store' });
         return res.end();
       }
     }
 
-    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/owner.html' || url.pathname === '/dashboard.html')) {
+    if (req.method === 'GET' && url.pathname === '/owner.html') {
+      const target = sessionFor(req) ? '/account.html' : '/auth';
+      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+
+    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/dashboard.html')) {
       const ownerSession = sessionFor(req);
-      if (!ownerSession) {
-        res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
-        return res.end();
-      }
-      if (ownerPasswordChangeRequired()) {
-        if (url.pathname !== '/owner.html') {
-          res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
-          return res.end();
-        }
-      } else if (url.pathname !== '/dashboard.html') {
-        res.writeHead(302, { Location: '/dashboard.html', 'Cache-Control': 'no-store' });
+      const target = !ownerSession ? '/auth' : ownerPasswordChangeRequired() ? '/account.html' : '/dashboard.html';
+      if (url.pathname !== target) {
+        res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
         return res.end();
       }
     }
+
 
     const pathname = url.pathname === '/' ? '/index.html' : url.pathname === '/auth' || url.pathname === '/auth/' ? '/auth.html' : url.pathname === '/account' || url.pathname === '/account/' ? '/account.html' : url.pathname;
     let filePath;

@@ -93,6 +93,53 @@ function createMemoryService(root) {
   return { service, auditRepository, repository };
 }
 
+
+function makeFencedLeaseRepository() {
+  const active = new Map();
+  const counters = new Map();
+  return {
+    async tryAcquire(lease) {
+      const current = active.get(lease.workflowId);
+      if (current && current.expiresAt > lease.acquiredAt) return null;
+      const fencingToken = (counters.get(lease.workflowId) || 0) + 1;
+      counters.set(lease.workflowId, fencingToken);
+      const stored = { ...lease, fencingToken };
+      active.set(lease.workflowId, stored);
+      return { ...stored };
+    },
+    async renewIfOwned(workflowId, leaseId, expiresAt, now) {
+      const current = active.get(workflowId);
+      if (!current || current.leaseId !== leaseId || current.expiresAt <= now) return false;
+      active.set(workflowId, { ...current, expiresAt });
+      return true;
+    },
+    async assertCurrent(workflowId, leaseId, fencingToken, now) {
+      const current = active.get(workflowId);
+      return Boolean(current && current.leaseId === leaseId &&
+        Number(current.fencingToken) === Number(fencingToken) && current.expiresAt > now);
+    },
+    async delete(workflowId, leaseId) {
+      const current = active.get(workflowId);
+      if (!current || current.leaseId !== leaseId) return false;
+      active.delete(workflowId);
+      return true;
+    },
+    async deleteExpired(workflowId, leaseId, now) {
+      const current = active.get(workflowId);
+      if (!current || current.leaseId !== leaseId || current.expiresAt > now) return false;
+      active.delete(workflowId);
+      return true;
+    },
+    async findByWorkflowId(workflowId) {
+      const current = active.get(workflowId);
+      return current ? { ...current } : null;
+    },
+    async findAll() {
+      return [...active.values()].map(lease => ({ ...lease }));
+    }
+  };
+}
+
 function makeAgentLoop(memoryTool, idempotencyRepository) {
   const registry = {
     has: name => name === 'memory.add',
@@ -160,19 +207,11 @@ test('memory.add receipt and idempotency result prevent duplicate writes after w
       maxConcurrent: 1,
       maxQueueDepth: 10,
       leaseDurationMs: 30000,
-      maxRetries: 0
+      maxRetries: 0,
+      leaseRepository: makeFencedLeaseRepository()
     });
     await scheduler.enqueueDurable(instance);
 
-    const leaseAsync = scheduler.leaseAsync.bind(scheduler);
-    scheduler.leaseAsync = async (...args) => {
-      const lease = await leaseAsync(...args);
-      if (lease) {
-        lease.fencingToken = 1;
-        scheduler.active.get(lease.workflowId).fencingToken = 1;
-      }
-      return lease;
-    };
     let assertionCount = 0;
     scheduler.assertCurrentAsync = async () => {
       assertionCount += 1;
@@ -307,19 +346,11 @@ test('memory.delete archive receipt prevents duplicate deletion after workflow l
       maxConcurrent: 1,
       maxQueueDepth: 10,
       leaseDurationMs: 30000,
-      maxRetries: 0
+      maxRetries: 0,
+      leaseRepository: makeFencedLeaseRepository()
     });
     await scheduler.enqueueDurable(instance);
 
-    const leaseAsync = scheduler.leaseAsync.bind(scheduler);
-    scheduler.leaseAsync = async (...args) => {
-      const lease = await leaseAsync(...args);
-      if (lease) {
-        lease.fencingToken = 1;
-        scheduler.active.get(lease.workflowId).fencingToken = 1;
-      }
-      return lease;
-    };
     let assertionCount = 0;
     scheduler.assertCurrentAsync = async () => {
       assertionCount += 1;

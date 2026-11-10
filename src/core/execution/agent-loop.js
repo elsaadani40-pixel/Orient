@@ -447,7 +447,8 @@ class AgentLoop {
                 agentId: agentAuthorization?.agentId || runtimeContext.agentId || plan.agentId || 'ORIENT_RUNTIME',
                 tenantId: runtimeContext.tenantId || context.tenantId,
                 operationId,
-                scope: { planRevision }
+                scope: { planRevision },
+                persistencePrincipal: runtimeContext.persistencePrincipal
               });
 
           context.record(
@@ -503,7 +504,8 @@ class AgentLoop {
           const consumed =
             await this.authorizationService.approvalService.consume(
               authorization.approval.approvalId,
-              runtimeContext.tenantId || context.tenantId
+              runtimeContext.tenantId || context.tenantId,
+              runtimeContext.persistencePrincipal || null
             );
 
           if (!consumed) {

@@ -73,7 +73,7 @@ class ApprovalService {
   async issue({
     executionId, step, tool, capability, planRevision = 1,
     scope = {}, ttlMs = 300000, metadata = {}, tenantId = this.tenantId,
-    agentId = null, operationId = null
+    agentId = null, operationId = null, persistencePrincipal = null
   } = {}) {
     if (!executionId || !tool || !capability) throw new TypeError('executionId, tool and capability are required');
     if (!Number.isInteger(step) || step < 1) throw new TypeError('step must be a positive integer');
@@ -91,18 +91,18 @@ class ApprovalService {
         ...(operationId ? { operationId } : {})
       }
     };
-    if (this.repository?.save) await this.repository.save(value, { tenantId });
+    if (this.repository?.save) await this.repository.save(value, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
     this.approvals.set(value.approvalId, value);
     return { ...value };
   }
 
   async validate({
     approval, executionId, step, tool, capability, planRevision = 1,
-    scope = {}, tenantId = this.tenantId, agentId = null, operationId = null
+    scope = {}, tenantId = this.tenantId, agentId = null, operationId = null, persistencePrincipal = null
   } = {}) {
     if (!approval || typeof approval !== 'object') return { allowed: false, reason: 'APPROVAL_REQUIRED' };
     const stored = this.repository?.findById
-      ? await this.repository.findById(approval.approvalId, { tenantId })
+      ? await this.repository.findById(approval.approvalId, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : this.approvals.get(approval.approvalId);
     if (!stored) return { allowed: false, reason: 'APPROVAL_NOT_FOUND' };
     if (!matchesApprovalTenant(stored, tenantId)) return { allowed: false, reason: 'APPROVAL_TENANT_MISMATCH' };
@@ -116,10 +116,10 @@ class ApprovalService {
     return { allowed: true, approval: { ...stored } };
   }
 
-  async findReusable({ executionId, step, tool, planRevision = 1, tenantId = this.tenantId } = {}) {
+  async findReusable({ executionId, step, tool, planRevision = 1, tenantId = this.tenantId, persistencePrincipal = null } = {}) {
     if (!executionId || !Number.isInteger(step) || step < 1 || !tool) return null;
     const candidates = this.repository?.findByExecution
-      ? await this.repository.findByExecution({ executionId, step, tool, planRevision, tenantId })
+      ? await this.repository.findByExecution({ executionId, step, tool, planRevision, tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : Array.from(this.approvals.values())
         .filter(record => record.executionId === String(executionId) && Number(record.step) === step && record.tool === tool && Number(record.planRevision || 1) === Number(planRevision))
         .sort((x, y) => Date.parse(y.issuedAt || 0) - Date.parse(x.issuedAt || 0));
@@ -132,11 +132,11 @@ class ApprovalService {
     return null;
   }
 
-  async listForExecution({ executionId, tenantId = this.tenantId } = {}) {
+  async listForExecution({ executionId, tenantId = this.tenantId, persistencePrincipal = null } = {}) {
     if (!executionId) return [];
 
     const candidates = this.repository?.findByExecution
-      ? await this.repository.findByExecution({ executionId, tenantId })
+      ? await this.repository.findByExecution({ executionId, tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : Array.from(this.approvals.values())
         .filter(record => record.executionId === String(executionId))
         .sort((a, b) => Date.parse(b.issuedAt || 0) - Date.parse(a.issuedAt || 0));
@@ -161,10 +161,10 @@ class ApprovalService {
       }));
   }
 
-  async listPending({ tenantId = this.tenantId, limit = 100 } = {}) {
+  async listPending({ tenantId = this.tenantId, limit = 100, persistencePrincipal = null } = {}) {
     const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 100;
     const candidates = this.repository?.findPending
-      ? await this.repository.findPending({ tenantId, limit: boundedLimit, now: this.clock() })
+      ? await this.repository.findPending({ tenantId, limit: boundedLimit, now: this.clock(), ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : Array.from(this.approvals.values())
         .filter(record => matchesApprovalTenant(record, tenantId))
         .sort((a, b) => Date.parse(a.issuedAt || 0) - Date.parse(b.issuedAt || 0));
@@ -212,7 +212,7 @@ class ApprovalService {
     }
   }
 
-  async _decideUnlocked({ approvalId, decision, actorId, executionId, tenantId = this.tenantId } = {}) {
+  async _decideUnlocked({ approvalId, decision, actorId, executionId, tenantId = this.tenantId, persistencePrincipal = null } = {}) {
     if (typeof approvalId !== 'string' || !approvalId.trim()) {
       throw Object.assign(new TypeError('approvalId is required'), { code: 'APPROVAL_ID_REQUIRED' });
     }
@@ -224,7 +224,7 @@ class ApprovalService {
     }
 
     const stored = this.repository?.findById
-      ? await this.repository.findById(approvalId, { tenantId })
+      ? await this.repository.findById(approvalId, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : this.approvals.get(approvalId);
     if (!stored) {
       throw Object.assign(new Error('Approval not found'), { code: 'APPROVAL_NOT_FOUND' });
@@ -270,7 +270,7 @@ class ApprovalService {
           code: 'APPROVAL_DECISION_PERSISTENCE_UNSUPPORTED'
         });
       }
-      updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId, this.clock);
+      updated = await this.repository.recordDecision(approvalId, decisionRecord, tenantId, this.clock, persistencePrincipal);
     } else {
       const current = stored.decision || null;
       if (current && (current.status !== decision || current.actorId !== actorId)) {
@@ -289,10 +289,10 @@ class ApprovalService {
     };
   }
 
-  async getApprovedForExecution({ approvalId, executionId, tenantId = this.tenantId } = {}) {
+  async getApprovedForExecution({ approvalId, executionId, tenantId = this.tenantId, persistencePrincipal = null } = {}) {
     if (typeof approvalId !== 'string' || !approvalId || !executionId) return null;
     const stored = this.repository?.findById
-      ? await this.repository.findById(approvalId, { tenantId })
+      ? await this.repository.findById(approvalId, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : this.approvals.get(approvalId);
     if (!stored || stored.executionId !== String(executionId)) return null;
     if (!matchesApprovalTenant(stored, tenantId)) return null;
@@ -308,9 +308,9 @@ class ApprovalService {
     return { ...stored };
   }
 
-  async consume(approvalId, tenantId = this.tenantId) {
+  async consume(approvalId, tenantId = this.tenantId, persistencePrincipal = null) {
     const stored = this.repository?.findById
-      ? await this.repository.findById(approvalId, { tenantId })
+      ? await this.repository.findById(approvalId, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : this.approvals.get(approvalId);
     if (!stored || stored.used) return false;
     if (!matchesApprovalTenant(stored, tenantId)) return false;
@@ -318,7 +318,7 @@ class ApprovalService {
     if (isApprovalExpired(stored.expiresAt, this.clock())) return false;
     const usedAt = new Date(this.clock()).toISOString();
     if (this.repository?.consume) {
-      const consumed = await this.repository.consume(approvalId, usedAt, tenantId);
+      const consumed = await this.repository.consume(approvalId, usedAt, tenantId, { ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       if (!consumed) return false;
     }
     stored.used = true;

@@ -88,14 +88,19 @@ test('website owner session creates and reads a task through the real Runtime', 
     approvalService,
     persistence,
     tenantId: 'website-runtime-test',
+    userId: 'owner',
     agentRegistry,
     ownerSessionAuthorizer: sessionId => ownerAuth.isActiveSession(sessionId)
   });
+  assert.equal(runtime.userId, 'owner', 'runtime execution identity must match the trusted HTTP owner identity');
+
   const server = createServer({
     memoryRoutes: { home(_req, res) { res.writeHead(200); res.end('home'); } },
     agentRoutes: createAgentRoutes(new AgentService(runtime)),
     ownerAuth,
-    websiteHandler: website.handler
+    websiteHandler: website.handler,
+    tenantId: 'website-runtime-test',
+    ownerId: runtime.userId
   });
 
   t.after(async () => {

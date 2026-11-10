@@ -122,15 +122,15 @@ class RequestExecutionCoordinator {
       : 'tool_result';
   }
 
-  async isCancellationRequested(executionId) {
+  async isCancellationRequested(executionId, persistencePrincipal = null) {
     if (!executionId || typeof this.persistence?.executions?.findById !== 'function') return false;
-    const execution = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId });
+    const execution = await this.persistence.executions.findById(executionId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
     return Boolean(execution?.cancellationRequested);
   }
 
-  async reconcileCancellationAfterFailure(context, executionId, activeSnapshot = null) {
+  async reconcileCancellationAfterFailure(context, executionId, activeSnapshot = null, persistencePrincipal = null) {
     const durableExecution = typeof this.persistence?.executions?.findById === 'function'
-      ? await this.persistence.executions.findById(executionId, { tenantId: this.tenantId })
+      ? await this.persistence.executions.findById(executionId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : null;
 
     if (!durableExecution?.cancellationRequested && durableExecution?.status !== 'cancelled') {
@@ -147,9 +147,9 @@ class RequestExecutionCoordinator {
       reconciledContext.cancel(cancellationReason);
     }
 
-    const persisted = await this.persistenceCoordinator.persistExecution(reconciledContext, 'update');
-    await this.persistenceCoordinator.persistEvents(reconciledContext);
-    await this.persistenceCoordinator.checkpoint(reconciledContext, 'update', 'execution_cancelled');
+    const persisted = await this.persistenceCoordinator.persistExecution(reconciledContext, 'update', persistencePrincipal);
+    await this.persistenceCoordinator.persistEvents(reconciledContext, persistencePrincipal);
+    await this.persistenceCoordinator.checkpoint(reconciledContext, 'update', 'execution_cancelled', persistencePrincipal);
 
     return {
       context: reconciledContext,
@@ -184,7 +184,7 @@ class RequestExecutionCoordinator {
     return true;
   }
 
-  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+  async execute(input, { approval = null, approvals = {}, ownerSessionContext = null, persistencePrincipal = null } = {}) {
     await this.assertOwnerSessionContext(ownerSessionContext);
     const requestId = crypto.randomUUID();
     const text = String(input || '').trim();
@@ -215,7 +215,7 @@ class RequestExecutionCoordinator {
     context.record('goal.created', context.goal.snapshot());
     context.metadata.tenantQuota = this.quotaPolicy.toJSON();
     context.record('request.understood', { inputLength: text.length });
-    await this.persistenceCoordinator.persistExecution(context, 'insert');
+    await this.persistenceCoordinator.persistExecution(context, 'insert', persistencePrincipal);
 
     try {
       context.transitionAgentTo(AgentState.LIFECYCLE.PLANNING);
@@ -232,6 +232,7 @@ class RequestExecutionCoordinator {
         requestId,
         input: text,
         tenantId: this.tenantId,
+        persistencePrincipal,
         isCancellationRequested: async () => {
           if (ownerSessionContext !== null) {
             try {
@@ -240,7 +241,7 @@ class RequestExecutionCoordinator {
               return true;
             }
           }
-          return this.isCancellationRequested(context.executionId);
+          return this.isCancellationRequested(context.executionId, persistencePrincipal);
         },
         cancellationReason: ownerSessionContext !== null
           ? 'Owner session is no longer active'
@@ -258,7 +259,7 @@ class RequestExecutionCoordinator {
         }))
       };
       context.complete();
-      const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
+      const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update', persistencePrincipal);
 
       // Some lightweight runtimes intentionally omit an execution repository.
       // Enforce divergence checks whenever durable state is available; absence
@@ -268,9 +269,9 @@ class RequestExecutionCoordinator {
         context = ExecutionContext.restore(activeContextSnapshot);
         context.requestCancellation(cancellationReason);
         context.cancel(cancellationReason);
-        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
-        await this.persistenceCoordinator.persistEvents(context);
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
+        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update', persistencePrincipal);
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
         return {
           requestId,
           type: 'execution_cancelled',
@@ -284,7 +285,7 @@ class RequestExecutionCoordinator {
         });
       }
 
-      await this.persistenceCoordinator.persistEvents(context);
+      await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
 
       const result = loopResult.result;
       return {
@@ -300,13 +301,17 @@ class RequestExecutionCoordinator {
     } catch (error) {
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
-        await this.persistenceCoordinator.persistEvents(context);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
         return { requestId, type: 'execution_cancelled', execution: context.snapshot() };
       }
 
       if (error?.code === 'APPROVAL_REQUIRED') {
         const approvalContext = error.executionContext || {};
+        if (approvalContext.tenantId !== undefined && approvalContext.tenantId !== null &&
+            approvalContext.tenantId !== context.tenantId) {
+          throw new AppError('Approval tenant does not match the active execution tenant', 403, 'APPROVAL_TENANT_MISMATCH');
+        }
         const step = Number(approvalContext.step);
         const planRevision = Number(approvalContext.planRevision || 1);
         const tool = typeof approvalContext.tool === 'string' ? approvalContext.tool : null;
@@ -332,8 +337,8 @@ class RequestExecutionCoordinator {
           summaryKind: approvalSummary.kind,
           changeCount: approvalSummary.changeCount || 0
         });
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_required');
-        await this.persistenceCoordinator.persistEvents(context);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_required', persistencePrincipal);
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
 
         if (this.approvalService?.issue && Number.isInteger(step) && step > 0 && tool && capability) {
           try {
@@ -348,7 +353,8 @@ class RequestExecutionCoordinator {
               agentId,
               operationId,
               ttlMs: 5 * 60 * 1000,
-              metadata: { approvalSummary }
+              metadata: { approvalSummary },
+              ...(persistencePrincipal ? { persistencePrincipal } : {})
             });
             context.record('approval.challenge.persisted', {
               executionId: context.executionId,
@@ -362,8 +368,8 @@ class RequestExecutionCoordinator {
               changeCount: approvalSummary.changeCount || 0
             });
             error.executionContext.approvalId = issued.approvalId;
-            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issued');
-            await this.persistenceCoordinator.persistEvents(context);
+            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issued', persistencePrincipal);
+            await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
           } catch (issueError) {
             context.record('approval.challenge.issue_failed', {
               executionId: context.executionId,
@@ -371,8 +377,8 @@ class RequestExecutionCoordinator {
               planRevision,
               code: issueError.code || 'APPROVAL_ISSUE_FAILED'
             });
-            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issue_failed');
-            await this.persistenceCoordinator.persistEvents(context);
+            await this.persistenceCoordinator.checkpoint(context, 'update', 'approval_issue_failed', persistencePrincipal);
+            await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
             throw issueError;
           }
         }
@@ -383,7 +389,8 @@ class RequestExecutionCoordinator {
       const cancellationBeforeRecovery = await this.reconcileCancellationAfterFailure(
         context,
         context.executionId,
-        activeSnapshot
+        activeSnapshot,
+        persistencePrincipal
       );
       if (cancellationBeforeRecovery) {
         return {
@@ -393,7 +400,7 @@ class RequestExecutionCoordinator {
         };
       }
 
-      await this.recoveryCoordinator.fail({ context, error });
+      await this.recoveryCoordinator.fail({ context, error, persistencePrincipal });
 
       // If cancellation arrived while recovery was committing a failure, the
       // repository refuses that terminal write. Reconcile the durable intent
@@ -401,7 +408,8 @@ class RequestExecutionCoordinator {
       const cancellationAfterRecovery = await this.reconcileCancellationAfterFailure(
         context,
         context.executionId,
-        activeSnapshot
+        activeSnapshot,
+        persistencePrincipal
       );
       if (cancellationAfterRecovery) {
         return {
@@ -457,7 +465,7 @@ class RequestExecutionCoordinator {
     };
   }
 
-  async resume(executionId, { approval = null, approvals = {}, ownerSessionContext = null } = {}) {
+  async resume(executionId, { approval = null, approvals = {}, ownerSessionContext = null, persistencePrincipal = null } = {}) {
     await this.assertOwnerSessionContext(ownerSessionContext);
     if (!this.persistence?.checkpoints?.findLatest) {
       throw Object.assign(new Error('Durable checkpoint storage is required for resume'), {
@@ -466,7 +474,8 @@ class RequestExecutionCoordinator {
     }
 
     const checkpoint = await this.persistence.checkpoints.findLatest(executionId, {
-      tenantId: this.tenantId
+      tenantId: this.tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
     if (!checkpoint) {
       throw Object.assign(new Error(`No checkpoint found for execution: ${executionId}`), {
@@ -475,6 +484,12 @@ class RequestExecutionCoordinator {
     }
 
     let context = ExecutionContext.restore(checkpoint.snapshot);
+    if (persistencePrincipal && context.userId !== persistencePrincipal.ownerId) {
+      throw Object.assign(new Error('Checkpoint owner does not match the authenticated persistence principal'), {
+        code: 'PERSISTENCE_PRINCIPAL_MISMATCH'
+      });
+    }
+
     this.quotaService.assertTenant(context.tenantId || this.tenantId);
     this.quotaService.assertInputSize(context.input);
 
@@ -498,7 +513,7 @@ class RequestExecutionCoordinator {
     // state before the corresponding checkpoint update. The durable execution
     // record is authoritative for terminal state; never re-run side effects.
     const durableExecution = typeof this.persistence?.executions?.findById === 'function'
-      ? await this.persistence.executions.findById(executionId, { tenantId: this.tenantId })
+      ? await this.persistence.executions.findById(executionId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) })
       : null;
 
     if (durableExecution?.cancellationRequested && context.isActive()) {
@@ -509,7 +524,7 @@ class RequestExecutionCoordinator {
       if (typeof this.persistence.checkpoints.save === 'function') {
         await this.persistence.checkpoints.save(
           durableExecution,
-          { reason: 'recovery_reconciled_terminal', tenantId: this.tenantId }
+          { reason: 'recovery_reconciled_terminal', tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) }
         );
       }
 
@@ -555,7 +570,8 @@ class RequestExecutionCoordinator {
     const resumeLease = hasResumeLeaseStore
       ? await this.persistence.checkpoints.acquireResumeLease(executionId, {
           tenantId: this.tenantId,
-          leaseDurationMs: this.resumeLeaseDurationMs
+          leaseDurationMs: this.resumeLeaseDurationMs,
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
         })
       : null;
 
@@ -589,7 +605,8 @@ class RequestExecutionCoordinator {
         durableApproval = await this.approvalService?.getApprovedForExecution?.({
           approvalId: approval.approvalId,
           executionId,
-          tenantId: this.tenantId
+          tenantId: this.tenantId,
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
         }) || null;
         if (!durableApproval) {
           throw Object.assign(new Error('A durable approved decision for this exact execution is required'), {
@@ -602,7 +619,8 @@ class RequestExecutionCoordinator {
           step: pendingStep,
           tool: pendingPlanStep.tool,
           planRevision,
-          tenantId: this.tenantId
+          tenantId: this.tenantId,
+          ...(persistencePrincipal ? { persistencePrincipal } : {})
         });
         if (durableApproval) {
           context.record('approval.recovered', {
@@ -650,7 +668,8 @@ class RequestExecutionCoordinator {
         ? async () => {
             const renewedLease = await this.persistence.checkpoints.renewResumeLease(executionId, resumeLease.leaseId, {
               tenantId: this.tenantId,
-              leaseDurationMs: this.resumeLeaseDurationMs
+              leaseDurationMs: this.resumeLeaseDurationMs,
+              ...(persistencePrincipal ? { persistencePrincipal } : {})
             });
             if (!renewedLease) {
               throw Object.assign(new Error('Execution resume lease was lost before checkpoint commit'), {
@@ -676,6 +695,7 @@ class RequestExecutionCoordinator {
         requestId: context.requestId,
         input: context.input,
         tenantId: this.tenantId,
+        persistencePrincipal,
         agentId: context.metadata?.agentId || 'ORIENT_RUNTIME',
         resumed: true,
         renewResumeLease: heartbeat ? heartbeat.renew : null,
@@ -687,7 +707,7 @@ class RequestExecutionCoordinator {
               return true;
             }
           }
-          return this.isCancellationRequested(context.executionId);
+          return this.isCancellationRequested(context.executionId, persistencePrincipal);
         },
         cancellationReason: ownerSessionContext !== null
           ? 'Owner session is no longer active'
@@ -708,7 +728,7 @@ class RequestExecutionCoordinator {
         }))
       };
       context.complete();
-      const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update');
+      const persistedExecution = await this.persistenceCoordinator.persistExecution(context, 'update', persistencePrincipal);
 
       // A concurrent durable cancellation must remain authoritative on resume,
       // exactly as it does on first execution. Never report success when the
@@ -718,11 +738,11 @@ class RequestExecutionCoordinator {
         context = ExecutionContext.restore(activeContextSnapshot);
         context.requestCancellation(cancellationReason);
         context.cancel(cancellationReason);
-        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update');
-        await this.persistenceCoordinator.persistEvents(context);
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
+        const durableCancellation = await this.persistenceCoordinator.persistExecution(context, 'update', persistencePrincipal);
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         return { resumed: false, reason: 'execution_cancelled', execution: durableCancellation || context.snapshot() };
       }
@@ -733,10 +753,10 @@ class RequestExecutionCoordinator {
         });
       }
 
-      await this.persistenceCoordinator.persistEvents(context);
-      await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_completed');
+      await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
+      await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_completed', persistencePrincipal);
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       }
 
       return {
@@ -756,17 +776,17 @@ class RequestExecutionCoordinator {
           error?.code === 'APPROVAL_NOT_APPROVED' ||
           error?.code === 'APPROVAL_EXPIRED') {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         throw error;
       }
 
       if (error?.code === 'EXECUTION_CANCELLATION_REQUESTED') {
         if (context.isActive()) context.cancel(context.cancellationReason || 'Execution cancelled');
-        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled');
-        await this.persistenceCoordinator.persistEvents(context);
+        await this.persistenceCoordinator.checkpoint(context, 'update', 'execution_cancelled', persistencePrincipal);
+        await this.persistenceCoordinator.persistEvents(context, persistencePrincipal);
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         return { resumed: false, reason: 'execution_cancelled', execution: context.snapshot() };
       }
@@ -775,11 +795,12 @@ class RequestExecutionCoordinator {
       const cancellationBeforeRecovery = await this.reconcileCancellationAfterFailure(
         context,
         executionId,
-        activeSnapshot
+        activeSnapshot,
+        persistencePrincipal
       );
       if (cancellationBeforeRecovery) {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         return {
           resumed: false,
@@ -792,18 +813,20 @@ class RequestExecutionCoordinator {
         await this.recoveryCoordinator.fail({
           context,
           error,
-          checkpointReason: 'resume_failed'
+          checkpointReason: 'resume_failed',
+          persistencePrincipal
         });
       }
 
       const cancellationAfterRecovery = await this.reconcileCancellationAfterFailure(
         context,
         executionId,
-        activeSnapshot
+        activeSnapshot,
+        persistencePrincipal
       );
       if (cancellationAfterRecovery) {
         if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+          await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
         }
         return {
           resumed: false,
@@ -813,7 +836,7 @@ class RequestExecutionCoordinator {
       }
 
       if (resumeLease?.leaseId && typeof this.persistence.checkpoints.releaseResumeLease === 'function') {
-        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId });
+        await this.persistence.checkpoints.releaseResumeLease(executionId, resumeLease.leaseId, { tenantId: this.tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       }
       throw error;
     }

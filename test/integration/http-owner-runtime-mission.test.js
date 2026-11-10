@@ -75,6 +75,7 @@ test('authenticated dashboard request completes a harmless mission through the r
     approvalService,
     persistence,
     tenantId: 'tenant-owner-runtime',
+    userId: 'owner',
     agentRegistry,
     approvalDecisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId),
     ownerSessionAuthorizer: sessionId => ownerAuth.isActiveSession(sessionId)
@@ -82,7 +83,8 @@ test('authenticated dashboard request completes a harmless mission through the r
   const server = createServer({
     memoryRoutes: { home() {}, add() {}, delete() {} },
     agentRoutes: createAgentRoutes(new AgentService(runtime)),
-    ownerAuth
+    ownerAuth,
+    tenantId: 'tenant-owner-runtime'
   });
 
   t.after(async () => {

@@ -104,7 +104,9 @@ async function runLimitedCommand(t, { resourceLimits, timeoutMs = 5000, script }
 
 test('kernel CPU-time limit terminates a CPU-bound command before wall-clock timeout', async t => {
   const result = await runLimitedCommand(t, {
-    timeoutMs: 5000,
+    // Leave enough wall-clock headroom for systemd transient-unit startup on
+    // loaded CI runners; the enforced CPU limit remains one second.
+    timeoutMs: 15000,
     resourceLimits: { maxCpuTimeSeconds: 1 },
     script: 'let value = 0; while (true) value = (value + 1) | 0;'
   });

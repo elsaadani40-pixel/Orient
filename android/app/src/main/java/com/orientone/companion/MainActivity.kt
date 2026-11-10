@@ -55,12 +55,16 @@ private fun OrientCompanionApp() {
     val scope = rememberCoroutineScope()
 
     var portText by remember { mutableStateOf("8080") }
+    var ownerEmail by remember { mutableStateOf("elsaadani40@gmail.com") }
     var password by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmNewPassword by remember { mutableStateOf("") }
     var taskInput by remember { mutableStateOf("") }
     var resultText by remember { mutableStateOf("") }
     var statusText by remember { mutableStateOf("أدخل كلمة مرور المالك للاتصال بخدمة ORIENT المحلية.") }
     var isBusy by remember { mutableStateOf(false) }
     var isAuthenticated by remember { mutableStateOf(false) }
+    var passwordChangeRequired by remember { mutableStateOf(false) }
     var client by remember { mutableStateOf<OwnerSessionClient?>(null) }
 
     fun handleFailure(error: Exception) {
@@ -134,6 +138,15 @@ private fun OrientCompanionApp() {
                                     enabled = !isBusy
                                 )
                                 OutlinedTextField(
+                                    value = ownerEmail,
+                                    onValueChange = { ownerEmail = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("البريد الإلكتروني للمالك") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                    enabled = !isBusy
+                                )
+                                OutlinedTextField(
                                     value = password,
                                     onValueChange = { password = it },
                                     modifier = Modifier.fillMaxWidth(),
@@ -159,11 +172,16 @@ private fun OrientCompanionApp() {
                                                 isBusy = true
                                                 scope.launch {
                                                     try {
-                                                        statusText = candidate.login(password)
+                                                        statusText = candidate.login(ownerEmail, password)
                                                         client = candidate
                                                         isAuthenticated = true
+                                                        passwordChangeRequired = candidate.mustChangePassword
                                                         password = ""
-                                                        resultText = candidate.fetchTasks()
+                                                        if (passwordChangeRequired) {
+                                                            resultText = ""
+                                                        } else {
+                                                            resultText = candidate.fetchTasks()
+                                                        }
                                                     } catch (error: Exception) {
                                                         candidate.clearSession()
                                                         handleFailure(error)
@@ -180,6 +198,91 @@ private fun OrientCompanionApp() {
                                     if (isBusy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.height(18.dp))
                                     else Text("اتصال آمن")
                                 }
+                            }
+                        }
+                    }
+                } else if (passwordChangeRequired) {
+                    item {
+                        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("تغيير كلمة المرور مطلوب", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "تم التحقق من حساب المالك. لأمان الحساب، غيّر كلمة المرور الأولية الآن قبل استخدام مهام Runtime أو أدوات الجهاز.",
+                                    color = muted,
+                                    fontSize = 13.sp
+                                )
+                                OutlinedTextField(
+                                    value = newPassword,
+                                    onValueChange = { newPassword = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("كلمة المرور الجديدة (14 حرفًا على الأقل)") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                    enabled = !isBusy
+                                )
+                                OutlinedTextField(
+                                    value = confirmNewPassword,
+                                    onValueChange = { confirmNewPassword = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("تأكيد كلمة المرور الجديدة") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                    enabled = !isBusy
+                                )
+                                Button(
+                                    onClick = {
+                                        val activeClient = client ?: return@Button
+                                        if (newPassword.length < 14) {
+                                            statusText = "استخدم كلمة مرور لا تقل عن 14 حرفًا."
+                                        } else if (newPassword != confirmNewPassword) {
+                                            statusText = "كلمتا المرور غير متطابقتين."
+                                        } else {
+                                            isBusy = true
+                                            scope.launch {
+                                                try {
+                                                    statusText = activeClient.changePassword(newPassword, confirmNewPassword)
+                                                    passwordChangeRequired = activeClient.mustChangePassword
+                                                    newPassword = ""
+                                                    confirmNewPassword = ""
+                                                    resultText = activeClient.fetchTasks()
+                                                    statusText = "تم تغيير كلمة المرور. اتصال Runtime جاهز."
+                                                } catch (error: Exception) {
+                                                    handleFailure(error)
+                                                } finally {
+                                                    isBusy = false
+                                                }
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isBusy && newPassword.isNotBlank() && confirmNewPassword.isNotBlank()
+                                ) {
+                                    if (isBusy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.height(18.dp))
+                                    else Text("حفظ كلمة المرور والمتابعة")
+                                }
+                                TextButton(
+                                    onClick = {
+                                        val activeClient = client
+                                        isBusy = true
+                                        scope.launch {
+                                            try { activeClient?.logout() } catch (_: Exception) { }
+                                            finally {
+                                                activeClient?.clearSession()
+                                                client = null
+                                                isAuthenticated = false
+                                                passwordChangeRequired = false
+                                                newPassword = ""
+                                                confirmNewPassword = ""
+                                                statusText = "تم تسجيل الخروج."
+                                                isBusy = false
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.align(Alignment.End),
+                                    enabled = !isBusy
+                                ) { Text("تسجيل الخروج") }
                             }
                         }
                     }
@@ -256,6 +359,7 @@ private fun OrientCompanionApp() {
                                                 activeClient?.clearSession()
                                                 client = null
                                                 isAuthenticated = false
+                                                passwordChangeRequired = false
                                                 resultText = ""
                                                 taskInput = ""
                                                 isBusy = false

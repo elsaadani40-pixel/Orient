@@ -13,7 +13,7 @@ class AgentExecutionCoordinator {
     this.validateReplannedPlan = validateReplannedPlan;
   }
 
-  async run({ context, plan, validation, planRevision = 1, replans = 0, previousFingerprint, approval = null, approvals = {}, requestId = context.requestId, input = context.input, tenantId, agentId = null, resumed = false, isCancellationRequested = null, cancellationReason = null, renewResumeLease = null }) {
+  async run({ context, plan, validation, planRevision = 1, replans = 0, previousFingerprint, approval = null, approvals = {}, requestId = context.requestId, input = context.input, tenantId, agentId = null, resumed = false, isCancellationRequested = null, cancellationReason = null, renewResumeLease = null, persistencePrincipal = null }) {
     let loopResult = null;
     let replanningDecision = null;
     let currentPlan = plan;
@@ -65,6 +65,7 @@ class AgentExecutionCoordinator {
           approval,
           approvals,
           tenantId,
+          persistencePrincipal,
           agentId: currentPlan.agentId || agentId || 'ORIENT_RUNTIME',
           isCancellationRequested,
           cancellationReason,
@@ -72,7 +73,7 @@ class AgentExecutionCoordinator {
             if (typeof renewResumeLease === 'function') await renewResumeLease();
             context.metadata.planRevision = checkpointPlanRevision;
             context.metadata.replans = currentReplans;
-            return this.checkpoint(context, 'update', reason + ':plan-' + checkpointPlanRevision + ':step-' + step);
+            return this.checkpoint(context, 'update', reason + ':plan-' + checkpointPlanRevision + ':step-' + step, persistencePrincipal);
           }
         }
       });

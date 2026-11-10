@@ -1,11 +1,12 @@
 const AppError = require('../../core/errors/AppError');
+const { assertPersistencePrincipal } = require('../../core/security/persistence-principal');
 
 class AgentService {
   constructor(runtime) {
     this.runtime = runtime;
   }
 
-  async createTask({ goal, idempotencyKey, ownerSessionContext = null } = {}) {
+  async createTask({ goal, idempotencyKey, ownerSessionContext = null, persistencePrincipal = null } = {}) {
     const clean = typeof goal === 'string' ? goal.trim() : '';
     if (!clean) {
       throw new AppError('الهدف مطلوب', 400, 'TASK_GOAL_REQUIRED');
@@ -22,6 +23,24 @@ class AgentService {
         throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
       }
       await this.runtime.assertOwnerSessionContext(ownerSessionContext);
+    }
+
+    if (ownerSessionContext !== null && persistencePrincipal === null) {
+      throw new AppError('A trusted persistence principal is required for owner task creation', 401, 'PERSISTENCE_PRINCIPAL_REQUIRED');
+    }
+
+    if (persistencePrincipal !== null) {
+      let principal;
+      try {
+        principal = assertPersistencePrincipal(persistencePrincipal);
+      } catch (_) {
+        throw new AppError('A trusted persistence principal is required', 401, 'PERSISTENCE_PRINCIPAL_REQUIRED');
+      }
+      if (!ownerSessionContext || principal.sessionId !== ownerSessionContext.sessionId ||
+          principal.tenantId !== (this.runtime.tenantId || 'local') ||
+          principal.ownerId !== (this.runtime.userId || 'local')) {
+        throw new AppError('Persistence principal does not match the authenticated task context', 403, 'PERSISTENCE_PRINCIPAL_MISMATCH');
+      }
     }
 
     const repository = this.runtime.persistence?.idempotency;
@@ -41,7 +60,8 @@ class AgentService {
       tool: 'api.v1.tasks.create:' + requestDigest,
       planRevision: 1,
       operationId,
-      tenantId
+      tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
 
     if (!begun.created) {
@@ -62,7 +82,7 @@ class AgentService {
     try {
       let result;
       try {
-        result = await this.execute(clean, { ownerSessionContext });
+        result = await this.execute(clean, { ownerSessionContext, persistencePrincipal });
       } catch (error) {
         // Approval-required executions have a durable ID and are paused, not failed.
         // Accept the task without retrying the high-risk side effect.
@@ -77,7 +97,7 @@ class AgentService {
         throw new AppError('لم يُرجع Runtime معرّف مهمة قابلًا للتحقق', 502, 'TASK_EXECUTION_ID_MISSING');
       }
 
-      const execution = await this.getExecutionStatus(executionId);
+      const execution = await this.getExecutionStatus(executionId, { persistencePrincipal });
       task = {
         id: execution.executionId,
         status: execution.status,
@@ -94,7 +114,7 @@ class AgentService {
         await repository.fail(begun.key, {
           code: error?.code || 'TASK_CREATION_FAILED',
           message: error?.message || 'Task creation failed'
-        }, { tenantId });
+        }, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       } catch (_) {
         // Preserve the original runtime error; the durable running record still
         // prevents a retry from silently executing the same key a second time.
@@ -102,13 +122,13 @@ class AgentService {
       throw error;
     }
 
-    await repository.complete(begun.key, task, { tenantId });
+    await repository.complete(begun.key, task, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
     return { task, replayed: false };
   }
 
 
-  async getFinalAnswer(executionId) {
-    const status = await this.getExecutionStatus(executionId);
+  async getFinalAnswer(executionId, { persistencePrincipal = null } = {}) {
+    const status = await this.getExecutionStatus(executionId, { persistencePrincipal });
     if (status.status !== 'completed') return { text: null, status: 'pending' };
 
     const persistence = this.runtime.persistence;
@@ -123,7 +143,7 @@ class AgentService {
 
     const tenantId = this.runtime.tenantId || 'local';
     const operationId = finalAnswerOperationId(tenantId, executionId);
-    const existing = await repository.findByKey(operationId, { tenantId });
+    const existing = await repository.findByKey(operationId, { tenantId, persistencePrincipal });
     if (existing?.status === 'completed') return normalizeFinalAnswer(existing.result);
     if (existing) return { text: null, status: existing.status === 'failed' ? 'unavailable' : 'pending' };
 
@@ -133,7 +153,8 @@ class AgentService {
       tool: 'api.v1.final-answer.generate',
       planRevision: 1,
       operationId,
-      tenantId
+      tenantId,
+      ...(persistencePrincipal ? { persistencePrincipal } : {})
     });
     if (!begun.created) {
       if (begun.record?.status === 'completed') return normalizeFinalAnswer(begun.record.result);
@@ -142,7 +163,7 @@ class AgentService {
 
     let answer = { text: null, status: 'unavailable' };
     try {
-      const execution = await executions.findById(executionId, { tenantId });
+      const execution = await executions.findById(executionId, { tenantId, persistencePrincipal });
       if (!execution || execution.status !== 'completed') {
         answer = { text: null, status: 'unavailable' };
       } else {
@@ -179,7 +200,7 @@ class AgentService {
     }
 
     try {
-      const saved = await repository.complete(begun.key, answer, { tenantId });
+      const saved = await repository.complete(begun.key, answer, { tenantId, ...(persistencePrincipal ? { persistencePrincipal } : {}) });
       if (saved?.status === 'completed') return normalizeFinalAnswer(saved.result);
     } catch (_) {
       // Do not return an unpersisted answer: the next poll must not regenerate it silently.
@@ -232,16 +253,16 @@ class AgentService {
     return this.runtime.getExecutionEvents(executionId, options);
   }
 
-  getExecutionStatus(executionId) {
-    return this.runtime.getExecutionStatus(executionId);
+  getExecutionStatus(executionId, options = {}) {
+    return this.runtime.getExecutionStatus(executionId, options);
   }
 
-  getExecutionApprovals(executionId) {
-    return this.runtime.getExecutionApprovals(executionId);
+  getExecutionApprovals(executionId, options = {}) {
+    return this.runtime.getExecutionApprovals(executionId, options);
   }
 
-  resumeExecution(executionId, options = {}, ownerSessionContext = null) {
-    return this.runtime.resume(executionId, options, ownerSessionContext);
+  resumeExecution(executionId, options = {}, ownerSessionContext = null, persistencePrincipal = null) {
+    return this.runtime.resume(executionId, options, ownerSessionContext, persistencePrincipal);
   }
 
   cancelExecution(executionId, options = {}) {

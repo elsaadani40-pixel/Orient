@@ -2,9 +2,14 @@
 
 **A governed, local-first personal AI operating system — under active engineering.**
 
-ORIENT is being built as one coherent system for researching, planning, executing, verifying, and recovering from work across phone, tablet, and computer. A canonical runtime owns task execution, tool permissions, durable state, approvals, and recovery. Client interfaces must not bypass those controls.
+[![ORIENT Strict CI](https://github.com/elsaadani40-pixel/Orient/actions/workflows/strict-ci.yml/badge.svg?branch=main)](https://github.com/elsaadani40-pixel/Orient/actions/workflows/strict-ci.yml) [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Status: pre-release / active development.** This repository does not claim that every planned capability is complete or production-ready. Use the source, tests, pull requests, and acceptance evidence to distinguish implemented behavior from roadmap.
+> **Product stage:** Pre-release · Active engineering · Local-first
+>
+> ORIENT is not currently advertised as a hosted SaaS, a production-ready enterprise deployment, or a finished cross-device assistant. The repository is the source of truth for shipped code; tests and acceptance evidence—not roadmap language—define what is verified.
+
+
+ORIENT is being built as one coherent system for researching, planning, executing, verifying, and recovering from work across phone, tablet, and computer. A canonical runtime owns task execution, tool permissions, durable state, approvals, and recovery. Client interfaces must not bypass those controls.
 
 ## Start here
 

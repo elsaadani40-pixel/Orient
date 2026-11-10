@@ -43,6 +43,7 @@ class WorkflowScheduler {
     this.workflowRepository = workflowRepository;
     this.tenantId = tenantId;
     this.queue = [];
+    this.pendingEnqueues = new Map();
     this.active = new Map();
     this.cancelled = new Set();
     this.sequence = 0;
@@ -55,6 +56,30 @@ class WorkflowScheduler {
       });
   }
 
+  reserveEnqueue(instance) {
+    if (!this.pendingEnqueues) this.pendingEnqueues = new Map();
+    if (!this.accepting) throw new AppError('Workflow scheduler is shutting down', 503, 'SCHEDULER_SHUTTING_DOWN');
+    if (!instance) throw new AppError('Workflow instance required', 400, 'SCHEDULER_WORKFLOW_REQUIRED');
+    if (this.tenantId && instance.tenantId !== this.tenantId) throw new AppError('Workflow tenant does not match scheduler tenant', 403, 'WORKFLOW_TENANT_MISMATCH');
+    const workflowId = instance.workflowId;
+    if (!workflowId) throw new AppError('Workflow ID is required', 400, 'SCHEDULER_WORKFLOW_REQUIRED');
+    if (this.queue.some(item => item.instance.workflowId === workflowId) || this.active.has(workflowId) || this.pendingEnqueues.has(workflowId)) throw new AppError('Workflow is already queued, active, or being admitted', 409, 'WORKFLOW_ALREADY_SCHEDULED');
+    if (this.queue.length + (this.pendingEnqueues?.size || 0) >= this.maxQueueDepth) throw new AppError('Workflow queue capacity exceeded', 429, 'SCHEDULER_QUEUE_FULL');
+    const reservation = Object.freeze({ workflowId, nonce: Symbol(workflowId) });
+    this.pendingEnqueues.set(workflowId, reservation);
+    return reservation;
+  }
+
+  releaseEnqueueReservation(reservation) {
+    if (!reservation || this.pendingEnqueues.get(reservation.workflowId) !== reservation) return false;
+    this.pendingEnqueues.delete(reservation.workflowId);
+    return true;
+  }
+
+  _consumeEnqueueReservation(instance, reservation) {
+    if (!reservation || this.pendingEnqueues.get(instance.workflowId) !== reservation) throw new AppError('Workflow queue reservation is missing or stale', 409, 'SCHEDULER_RESERVATION_INVALID');
+    this.pendingEnqueues.delete(instance.workflowId);
+  }
   enqueue(
     instance,
     { priority = 0, deadlineAt = null, delayMs = 0 } = {}
@@ -93,8 +118,13 @@ class WorkflowScheduler {
       );
     }
 
-    if (this.queue.length >= this.maxQueueDepth) {
+    if (this.queue.length + (this.pendingEnqueues?.size || 0) >= this.maxQueueDepth) {
       throw new AppError('Workflow queue capacity exceeded', 429, 'SCHEDULER_QUEUE_FULL');
+    }
+    if (this.pendingEnqueues?.has(instance.workflowId) ||
+        this.queue.some(item => item.instance.workflowId === instance.workflowId) ||
+        this.active.has(instance.workflowId)) {
+      throw new AppError('Workflow is already queued, active, or being admitted', 409, 'WORKFLOW_ALREADY_SCHEDULED');
     }
 
     instance.setDeadline(deadlineAt);
@@ -114,6 +144,22 @@ class WorkflowScheduler {
     return instance;
   }
 
+  enqueuePersisted(instance, { priority = 0, deadlineAt = null, delayMs = 0, reservation = null } = {}) {
+    const ownedReservation = reservation || this.reserveEnqueue(instance);
+    try {
+      if (!instance || instance.state !== 'QUEUED') throw new AppError('A durably persisted QUEUED workflow is required', 409, 'SCHEDULER_INVALID_STATE');
+      if (this.tenantId && instance.tenantId !== this.tenantId) throw new AppError('Workflow tenant does not match scheduler tenant', 403, 'WORKFLOW_TENANT_MISMATCH');
+      instance.setDeadline(deadlineAt);
+      const now = this.clock();
+      this._consumeEnqueueReservation(instance, ownedReservation);
+      this.queue.push({ instance, priority, sequence: ++this.sequence, enqueuedAt: now, availableAt: now + Math.max(0, delayMs), deadlineAt });
+      this.sortQueue();
+      return instance;
+    } catch (error) {
+      this.releaseEnqueueReservation(ownedReservation);
+      throw error;
+    }
+  }
   sortQueue() {
     const now = this.clock();
 

@@ -183,17 +183,22 @@ const accessAuditRepository =
 
 const websiteDataDir = process.env.ORIENT_DATA_DIR || path.join(__dirname, '.orient-data');
 const ownerBootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD;
+const ownerEmail = (process.env.ORIENT_OWNER_EMAIL || 'elsaadani40@gmail.com').trim().toLowerCase();
 const ownerStateFile = path.join(websiteDataDir, 'owner.json');
 let ownerWorkProfileStore;
 let ownerChatConversationStore;
 if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
-  throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters). Set it in the local environment before starting ORIENT.');
+  throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (exactly 10 digits). Set it in the protected environment before starting ORIENT.');
+}
+if (!fs.existsSync(ownerStateFile) && !/^\d{10}$/.test(ownerBootstrapPassword || '')) {
+  throw new Error('ORIENT_OWNER_BOOTSTRAP_PASSWORD must contain exactly 10 numeric digits for first-run setup.');
 }
 const ownerIdentityService = new OwnerIdentityService({
   // Keep the website's established state path so legacy owner credentials and
   // public accounts are migrated in place rather than silently abandoned.
   stateFile: require('path').join(websiteDataDir, 'owner.json'),
-  bootstrapPassword: ownerBootstrapPassword
+  bootstrapPassword: ownerBootstrapPassword,
+  ownerEmail
 });
 const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService });
 const website = createOwnerServer({
@@ -386,6 +391,7 @@ const runtime =
     authorizationService,
     persistence,
     tenantId: config.defaultTenantId,
+    userId: 'owner',
     maxQueueDepth: config.maxQueueDepth,
     workflowDispatchWindow: config.workflowDispatchWindow,
     workflowAgingQuantumMs: config.workflowAgingQuantumMs,
@@ -409,7 +415,7 @@ const memoryRoutes =
     config
   );
 
-async function persistOwnerFinalAnswer(executionId) {
+async function persistOwnerFinalAnswer(executionId, persistencePrincipal = null) {
   if (typeof executionId !== 'string' || !executionId) return;
   try {
     const status = await agentService.getExecutionStatus(executionId);
@@ -422,7 +428,7 @@ async function persistOwnerFinalAnswer(executionId) {
       role: 'assistant',
       content: answer.text,
       taskId: executionId
-    });
+    }, persistencePrincipal);
   } catch (error) {
     logger.error('Owner chat final answer persistence failed', {
       code: error?.code || 'OWNER_CHAT_ANSWER_WRITE_FAILED'
@@ -432,9 +438,9 @@ async function persistOwnerFinalAnswer(executionId) {
 
 const agentRoutes =
   createAgentRoutes(agentService, {
-    async onTaskCreated({ executionId, messageId }) {
+    async onTaskCreated({ executionId, messageId, persistencePrincipal }) {
       try {
-        await ownerChatConversationStore.attachTaskId(messageId, executionId);
+        await ownerChatConversationStore.attachTaskId(messageId, executionId, persistencePrincipal);
       } catch (error) {
         logger.error('Owner chat task linkage failed', {
           code: error?.code || 'OWNER_CHAT_TASK_LINK_FAILED'
@@ -442,9 +448,9 @@ const agentRoutes =
       }
       // Persist immediately when task execution already completed, rather than
       // relying exclusively on a connected browser polling the response route.
-      await persistOwnerFinalAnswer(executionId);
+      await persistOwnerFinalAnswer(executionId, persistencePrincipal);
     },
-    async onFinalAnswer({ executionId, text }) {
+    async onFinalAnswer({ executionId, text, persistencePrincipal }) {
       if (typeof text !== 'string' || !text.trim()) return;
       const safeExecutionId = String(executionId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
       try {
@@ -453,7 +459,7 @@ const agentRoutes =
           role: 'assistant',
           content: text,
           taskId: executionId
-        });
+        }, persistencePrincipal);
       } catch (error) {
         logger.error('Owner chat final answer persistence failed', {
           code: error?.code || 'OWNER_CHAT_ANSWER_WRITE_FAILED'
@@ -470,7 +476,7 @@ const server =
     ownerAuth: ownerAuthService,
     ownerProfile: ownerWorkProfileStore,
     ownerChatStore: ownerChatConversationStore,
-    ownerChatHistoryResolver: async messages => {
+    ownerChatHistoryResolver: async (messages, persistencePrincipal) => {
       const answeredTaskIds = new Set(
         messages.filter(message => message.role === 'assistant' && message.taskId)
           .map(message => message.taskId)
@@ -479,10 +485,12 @@ const server =
         message.role === 'user' && message.taskId && !answeredTaskIds.has(message.taskId)
       ).slice(-25);
       for (const message of unresolved) {
-        await persistOwnerFinalAnswer(message.taskId);
+        await persistOwnerFinalAnswer(message.taskId, persistencePrincipal);
       }
     },
     websiteHandler: website.handler,
+    tenantId: config.defaultTenantId,
+    ownerId: 'owner',
     unsandboxedExecution
   });
 
@@ -568,6 +576,8 @@ start().catch((error) => {
 });
 
 const shutdownInOrder = require('./src/core/runtime/shutdown-in-order');
+const createProductionShutdownStages =
+  require('./src/core/runtime/production-shutdown-stages');
 
 function shutdown(signal) {
   logger.info(
@@ -580,34 +590,16 @@ function shutdown(signal) {
   }, config.shutdownGraceMs);
   forceExit.unref();
 
-  void shutdownInOrder({
-    // server.close stops accepting new requests and resolves after active
-    // connections have drained; only then may Runtime and persistence stop.
-    closeIngress: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
-    stopObservations: () => eventStoreSubscriber.stop(),
-    // Production async workers remain disabled until safety gate #189 passes.
+  // This is the same composition exercised by the shutdown integration test.
+  // Production workers remain deliberately absent until safety gate #189 passes.
+  void shutdownInOrder(createProductionShutdownStages({
+    server,
+    eventStoreSubscriber,
     stopWorkers: async () => {},
-    shutdownRuntime: () => runtime.shutdown({ cancelQueued: false }),
-    closePersistence: () => (
-      typeof persistenceRuntime.close === 'function'
-        ? persistenceRuntime.close()
-        : Promise.resolve()
-    ),
-    onError(stage, error) {
-      const labels = {
-        'http-ingress': 'HTTP ingress shutdown failed',
-        observations: 'Event subscriber shutdown failed',
-        workers: 'Worker shutdown failed',
-        runtime: 'Runtime shutdown failed',
-        persistence: 'Persistence shutdown failed'
-      };
-      logger.error(labels[stage] || 'Shutdown stage failed', {
-        stage,
-        code: error?.code || 'SHUTDOWN_STAGE_FAILED',
-        message: error?.message || String(error)
-      });
-    }
-  }).then((failures) => {
+    runtime,
+    persistenceRuntime,
+    logger
+  })).then((failures) => {
     clearTimeout(forceExit);
     process.exit(failures.length > 0 ? 1 : 0);
   }).catch((error) => {
