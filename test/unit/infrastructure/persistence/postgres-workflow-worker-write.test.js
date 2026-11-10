@@ -113,7 +113,9 @@ test('unleased workflow writes cannot overwrite a workflow with an active durabl
     error => error.code === 'WORKFLOW_LEASE_HELD'
   );
   assert.match(calls[0].sql, /FOR UPDATE/);
-  assert.match(calls[1].sql, /workflow_leases/);
+  assert.match(calls[1].sql, /workflow_dispatch_claims/);
+  assert.match(calls[2].sql, /workflow_leases/);
+  assert.equal(calls.length, 3);
 });
 
 
