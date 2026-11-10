@@ -150,8 +150,12 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
   let recovered = 0;
 
   for (const payload of persisted) {
-    if (!payload || ['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state) ||
-        Boolean(payload.metadata && payload.metadata.approvalBlocked)) continue;
+    if (!payload) continue;
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state) ||
+        Boolean(payload.metadata && payload.metadata.approvalBlocked)) {
+      await releaseUnverifiedClaim(payload.workflowId);
+      continue;
+    }
 
     if (dispatchEligibleWorkflowIds && !dispatchEligibleWorkflowIds.has(payload.workflowId)) {
       await releaseUnverifiedClaim(payload.workflowId);
@@ -159,21 +163,31 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
     }
 
     if (this.queue.some(item => item.instance.workflowId === payload.workflowId) ||
-        this.active.has(payload.workflowId)) continue;
+        this.active.has(payload.workflowId)) {
+      await releaseUnverifiedClaim(payload.workflowId);
+      continue;
+    }
 
     const lease = await this.leaseStore.get(payload.workflowId);
-    if (lease && lease.expiresAt > this.clock()) continue;
+    if (lease && lease.expiresAt > this.clock()) {
+      await releaseUnverifiedClaim(payload.workflowId);
+      continue;
+    }
 
     const instance = WorkflowInstance.fromJSON(payload);
     try {
       enforceInputQuota(instance, this.quotaPolicy);
     } catch (error) {
-      instance.state = 'FAILED';
-      instance.metadata = { ...instance.metadata, failureCode: error.code };
-      await this.workflowRepository.save(instance);
+      // Do not mutate a claimed snapshot through the unleased repository path.
+      // Keep the durable state unchanged until a lease-bound worker can persist
+      // an authorized terminal transition.
+      await releaseUnverifiedClaim(payload.workflowId);
       continue;
     }
-    if (!supportsCapabilities(instance, workerCapabilities)) continue;
+    if (!supportsCapabilities(instance, workerCapabilities)) {
+      await releaseUnverifiedClaim(payload.workflowId);
+      continue;
+    }
 
     if (instance.state === 'RUNNING' || instance.state === 'RECOVERING') instance.state = 'RECOVERING';
     if (instance.metadata?.fencingToken !== undefined) {
@@ -190,11 +204,16 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
             tenantId: this.tenantId, workflowId: instance.workflowId, policy: this.quotaPolicy
           });
         } catch (error) {
-          if (error?.code !== 'TENANT_QUOTA_RESERVATION_EXISTS') continue;
+          if (error?.code !== 'TENANT_QUOTA_RESERVATION_EXISTS') {
+            await releaseUnverifiedClaim(payload.workflowId);
+            continue;
+          }
         }
       }
+      // The durable dispatch claim remains held until leaseAsync acquires the
+      // worker lease and performs the first lease-fenced persistence. Saving
+      // here would be an unleased write racing the claim owner.
       super.enqueue(instance, { priority: Number(instance.metadata?.priority || 0), deadlineAt: instance.deadlineAt });
-      await this.workflowRepository.save(instance);
       recovered++;
     }
   }
