@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { performance } = require('node:perf_hooks');
 const AgentService = require('../../../../src/application/agent/agent.service');
+const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
 
 function storePersistedExecution(persistedExecutions, executionId, tenantId = 'tenant-test') {
   persistedExecutions.set(executionId, {
@@ -509,4 +510,123 @@ test('task idempotency stays single-execution under a 250-request concurrent bur
       p95Ms: Number(replayBurst.p95Ms.toFixed(2))
     }
   }));
+});
+
+
+test('owner task idempotency is isolated across owners in the same tenant', async () => {
+  const records = new Map();
+  const idempotency = {
+    async begin(args) {
+      const existing = records.get(args.operationId);
+      if (existing) return { created: false, key: args.operationId, record: existing };
+      const record = { ...args, status: 'running', result: null };
+      records.set(args.operationId, record);
+      return { created: true, key: args.operationId, record };
+    },
+    async complete(key, result) {
+      const record = records.get(key);
+      assert.ok(record);
+      record.status = 'completed';
+      record.result = result;
+      return record;
+    },
+    async fail(key, error) {
+      const record = records.get(key);
+      assert.ok(record);
+      record.status = 'failed';
+      record.error = error;
+      return record;
+    }
+  };
+
+  function createOwner(ownerId) {
+    const sessionId = 'session-' + ownerId;
+    const persistencePrincipal = createPersistencePrincipal({
+      tenantId: 'tenant-shared',
+      ownerId,
+      sessionId
+    });
+    const persistedExecutions = new Map();
+    let executions = 0;
+    const runtime = {
+      tenantId: 'tenant-shared',
+      userId: ownerId,
+      persistence: {
+        idempotency,
+        executions: {
+          async findById(executionId, options = {}) {
+            if (options.tenantId !== 'tenant-shared' ||
+                options.persistencePrincipal?.ownerId !== ownerId) return null;
+            return persistedExecutions.get(executionId) || null;
+          }
+        }
+      },
+      async assertOwnerSessionContext(context) {
+        assert.equal(context?.sessionId, sessionId);
+        return true;
+      },
+      async execute(_goal, options = {}) {
+        executions += 1;
+        persistedExecutions.set(options.executionId, {
+          executionId: options.executionId,
+          tenantId: 'tenant-shared',
+          userId: ownerId,
+          status: 'completed',
+          startedAt: '2026-11-10T10:00:00.000Z',
+          updatedAt: '2026-11-10T10:00:01.000Z'
+        });
+        return { execution: { executionId: options.executionId } };
+      },
+      async getExecutionStatus(executionId) {
+        return persistedExecutions.get(executionId) || null;
+      }
+    };
+    return {
+      service: new AgentService(runtime),
+      ownerSessionContext: { sessionId },
+      persistencePrincipal,
+      get executions() { return executions; }
+    };
+  }
+
+  const ownerA = createOwner('owner-a');
+  const ownerB = createOwner('owner-b');
+  const request = {
+    goal: 'create a private task',
+    idempotencyKey: 'same-owner-independent-key-001'
+  };
+
+  const firstA = await ownerA.service.createTask({
+    ...request,
+    ownerSessionContext: ownerA.ownerSessionContext,
+    persistencePrincipal: ownerA.persistencePrincipal
+  });
+  const firstB = await ownerB.service.createTask({
+    ...request,
+    ownerSessionContext: ownerB.ownerSessionContext,
+    persistencePrincipal: ownerB.persistencePrincipal
+  });
+
+  assert.notEqual(firstA.task.id, firstB.task.id);
+  assert.equal(records.size, 2);
+  assert.equal(ownerA.executions, 1);
+  assert.equal(ownerB.executions, 1);
+
+  const replayA = await ownerA.service.createTask({
+    ...request,
+    ownerSessionContext: ownerA.ownerSessionContext,
+    persistencePrincipal: ownerA.persistencePrincipal
+  });
+  const replayB = await ownerB.service.createTask({
+    ...request,
+    ownerSessionContext: ownerB.ownerSessionContext,
+    persistencePrincipal: ownerB.persistencePrincipal
+  });
+
+  assert.equal(replayA.replayed, true);
+  assert.equal(replayB.replayed, true);
+  assert.equal(replayA.task.id, firstA.task.id);
+  assert.equal(replayB.task.id, firstB.task.id);
+  assert.equal(ownerA.executions, 1);
+  assert.equal(ownerB.executions, 1);
 });
