@@ -211,12 +211,9 @@ test('constructor fails closed when O_NOFOLLOW is unavailable', t => {
   delete require.cache[modulePath];
 
   const originalLoad = Module._load;
-  const unsupportedFs = new Proxy(fs, {
-    get(target, property) {
-      if (property === 'constants') return { ...target.constants, O_NOFOLLOW: undefined };
-      const value = Reflect.get(target, property, target);
-      return typeof value === 'function' ? value.bind(target) : value;
-    }
+  const unsupportedFs = Object.create(fs);
+  Object.defineProperty(unsupportedFs, 'constants', {
+    value: { ...fs.constants, O_NOFOLLOW: undefined }
   });
   let UnsupportedRepository;
   Module._load = function (request, parent, isMain) {
