@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const RequestExecutionCoordinator = require('../../../../src/core/runtime/request-execution-coordinator');
 const AgentState = require('../../../../src/core/agent/state/agent-state');
+const { createPersistencePrincipal } = require('../../../../src/core/security/persistence-principal');
 
 test('preserves plan identity validation and response classification', () => {
   const coordinator = new RequestExecutionCoordinator({
@@ -896,4 +897,162 @@ test('preserves the owner persistence principal when cancellation wins after fai
   assert.strictEqual(lookupOptions[1].persistencePrincipal, principal);
   assert.deepEqual(persistCalls.map(call => call[0]), ['execution', 'events', 'checkpoint']);
   for (const call of persistCalls) assert.strictEqual(call[call.length - 1], principal);
+});
+
+
+function createResumeCheckpoint({ tenantId = 'tenant-a', userId = 'owner-a', executionId = 'execution-resume-identity' } = {}) {
+  return {
+    checkpointId: 'checkpoint-' + executionId,
+    sequence: 3,
+    snapshotSha256: null,
+    snapshot: {
+      executionId,
+      requestId: 'request-' + executionId,
+      goalId: 'goal-' + executionId,
+      tenantId,
+      userId,
+      workspaceId: 'workspace-a',
+      metadata: { tenantId, userId, workspaceId: 'workspace-a', planRevision: 1 },
+      input: 'resume a safe task',
+      status: 'running',
+      plan: { intent: 'test.resume-identity', steps: [{ step: 1, tool: 'test.tool' }] },
+      events: []
+    }
+  };
+}
+
+test('rejects a checkpoint owned by another principal before durable execution lookup or side effects', async () => {
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a',
+    ownerId: 'owner-a',
+    sessionId: 'active-owner-session'
+  });
+  let checkpointReads = 0;
+  let executionLookups = 0;
+  let checkpointWrites = 0;
+  let leaseAcquisitions = 0;
+  let eventWrites = 0;
+  let toolRuns = 0;
+  let quotaChecks = 0;
+  let receivedCheckpointOptions = null;
+
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: { run: async () => { toolRuns += 1; } },
+    recoveryCoordinator: { fail: async () => { throw new Error('recovery must not run'); } },
+    persistence: {
+      checkpoints: {
+        findLatest: async (_executionId, options) => {
+          checkpointReads += 1;
+          receivedCheckpointOptions = options;
+          return createResumeCheckpoint({ userId: 'owner-b' });
+        },
+        save: async () => { checkpointWrites += 1; },
+        acquireResumeLease: async () => { leaseAcquisitions += 1; return { leaseId: 'must-not-acquire' }; }
+      },
+      executions: {
+        findById: async () => { executionLookups += 1; return null; }
+      }
+    },
+    persistenceCoordinator: {
+      persistExecution: async () => {},
+      persistEvents: async () => { eventWrites += 1; },
+      checkpoint: async () => { checkpointWrites += 1; }
+    },
+    quotaService: {
+      assertTenant: () => { quotaChecks += 1; },
+      assertInputSize: () => { quotaChecks += 1; }
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    userId: 'owner-a',
+    workspaceId: 'workspace-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async sessionId => sessionId === principal.sessionId
+  });
+
+  await assert.rejects(
+    coordinator.resume('execution-resume-identity', {
+      ownerSessionContext: { sessionId: principal.sessionId },
+      persistencePrincipal: principal
+    }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_MISMATCH'
+  );
+
+  assert.equal(checkpointReads, 1);
+  assert.deepEqual(receivedCheckpointOptions, { tenantId: 'tenant-a', persistencePrincipal: principal });
+  assert.equal(quotaChecks, 0, 'owner mismatch must be rejected before quota processing');
+  assert.equal(executionLookups, 0, 'owner mismatch must be rejected before durable execution lookup');
+  assert.equal(checkpointWrites, 0, 'owner mismatch must not rewrite a checkpoint');
+  assert.equal(leaseAcquisitions, 0, 'owner mismatch must not acquire a resume lease');
+  assert.equal(eventWrites, 0, 'owner mismatch must not persist events');
+  assert.equal(toolRuns, 0, 'owner mismatch must never resume tool execution');
+});
+
+test('rejects a checkpoint from another tenant before durable execution lookup or side effects', async () => {
+  const principal = createPersistencePrincipal({
+    tenantId: 'tenant-a',
+    ownerId: 'owner-a',
+    sessionId: 'active-owner-session'
+  });
+  let checkpointReads = 0;
+  let executionLookups = 0;
+  let checkpointWrites = 0;
+  let leaseAcquisitions = 0;
+  let eventWrites = 0;
+  let toolRuns = 0;
+  let quotaTenant = null;
+  let receivedCheckpointOptions = null;
+
+  const coordinator = new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: { run: async () => { toolRuns += 1; } },
+    recoveryCoordinator: { fail: async () => { throw new Error('recovery must not run'); } },
+    persistence: {
+      checkpoints: {
+        findLatest: async (_executionId, options) => {
+          checkpointReads += 1;
+          receivedCheckpointOptions = options;
+          return createResumeCheckpoint({ tenantId: 'tenant-b', userId: 'owner-a' });
+        },
+        save: async () => { checkpointWrites += 1; },
+        acquireResumeLease: async () => { leaseAcquisitions += 1; return { leaseId: 'must-not-acquire' }; }
+      },
+      executions: {
+        findById: async () => { executionLookups += 1; return null; }
+      }
+    },
+    persistenceCoordinator: {
+      persistExecution: async () => {},
+      persistEvents: async () => { eventWrites += 1; },
+      checkpoint: async () => { checkpointWrites += 1; }
+    },
+    quotaService: {
+      assertTenant: tenantId => { quotaTenant = tenantId; },
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    userId: 'owner-a',
+    workspaceId: 'workspace-a',
+    maxInputChars: 1000,
+    ownerSessionAuthorizer: async sessionId => sessionId === principal.sessionId
+  });
+
+  await assert.rejects(
+    coordinator.resume('execution-resume-identity', {
+      ownerSessionContext: { sessionId: principal.sessionId },
+      persistencePrincipal: principal
+    }),
+    error => error.code === 'TENANT_CONTEXT_MISMATCH'
+  );
+
+  assert.equal(checkpointReads, 1);
+  assert.deepEqual(receivedCheckpointOptions, { tenantId: 'tenant-a', persistencePrincipal: principal });
+  assert.equal(quotaTenant, 'tenant-b');
+  assert.equal(executionLookups, 0, 'tenant mismatch must be rejected before durable execution lookup');
+  assert.equal(checkpointWrites, 0, 'tenant mismatch must not rewrite a checkpoint');
+  assert.equal(leaseAcquisitions, 0, 'tenant mismatch must not acquire a resume lease');
+  assert.equal(eventWrites, 0, 'tenant mismatch must not persist events');
+  assert.equal(toolRuns, 0, 'tenant mismatch must never resume tool execution');
 });
