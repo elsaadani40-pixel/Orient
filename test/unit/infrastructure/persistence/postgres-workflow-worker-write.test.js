@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { PostgresWorkflowRepository } = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
 const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
 
-function fixture({ workerRows = 1, updateRows = 1 } = {}) {
+function fixture({ workerRows = 1, workflowRows = 1, leaseRows = 1, updateRows = 1 } = {}) {
   const calls = [];
   let transactions = 0;
   let requireLease = false;
@@ -13,6 +13,8 @@ function fixture({ workerRows = 1, updateRows = 1 } = {}) {
     async query(sql, values = []) {
       calls.push({ sql, values });
       if (sql.includes('FROM worker_nodes')) return { rowCount: workerRows, rows: workerRows ? [{}] : [] };
+      if (sql.includes('FROM workflows')) return { rowCount: workflowRows, rows: workflowRows ? [{}] : [] };
+      if (sql.includes('FROM workflow_leases')) return { rowCount: leaseRows, rows: leaseRows ? [{}] : [] };
       if (sql.includes('UPDATE workflows')) return { rowCount: updateRows, rows: [] };
       throw new Error('Unexpected SQL: ' + sql);
     }
@@ -46,10 +48,16 @@ test('fenced workflow writes require a lease-bound worker transaction and match 
   assert.equal(h.requireLease, true);
   assert.match(h.calls[0].sql, /session_id=\$3/);
   assert.match(h.calls[0].sql, /status='READY'/);
-  assert.match(h.calls[1].sql, /worker_session_id=\$8/);
-  assert.match(h.calls[1].sql, /lease_id=\$6/);
-  assert.match(h.calls[1].sql, /fencing_token=\$9/);
-  assert.deepEqual(h.calls[1].values.slice(5), ['lease-a', 'worker-a', 'session-a', 71]);
+  assert.match(h.calls[0].sql, /clock_timestamp\(\)/);
+  assert.match(h.calls[1].sql, /FROM workflows/);
+  assert.match(h.calls[1].sql, /FOR UPDATE/);
+  assert.match(h.calls[2].sql, /worker_session_id=\$5/);
+  assert.match(h.calls[2].sql, /lease_id=\$3/);
+  assert.match(h.calls[2].sql, /fencing_token=\$6/);
+  assert.match(h.calls[2].sql, /clock_timestamp\(\)/);
+  assert.match(h.calls[2].sql, /FOR UPDATE/);
+  assert.deepEqual(h.calls[2].values, ['workflow-a', 'tenant-a', 'lease-a', 'worker-a', 'session-a', 71]);
+  assert.match(h.calls[3].sql, /UPDATE workflows/);
 });
 
 test('fenced workflow writes reject expired or replaced worker sessions', async () => {
@@ -63,12 +71,12 @@ test('fenced workflow writes reject expired or replaced worker sessions', async 
 });
 
 test('fenced workflow writes reject stale lease rows even for a live worker session', async () => {
-  const h = fixture({ updateRows: 0 });
+  const h = fixture({ leaseRows: 0 });
   await assert.rejects(
     h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal }),
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
-  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls.length, 3);
 });
 
 test('fenced workflow writes reject missing or mismatched principals before database access', async () => {
