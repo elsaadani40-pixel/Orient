@@ -73,7 +73,7 @@ test('lock release never removes a replacement lock directory', t => {
   }), error => error.code === 'ENOENT');
 
   assert.equal(fs.readFileSync(path.join(repository.lockPath, replacementMarker), 'utf8'), 'successor');
-  assert.equal(fs.readFileSync(path.join(displacedPath), 'utf8'), undefined);
+  assert.equal(fs.readdirSync(displacedPath).some(name => name.startsWith('owner.')), true);
 });
 
 test('lock initialization failure leaves the incomplete lock for operator recovery', t => {
