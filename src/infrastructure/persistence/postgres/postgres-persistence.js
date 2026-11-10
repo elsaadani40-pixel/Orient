@@ -997,29 +997,46 @@ class PostgresWorkflowRepository {
         const worker = await client.query(
           `SELECT 1 FROM worker_nodes
            WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
-             AND status='READY' AND expires_at > NOW()
+             AND status='READY' AND expires_at > clock_timestamp()
            FOR UPDATE`,
           [effectiveTenant, principal.workerId, principal.sessionId]
         );
         if (worker.rowCount !== 1) {
           throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
         }
-        const result = await client.query(
-          `UPDATE workflows
-           SET state=$3,updated_at=$4,payload=$5
-           WHERE workflow_id=$1 AND tenant_id=$2
-             AND EXISTS (
-               SELECT 1 FROM workflow_leases
-               WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$6
-                 AND worker_id=$7 AND worker_session_id=$8
-                 AND fencing_token=$9 AND expires_at > NOW()
-             )`,
-          [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(),
-            item, principal.leaseId, principal.workerId, principal.sessionId, principal.fencingToken]
+
+        // Lock order is worker session -> workflow -> lease. Lease acquisition and
+        // recovery use the same order, so a takeover cannot race this write.
+        const workflow = await client.query(
+          'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+          [item.workflowId, effectiveTenant]
         );
-        if (result.rowCount !== 1) {
+        if (workflow.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+        }
+
+        const lease = await client.query(
+          `SELECT 1 FROM workflow_leases
+           WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3
+             AND worker_id=$4 AND worker_session_id=$5
+             AND fencing_token=$6 AND expires_at > clock_timestamp()
+           FOR UPDATE`,
+          [item.workflowId, effectiveTenant, principal.leaseId,
+            principal.workerId, principal.sessionId, principal.fencingToken]
+        );
+        if (lease.rowCount !== 1) {
           throw Object.assign(new Error('Workflow write rejected by worker session and durable fencing'), {
             code: 'WORKFLOW_FENCING_REJECTED'
+          });
+        }
+
+        const result = await client.query(
+          'UPDATE workflows SET state=$3,updated_at=$4,payload=$5 WHERE workflow_id=$1 AND tenant_id=$2',
+          [item.workflowId, effectiveTenant, item.state, item.updatedAt || new Date().toISOString(), item]
+        );
+        if (result.rowCount !== 1) {
+          throw Object.assign(new Error('Workflow write target changed during fenced persistence'), {
+            code: 'WORKFLOW_NOT_FOUND'
           });
         }
         return item;
@@ -1474,7 +1491,7 @@ class PostgresWorkflowLeaseRepository {
     const result = await client.query(
       `SELECT 1 FROM worker_nodes
        WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
-         AND status='READY' AND expires_at > NOW()
+         AND status='READY' AND expires_at > clock_timestamp()
        FOR UPDATE`,
       [principal.tenantId, principal.workerId, principal.sessionId]
     );
