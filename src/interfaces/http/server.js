@@ -747,7 +747,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
         req.method === 'GET' &&
         requestUrl.pathname === '/approvals/pending'
       ) {
-        await agentRoutes.pendingApprovals(req, res);
+        await agentRoutes.pendingApprovals(req, res, ownerPersistencePrincipal);
         return;
       }
 

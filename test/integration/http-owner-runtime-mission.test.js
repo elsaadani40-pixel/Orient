@@ -80,9 +80,10 @@ test('authenticated dashboard request completes a harmless mission through the r
     approvalDecisionAuthorizer: ({ actorId }) => ownerAuth.isActiveSession(actorId),
     ownerSessionAuthorizer: sessionId => ownerAuth.isActiveSession(sessionId)
   });
+  const agentService = new AgentService(runtime);
   const server = createServer({
     memoryRoutes: { home() {}, add() {}, delete() {} },
-    agentRoutes: createAgentRoutes(new AgentService(runtime)),
+    agentRoutes: createAgentRoutes(agentService),
     ownerAuth,
     tenantId: 'tenant-owner-runtime'
   });
@@ -238,6 +239,20 @@ test('authenticated dashboard request completes a harmless mission through the r
     body: JSON.stringify({ executionId: 'http-approval-execution', decision: 'rejected' })
   });
   assert.equal(conflictingDecision.status, 409, 'a durable approval decision must not be overwritten by a conflicting choice');
+
+  let pendingApprovalPrincipal = null;
+  const originalListPendingApprovals = agentService.listPendingApprovals.bind(agentService);
+  agentService.listPendingApprovals = options => {
+    pendingApprovalPrincipal = options.persistencePrincipal || null;
+    return originalListPendingApprovals(options);
+  };
+  const pendingApprovalsResponse = await fetch(origin + '/approvals/pending', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(pendingApprovalsResponse.status, 200);
+  assert.equal(pendingApprovalPrincipal?.tenantId, 'tenant-owner-runtime');
+  assert.equal(pendingApprovalPrincipal?.ownerId, 'owner');
+  assert.ok(pendingApprovalPrincipal?.sessionId);
 
   const dashboard = await fetch(origin + '/dashboard', { headers: { Cookie: cookie } });
   assert.equal(dashboard.status, 200);
