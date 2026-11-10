@@ -30,20 +30,26 @@ test('unscoped local aggregate events do not advance a tenant aggregate sequence
   );
 });
 
-test('tenant-owned aggregate events do not advance the local aggregate sequence', t => {
+test('local aggregate sequence includes unscoped events but excludes tenant-owned events', t => {
   const repository = createRepository(t);
+  repository.appendMissionEvent({
+    id: 'local-unscoped-event', aggregateId: 'shared-aggregate-id', sequence: 1,
+    type: 'mission.local', data: {}
+  });
   repository.appendMissionEvent({
     id: 'tenant-a-event', aggregateId: 'shared-aggregate-id', sequence: 1,
     type: 'mission.tenant', data: { tenantId: 'tenant-a' }
   }, { tenantId: 'tenant-a' });
+
   const localEvent = repository.appendMissionEvent({
-    id: 'local-event', aggregateId: 'shared-aggregate-id', sequence: 1,
+    id: 'local-event', aggregateId: 'shared-aggregate-id', sequence: 2,
     type: 'mission.local', data: { tenantId: 'local' }
   }, { tenantId: 'local' });
-  assert.equal(localEvent.sequence, 1);
+
+  assert.equal(localEvent.sequence, 2);
   assert.deepEqual(
     repository.findByAggregateId('shared-aggregate-id', { tenantId: 'local' }).map(event => event.id),
-    ['local-event']
+    ['local-unscoped-event', 'local-event']
   );
 });
 
