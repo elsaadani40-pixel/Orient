@@ -46,3 +46,28 @@ test('tenant-owned aggregate events do not advance the local aggregate sequence'
     ['local-event']
   );
 });
+
+test('an event id owned by another tenant cannot be replayed or overwritten', t => {
+  const repository = createRepository(t);
+  const original = repository.appendMissionEvent({
+    id: 'cross-tenant-stable-id',
+    aggregateId: 'tenant-a-aggregate',
+    sequence: 1,
+    type: 'mission.created',
+    data: { tenantId: 'tenant-a', state: 'original' }
+  }, { tenantId: 'tenant-a' });
+
+  assert.throws(
+    () => repository.appendMissionEvent({
+      id: 'cross-tenant-stable-id',
+      aggregateId: 'tenant-b-aggregate',
+      sequence: 1,
+      type: 'mission.created',
+      data: { tenantId: 'tenant-b', state: 'attacker-replay' }
+    }, { tenantId: 'tenant-b' }),
+    error => error.code === 'EVENT_TENANT_MISMATCH'
+  );
+
+  assert.deepEqual(repository.findByAggregateId('tenant-a-aggregate', { tenantId: 'tenant-a' }), [original]);
+  assert.deepEqual(repository.findByAggregateId('tenant-b-aggregate', { tenantId: 'tenant-b' }), []);
+});
