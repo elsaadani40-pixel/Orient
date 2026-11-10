@@ -3,7 +3,7 @@ name: ORIENT — EventRepository Mainline Mutation Evidence v3
 on:
   push:
     branches:
-      - security/event-repository-mutation-mainline-v3
+      - main
     paths:
       - ".github/workflows/event-repository-mutation-mainline-v3.yml"
       - "stryker.event-repository.config.json"
@@ -13,6 +13,7 @@ on:
       - "test/unit/infrastructure/mission-event-repository.test.js"
       - "test/unit/infrastructure/persistence/json/event-repository.security.test.js"
       - "test/unit/infrastructure/persistence/json/event-repository-tenant-boundaries.test.js"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     steps:
-      - name: Checkout exact mainline-derived evidence branch
+      - name: Checkout exact mainline commit
         uses: actions/checkout@v7
       - name: Setup Node
         uses: actions/setup-node@v6
