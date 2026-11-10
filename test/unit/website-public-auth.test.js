@@ -31,7 +31,7 @@ test('public registration creates a regular account and never grants owner dashb
   for (const protectedPath of ['/dashboard.html', '/owner.html', '/owner']) {
     const blocked = await fetch(base + protectedPath, { redirect: 'manual' });
     assert.equal(blocked.status, 302, protectedPath + ' must require owner authentication');
-    assert.equal(blocked.headers.get('location'), '/auth?mode=owner');
+    assert.equal(blocked.headers.get('location'), '/auth');
   }
 
   const registered = await fetch(base + '/api/auth/register', {
@@ -47,7 +47,7 @@ test('public registration creates a regular account and never grants owner dashb
   assert.equal(accountRoute.headers.get('location'), '/account.html');
   const accountPage = await fetch(base + '/account.html', { headers: { cookie }, redirect: 'manual' });
   assert.equal(accountPage.status, 200);
-  assert.match(await accountPage.text(), /PERSONAL ACCOUNT/);
+  assert.match(await accountPage.text(), /YOUR ORIENT WORKSPACE/);
 
   const ownerApi = await fetch(base + '/api/owner/users', { headers: { cookie } });
   assert.equal(ownerApi.status, 401);
@@ -93,10 +93,11 @@ test('owner alone can open the dashboard after mandatory password replacement', 
   for (const protectedPath of ['/owner', '/dashboard.html']) {
     const beforeChange = await fetch(base + protectedPath, { headers: { cookie }, redirect: 'manual' });
     assert.equal(beforeChange.status, 302);
-    assert.equal(beforeChange.headers.get('location'), '/owner.html');
+    assert.equal(beforeChange.headers.get('location'), '/account.html');
   }
-  const setupPage = await fetch(base + '/owner.html', { headers: { cookie }, redirect: 'manual' });
+  const setupPage = await fetch(base + '/account.html', { headers: { cookie }, redirect: 'manual' });
   assert.equal(setupPage.status, 200);
+  assert.match(await setupPage.text(), /OWNER CAPABILITIES/);
 
   const changed = await fetch(base + '/api/owner/password', {
     method: 'POST', headers: { 'content-type': 'application/json', cookie },
@@ -110,11 +111,12 @@ test('owner alone can open the dashboard after mandatory password replacement', 
   assert.equal((await fetch(base + '/api/owner/me', { headers: { cookie: staleCookie } })).status, 401);
   assert.equal((await fetch(base + '/api/owner/me', { headers: { cookie } })).status, 200);
 
-  for (const protectedPath of ['/owner', '/owner.html']) {
-    const dashboard = await fetch(base + protectedPath, { headers: { cookie }, redirect: 'manual' });
-    assert.equal(dashboard.status, 302);
-    assert.equal(dashboard.headers.get('location'), '/dashboard.html');
-  }
+  const ownerAlias = await fetch(base + '/owner', { headers: { cookie }, redirect: 'manual' });
+  assert.equal(ownerAlias.status, 302);
+  assert.equal(ownerAlias.headers.get('location'), '/dashboard.html');
+  const legacySetup = await fetch(base + '/owner.html', { headers: { cookie }, redirect: 'manual' });
+  assert.equal(legacySetup.status, 302);
+  assert.equal(legacySetup.headers.get('location'), '/account.html');
 
   const html = await fetch(base + '/dashboard.html', { headers: { cookie }, redirect: 'manual' });
   assert.equal(html.status, 200);
@@ -220,52 +222,4 @@ test('a public user can change their password, rotate the active session, and no
   assert.equal(newLogin.status, 200);
   const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8'));
   assert.equal(JSON.stringify(stored).includes(newPassword), false);
-});
-
-
-test('email registration and login use a unique normalized email identity', async t => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-email-auth-'));
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-  const instance = createOwnerServer({ dataDir, bootstrapPassword: 'temporary-owner-password-9F!x', log: () => {} });
-  const base = await listen(instance.server);
-  t.after(() => close(instance.server));
-
-  const email = 'Customer@Example.com';
-  const password = 'secure-email-password-123';
-  const registered = await fetch(base + '/api/auth/register', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password })
-  });
-  assert.equal(registered.status, 201);
-  const registeredBody = await registered.json();
-  assert.equal(registeredBody.email, 'customer@example.com');
-  assert.equal(registeredBody.role, 'user');
-  assert.equal(registeredBody.emailVerified, false);
-  const cookie = registered.headers.get('set-cookie').split(';')[0];
-
-  const duplicate = await fetch(base + '/api/auth/register', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: 'customer@example.com', password })
-  });
-  assert.equal(duplicate.status, 409);
-
-  const login = await fetch(base + '/api/auth/login', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: ' CUSTOMER@example.com ', password })
-  });
-  assert.equal(login.status, 200);
-  assert.equal((await login.json()).email, 'customer@example.com');
-
-  const invalid = await fetch(base + '/api/auth/register', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: 'not-an-email', password })
-  });
-  assert.equal(invalid.status, 400);
-
-  const me = await fetch(base + '/api/auth/me', { headers: { cookie } });
-  assert.equal(me.status, 200);
-  assert.equal((await me.json()).role, 'user');
-  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'users.json'), 'utf8'));
-  assert.equal(stored[0].email, 'customer@example.com');
-  assert.equal(JSON.stringify(stored).includes(password), false);
 });

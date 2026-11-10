@@ -156,7 +156,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           'Pragma': 'no-cache',
           'Referrer-Policy': 'no-referrer',
           'X-Frame-Options': 'DENY',
-          'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+          'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         });
         res.end(require('fs').readFileSync(require('path').join(__dirname, 'owner-dashboard.html'), 'utf8'));
         return;
@@ -217,7 +217,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           'X-Content-Type-Options': 'nosniff',
           'Cache-Control': 'no-store',
           'Pragma': 'no-cache',
-          'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+          'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
           'Referrer-Policy': 'no-referrer',
           'X-Frame-Options': 'DENY'
         });
@@ -245,6 +245,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
         const result = await ownerAuth.login({
+          email: typeof payload.email === 'string' ? payload.email : undefined,
           password: payload.password,
           sourceIp: req.socket?.remoteAddress || 'unknown'
         });
@@ -686,7 +687,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           'Content-Type': 'text/html; charset=utf-8',
           'X-Content-Type-Options': 'nosniff',
           'Cache-Control': 'no-store',
-          'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
+          'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
           'Referrer-Policy': 'no-referrer'
         });
         res.end(require('fs').readFileSync(require('path').join(__dirname, 'dashboard.html'), 'utf8'));

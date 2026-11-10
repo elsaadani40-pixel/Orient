@@ -1,11 +1,16 @@
 package com.orientone.companion
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -28,6 +33,18 @@ class PhoneNumberToolsTest {
         assertNull(PhoneNumberTools.sanitize("123;DROP"))
         assertNull(PhoneNumberTools.sanitize("20+123"))
         assertNull(PhoneNumberTools.sanitize("++20100123"))
+    }
+
+    @Test
+    fun manifestRequestsContactsOnlyForTheUserInitiatedLookupAndNeverRequestsDirectCalling() {
+        val context = RuntimeEnvironment.getApplication<android.app.Application>()
+        val permissions = context.packageManager.getPackageInfo(
+            context.packageName,
+            PackageManager.GET_PERMISSIONS
+        ).requestedPermissions?.toSet().orEmpty()
+
+        assertTrue(Manifest.permission.READ_CONTACTS in permissions)
+        assertFalse(Manifest.permission.CALL_PHONE in permissions)
     }
 
     @Test

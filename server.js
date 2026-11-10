@@ -227,7 +227,7 @@ function createOwnerServer(options = {}) {
 
     if (req.method === 'GET' && url.pathname === '/api/auth/me') {
       const owner = sessionFor(req);
-      if (owner) return sendJson(res, 200, { username: 'Admin', role: 'owner', passwordChangeRequired: ownerPasswordChangeRequired() });
+      if (owner) return sendJson(res, 200, { username: 'Admin', email: identity ? identity.status().email : undefined, role: 'owner', passwordChangeRequired: ownerPasswordChangeRequired() });
       const session = userSessionFor(req);
       if (session) return sendJson(res, 200, { username: session.username, role: 'user' });
       return sendJson(res, 401, { error: 'Authentication required' });
@@ -247,51 +247,45 @@ function createOwnerServer(options = {}) {
         const nextSignup = signupAttempt.until > Date.now() ? signupAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
         nextSignup.count += 1;
         registrationAttempts.set(ip, nextSignup);
-        const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
-        const suppliedUsername = typeof body.username === 'string' ? body.username.trim() : '';
+        const username = typeof body.username === 'string' ? body.username.trim() : '';
         const password = body.password;
-        if (email && (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email) || email.length > 254)) {
-          return sendJson(res, 400, { error: 'أدخل بريدًا إلكترونيًا صحيحًا.' });
-        }
-        if (!email && !suppliedUsername) {
-          return sendJson(res, 400, { error: 'أدخل البريد الإلكتروني.' });
-        }
-        if (suppliedUsername && !/^[A-Za-z0-9_ -]{3,32}$/.test(suppliedUsername)) {
-          return sendJson(res, 400, { error: 'اسم المستخدم يجب أن يكون من 3 إلى 32 حرفًا أو رقمًا.' });
-        }
-        if (typeof password !== 'string' || password.length < 12 || password.length > 1024) {
-          return sendJson(res, 400, { error: 'استخدم كلمة مرور لا تقل عن 12 حرفًا.' });
-        }
-        if (email && users.some(user => user.email?.toLowerCase() === email)) {
-          return sendJson(res, 409, { error: 'هذا البريد الإلكتروني مسجل بالفعل.' });
-        }
-        const localPart = email ? (email.split('@')[0].replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 20) || 'orient_user') : '';
-        const username = suppliedUsername || (localPart + '_' + crypto.randomBytes(3).toString('hex'));
-        if (username.toLowerCase() === 'admin' || users.some(user => user.username.toLowerCase() === username.toLowerCase())) {
-          return sendJson(res, 409, { error: 'اسم المستخدم مستخدم بالفعل.' });
-        }
-        const user = { id: crypto.randomUUID(), ...(email ? { email, emailVerified: false } : {}), username, password: hashPassword(password), role: 'user', createdAt: new Date().toISOString(), disabled: false };
+        if (!/^[A-Za-z0-9_ -]{3,32}$/.test(username)) return sendJson(res, 400, { error: 'اسم المستخدم يجب أن يكون من 3 إلى 32 حرفًا أو رقمًا.' });
+        if (username.toLowerCase() === 'admin') return sendJson(res, 400, { error: 'اسم المستخدم محجوز.' });
+        if (typeof password !== 'string' || password.length < 12 || password.length > 1024) return sendJson(res, 400, { error: 'استخدم كلمة مرور لا تقل عن 12 حرفًا.' });
+        if (users.some(user => user.username.toLowerCase() === username.toLowerCase())) return sendJson(res, 409, { error: 'اسم المستخدم مستخدم بالفعل.' });
+        const user = { id: crypto.randomUUID(), username, password: hashPassword(password), role: 'user', createdAt: new Date().toISOString(), disabled: false };
         try { persistUsers([...users, user]); }
         catch { return sendJson(res, 500, { error: 'تعذر حفظ الحساب بأمان.' }); }
         const token = crypto.randomBytes(32).toString('base64url');
-        userSessions.set(token, { userId: user.id, username: user.username, email: user.email, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
-        return sendJson(res, 201, { ok: true, email, username, role: 'user', emailVerified: false }, { 'Set-Cookie': userCookie(token, req) });
+        userSessions.set(token, { userId: user.id, username: user.username, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+        return sendJson(res, 201, { ok: true, username, role: 'user' }, { 'Set-Cookie': userCookie(token, req) });
       }
 
       if (url.pathname === '/api/auth/login') {
-        const identifier = typeof body.email === 'string' ? body.email.trim().toLowerCase()
-          : typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
-        if (!identifier || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل البريد الإلكتروني وكلمة المرور.' });
-        const user = users.find(item => (item.email && item.email.toLowerCase() === identifier) || item.username.toLowerCase() === identifier);
+        const identifier = typeof body.identifier === 'string' ? body.identifier.trim() : typeof body.username === 'string' ? body.username.trim() : '';
+        if (!identifier || typeof body.password !== 'string') return sendJson(res, 400, { error: 'أدخل البريد الإلكتروني أو اسم المستخدم وكلمة المرور.' });
+        const ownerStatus = identity ? identity.status() : null;
+        if (identity && identifier.toLowerCase() === String(ownerStatus.email || '').toLowerCase()) {
+          const result = await identity.login({ email: identifier, password: body.password, sourceIp: ip });
+          if (!result.ok) {
+            const status = result.code === 'OWNER_LOGIN_RATE_LIMITED' || result.code === 'OWNER_SESSION_LIMIT_REACHED' ? 429 : 401;
+            return sendJson(res, status, { error: 'بيانات الدخول غير صحيحة.' });
+          }
+          attempts.delete(ip);
+          const maxAge = Math.max(1, Math.floor((result.expiresAt - Date.now()) / 1000));
+          return sendJson(res, 200, { ok: true, username: 'Admin', role: 'owner', email: ownerStatus.email, csrfToken: result.csrfToken, expiresAt: result.expiresAt, passwordChangeRequired: result.passwordChangeRequired },
+            { 'Set-Cookie': sessionCookie(result.token, req).replace('Max-Age=28800', 'Max-Age=' + maxAge) });
+        }
+        const user = users.find(item => item.username.toLowerCase() === identifier.toLowerCase());
         if (!user || user.disabled || !verifyPassword(body.password, user.password)) {
           const next = authAttempt.until > Date.now() ? authAttempt : { count: 0, until: Date.now() + 15 * 60 * 1000 };
           next.count += 1; attempts.set(ip, next);
-          return sendJson(res, 401, { error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة.' });
+          return sendJson(res, 401, { error: 'اسم المستخدم أو كلمة المرور غير صحيحة.' });
         }
         attempts.delete(ip);
         const token = crypto.randomBytes(32).toString('base64url');
-        userSessions.set(token, { userId: user.id, username: user.username, email: user.email || null, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
-        return sendJson(res, 200, { ok: true, email: user.email || null, username: user.username, role: 'user', emailVerified: user.emailVerified === true }, { 'Set-Cookie': userCookie(token, req) });
+        userSessions.set(token, { userId: user.id, username: user.username, role: 'user', expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+        return sendJson(res, 200, { ok: true, username: user.username, role: 'user' }, { 'Set-Cookie': userCookie(token, req) });
       }
 
       if (url.pathname === '/api/auth/password') {
@@ -511,33 +505,32 @@ function createOwnerServer(options = {}) {
     if (req.method === 'GET' && (url.pathname === '/account' || url.pathname === '/account/' || url.pathname === '/account.html')) {
       const userSession = userSessionFor(req);
       const ownerSession = sessionFor(req);
-      const target = ownerSession ? '/owner' : userSession ? '/account.html' : '/auth';
+      const target = ownerSession || userSession ? '/account.html' : '/auth';
       if (url.pathname !== target && !(target === '/account.html' && url.pathname === '/account.html')) {
         res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
         return res.end();
       }
-      if (target === '/account.html' && !userSession) {
+      if (target === '/account.html' && !userSession && !ownerSession) {
         res.writeHead(302, { Location: '/auth', 'Cache-Control': 'no-store' });
         return res.end();
       }
     }
 
-    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/owner.html' || url.pathname === '/dashboard.html')) {
+    if (req.method === 'GET' && url.pathname === '/owner.html') {
+      const target = sessionFor(req) ? '/account.html' : '/auth';
+      res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+
+    if (req.method === 'GET' && (url.pathname === '/owner' || url.pathname === '/owner/' || url.pathname === '/dashboard.html')) {
       const ownerSession = sessionFor(req);
-      if (!ownerSession) {
-        res.writeHead(302, { Location: '/auth?mode=owner', 'Cache-Control': 'no-store' });
-        return res.end();
-      }
-      if (ownerPasswordChangeRequired()) {
-        if (url.pathname !== '/owner.html') {
-          res.writeHead(302, { Location: '/owner.html', 'Cache-Control': 'no-store' });
-          return res.end();
-        }
-      } else if (url.pathname !== '/dashboard.html') {
-        res.writeHead(302, { Location: '/dashboard.html', 'Cache-Control': 'no-store' });
+      const target = !ownerSession ? '/auth' : ownerPasswordChangeRequired() ? '/account.html' : '/dashboard.html';
+      if (url.pathname !== target) {
+        res.writeHead(302, { Location: target, 'Cache-Control': 'no-store' });
         return res.end();
       }
     }
+
 
     const pathname = url.pathname === '/' ? '/index.html' : url.pathname === '/auth' || url.pathname === '/auth/' ? '/auth.html' : url.pathname === '/account' || url.pathname === '/account/' ? '/account.html' : url.pathname;
     let filePath;

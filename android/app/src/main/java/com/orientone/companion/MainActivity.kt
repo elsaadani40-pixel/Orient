@@ -70,7 +70,11 @@ private fun OrientApp() {
     var isDarkTheme by remember { mutableStateOf(preferences.getBoolean("dark_theme", true)) }
     var selectedSection by remember { mutableStateOf(OrientSection.HOME) }
     var portText by remember { mutableStateOf("8080") }
+    var ownerEmail by remember { mutableStateOf("elsaadani40@gmail.com") }
     var password by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmNewPassword by remember { mutableStateOf("") }
+    var passwordChangeRequired by remember { mutableStateOf(false) }
     var taskInput by remember { mutableStateOf("") }
     var taskData by remember { mutableStateOf("") }
     var activityData by remember { mutableStateOf("") }
@@ -106,8 +110,14 @@ private fun OrientApp() {
             client?.clearSession()
             client = null
             isAuthenticated = false
+            passwordChangeRequired = false
+            password = ""
+            newPassword = ""
+            confirmNewPassword = ""
         }
     }
+
+    val canUseRuntime = isAuthenticated && !passwordChangeRequired
 
     fun connect() {
         val port = portText.toIntOrNull()
@@ -124,12 +134,19 @@ private fun OrientApp() {
         isBusy = true
         scope.launch {
             try {
-                statusText = candidate.login(password)
+                statusText = candidate.login(ownerEmail, password)
                 client = candidate
                 isAuthenticated = true
+                passwordChangeRequired = candidate.mustChangePassword
                 password = ""
-                statusText = "اتصال آمن ونشط مع Runtime المحلي."
-                selectedSection = OrientSection.HOME
+                newPassword = ""
+                confirmNewPassword = ""
+                statusText = if (passwordChangeRequired) {
+                    "تم التحقق من الهوية. غيّر كلمة المرور الأولية قبل استخدام Runtime."
+                } else {
+                    "اتصال آمن ونشط مع Runtime المحلي."
+                }
+                selectedSection = if (passwordChangeRequired) OrientSection.SETTINGS else OrientSection.HOME
             } catch (error: Exception) {
                 candidate.clearSession()
                 showFailure(error)
@@ -140,6 +157,7 @@ private fun OrientApp() {
     }
 
     fun refreshTasks() {
+        if (!canUseRuntime) return
         val activeClient = client ?: return
         isBusy = true
         scope.launch {
@@ -155,12 +173,43 @@ private fun OrientApp() {
     }
 
     fun refreshActivity() {
+        if (!canUseRuntime) return
         val activeClient = client ?: return
         isBusy = true
         scope.launch {
             try {
                 activityData = activeClient.fetchExecutions()
                 statusText = "تم تحديث سجل التنفيذات من Runtime."
+            } catch (error: Exception) {
+                showFailure(error)
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
+    fun changeOwnerPassword() {
+        val activeClient = client ?: return
+        if (newPassword.length !in 14..1024) {
+            statusText = "كلمة المرور الجديدة يجب ألا تقل عن 14 حرفًا."
+            return
+        }
+        if (newPassword != confirmNewPassword) {
+            statusText = "كلمتا المرور غير متطابقتين."
+            return
+        }
+        isBusy = true
+        scope.launch {
+            try {
+                statusText = activeClient.changePassword(newPassword, confirmNewPassword)
+                passwordChangeRequired = activeClient.mustChangePassword
+                newPassword = ""
+                confirmNewPassword = ""
+                if (!passwordChangeRequired) {
+                    taskData = activeClient.fetchTasks()
+                    selectedSection = OrientSection.HOME
+                    statusText = "تم تغيير كلمة المرور. اتصال Runtime جاهز."
+                }
             } catch (error: Exception) {
                 showFailure(error)
             } finally {
@@ -190,7 +239,7 @@ private fun OrientApp() {
                     }
                     item {
                         RuntimeStatusCard(
-                            connected = isAuthenticated,
+                            connected = canUseRuntime,
                             status = statusText,
                             panel = panel,
                             muted = muted
@@ -257,7 +306,7 @@ private fun OrientApp() {
                         }
                         OrientSection.PHONE -> {
                             item {
-                                if (isAuthenticated) PhoneToolsCard()
+                                if (canUseRuntime) PhoneToolsCard()
                                 else LockedFeatureCard(
                                     title = "أدوات الهاتف",
                                     description = "اتصل بخدمة ORIENT المحلية أولًا للوصول إلى مساحة العمل. أذونات الهاتف تظل اختيارية وتُطلب عند الحاجة فقط.",
@@ -271,15 +320,23 @@ private fun OrientApp() {
                             item {
                                 SettingsScreen(
                                     connected = isAuthenticated,
+                                    passwordChangeRequired = passwordChangeRequired,
                                     busy = isBusy,
                                     portText = portText,
+                                    ownerEmail = ownerEmail,
                                     password = password,
+                                    newPassword = newPassword,
+                                    confirmNewPassword = confirmNewPassword,
                                     isDarkTheme = isDarkTheme,
                                     panel = panel,
                                     muted = muted,
                                     onPortChange = { portText = it },
+                                    onOwnerEmailChange = { ownerEmail = it },
                                     onPasswordChange = { password = it },
+                                    onNewPasswordChange = { newPassword = it },
+                                    onConfirmNewPasswordChange = { confirmNewPassword = it },
                                     onConnect = { connect() },
+                                    onChangePassword = { changeOwnerPassword() },
                                     onThemeToggle = {
                                         isDarkTheme = !isDarkTheme
                                         preferences.edit().putBoolean("dark_theme", isDarkTheme).apply()
@@ -297,6 +354,10 @@ private fun OrientApp() {
                                                 activeClient?.clearSession()
                                                 client = null
                                                 isAuthenticated = false
+                                                passwordChangeRequired = false
+                                                password = ""
+                                                newPassword = ""
+                                                confirmNewPassword = ""
                                                 taskData = ""
                                                 activityData = ""
                                                 isBusy = false
@@ -315,14 +376,14 @@ private fun OrientApp() {
                         )
                     }
                 }
-                NavigationBar(containerColor = panel) {
+                if (!passwordChangeRequired) NavigationBar(containerColor = panel) {
                     OrientSection.entries.forEach { section ->
                         NavigationBarItem(
                             selected = selectedSection == section,
                             onClick = {
                                 selectedSection = section
-                                if (section == OrientSection.TASKS && isAuthenticated && taskData.isBlank()) refreshTasks()
-                                if (section == OrientSection.ACTIVITY && isAuthenticated && activityData.isBlank()) refreshActivity()
+                                if (section == OrientSection.TASKS && canUseRuntime && taskData.isBlank()) refreshTasks()
+                                if (section == OrientSection.ACTIVITY && canUseRuntime && activityData.isBlank()) refreshActivity()
                             },
                             icon = { Text(section.symbol, fontSize = 19.sp) },
                             label = { Text(section.title, fontSize = 10.sp) }
@@ -533,10 +594,26 @@ private fun LockedFeatureCard(
 
 @Composable
 private fun SettingsScreen(
-    connected: Boolean, busy: Boolean, portText: String, password: String,
-    isDarkTheme: Boolean, panel: Color, muted: Color,
-    onPortChange: (String) -> Unit, onPasswordChange: (String) -> Unit,
-    onConnect: () -> Unit, onThemeToggle: () -> Unit, onLogout: () -> Unit
+    connected: Boolean,
+    passwordChangeRequired: Boolean,
+    busy: Boolean,
+    portText: String,
+    ownerEmail: String,
+    password: String,
+    newPassword: String,
+    confirmNewPassword: String,
+    isDarkTheme: Boolean,
+    panel: Color,
+    muted: Color,
+    onPortChange: (String) -> Unit,
+    onOwnerEmailChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onNewPasswordChange: (String) -> Unit,
+    onConfirmNewPasswordChange: (String) -> Unit,
+    onConnect: () -> Unit,
+    onChangePassword: () -> Unit,
+    onThemeToggle: () -> Unit,
+    onLogout: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("الإعدادات", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -563,21 +640,61 @@ private fun SettingsScreen(
                     singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     enabled = !busy && !connected
                 )
-                if (!connected) {
-                    OutlinedTextField(
-                        value = password, onValueChange = onPasswordChange,
-                        modifier = Modifier.fillMaxWidth(), label = { Text("كلمة مرور المالك") },
-                        singleLine = true, visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), enabled = !busy
-                    )
-                    Button(onClick = onConnect, modifier = Modifier.fillMaxWidth(), enabled = !busy && password.isNotBlank()) {
-                        if (busy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                        else Text("اتصال آمن")
+                when {
+                    !connected -> {
+                        OutlinedTextField(
+                            value = ownerEmail, onValueChange = onOwnerEmailChange,
+                            modifier = Modifier.fillMaxWidth(), label = { Text("البريد الإلكتروني للمالك") },
+                            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                            enabled = !busy
+                        )
+                        OutlinedTextField(
+                            value = password, onValueChange = onPasswordChange,
+                            modifier = Modifier.fillMaxWidth(), label = { Text("كلمة مرور المالك") },
+                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), enabled = !busy
+                        )
+                        Button(
+                            onClick = onConnect, modifier = Modifier.fillMaxWidth(),
+                            enabled = !busy && ownerEmail.isNotBlank() && password.isNotBlank()
+                        ) {
+                            if (busy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                            else Text("اتصال آمن")
+                        }
                     }
-                } else {
-                    Text("الجلسة الحالية مصادق عليها.", color = Color(0xFF39B980))
-                    OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
-                        Text("تسجيل الخروج")
+                    passwordChangeRequired -> {
+                        Text(
+                            "تغيير كلمة المرور مطلوب قبل فتح المهام أو أدوات الهاتف أو أي واجهة Runtime.",
+                            color = muted, style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = newPassword, onValueChange = onNewPasswordChange,
+                            modifier = Modifier.fillMaxWidth(), label = { Text("كلمة المرور الجديدة (14 حرفًا على الأقل)") },
+                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), enabled = !busy
+                        )
+                        OutlinedTextField(
+                            value = confirmNewPassword, onValueChange = onConfirmNewPasswordChange,
+                            modifier = Modifier.fillMaxWidth(), label = { Text("تأكيد كلمة المرور الجديدة") },
+                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), enabled = !busy
+                        )
+                        Button(
+                            onClick = onChangePassword, modifier = Modifier.fillMaxWidth(),
+                            enabled = !busy && newPassword.isNotBlank() && confirmNewPassword.isNotBlank()
+                        ) {
+                            if (busy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                            else Text("حفظ كلمة المرور والمتابعة")
+                        }
+                        TextButton(onClick = onLogout, modifier = Modifier.align(Alignment.End), enabled = !busy) {
+                            Text("تسجيل الخروج")
+                        }
+                    }
+                    else -> {
+                        Text("الجلسة الحالية مصادق عليها.", color = Color(0xFF39B980))
+                        OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
+                            Text("تسجيل الخروج")
+                        }
                     }
                 }
             }
