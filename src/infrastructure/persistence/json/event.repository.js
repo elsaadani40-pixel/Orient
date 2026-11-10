@@ -50,9 +50,13 @@ class EventRepository {
     }
     if (process.platform !== 'win32' && typeof process.getuid === 'function') {
       if (directoryStats.uid !== BigInt(process.getuid())) fail('JSON event storage directory must be owned by the application user', 'EVENT_STORAGE_DIRECTORY_OWNER_INVALID');
-      if ((directoryStats.mode & 0o077n) !== 0n) fail('JSON event storage directory must be private (mode 0700)', 'EVENT_STORAGE_DIRECTORY_PERMISSIONS_INVALID');
       const parentMode = parentStats.mode & 0o7777n;
       if ((parentMode & 0o022n) !== 0n && (parentMode & 0o1000n) === 0n) fail('JSON event storage parent is writable by other users without sticky-bit protection', 'EVENT_STORAGE_PARENT_UNTRUSTED');
+      // Tighten an existing service-owned directory instead of breaking a
+      // local JSON setup created earlier with a permissive umask.
+      if ((directoryStats.mode & 0o077n) !== 0n) fs.chmodSync(this.directory, 0o700);
+      const privateStats = fs.lstatSync(this.directory, { bigint: true });
+      if ((privateStats.mode & 0o077n) !== 0n) fail('JSON event storage directory must be private (mode 0700)', 'EVENT_STORAGE_DIRECTORY_PERMISSIONS_INVALID');
     }
     try {
       const fd = fs.openSync(this.filePath, 'wx', 0o600);
