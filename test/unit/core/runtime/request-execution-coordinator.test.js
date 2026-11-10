@@ -13,6 +13,25 @@ function plannedResult(intent = 'test', step = { step: 1, tool: 'test.tool' }) {
 }
 
 
+function createAdmissionCoordinator(overrides = {}) {
+  return new RequestExecutionCoordinator({
+    agentOrchestrator: {},
+    agentExecutionCoordinator: {},
+    recoveryCoordinator: { fail: async () => {} },
+    persistence: {},
+    persistenceCoordinator: {},
+    quotaService: {
+      assertTenant: () => {},
+      assertInputSize: () => {}
+    },
+    quotaPolicy: { toJSON: () => ({}) },
+    tenantId: 'tenant-a',
+    maxInputChars: 1000,
+    ...overrides
+  });
+}
+
+
 test('preserves plan identity validation and response classification', () => {
   const coordinator = new RequestExecutionCoordinator({
     agentOrchestrator: {},
@@ -894,10 +913,8 @@ test('Runtime preserves a task-reserved execution ID in its durable ExecutionCon
   const reservedExecutionId = 'reserved-task-execution-001';
   let insertedSnapshot = null;
   let executedSnapshot = null;
-  const coordinator = new RequestExecutionCoordinator({
-    agentOrchestrator: {
-      plan: async () => plannedResult('test')
-    },
+  const coordinator = createAdmissionCoordinator({
+    agentOrchestrator: { plan: async () => plannedResult('test') },
     agentExecutionCoordinator: {
       run: async args => {
         executedSnapshot = args.context.snapshot();
@@ -912,8 +929,6 @@ test('Runtime preserves a task-reserved execution ID in its durable ExecutionCon
         };
       }
     },
-    recoveryCoordinator: { fail: async () => {} },
-    persistence: {},
     persistenceCoordinator: {
       persistExecution: async (context, mode) => {
         if (mode === 'insert') insertedSnapshot = context.snapshot();
@@ -921,12 +936,8 @@ test('Runtime preserves a task-reserved execution ID in its durable ExecutionCon
       },
       persistEvents: async () => {}
     },
-    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
-    quotaPolicy: { toJSON: () => ({}) },
-    tenantId: 'tenant-a',
     userId: 'owner-a',
-    workspaceId: 'workspace-a',
-    maxInputChars: 1000
+    workspaceId: 'workspace-a'
   });
   const result = await coordinator.execute('run canonical task', { executionId: reservedExecutionId });
   assert.equal(insertedSnapshot.executionId, reservedExecutionId);
@@ -939,21 +950,12 @@ test('Runtime admission evidence overrides a frozen downstream rejection marker 
     code: 'TOOL_FAILED', executionAdmission: 'rejected'
   }));
   let insertCalls = 0;
-  const coordinator = new RequestExecutionCoordinator({
-    agentOrchestrator: {
-      plan: async () => plannedResult('test')
-    },
+  const coordinator = createAdmissionCoordinator({
     agentExecutionCoordinator: { run: async () => { throw downstreamError; } },
-    recoveryCoordinator: { fail: async () => {} },
-    persistence: {},
     persistenceCoordinator: {
       persistExecution: async (_context, operation) => { if (operation === 'insert') insertCalls += 1; },
       persistEvents: async () => {}
-    },
-    quotaService: { assertTenant: () => {}, assertInputSize: () => {} },
-    quotaPolicy: { toJSON: () => ({}) },
-    tenantId: 'tenant-a',
-    maxInputChars: 1000
+    }
   });
   await assert.rejects(
     coordinator.execute('run a task'),
@@ -971,12 +973,11 @@ test('Runtime preflight evidence overrides a frozen downstream acceptance marker
   const quotaError = Object.freeze(Object.assign(new Error('tenant quota rejected'), {
     code: 'TENANT_QUOTA_EXCEEDED', executionAdmission: 'accepted'
   }));
-  const coordinator = new RequestExecutionCoordinator({
-    agentOrchestrator: {}, agentExecutionCoordinator: {}, recoveryCoordinator: {},
-    persistence: {}, persistenceCoordinator: {},
-    quotaService: { assertTenant: () => { throw quotaError; }, assertInputSize: () => {} },
-    quotaPolicy: { toJSON: () => ({}) },
-    tenantId: 'tenant-a', maxInputChars: 1000
+  const coordinator = createAdmissionCoordinator({
+    quotaService: {
+      assertTenant: () => { throw quotaError; },
+      assertInputSize: () => {}
+    }
   });
   await assert.rejects(
     coordinator.execute('run a task'),
