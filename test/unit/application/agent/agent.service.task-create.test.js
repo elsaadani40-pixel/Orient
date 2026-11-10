@@ -183,7 +183,7 @@ test('persisted approval challenge is reconciled as awaiting approval, not as a 
           tenantId: 'tenant-test',
           pendingStepInputs: { 1: { tool: 'project.execute_change' } }
         },
-        events: [{ type: 'approval.challenge.requested' }]
+        events: [{ type: 'approval.challenge.persisted' }]
       });
       throw Object.assign(new Error('Owner approval is required'), {
         code: 'APPROVAL_REQUIRED',
