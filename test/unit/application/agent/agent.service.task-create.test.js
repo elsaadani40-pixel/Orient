@@ -430,12 +430,14 @@ test('task idempotency stays single-execution under a 250-request concurrent bur
   let markAdmitted;
   const executionGate = new Promise(resolve => { releaseExecution = resolve; });
   const admitted = new Promise(resolve => { markAdmitted = resolve; });
+  let executionFinished = false;
   const fixture = createRuntime({
-    status: () => 'running',
+    status: () => executionFinished ? 'completed' : 'running',
     execute: async (_goal, options, persistedExecutions) => {
       storePersistedExecution(persistedExecutions, options.executionId);
       markAdmitted();
       await executionGate;
+      executionFinished = true;
       return { execution: { executionId: options.executionId } };
     }
   });
