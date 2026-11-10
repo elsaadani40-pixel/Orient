@@ -97,6 +97,7 @@ test('unleased workflow writes cannot overwrite a workflow with an active durabl
         async query(sql, values = []) {
           calls.push({ sql, values });
           if (sql.includes('SELECT workflow_id FROM workflows')) return { rowCount: 1, rows: [{ workflow_id: 'workflow-active-lease' }] };
+          if (sql.includes('FROM workflow_dispatch_claims')) return { rowCount: 0, rows: [] };
           if (sql.includes('FROM workflow_leases')) return { rowCount: 1, rows: [{}] };
           throw new Error('Unexpected SQL: ' + sql);
         }
