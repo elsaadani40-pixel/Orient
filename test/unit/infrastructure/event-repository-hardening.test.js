@@ -258,3 +258,82 @@ test('constructor rejects a missing file path and invalid lock timeout', t => {
     TypeError
   );
 });
+
+
+test('empty event storage is treated as an empty event list', t => {
+  const { filePath, repository } = fixture(t);
+  fs.writeFileSync(filePath, '  \n');
+  assert.deepEqual(repository.read(), []);
+});
+
+test('mission event sequence is isolated by aggregate and advances from the maximum sequence', t => {
+  const { repository } = fixture(t);
+  for (const sequence of [1, 2, 3]) {
+    repository.appendMissionEvent({
+      id: `aggregate-a-${sequence}`,
+      aggregateId: 'aggregate-a',
+      sequence,
+      type: 'mission.progressed',
+      data: {}
+    });
+  }
+
+  const independent = repository.appendMissionEvent({
+    id: 'aggregate-b-1',
+    aggregateId: 'aggregate-b',
+    sequence: 1,
+    type: 'mission.started',
+    data: {}
+  });
+
+  assert.equal(independent.sequence, 1);
+  assert.deepEqual(repository.findByAggregateId('aggregate-a').map(event => event.sequence), [1, 2, 3]);
+  assert.deepEqual(repository.findByAggregateId('aggregate-b').map(event => event.sequence), [1]);
+});
+
+test('aggregate lookup sorts persisted events by sequence rather than file insertion order', t => {
+  const { repository } = fixture(t);
+  const first = repository.appendMissionEvent({
+    id: 'sort-sequence-1', aggregateId: 'sort-aggregate',
+    sequence: 1, type: 'mission.started', data: {}
+  });
+  const second = repository.appendMissionEvent({
+    id: 'sort-sequence-2', aggregateId: 'sort-aggregate',
+    sequence: 2, type: 'mission.progressed', data: {}
+  });
+
+  repository.write([second, first]);
+
+  assert.deepEqual(
+    repository.findByAggregateId('sort-aggregate').map(event => event.id),
+    ['sort-sequence-1', 'sort-sequence-2']
+  );
+});
+
+test('mission event idempotency rejects timestamp and sequence identity changes', t => {
+  const { repository } = fixture(t);
+  const event = {
+    id: 'identity-fields',
+    aggregateId: 'identity-aggregate',
+    sequence: 1,
+    timestamp: '2026-11-10T10:00:00.000Z',
+    type: 'mission.started',
+    data: { state: 'started' }
+  };
+  repository.appendMissionEvent(event);
+
+  assert.throws(
+    () => repository.appendMissionEvent({
+      ...event,
+      timestamp: '2026-11-10T10:00:01.000Z'
+    }),
+    error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+  );
+  assert.throws(
+    () => repository.appendMissionEvent({
+      ...event,
+      sequence: 2
+    }),
+    error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+  );
+});
