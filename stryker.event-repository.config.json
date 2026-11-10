@@ -3,7 +3,7 @@
   "packageManager": "npm",
   "testRunner": "command",
   "commandRunner": {
-    "command": "node --test --test-timeout=120000 test/unit/infrastructure/event-repository.test.js"
+    "command": "node --test --test-timeout=120000 test/unit/infrastructure/event-repository.test.js test/unit/infrastructure/event-repository-hardening.test.js"
   },
   "mutate": [
     "src/infrastructure/persistence/json/event.repository.js"
