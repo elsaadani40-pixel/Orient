@@ -179,6 +179,7 @@ test('persisted approval challenge is reconciled as awaiting approval, not as a 
       persistedExecutions.set(options.executionId, {
         executionId: options.executionId,
         tenantId: 'tenant-test',
+        status: 'running',
         metadata: {
           tenantId: 'tenant-test',
           pendingStepInputs: { 1: { tool: 'project.execute_change' } }
