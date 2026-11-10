@@ -218,3 +218,55 @@ test('rejects a forged persistence principal before idempotency admission', asyn
   );
   assert.equal(admitted, false);
 });
+
+
+test('rejects legacy owner execution without a persistence principal before runtime execution', async () => {
+  let executionStarted = false;
+  const runtime = {
+    tenantId: 'tenant-a',
+    userId: 'owner-a',
+    assertOwnerSessionContext: async () => true,
+    execute: async () => {
+      executionStarted = true;
+      return { execution: { executionId: 'should-not-run' } };
+    }
+  };
+
+  await assert.rejects(
+    new AgentService(runtime).execute('run a task', {
+      ownerSessionContext: { sessionId: 'active-session' }
+    }),
+    error => error.code === 'PERSISTENCE_PRINCIPAL_REQUIRED'
+  );
+  assert.equal(executionStarted, false);
+});
+
+test('forwards a validated persistence principal through legacy owner execution', async () => {
+  const persistencePrincipal = createPersistencePrincipal({
+    tenantId: 'tenant-a',
+    ownerId: 'owner-a',
+    sessionId: 'active-session'
+  });
+  let forwardedOptions = null;
+  const runtime = {
+    tenantId: 'tenant-a',
+    userId: 'owner-a',
+    assertOwnerSessionContext: async context => {
+      assert.equal(context.sessionId, 'active-session');
+      return true;
+    },
+    execute: async (goal, options) => {
+      assert.equal(goal, 'run a task');
+      forwardedOptions = options;
+      return { execution: { executionId: 'legacy-principal-bound' } };
+    }
+  };
+
+  const result = await new AgentService(runtime).execute('run a task', {
+    ownerSessionContext: { sessionId: 'active-session' },
+    persistencePrincipal
+  });
+
+  assert.equal(result.execution.executionId, 'legacy-principal-bound');
+  assert.strictEqual(forwardedOptions.persistencePrincipal, persistencePrincipal);
+});
