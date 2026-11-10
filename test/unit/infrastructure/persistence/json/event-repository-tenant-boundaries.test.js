@@ -77,3 +77,17 @@ test('an event id owned by another tenant cannot be replayed or overwritten', t 
   assert.deepEqual(repository.findByAggregateId('tenant-a-aggregate', { tenantId: 'tenant-a' }), [original]);
   assert.deepEqual(repository.findByAggregateId('tenant-b-aggregate', { tenantId: 'tenant-b' }), []);
 });
+
+test('belongsToTenant explicitly enforces tenant and local boundaries', t => {
+  const repository = createRepository(t);
+
+  assert.equal(repository.belongsToTenant(undefined, 'tenant-a'), false);
+  assert.equal(repository.belongsToTenant({}, 'tenant-a'), false);
+  assert.equal(repository.belongsToTenant({ data: {} }, 'tenant-a'), false);
+  assert.equal(repository.belongsToTenant({ data: { tenantId: 'tenant-b' } }, 'tenant-a'), false);
+  assert.equal(repository.belongsToTenant({ data: { tenantId: 'tenant-a' } }, 'tenant-a'), true);
+
+  assert.equal(repository.belongsToTenant({ data: {} }, 'local'), true);
+  assert.equal(repository.belongsToTenant({ data: { tenantId: 'local' } }, 'local'), true);
+  assert.equal(repository.belongsToTenant({ data: { tenantId: 'tenant-a' } }, 'local'), false);
+});
