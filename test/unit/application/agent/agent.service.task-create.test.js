@@ -108,7 +108,9 @@ function createRuntime({
       statusLookups += 1;
       if (failFirstStatusLookup && statusLookups === 1) throw new Error('simulated transient status read failure');
       const currentStatus = typeof status === 'function' ? status() : status;
+      const persisted = persistedExecutions.get(id) || {};
       return {
+        ...persisted,
         executionId: statusExecutionId || id,
         status: currentStatus,
         currentStep: 2,
