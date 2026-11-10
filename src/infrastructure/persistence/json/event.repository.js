@@ -265,10 +265,13 @@ class EventRepository {
         throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
       }
       if (tenantId && !normalized.data?.tenantId) normalized.data.tenantId = tenantId;
+      // Event metadata is also an authoritative tenant scope when callers
+      // omit the explicit option; never sequence across unrelated tenants.
+      const effectiveTenantId = normalized.data?.tenantId || tenantId;
 
       const existing = current.find(item => item.id === normalized.id);
       if (existing) {
-        if (!this.belongsToTenant(existing, normalized.data?.tenantId || tenantId)) {
+        if (!this.belongsToTenant(existing, effectiveTenantId)) {
           throw Object.assign(new Error('Event tenant mismatch'), { code: 'EVENT_TENANT_MISMATCH' });
         }
         if (existing.aggregateId !== normalized.aggregateId ||
@@ -284,7 +287,7 @@ class EventRepository {
       }
 
       const aggregateEvents = current.filter(item =>
-        item.aggregateId === normalized.aggregateId && this.belongsToTenant(item, tenantId)
+        item.aggregateId === normalized.aggregateId && this.belongsToTenant(item, effectiveTenantId)
       );
       const expected = aggregateEvents.length ? Math.max(...aggregateEvents.map(item => Number(item.sequence) || 0)) + 1 : 1;
       if (normalized.sequence != null && normalized.sequence !== expected) {
