@@ -81,6 +81,8 @@ test('an event id owned by another tenant cannot be replayed or overwritten', t 
 test('belongsToTenant explicitly enforces tenant and local boundaries', t => {
   const repository = createRepository(t);
 
+  assert.equal(repository.belongsToTenant(undefined, 'tenant-a'), false);
+  assert.equal(repository.belongsToTenant({}, 'tenant-a'), false);
   assert.equal(repository.belongsToTenant({ data: {} }, 'tenant-a'), false);
   assert.equal(repository.belongsToTenant({ data: { tenantId: 'tenant-b' } }, 'tenant-a'), false);
   assert.equal(repository.belongsToTenant({ data: { tenantId: 'tenant-a' } }, 'tenant-a'), true);
