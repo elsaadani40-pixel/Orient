@@ -20,7 +20,7 @@ class ExecutionRepository {
     this.filePath = storage.filePath;
     this.directory = storage.directory;
     this.lockPath = storage.lockPath;
-    initializeJsonFile(this.filePath, '[]\\n', this.directory, { allowUnsupported: true });
+    initializeJsonFile(this.filePath, '[]\n', this.directory, { allowUnsupported: true });
   }
 
   readRaw() {
@@ -96,7 +96,7 @@ class ExecutionRepository {
   write(executions) {
     return writeAtomic(
       this.filePath,
-      JSON.stringify(executions, null, 2) + '\\n',
+      JSON.stringify(executions, null, 2) + '\n',
       this.directory,
       { label: 'Execution', allowUnsupportedDirectoryFsync: true }
     );
