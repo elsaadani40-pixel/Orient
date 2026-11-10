@@ -1,10 +1,26 @@
 const AppError = require('../../core/errors/AppError');
 const { assertPersistencePrincipal } = require('../../core/security/persistence-principal');
 
+function isApprovalPendingExecution(execution) {
+  const pendingSteps = execution?.metadata?.pendingStepInputs;
+  const hasPendingSteps = pendingSteps && typeof pendingSteps === 'object' &&
+    !Array.isArray(pendingSteps) && Object.keys(pendingSteps).length > 0;
+  const hasApprovalChallenge = Array.isArray(execution?.events) &&
+    execution.events.some(event => event?.type === 'approval.challenge.requested');
+  return execution?.status === 'running' && hasPendingSteps && hasApprovalChallenge;
+}
+
+function isTaskCreationSettled(execution) {
+  return ['completed', 'failed', 'cancelled', 'awaiting_approval'].includes(execution?.status) ||
+    isApprovalPendingExecution(execution);
+}
+
 function taskSummary(execution) {
+  const awaitingApproval = execution.status === 'awaiting_approval' ||
+    isApprovalPendingExecution(execution);
   return {
     id: execution.executionId,
-    status: execution.status,
+    status: awaitingApproval ? 'awaiting_approval' : execution.status,
     currentStep: execution.currentStep ?? null,
     createdAt: execution.startedAt || null,
     updatedAt: execution.updatedAt || null,
@@ -35,6 +51,13 @@ async function completeTaskFromExecution(service, repository, key, executionId, 
       'Persisted execution status does not match the idempotency reservation',
       502,
       'TASK_EXECUTION_ID_MISMATCH'
+    );
+  }
+  if (!isTaskCreationSettled(execution)) {
+    throw new AppError(
+      'The reserved task is still executing; its idempotency record remains recoverable',
+      409,
+      'TASK_EXECUTION_IN_PROGRESS'
     );
   }
   const task = taskSummary(execution);
