@@ -10,6 +10,12 @@ A newly acquired lock contains one owner marker named `owner.<random-token>.json
 
 The receipt directory must be local application data, not the project workspace or a shared/network filesystem. On POSIX systems it must be owned by the ORIENT service user and have mode `0700`. Its immediate parent must not be group/world writable unless the sticky bit protects directory entries (for example, a private child under `/tmp`).
 
+## Platform support
+
+Safe receipt and intent reads require Node.js `fs.constants.O_NOFOLLOW`. On standard Node.js Windows builds where this flag is unavailable, the store deliberately fails closed with `PROJECT_OPERATION_RECEIPT_UNSAFE_FILESYSTEM` or `PROJECT_OPERATION_INTENT_UNSAFE_FILESYSTEM`. Do not replace this with an `lstat`-then-`open` fallback.
+
+Windows receipt-backed project operations remain unsupported until a separate implementation can open reparse points safely and verify service-account ACLs. POSIX Linux, macOS, and Android/Termux builds use the no-follow descriptor path; the receipt directory must still satisfy the ownership and mode checks below.
+
 ## Operator procedure
 
 1. **Stop every ORIENT process that can write to this receipt directory.** Do not attempt recovery while any instance is running. If the directory is on a shared or network filesystem, do not perform this procedure; treat the store as unsupported and escalate.
