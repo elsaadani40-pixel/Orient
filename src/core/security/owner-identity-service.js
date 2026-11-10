@@ -7,6 +7,7 @@ const path = require('node:path');
 const TOKEN = /^[A-Za-z0-9_-]{40,100}$/;
 const HASH = /^(?:[a-f0-9]{128}:[a-f0-9]{32}|legacy:[a-f0-9]{128}:[a-f0-9]{32})$/;
 const MIN_PASSWORD = 14;
+const MAX_OWNER_STATE_FILE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_OWNER_EMAIL = 'elsaadani40@gmail.com';
 function normalizeEmail(value) { return typeof value === 'string' ? value.trim().toLowerCase() : ''; }
 
@@ -24,6 +25,22 @@ function matches(password, encoded) {
 }
 function tokenDigest(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function readBoundedFile(fd, maxBytes) {
+  const buffer = Buffer.allocUnsafe(maxBytes + 1);
+  let total = 0;
+  while (total < buffer.length) {
+    const count = fs.readSync(fd, buffer, total, buffer.length - total, null);
+    if (count === 0) break;
+    total += count;
+  }
+  if (total > maxBytes) {
+    throw Object.assign(new Error('Owner identity state exceeds the size limit'), {
+      code: 'OWNER_IDENTITY_STATE_INVALID'
+    });
+  }
+  return buffer.subarray(0, total).toString('utf8');
 }
 
 /**
@@ -44,6 +61,7 @@ class OwnerIdentityService {
     this.maxLoginFailures = maxLoginFailures;
     this.loginLockoutMs = loginLockoutMs;
     this.now = now;
+    this.prepareStateDirectory();
     this.sessions = new Map();
     this.createdBootstrap = false;
     this._bootstrapPassword = null;
@@ -80,13 +98,114 @@ class OwnerIdentityService {
     return password;
   }
 
+  prepareStateDirectory() {
+    const configuredDirectory = path.dirname(this.stateFile);
+    fs.mkdirSync(configuredDirectory, { recursive: true, mode: 0o700 });
+    const configuredStats = fs.lstatSync(configuredDirectory, { bigint: true });
+    if (!configuredStats.isDirectory() || configuredStats.isSymbolicLink()) {
+      throw Object.assign(new Error('Owner identity directory must not be a symbolic link'), {
+        code: 'OWNER_IDENTITY_STORAGE_DIRECTORY_INVALID'
+      });
+    }
+
+    // Resolve trusted platform path aliases once, then use only the canonical path.
+    const directory = fs.realpathSync(configuredDirectory);
+    const directoryStats = fs.lstatSync(directory, { bigint: true });
+    const parentDirectory = path.dirname(directory);
+    const parentStats = fs.lstatSync(parentDirectory, { bigint: true });
+    if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink() ||
+        !parentStats.isDirectory() || parentStats.isSymbolicLink() ||
+        fs.realpathSync(directory) !== directory ||
+        fs.realpathSync(parentDirectory) !== parentDirectory) {
+      throw Object.assign(new Error('Owner identity directory must be a real canonical directory'), {
+        code: 'OWNER_IDENTITY_STORAGE_DIRECTORY_INVALID'
+      });
+    }
+
+    if (process.platform !== 'win32' && typeof process.getuid === 'function') {
+      if (directoryStats.uid !== BigInt(process.getuid())) {
+        throw Object.assign(new Error('Owner identity directory must be owned by the application user'), {
+          code: 'OWNER_IDENTITY_STORAGE_DIRECTORY_OWNER_INVALID'
+        });
+      }
+      const parentMode = parentStats.mode & 0o7777n;
+      if ((parentMode & 0o022n) !== 0n && (parentMode & 0o1000n) === 0n) {
+        throw Object.assign(new Error('Owner identity parent directory is writable by other users without sticky-bit protection'), {
+          code: 'OWNER_IDENTITY_STORAGE_PARENT_UNTRUSTED'
+        });
+      }
+      if ((directoryStats.mode & 0o077n) !== 0n) fs.chmodSync(directory, 0o700);
+      const privateStats = fs.lstatSync(directory, { bigint: true });
+      if ((privateStats.mode & 0o077n) !== 0n) {
+        throw Object.assign(new Error('Owner identity directory must be private (mode 0700)'), {
+          code: 'OWNER_IDENTITY_STORAGE_DIRECTORY_PERMISSIONS_INVALID'
+        });
+      }
+    }
+
+    this.stateFile = path.join(directory, path.basename(this.stateFile));
+    this.loginFailureKeyFile = this.stateFile + '.lockout-key';
+  }
+
   read() {
+    let descriptor;
     let raw;
-    try { raw = fs.readFileSync(this.stateFile, 'utf8'); }
-    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    const invalid = message => Object.assign(new Error(message), {
+      code: 'OWNER_IDENTITY_STATE_INVALID'
+    });
+
+    try {
+      const noFollow = fs.constants.O_NOFOLLOW;
+      if (typeof noFollow !== 'number') {
+        // Windows relies on the deployment ACL for race protection; still reject
+        // an already-present reparse-point/symlink before opening the file.
+        let pathStats;
+        try { pathStats = fs.lstatSync(this.stateFile); }
+        catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+        if (!pathStats.isFile() || pathStats.isSymbolicLink()) {
+          throw invalid('Owner identity state must be a regular non-symbolic-link file');
+        }
+      }
+
+      try {
+        descriptor = fs.openSync(
+          this.stateFile,
+          fs.constants.O_RDONLY | (typeof noFollow === 'number' ? noFollow : 0)
+        );
+      } catch (error) {
+        if (error.code === 'ENOENT') return null;
+        if (error.code === 'ELOOP' || error.code === 'EMLINK') {
+          throw invalid('Owner identity state must not be a symbolic link');
+        }
+        throw error;
+      }
+
+      const stats = fs.fstatSync(descriptor);
+      if (!stats.isFile() || stats.nlink !== 1) {
+        throw invalid('Owner identity state must be a single-link regular file');
+      }
+      if (stats.size > MAX_OWNER_STATE_FILE_BYTES) {
+        throw invalid('Owner identity state exceeds the size limit');
+      }
+      if (process.platform !== 'win32' && typeof process.getuid === 'function') {
+        if (stats.uid !== process.getuid()) {
+          throw invalid('Owner identity state must be owned by the application user');
+        }
+        if ((stats.mode & 0o077) !== 0) {
+          fs.fchmodSync(descriptor, 0o600);
+          if ((fs.fstatSync(descriptor).mode & 0o077) !== 0) {
+            throw invalid('Owner identity state must be private (mode 0600)');
+          }
+        }
+      }
+      raw = readBoundedFile(descriptor, MAX_OWNER_STATE_FILE_BYTES);
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+
     let value;
-    try { value = JSON.parse(raw); } catch { throw Object.assign(new Error('Owner identity state is corrupt'), { code: 'OWNER_IDENTITY_STATE_INVALID' }); }
-    if (raw.length > 2 * 1024 * 1024) throw Object.assign(new Error('Owner identity state exceeds the size limit'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
+    try { value = JSON.parse(raw); }
+    catch { throw invalid('Owner identity state is corrupt'); }
 
     // One-time, lossless migration from the website's former owner.json shape.
     // Existing sessions are intentionally revoked; the old password verifier is
@@ -110,11 +229,11 @@ class OwnerIdentityService {
     if (value?.version !== 1 || value.username !== 'Admin' ||
         typeof value.mustChangePassword !== 'boolean' || !HASH.test(value.passwordHash) ||
         !Array.isArray(value.sessions) || value.sessions.length > 4096) {
-      throw Object.assign(new Error('Owner identity state schema is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
+      throw invalid('Owner identity state schema is invalid');
     }
     const failures = value.loginFailures === undefined ? [] : value.loginFailures;
     if (!Array.isArray(failures) || failures.length > 1024) {
-      throw Object.assign(new Error('Owner identity login-failure state is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
+      throw invalid('Owner identity login-failure state is invalid');
     }
     const seenFailureKeys = new Set();
     for (const item of failures) {
@@ -124,7 +243,7 @@ class OwnerIdentityService {
           !Number.isSafeInteger(item.blockedUntil) || item.blockedUntil < 0 ||
           item.blockedUntil > this.now() + 86400000 ||
           (item.keyVersion !== undefined && item.keyVersion !== 1 && item.keyVersion !== 2)) {
-        throw Object.assign(new Error('Owner identity login-failure state is invalid'), { code: 'OWNER_IDENTITY_STATE_INVALID' });
+        throw invalid('Owner identity login-failure state is invalid');
       }
       seenFailureKeys.add(item.key);
     }
@@ -435,15 +554,34 @@ class OwnerIdentityService {
 
   logout(token) {
     if (typeof token !== 'string' || !TOKEN.test(token)) return false;
-    const removed = this.sessions.delete(tokenDigest(token));
-    if (removed) this.save();
-    return removed;
+    const digest = tokenDigest(token);
+    const previous = this.sessions.get(digest);
+    if (!previous) return false;
+
+    this.sessions.delete(digest);
+    try {
+      this.save();
+    } catch (error) {
+      // Before rename, disk still contains the active session. Restore memory
+      // to that same committed state; after rename, keep the revocation applied.
+      if (!error.committed) this.sessions.set(digest, previous);
+      throw error;
+    }
+    return true;
   }
 
   revokeAllSessions() {
-    const count = this.sessions.size;
+    const previous = new Map(this.sessions);
+    const count = previous.size;
     this.sessions.clear();
-    this.save();
+    try {
+      this.save();
+    } catch (error) {
+      if (!error.committed) {
+        for (const [digest, session] of previous) this.sessions.set(digest, session);
+      }
+      throw error;
+    }
     return count;
   }
 
