@@ -48,7 +48,6 @@ const createWorkspaceTools =
   require('./src/application/tools/workspace.tools');
 const createProjectTools =
   require('./src/application/tools/project.tools');
-
 const OpenMausBotMcpClient =
   require('./src/infrastructure/agents/openmausbot-mcp-client').OpenMausBotMcpClient;
 const OpenMausBotAgentProvider =
@@ -192,17 +191,22 @@ const accessAuditRepository =
 
 const websiteDataDir = process.env.ORIENT_DATA_DIR || path.join(__dirname, '.orient-data');
 const ownerBootstrapPassword = process.env.ORIENT_OWNER_BOOTSTRAP_PASSWORD || process.env.ORIENT_OWNER_PASSWORD;
+const ownerEmail = (process.env.ORIENT_OWNER_EMAIL || 'elsaadani40@gmail.com').trim().toLowerCase();
 const ownerStateFile = path.join(websiteDataDir, 'owner.json');
 let ownerWorkProfileStore;
 let ownerChatConversationStore;
 if (!fs.existsSync(ownerStateFile) && !ownerBootstrapPassword) {
-  throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (minimum 14 characters). Set it in the local environment before starting ORIENT.');
+  throw new Error('First-run owner setup requires ORIENT_OWNER_BOOTSTRAP_PASSWORD (exactly 10 digits). Set it in the protected environment before starting ORIENT.');
+}
+if (!fs.existsSync(ownerStateFile) && !/^\d{10}$/.test(ownerBootstrapPassword || '')) {
+  throw new Error('ORIENT_OWNER_BOOTSTRAP_PASSWORD must contain exactly 10 numeric digits for first-run setup.');
 }
 const ownerIdentityService = new OwnerIdentityService({
   // Keep the website's established state path so legacy owner credentials and
   // public accounts are migrated in place rather than silently abandoned.
   stateFile: require('path').join(websiteDataDir, 'owner.json'),
-  bootstrapPassword: ownerBootstrapPassword
+  bootstrapPassword: ownerBootstrapPassword,
+  ownerEmail
 });
 const ownerAuthService = new OwnerIdentityRuntimeAdapter({ identity: ownerIdentityService });
 const website = createOwnerServer({

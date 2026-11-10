@@ -36,6 +36,7 @@ class McpStdioSession {
   constructor(child, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     this.child = child;
     this.timeoutMs = timeoutMs;
+    this.deadlineAt = Date.now() + timeoutMs;
     this.nextId = 1;
     this.buffer = '';
     this.pending = new Map();
@@ -124,12 +125,19 @@ class McpStdioSession {
     }
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(Object.assign(new Error('OpenMausBot MCP request timed out'), {
+      const remainingMs = this.deadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        reject(Object.assign(new Error('OpenMausBot MCP operation timed out'), {
           code: 'OPENMAUSBOT_MCP_TIMEOUT'
         }));
-      }, this.timeoutMs);
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(Object.assign(new Error('OpenMausBot MCP operation timed out'), {
+          code: 'OPENMAUSBOT_MCP_TIMEOUT'
+        }));
+      }, remainingMs);
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(frame, error => {
         if (!error || !this.pending.has(id)) return;
@@ -219,6 +227,9 @@ class OpenMausBotMcpClient {
     this.activeCalls = 0;
     this.spawn = spawnImpl;
     this.env = buildChildEnvironment(env);
+    if (this.env.OPENMAUSBOT_TOKEN && !this.env.OPENMAUSBOT_URL && !this.env.OMB_PORT) {
+      throw new TypeError('OPENMAUSBOT_TOKEN requires an explicit OPENMAUSBOT_URL or OMB_PORT');
+    }
   }
 
   async callTool(name, input = {}) {

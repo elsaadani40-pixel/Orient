@@ -77,7 +77,7 @@ Computer control, shell, file edits, connected apps, VM lifecycle, credential ma
 ## Security and operational requirements
 
 1. Spawn only an operator-configured executable and fixed argument vector with `shell: false`. No model-controlled command, args, URL, environment, or binary path.
-2. Bound JSON-RPC frame size, response size, pending requests, concurrency, timeouts, and process lifetime. Handle malformed frames, protocol errors, process exit, cancellation, backpressure, and graceful shutdown.
+2. Bound JSON-RPC frame size, response size, pending requests, concurrency, one total operation deadline, and process lifetime. Handle malformed frames, protocol errors, process exit, backpressure, and graceful termination. Explicit cancellation is deferred because Phase 1 exposes only short, read-only discovery calls.
 3. Validate configured origins. Permit loopback HTTP; permit remote endpoints only over HTTPS or explicitly allowed private-network transport. Reject public plain HTTP, URL credentials, redirects to untrusted origins, and ambiguous host forms.
 4. Store pairing/bearer tokens only in operator-managed secret configuration. Never put them in source, logs, plans, model context, transcripts, or audit payloads. Support token rotation and revocation; fail closed when a configured credential is missing or rejected.
 5. Use a strict tool allowlist and validate each request and response against locally defined schemas. Upstream tool descriptions and annotations are informational, not authorization.
@@ -101,7 +101,7 @@ Computer control, shell, file edits, connected apps, VM lifecycle, credential ma
 - MCP initialization and protocol negotiation
 - Tool allowlist and strict schema validation
 - Malformed JSON-RPC, oversized frames, unknown IDs/tools, and unexpected response shapes
-- Timeout, cancellation, backpressure, process exit, and restart behavior
+- Total-operation timeout, process exit, and concurrency bounds for Phase 1; cancellation and restart recovery remain acceptance gates before any long-running or mutating Phase 2 operation
 - Endpoint/origin validation, redirect refusal, and token redaction
 - Idempotent dispatch and reconciliation before any retry
 

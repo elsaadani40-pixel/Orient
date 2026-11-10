@@ -14,10 +14,10 @@ function createOpenMausBotTools(provider) {
   }
 
   const definitions = [
-    ['openmausbot.health', provider.health, 'التحقق من اتصال OpenMausBot وحالة خدمته (قراءة فقط)'],
-    ['openmausbot.list_bots', provider.listAgents, 'عرض قائمة وكلاء OpenMausBot وحالتهم الحالية (قراءة فقط)'],
-    ['openmausbot.list_channels', provider.listChannels, 'عرض قنوات فريق OpenMausBot (قراءة فقط)'],
-    ['openmausbot.list_models', provider.listModels, 'عرض النماذج المتاحة لوكلاء OpenMausBot (قراءة فقط)']
+    ['openmausbot.health', provider.health, 'Check OpenMausBot service health (read-only)'],
+    ['openmausbot.list_bots', provider.listAgents, 'List OpenMausBot agents and their current status (read-only)'],
+    ['openmausbot.list_channels', provider.listChannels, 'List OpenMausBot channels (read-only)'],
+    ['openmausbot.list_models', provider.listModels, 'List available models for OpenMausBot agents (read-only)']
   ];
 
   return definitions.map(([name, operation, description]) => new ToolInterface({

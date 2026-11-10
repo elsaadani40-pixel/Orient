@@ -11,7 +11,7 @@ const {
 } = require('../../../../src/infrastructure/agents/openmausbot-mcp-client');
 
 class FakeMcpChild extends EventEmitter {
-  constructor({ availableTools = [...ALLOWED_TOOLS], failMethod = null, malformed = false, identity = 'openmausbot', exitImmediately = false } = {}) {
+  constructor({ availableTools = [...ALLOWED_TOOLS], failMethod = null, malformed = false, identity = 'openmausbot', exitImmediately = false, responseDelayMs = 0 } = {}) {
     super();
     this.stdout = new PassThrough();
     this.stdin = new PassThrough();
@@ -23,6 +23,7 @@ class FakeMcpChild extends EventEmitter {
     this.malformed = malformed;
     this.identity = identity;
     this.exitImmediately = exitImmediately;
+    this.responseDelayMs = responseDelayMs;
     if (exitImmediately) process.nextTick(() => { this.exitCode = 1; this.emit('exit', 1, null); });
     let buffer = '';
     this.stdin.on('data', chunk => {
@@ -54,7 +55,12 @@ class FakeMcpChild extends EventEmitter {
             structuredContent: data
           };
         }
-        this.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+        const responseFrame = JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n';
+        if (this.responseDelayMs > 0) {
+          setTimeout(() => this.stdout.write(responseFrame), this.responseDelayMs);
+        } else {
+          this.stdout.write(responseFrame);
+        }
       }
     });
   }
@@ -77,7 +83,7 @@ test('OpenMausBot MCP client initializes and calls only the expected read-only t
       child = new FakeMcpChild();
       return child;
     },
-    env: { PATH: '/usr/bin', HOME: '/home/orient', OPENMAUSBOT_TOKEN: 'test-token', DATABASE_URL: 'must-not-leak' }
+    env: { PATH: '/usr/bin', HOME: '/home/orient', OMB_PORT: '8799', OPENMAUSBOT_TOKEN: 'test-token', DATABASE_URL: 'must-not-leak' }
   });
 
   const result = await client.callTool('list_bots');
@@ -89,6 +95,7 @@ test('OpenMausBot MCP client initializes and calls only the expected read-only t
   assert.deepEqual(spawnArgs.args, ['mcp']);
   assert.equal(spawnArgs.options.shell, false);
   assert.equal(spawnArgs.options.env.OPENMAUSBOT_TOKEN, 'test-token');
+  assert.equal(spawnArgs.options.env.OMB_PORT, '8799');
   assert.equal(spawnArgs.options.env.DATABASE_URL, undefined);
   assert.ok(child.requests.some(request => request.method === 'notifications/initialized'));
   assert.ok(child.requests.some(request => request.method === 'tools/call' && request.params.name === 'list_bots'));
@@ -183,6 +190,22 @@ test('OpenMausBot MCP client rejects invalid command, timeout, and concurrency c
   assert.throws(() => new OpenMausBotMcpClient({ timeoutMs: 999 }), /between 1000 and 120000/);
   assert.throws(() => new OpenMausBotMcpClient({ args: 'mcp' }), /array of strings/);
   assert.throws(() => new OpenMausBotMcpClient({ maxConcurrent: 9 }), /between 1 and 8/);
+});
+
+test('OpenMausBot MCP token requires an explicit endpoint before spawning', () => {
+  assert.throws(() => new OpenMausBotMcpClient({
+    env: { PATH: '/usr/bin', OPENMAUSBOT_TOKEN: 'paired-token' }
+  }), /requires an explicit OPENMAUSBOT_URL or OMB_PORT/);
+});
+
+test('OpenMausBot MCP timeout bounds the complete handshake and tool call', async () => {
+  const client = new OpenMausBotMcpClient({
+    timeoutMs: 1000,
+    spawnImpl: () => new FakeMcpChild({ responseDelayMs: 400 })
+  });
+  await assert.rejects(client.callTool('list_bots'), {
+    code: 'OPENMAUSBOT_MCP_TIMEOUT'
+  });
 });
 
 test('OpenMausBot child environment excludes unrelated ORIENT secrets', () => {

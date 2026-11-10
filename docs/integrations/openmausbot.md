@@ -46,7 +46,7 @@ When enabled, the Research Agent may use only these read-only tools:
 | `openmausbot.list_channels` | `list_channels` | Read-only |
 | `openmausbot.list_models` | `list_available_models` | Read-only |
 
-Every request starts a bounded MCP child process, performs MCP initialization, verifies the health response identifies OpenMausBot, checks the strict upstream tool allowlist, calls the selected read-only operation, bounds the response, and terminates the child. The child receives a minimal environment; unrelated ORIENT database and owner secrets are not inherited.
+Every request starts a bounded MCP child process, performs MCP initialization, verifies the health response identifies OpenMausBot, checks the strict upstream tool allowlist, calls the selected read-only operation within one total deadline, bounds the response, and terminates the child. The child receives a minimal environment; unrelated ORIENT database and owner secrets are not inherited.
 
 Upstream results are marked untrusted. They are observations, not instructions, permissions, or proof that a user task was completed.
 
@@ -58,6 +58,6 @@ Controlled delegation is a separate phase. It must bind an ORIENT approval to th
 
 ## Runtime and licensing
 
-ORIENT targets Node.js `>=22`; the current OpenMausBot package targets Node.js `>=24`. Keep them in separate processes rather than raising ORIENT's runtime requirement or embedding Electron.
+ORIENT targets Node.js `>=22`; the current OpenMausBot npm CLI targets Node.js `>=24`. Keep them in separate processes rather than raising ORIENT's runtime requirement or embedding Electron. When using the npm CLI, ensure the child command resolves to Node.js 24 or newer; a packaged desktop executable can instead launch its bundled MCP server with `ELECTRON_RUN_AS_NODE=1`. The ORIENT timeout is a total deadline for MCP initialization, identity verification, and the selected read-only tool call. OpenMausBot is a separate desktop service; Termux/Android compatibility of its CLI has not been verified.
 
 OpenMausBot's repository root is Apache-2.0, but its `enterprise/` directory is separately licensed. ORIENT does not copy or redistribute upstream source in this integration. Review upstream licensing and trademark rules before any future redistribution or white-labeling.
