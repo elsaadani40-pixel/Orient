@@ -625,7 +625,6 @@ test('constructor accepts EEXIST when another creator wins the initial event-fil
     if (target === filePath && flags === 'wx' && !simulatedRace) {
       simulatedRace = true;
       const descriptor = originalOpenSync.call(this, target, flags, ...args);
-      originalOpenSync.call(this, target, 'r');
       fs.closeSync(descriptor);
       throw Object.assign(new Error('another process created the event file'), { code: 'EEXIST' });
     }
