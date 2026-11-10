@@ -174,6 +174,26 @@ test('append reports a stable tenant mismatch code for caller-supplied tenant me
   assert.equal(repository.count(), 0);
 });
 
+test('findByType never returns another tenant events for a shared event type', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-type-tenant-filter-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const repository = new EventRepository(path.join(directory, 'events.json'));
+
+  repository.appendMany([
+    { id: 'tenant-a-event', type: 'mission.updated', data: { tenantId: 'tenant-a' } },
+    { id: 'tenant-b-event', type: 'mission.updated', data: { tenantId: 'tenant-b' } }
+  ]);
+
+  assert.deepEqual(
+    repository.findByType('mission.updated', { tenantId: 'tenant-a' }).map(event => event.id),
+    ['tenant-a-event']
+  );
+  assert.deepEqual(
+    repository.findByType('mission.updated', { tenantId: 'tenant-b' }).map(event => event.id),
+    ['tenant-b-event']
+  );
+});
+
 test('appendMany reports a stable tenant mismatch code before writing any event', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-many-mismatch-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
