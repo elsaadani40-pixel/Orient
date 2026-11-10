@@ -57,7 +57,7 @@ jobs:
             test: test/unit/core/security/owner-auth-service.test.js
           - name: execution-coordinator
             mutate: src/core/runtime/request-execution-coordinator.js
-            test: test/unit/core/runtime/request-execution-coordinator.test.js
+            test: test/unit/core/runtime/request-execution-coordinator.test.js test/unit/core/runtime/coordinator-security-regressions.test.js
           - name: event-repository
             timeout: 60
             mutate: src/infrastructure/persistence/json/event.repository.js
