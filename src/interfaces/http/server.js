@@ -829,7 +829,8 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           req,
           res,
           body,
-          ownerSession ? { sessionId: ownerSession.sessionId } : null
+          ownerSession ? { sessionId: ownerSession.sessionId } : null,
+          ownerPersistencePrincipal
         );
         return;
       }

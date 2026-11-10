@@ -6,18 +6,7 @@ class AgentService {
     this.runtime = runtime;
   }
 
-  async createTask({ goal, idempotencyKey, ownerSessionContext = null, persistencePrincipal = null } = {}) {
-    const clean = typeof goal === 'string' ? goal.trim() : '';
-    if (!clean) {
-      throw new AppError('الهدف مطلوب', 400, 'TASK_GOAL_REQUIRED');
-    }
-    if (clean.length > 5000) {
-      throw new AppError('الهدف طويل جدًا', 400, 'AGENT_INPUT_TOO_LONG');
-    }
-    if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8 || idempotencyKey.length > 200) {
-      throw new AppError('مفتاح منع التكرار غير صالح', 400, 'IDEMPOTENCY_KEY_REQUIRED');
-    }
-
+  async assertOwnerPersistenceContext(ownerSessionContext = null, persistencePrincipal = null) {
     if (ownerSessionContext !== null) {
       if (typeof this.runtime.assertOwnerSessionContext !== 'function') {
         throw new AppError('An active authenticated owner session is required', 401, 'OWNER_SESSION_REJECTED');
@@ -26,7 +15,7 @@ class AgentService {
     }
 
     if (ownerSessionContext !== null && persistencePrincipal === null) {
-      throw new AppError('A trusted persistence principal is required for owner task creation', 401, 'PERSISTENCE_PRINCIPAL_REQUIRED');
+      throw new AppError('A trusted persistence principal is required for owner execution', 401, 'PERSISTENCE_PRINCIPAL_REQUIRED');
     }
 
     if (persistencePrincipal !== null) {
@@ -42,6 +31,21 @@ class AgentService {
         throw new AppError('Persistence principal does not match the authenticated task context', 403, 'PERSISTENCE_PRINCIPAL_MISMATCH');
       }
     }
+  }
+
+  async createTask({ goal, idempotencyKey, ownerSessionContext = null, persistencePrincipal = null } = {}) {
+    const clean = typeof goal === 'string' ? goal.trim() : '';
+    if (!clean) {
+      throw new AppError('الهدف مطلوب', 400, 'TASK_GOAL_REQUIRED');
+    }
+    if (clean.length > 5000) {
+      throw new AppError('الهدف طويل جدًا', 400, 'AGENT_INPUT_TOO_LONG');
+    }
+    if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8 || idempotencyKey.length > 200) {
+      throw new AppError('مفتاح منع التكرار غير صالح', 400, 'IDEMPOTENCY_KEY_REQUIRED');
+    }
+
+    await this.assertOwnerPersistenceContext(ownerSessionContext, persistencePrincipal);
 
     const repository = this.runtime.persistence?.idempotency;
     if (!repository || typeof repository.begin !== 'function' ||
@@ -215,7 +219,7 @@ class AgentService {
     return this.runtime.assertOwnerSessionContext(ownerSessionContext);
   }
 
-  execute(input, options = {}) {
+  async execute(input, options = {}) {
     const clean = String(input || '').trim();
 
     if (!clean) {
@@ -234,6 +238,10 @@ class AgentService {
       );
     }
 
+    await this.assertOwnerPersistenceContext(
+      options.ownerSessionContext ?? null,
+      options.persistencePrincipal ?? null
+    );
     return this.runtime.execute(clean, options);
   }
 

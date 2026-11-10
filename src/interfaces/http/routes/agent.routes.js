@@ -485,7 +485,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       res.end(JSON.stringify(result, null, 2));
     },
 
-    async execute(req, res, body, ownerSessionContext = null) {
+    async execute(req, res, body, ownerSessionContext = null, persistencePrincipal = null) {
       let input = '';
 
       const contentType =
@@ -514,7 +514,7 @@ function createAgentRoutes(agentService, { onFinalAnswer = null, onTaskCreated =
       }
 
       const result =
-        await agentService.execute(input, { ownerSessionContext });
+        await agentService.execute(input, { ownerSessionContext, persistencePrincipal });
 
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
