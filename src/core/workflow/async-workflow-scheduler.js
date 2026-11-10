@@ -210,10 +210,15 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
           }
         }
       }
-      // The durable dispatch claim remains held until leaseAsync acquires the
-      // worker lease and performs the first lease-fenced persistence. Saving
-      // here would be an unleased write racing the claim owner.
-      super.enqueue(instance, { priority: Number(instance.metadata?.priority || 0), deadlineAt: instance.deadlineAt });
+      // The claim is the durable authority until leaseAsync completes the
+      // claim-to-lease handoff. Use the persisted enqueue path: base enqueue()
+      // invokes the polymorphic persist() method and would issue an unleased
+      // repository write while this claim is still held.
+      if (instance.state !== 'QUEUED') instance.transition('QUEUED');
+      super.enqueuePersisted(instance, {
+        priority: Number(instance.metadata?.priority || 0),
+        deadlineAt: instance.deadlineAt
+      });
       recovered++;
     }
   }
