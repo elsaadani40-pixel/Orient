@@ -1556,6 +1556,7 @@ class PostgresWorkflowLeaseRepository {
       if (['COMPLETED','FAILED'].includes(workflowState)) {
         throw Object.assign(new Error('Workflow is terminal'), { code: 'WORKFLOW_TERMINAL' });
       }
+      await this.assertRegisteredWorkerSession(client, principal);
       await client.query(
         'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= clock_timestamp()',
         [lease.workflowId, effectiveTenant]
