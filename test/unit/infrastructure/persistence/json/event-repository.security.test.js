@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const Module = require('node:module');
 const EventRepository = require('../../../../../src/infrastructure/persistence/json/event.repository');
 
 function fixture(t, options = {}) {
@@ -201,4 +202,213 @@ test('event file and active lock use private filesystem permissions', t => {
     assert.ok(ownerName);
     assert.equal((fs.statSync(path.join(repository.lockPath, ownerName)).mode & 0o777), 0o600);
   });
+});
+
+
+test('constructor fails closed when O_NOFOLLOW is unavailable', t => {
+  const modulePath = require.resolve('../../../../../src/infrastructure/persistence/json/event.repository');
+  const cachedModule = require.cache[modulePath];
+  delete require.cache[modulePath];
+
+  const originalLoad = Module._load;
+  const unsupportedFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === 'constants') return { ...target.constants, O_NOFOLLOW: undefined };
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    }
+  });
+  let UnsupportedRepository;
+  Module._load = function (request, parent, isMain) {
+    if (request === 'fs' && parent?.filename === modulePath) return unsupportedFs;
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    UnsupportedRepository = require(modulePath);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[modulePath];
+    if (cachedModule) require.cache[modulePath] = cachedModule;
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-no-nofollow-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.throws(
+    () => new UnsupportedRepository(path.join(root, 'events.json')),
+    error => error.code === 'EVENT_STORAGE_UNSAFE_FILESYSTEM'
+  );
+});
+
+test('bounded reads reject file growth beyond the hard limit after fstat', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const originalOpenSync = fs.openSync;
+  const originalFstatSync = fs.fstatSync;
+  const originalReadSync = fs.readSync;
+  let targetDescriptor;
+
+  fs.openSync = function (target, ...args) {
+    const descriptor = originalOpenSync.call(this, target, ...args);
+    if (target === repository.filePath) targetDescriptor = descriptor;
+    return descriptor;
+  };
+  fs.fstatSync = function (descriptor, ...args) {
+    const stats = originalFstatSync.call(this, descriptor, ...args);
+    if (descriptor !== targetDescriptor) return stats;
+    const altered = Object.create(Object.getPrototypeOf(stats));
+    Object.assign(altered, stats);
+    Object.defineProperty(altered, 'size', { value: 0n });
+    return altered;
+  };
+  fs.readSync = function (descriptor, buffer, offset, length, position) {
+    if (descriptor === targetDescriptor) {
+      buffer.fill(0x20, offset, offset + length);
+      return length;
+    }
+    return originalReadSync.call(this, descriptor, buffer, offset, length, position);
+  };
+
+  try {
+    assert.throws(
+      () => repository.read(),
+      error => error.code === 'EVENT_STORAGE_TOO_LARGE'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.fstatSync = originalFstatSync;
+    fs.readSync = originalReadSync;
+  }
+});
+
+test('read closes its descriptor after a filesystem read failure', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const originalOpenSync = fs.openSync;
+  const originalReadSync = fs.readSync;
+  const expected = Object.assign(new Error('simulated read failure'), { code: 'EIO' });
+  let targetDescriptor;
+
+  fs.openSync = function (target, ...args) {
+    const descriptor = originalOpenSync.call(this, target, ...args);
+    if (target === repository.filePath) targetDescriptor = descriptor;
+    return descriptor;
+  };
+  fs.readSync = function (descriptor, ...args) {
+    if (descriptor === targetDescriptor) throw expected;
+    return originalReadSync.call(this, descriptor, ...args);
+  };
+
+  try {
+    assert.throws(() => repository.read(), error => error === expected);
+    assert.throws(
+      () => fs.fstatSync(targetDescriptor),
+      error => error.code === 'EBADF'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.readSync = originalReadSync;
+  }
+});
+
+test('lock initialization closes the owner descriptor when marker writing fails', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const originalOpenSync = fs.openSync;
+  const originalWriteFileSync = fs.writeFileSync;
+  const expected = Object.assign(new Error('owner marker write failed'), { code: 'EIO' });
+  let ownerDescriptor;
+  let ownerPath;
+
+  fs.openSync = function (target, ...args) {
+    const descriptor = originalOpenSync.call(this, target, ...args);
+    if (String(target).startsWith(repository.lockPath + path.sep)) {
+      ownerDescriptor = descriptor;
+      ownerPath = String(target);
+    }
+    return descriptor;
+  };
+  fs.writeFileSync = function (target, ...args) {
+    if (target === ownerDescriptor) throw expected;
+    return originalWriteFileSync.call(this, target, ...args);
+  };
+
+  try {
+    assert.throws(() => repository.withLock(() => assert.fail('must not enter')), error => error === expected);
+    assert.equal(fs.lstatSync(repository.lockPath).isDirectory(), true);
+    assert.equal(fs.lstatSync(ownerPath).isFile(), true);
+    assert.throws(
+      () => fs.fstatSync(ownerDescriptor),
+      error => error.code === 'EBADF'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.writeFileSync = originalWriteFileSync;
+  }
+});
+
+test('lock owner descriptor is closed before the protected operation begins', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const originalOpenSync = fs.openSync;
+  let ownerDescriptor;
+
+  fs.openSync = function (target, ...args) {
+    const descriptor = originalOpenSync.call(this, target, ...args);
+    if (String(target).startsWith(repository.lockPath + path.sep)) ownerDescriptor = descriptor;
+    return descriptor;
+  };
+  try {
+    repository.withLock(() => {
+      assert.throws(
+        () => fs.fstatSync(ownerDescriptor),
+        error => error.code === 'EBADF'
+      );
+    });
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+});
+
+test('atomic writes fsync and close their temporary file descriptor', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const originalOpenSync = fs.openSync;
+  const originalFsyncSync = fs.fsyncSync;
+  let temporaryDescriptor;
+  let fsyncCalls = 0;
+
+  fs.openSync = function (target, ...args) {
+    const descriptor = originalOpenSync.call(this, target, ...args);
+    if (String(target).startsWith(repository.filePath + '.tmp.')) temporaryDescriptor = descriptor;
+    return descriptor;
+  };
+  fs.fsyncSync = function (descriptor) {
+    fsyncCalls += 1;
+    return originalFsyncSync.call(this, descriptor);
+  };
+  try {
+    repository.write([{ id: 'durable-event', type: 'test.created' }]);
+    assert.equal(fsyncCalls, 1);
+    assert.throws(
+      () => fs.fstatSync(temporaryDescriptor),
+      error => error.code === 'EBADF'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.fsyncSync = originalFsyncSync;
+  }
+});
+
+test('a safe non-writable parent directory is accepted', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX parent permission checks are not available');
+    return;
+  }
+  const f = fixture(t);
+  const parent = path.join(f.root, 'trusted-parent');
+  fs.mkdirSync(parent, { mode: 0o700 });
+  fs.chmodSync(parent, 0o755);
+  const storage = path.join(parent, 'storage');
+  const repository = new EventRepository(path.join(storage, 'events.json'));
+  assert.equal(repository.directory, storage);
 });

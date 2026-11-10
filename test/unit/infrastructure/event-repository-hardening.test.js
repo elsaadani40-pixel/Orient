@@ -70,16 +70,32 @@ test('read rejects files larger than the configured hard limit before parsing', 
   );
 });
 
-test('a stale lock times out without reclaiming or modifying its contents', t => {
-  const { repository } = fixture(t, { lockTimeoutMs: 1 });
+test('a stale lock times out deterministically without reclaiming or modifying its contents', t => {
+  const { repository } = fixture(t, { lockTimeoutMs: 10 });
   const marker = path.join(repository.lockPath, 'operator-owned-marker');
   fs.mkdirSync(repository.lockPath);
   fs.writeFileSync(marker, 'leave-me-alone');
 
-  assert.throws(
-    () => repository.withLock(() => 'unreachable'),
-    error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
-  );
+  const originalNow = Date.now;
+  const originalWait = Atomics.wait;
+  let clockReads = 0;
+  let waitCalls = 0;
+  Date.now = () => 1000 + clockReads++ * 5;
+  Atomics.wait = () => {
+    waitCalls += 1;
+    return 'timed-out';
+  };
+  try {
+    assert.throws(
+      () => repository.withLock(() => 'unreachable'),
+      error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.equal(waitCalls, 1);
+  } finally {
+    Date.now = originalNow;
+    Atomics.wait = originalWait;
+  }
+
   assert.equal(fs.readFileSync(marker, 'utf8'), 'leave-me-alone');
   assert.equal(fs.existsSync(repository.lockPath), true);
 });
