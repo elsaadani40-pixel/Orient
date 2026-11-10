@@ -245,6 +245,7 @@ function createServer({ memoryRoutes, agentRoutes, accessAudit = null, ownerAuth
           return;
         }
         const result = await ownerAuth.login({
+          email: typeof payload.email === 'string' ? payload.email : undefined,
           password: payload.password,
           sourceIp: req.socket?.remoteAddress || 'unknown'
         });

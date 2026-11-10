@@ -2,26 +2,29 @@
 
 ## Local setup
 
-The owner console has no default password. Configure `ORIENT_OWNER_PASSWORD` in the same shell that starts ORIENT ONE. The password must contain at least 16 characters. Do not commit it, put it in source files, or send it in chat.
+The owner console has no default password. In the unified application, configure `ORIENT_OWNER_EMAIL` and `ORIENT_OWNER_BOOTSTRAP_PASSWORD` in the protected environment before first start. The bootstrap password must be exactly 10 ASCII digits and is used only for the first owner sign-in. After sign-in, change it to a permanent password of at least 14 characters from the shared account workspace. Never commit either value, put them in source files, or send them in chat.
 
-In Bash/Termux, enter it without echoing it or placing it in shell history:
+For local first-run setup, load the bootstrap value from a protected local secret store or enter it into the shell without echoing it or placing it in shell history. Do not add it to a checked-in `.env` file. Production deployments must use the platform's encrypted environment settings.
 
 ```bash
-read -rsp "ORIENT ONE owner password: " ORIENT_OWNER_PASSWORD
+read -rsp "ORIENT bootstrap password (10 digits): " ORIENT_OWNER_BOOTSTRAP_PASSWORD
 printf '\n'
-export ORIENT_OWNER_PASSWORD
+export ORIENT_OWNER_BOOTSTRAP_PASSWORD
+export ORIENT_OWNER_EMAIL="elsaadani40@gmail.com"
 npm start
 ```
+
+After the first successful sign-in and password rotation, remove the bootstrap variable from the shell/deployment configuration; changing it later does not reset an initialized owner identity.
 
 Open `http://127.0.0.1:8080/owner` (change the port if `PORT` is configured). After login, use **لوحة التشغيل** to access the operational dashboard. The same owner session protects the dashboard and its HTTP API. If the password is absent or too weak, authentication fails closed rather than using a default credential.
 
 ## Session and request protections
 
 - Session tokens are random, opaque, and stored server-side as SHA-256 digests.
-- The browser cookie is `HttpOnly`, `SameSite=Strict`, scoped to `Path=/`, and expires after 30 minutes. A `Secure` attribute is added when the server socket is HTTPS.
+- The browser cookie is `HttpOnly`, `SameSite=Strict`, scoped to `Path=/`, and expires according to the server-issued owner session TTL. The Android loopback client uses the same owner identity/session authority and keeps its cookie and CSRF token in memory only. A `Secure` attribute is added when the server socket is HTTPS.
 - Login/logout enforce same-origin checks; logout also requires the session CSRF token.
 - Operational HTTP routes require an authenticated owner session when the production composition is used. Mutating browser requests from a different origin are rejected.
-- At most 64 active sessions are allowed by default; expired sessions are pruned before new login and during authentication. Session digests, CSRF values, expirations, and bounded per-IP login-failure/lockout state are persisted in `data/agent/owner-auth-state.json` using atomic replacement and restrictive file/directory permissions where supported. Raw session bearer tokens are never persisted. Corrupt or unsupported state fails startup closed rather than silently discarding lockouts or revocations. Back up this file only as sensitive security state; protect the host and filesystem, because a local administrator or process with the same OS privileges can still read or replace it.
+- The canonical identity service allows at most 4096 active owner sessions; expired sessions are pruned before new login and during authentication. Session digests, CSRF values, expirations, and bounded login-failure/lockout records are persisted in the canonical owner identity file (`owner.json`) using atomic replacement and restrictive file/directory permissions where supported. Login-failure records contain HMAC digests of source addresses rather than raw IP addresses. Their independent random 256-bit HMAC key is stored separately in the sibling file `owner.json.lockout-key`; it is not derived from the password verifier and is never copied into `owner.json`. On POSIX systems, the service opens this key with `O_NOFOLLOW` and enforces restrictive directory/file modes. Node.js does not expose `O_NOFOLLOW` on Windows, and its `chmod` implementation does not enforce POSIX owner/group/other permissions there; Windows deployments must place the data directory under an ACL that grants write access only to the service account. Do not use a shared or broadly writable Windows data directory. Back up and restore both files together as sensitive security state. Legacy verifier-keyed lockout records remain enforced during migration; if the independent key is missing while version-2 lockout records exist, startup fails closed instead of silently discarding active lockouts. Password rotation clears prior failure records. Raw session bearer tokens and raw source addresses are never persisted. Corrupt or unsupported state fails startup closed rather than silently discarding lockouts or revocations. Protect the host and filesystem, because a local administrator or process with the same OS privileges can still read or replace these files. The JSON identity store is designed for the current single-process server composition; multi-process shared authentication requires a transactional shared persistence adapter.
 
 ## Access audit scope
 
