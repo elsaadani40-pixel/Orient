@@ -299,8 +299,10 @@ class ProjectOperationReceiptStore {
       };
       const temporary = filePath + '.tmp.' + token;
       let fd;
+      let temporaryCreated = false;
       try {
         fd = fs.openSync(temporary, 'wx', 0o600);
+        temporaryCreated = true;
         fs.writeFileSync(fd, JSON.stringify(receipt) + '\n', 'utf8');
         fs.fsyncSync(fd);
         fs.closeSync(fd);
@@ -311,8 +313,12 @@ class ProjectOperationReceiptStore {
         if (fd !== undefined) {
           try { fs.closeSync(fd); } catch {}
         }
-        try { fs.unlinkSync(temporary); } catch (error) {
-          if (error.code !== 'ENOENT') throw error;
+        // An exclusive-open collision means this operation never owned the
+        // pathname. Never remove a pre-existing temporary file on that path.
+        if (temporaryCreated) {
+          try { fs.unlinkSync(temporary); } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
         }
       }
       return receipt;
