@@ -18,37 +18,21 @@ class OwnerIdentityRuntimeAdapter {
     this.maxFailures = maxFailures;
     this.lockoutMs = lockoutMs;
     this.now = now;
-    this.failures = new Map();
   }
 
   get enabled() {
     return this.identity.status().configured === true;
   }
 
-  async login({ password, sourceIp = 'unknown' } = {}) {
-    const ip = String(sourceIp || 'unknown').slice(0, 64);
-    const now = this.now();
-    const prior = this.failures.get(ip);
-    if (prior && prior.blockedUntil > now) {
-      return { ok: false, code: 'OWNER_LOGIN_RATE_LIMITED' };
-    }
-
-    const result = await this.identity.login({ username: 'Admin', password });
-    if (result.ok) {
-      this.failures.delete(ip);
-      return result;
-    }
-
-    const withinWindow = prior && now - prior.windowStartedAt < this.lockoutMs;
-    const count = withinWindow ? prior.count + 1 : 1;
-    this.failures.delete(ip);
-    if (this.failures.size >= 1024) this.failures.delete(this.failures.keys().next().value);
-    this.failures.set(ip, {
-      count,
-      windowStartedAt: withinWindow ? prior.windowStartedAt : now,
-      blockedUntil: count >= this.maxFailures ? now + this.lockoutMs : 0
+  async login({ email, password, sourceIp = 'unknown' } = {}) {
+    return this.identity.login({
+      ...(email ? { email } : { username: 'Admin' }),
+      password,
+      sourceIp,
+      maxFailures: this.maxFailures,
+      lockoutMs: this.lockoutMs,
+      now: this.now()
     });
-    return result;
   }
 
   status() {

@@ -11,6 +11,7 @@ const {
   PostgresCheckpointRepository
 } = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
 const PostgresTenantQuotaRepository = require('../../../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
+const { MIGRATIONS } = require('../../../../src/infrastructure/persistence/postgres/postgres-database');
 const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
 
 function fakeDb(responses = []) {
@@ -22,6 +23,7 @@ function fakeDb(responses = []) {
       return responses.shift() || { rows: [], rowCount: 0 };
     },
     async transactionWithWorkerPrincipal(principal, work) { return this.transaction(work); },
+    async transactionWithPrincipal(principal, work) { return this.transaction(work); },
     async transaction(work) {
       const client = {
         query: async (text, values = []) => {
@@ -42,6 +44,7 @@ test('PostgresPersistence exposes every durable repository without opening a dat
   assert.ok(persistence.idempotency);
   assert.ok(persistence.checkpoints);
   assert.ok(persistence.workflows);
+  assert.strictEqual(persistence.workflows.eventRepository, persistence.events);
   assert.ok(persistence.workflowLeases);
   assert.ok(persistence.approvals);
 });
@@ -138,6 +141,56 @@ test('Postgres workflow writes reject stale fencing tokens', async () => {
   assert.match(db.calls[1].text, /fencing_token/);
 });
 
+
+test('Postgres workflow repair uses tenant-scoped revision compare-and-set', async () => {
+  const existing = { workflowId: 'wf-repair', tenantId: 'tenant-a', state: 'WAITING', checkpoint: { revision: 3 } };
+  const db = fakeDb([
+    { rows: [{ payload: existing }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowRepository(db);
+  const repaired = await repo.repair({
+    workflowId: 'wf-repair', tenantId: 'tenant-a', state: 'WAITING',
+    updatedAt: '2026-11-09T10:00:00.000Z',
+    checkpoint: { revision: 3 },
+    toJSON() { return this; }
+  }, { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 5 });
+  assert.equal(repaired.checkpoint.revision, 5);
+  assert.match(db.calls[0].text, /FOR UPDATE/);
+  assert.match(db.calls[1].text, /workflow_dispatch_claims/);
+  assert.match(db.calls[2].text, /workflow_leases/);
+  assert.match(db.calls[3].text, /checkpoint.*revision/);
+  assert.deepEqual(db.calls[3].values.slice(0, 2), ['wf-repair', 'tenant-a']);
+  assert.equal(db.calls[3].values[5], 3);
+});
+
+test('Postgres workflow repair refuses an active dispatch claim before updating', async () => {
+  const db = fakeDb([
+    { rows: [{ payload: { checkpoint: { revision: 3 } } }], rowCount: 1 },
+    { rows: [{}], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowRepository(db);
+  await assert.rejects(
+    () => repo.repair({ workflowId: 'wf-claimed', tenantId: 'tenant-a', state: 'WAITING', toJSON() { return this; } },
+      { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 4 }),
+    error => error.code === 'WORKFLOW_DISPATCH_CLAIM_HELD'
+  );
+  assert.equal(db.calls.length, 2);
+  assert.match(db.calls[1].text, /workflow_dispatch_claims/);
+});
+
+test('Postgres workflow repair rejects stale revisions without writing', async () => {
+  const db = fakeDb([{ rows: [{ payload: { checkpoint: { revision: 4 } } }], rowCount: 1 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  await assert.rejects(
+    () => repo.repair({ workflowId: 'wf-stale', tenantId: 'tenant-a', state: 'WAITING', toJSON() { return this; } },
+      { tenantId: 'tenant-a', expectedRevision: 3, targetRevision: 5 }),
+    error => error.code === 'WORKFLOW_CHECKPOINT_CONFLICT'
+  );
+  assert.equal(db.calls.length, 1);
+});
 
 test('PostgresPersistence exposes durable tenant quota repository', () => {
   const persistence = new PostgresPersistence({ pool: fakeDb() });
@@ -251,4 +304,235 @@ test('Postgres approval repository supports durable tenant-scoped execution and 
   assert.equal(pending[0].approvalId, 'approval-1');
   assert.match(db.calls[1].text, /tenant_id=\$1 AND used=FALSE AND expires_at>\$2.*LIMIT \$3/);
   assert.deepEqual(db.calls[1].values, ['tenant-a', '2026-10-10T10:00:00.000Z', 10]);
+});
+
+
+test('Postgres durable-event migration safely handles non-array pending publication JSON', () => {
+  const migration = MIGRATIONS.find(item => item.version === 12);
+  assert.ok(migration, 'durable-event migration 12 must exist');
+  assert.match(migration.sql, /ALTER TABLE events ADD COLUMN IF NOT EXISTS aggregate_id/);
+  assert.match(migration.sql, /ALTER TABLE events ADD COLUMN IF NOT EXISTS sequence/);
+  assert.match(migration.sql, /CASE\s+WHEN jsonb_typeof\(payload->'metadata'->'pendingPublications'\)='array'/);
+  assert.match(migration.sql, /ELSE 0\s+END > 0/);
+  assert.doesNotMatch(
+    migration.sql,
+    /jsonb_array_length\(COALESCE\(payload->'metadata'->'pendingPublications'/
+  );
+});
+
+
+test('Postgres mission event append assigns a tenant aggregate sequence and is idempotent', async () => {
+  const event = {
+    id: 'mission-1', aggregateId: 'workflow-1', executionId: 'workflow-1',
+    type: 'workflow.approval.required', timestamp: '2026-11-09T10:00:00.000Z',
+    data: { tenantId: 'tenant-a', approvalId: 'approval-1' }
+  };
+  const persisted = { ...event, sequence: 1 };
+  const db = fakeDb([
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ next_sequence: '1' }], rowCount: 1 },
+    { rows: [{ payload: persisted }], rowCount: 1 }
+  ]);
+  const repo = new PostgresEventRepository(db);
+  const result = await repo.appendMissionEvent(event, { tenantId: 'tenant-a' });
+  assert.equal(result.sequence, 1);
+  assert.match(db.calls[0].text, /pg_advisory_xact_lock/);
+  assert.deepEqual(db.calls[0].values, ['tenant-a', 'workflow-1']);
+  assert.match(db.calls[3].text, /aggregate_id,sequence,type/);
+});
+
+test('Postgres mission event replay rejects reuse of a stable ID with changed data', async () => {
+  const prior = {
+    id: 'mission-reused', aggregateId: 'workflow-1', executionId: 'workflow-1',
+    type: 'workflow.created', timestamp: '2026-11-09T10:00:00.000Z',
+    data: { tenantId: 'tenant-a', value: 'original' }
+  };
+  const db = fakeDb([
+    { rows: [], rowCount: 0 },
+    { rows: [{ tenant_id: 'tenant-a', aggregate_id: 'workflow-1', payload: prior }], rowCount: 1 }
+  ]);
+  const repo = new PostgresEventRepository(db);
+  await assert.rejects(
+    () => repo.appendMissionEvent({
+      ...prior, data: { tenantId: 'tenant-a', value: 'changed' }
+    }, { tenantId: 'tenant-a' }),
+    error => error.code === 'MISSION_EVENT_ID_CONFLICT'
+  );
+});
+
+test('Postgres mission event reads are tenant-scoped and sequence-ordered', async () => {
+  const events = [{ id: 'mission-1', sequence: 1 }, { id: 'mission-2', sequence: 2 }];
+  const db = fakeDb([{ rows: events.map(payload => ({ payload })), rowCount: 2 }]);
+  const repo = new PostgresEventRepository(db);
+  assert.deepEqual(await repo.findByAggregateId('workflow-1', { tenantId: 'tenant-a' }), events);
+  assert.match(db.calls[0].text, /tenant_id=\$1 AND aggregate_id=\$2 ORDER BY sequence ASC/);
+  assert.deepEqual(db.calls[0].values, ['tenant-a', 'workflow-1']);
+});
+
+
+test('Postgres generic event append rejects stable ID reuse with changed payload', async () => {
+  const prior = {
+    id: 'event-reused', type: 'execution.completed', executionId: 'exec-1',
+    goalId: null, timestamp: '2026-11-09T10:00:00.000Z',
+    data: { tenantId: 'tenant-a', value: 'original' }
+  };
+  const db = fakeDb([
+    { rows: [], rowCount: 0 },
+    { rows: [{ tenant_id: 'tenant-a', payload: prior }], rowCount: 1 }
+  ]);
+  const repo = new PostgresEventRepository(db);
+  await assert.rejects(
+    () => repo.append({
+      ...prior, data: { tenantId: 'tenant-a', value: 'changed' }
+    }, { tenantId: 'tenant-a' }),
+    error => error.code === 'EVENT_ID_CONFLICT'
+  );
+});
+
+
+test('Postgres workflow outbox lookup is bounded, tenant-scoped, and JSON-type safe', async () => {
+  const snapshot = {
+    workflowId: 'wf-pending', tenantId: 'tenant-a',
+    metadata: { approvalBlocked: true, pendingPublications: [{ eventId: 'event-1' }] }
+  };
+  const db = fakeDb([{ rows: [{ payload: snapshot }], rowCount: 1 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  assert.deepEqual(await repo.findPendingPublications({ tenantId: 'tenant-a', limit: 8 }), [snapshot]);
+  assert.match(db.calls[0].text, /jsonb_typeof\(payload->'metadata'->'pendingPublications'\)/);
+  assert.match(db.calls[0].text, /ELSE 0/);
+  assert.deepEqual(db.calls[0].values, ['tenant-a', 8]);
+});
+
+test('Postgres workflow outbox acknowledgement locks and advances checkpoint revision', async () => {
+  const snapshot = {
+    workflowId: 'wf-ack', tenantId: 'tenant-a', checkpoint: { revision: 4 },
+    metadata: { pendingPublications: [{ eventId: 'event-1' }, { eventId: 'event-2' }] }
+  };
+  const db = fakeDb([
+    { rows: [{ payload: snapshot }], rowCount: 1 },
+    { rows: [], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowRepository(db);
+  const result = await repo.acknowledgePendingPublications('wf-ack', 'tenant-a', ['event-1']);
+  assert.equal(result.acknowledged, 1);
+  assert.equal(result.revision, 5);
+  assert.deepEqual(result.pending, [{ eventId: 'event-2' }]);
+  assert.match(db.calls[0].text, /FOR UPDATE/);
+  assert.match(db.calls[1].text, /UPDATE workflows SET payload=\$3/);
+});
+
+
+test('Postgres mission event append requires the active lease-bound worker principal', async () => {
+  const db = fakeDb([
+    { rows: [{}], rowCount: 1 },
+    { rows: [{}], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ next_sequence: '1' }], rowCount: 1 },
+    { rows: [{ payload: { id: 'worker-event-1', sequence: 1 } }], rowCount: 1 }
+  ]);
+  const repo = new PostgresEventRepository(db);
+  const workerPrincipal = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-a',
+    workerId: 'worker-a',
+    sessionId: 'session-a',
+    workflowId: 'workflow-a',
+    leaseId: 'lease-a',
+    fencingToken: 9
+  });
+  const result = await repo.appendMissionEvent({
+    id: 'worker-event-1',
+    aggregateId: 'workflow-a',
+    executionId: 'workflow-a',
+    type: 'workflow.state.changed',
+    timestamp: '2026-11-09T11:00:00.000Z',
+    data: { tenantId: 'tenant-a', from: 'QUEUED', to: 'RUNNING' }
+  }, { tenantId: 'tenant-a', workerPrincipal });
+
+  assert.equal(result.sequence, 1);
+  assert.match(db.calls[0].text, /FROM worker_nodes/);
+  assert.match(db.calls[0].text, /session_id/);
+  assert.match(db.calls[1].text, /FROM workflow_leases/);
+  assert.match(db.calls[1].text, /fencing_token/);
+  assert.match(db.calls[1].text, /expires_at > NOW/);
+  assert.match(db.calls[2].text, /pg_advisory_xact_lock/);
+});
+
+test('Postgres mission event append rejects a worker principal for another workflow', async () => {
+  const db = fakeDb();
+  const repo = new PostgresEventRepository(db);
+  const workerPrincipal = createWorkerPersistencePrincipal({
+    tenantId: 'tenant-a',
+    workerId: 'worker-a',
+    sessionId: 'session-a',
+    workflowId: 'workflow-other',
+    leaseId: 'lease-a',
+    fencingToken: 9
+  });
+  await assert.rejects(
+    () => repo.appendMissionEvent({
+      id: 'worker-event-cross-workflow',
+      aggregateId: 'workflow-a',
+      executionId: 'workflow-a',
+      type: 'workflow.state.changed',
+      data: { tenantId: 'tenant-a' }
+    }, { tenantId: 'tenant-a', workerPrincipal }),
+    error => error.code === 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
+  );
+  assert.equal(db.calls.length, 0);
+});
+
+
+test('Postgres workflow creation stores the initial snapshot and mission events in one transaction', async () => {
+  const calls = [];
+  const db = {
+    async transaction(work) {
+      calls.push('begin');
+      const client = { async query(text, values = []) {
+        calls.push({ text, values });
+        return { rows: [{ workflow_id: 'wf-atomic' }], rowCount: 1 };
+      }};
+      const result = await work(client);
+      calls.push('commit');
+      return result;
+    }
+  };
+  const repo = new PostgresWorkflowRepository(db);
+  repo.eventRepository = {
+    async appendMissionEvent(event, options) {
+      assert.ok(options.transactionClient);
+      calls.push(['event', event.type]);
+      return event;
+    }
+  };
+  const instance = {
+    workflowId: 'wf-atomic', tenantId: 'tenant-a', userId: 'owner-a', state: 'QUEUED',
+    updatedAt: '2026-11-09T12:00:00.000Z', toJSON() { return this; }
+  };
+  await repo.createWithEvents(instance, [
+    { id: 'evt-created', aggregateId: 'wf-atomic', type: 'workflow.created' },
+    { id: 'evt-queued', aggregateId: 'wf-atomic', type: 'workflow.state.changed' }
+  ]);
+  assert.equal(calls[0], 'begin');
+  assert.match(calls[1].text, /INSERT INTO workflows/);
+  assert.deepEqual(calls.slice(2), [
+    ['event', 'workflow.created'],
+    ['event', 'workflow.state.changed'],
+    'commit'
+  ]);
+});
+
+test('Postgres workflow creation rejects an existing workflow ID without overwriting it', async () => {
+  const db = fakeDb([{ rows: [], rowCount: 0 }]);
+  const repo = new PostgresWorkflowRepository(db);
+  repo.eventRepository = { async appendMissionEvent() { throw new Error('must not append'); } };
+  await assert.rejects(
+    () => repo.createWithEvents({
+      workflowId: 'wf-existing', tenantId: 'tenant-a', userId: 'owner-a', state: 'QUEUED',
+      toJSON() { return this; }
+    }, [{ id: 'evt', aggregateId: 'wf-existing', type: 'workflow.created' }]),
+    error => error.code === 'WORKFLOW_ID_CONFLICT'
+  );
+  assert.equal(db.calls.length, 1);
 });

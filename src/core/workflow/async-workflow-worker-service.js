@@ -140,6 +140,19 @@ class AsyncWorkflowWorkerService {
         return await worker.tick();
       } catch (error) {
         this.onError(error);
+        if (error?.code === 'WORKER_DURABLE_FENCING_UNSUPPORTED') {
+          this.stopRequested = true;
+          this.running = false;
+          if (this.timer) clearInterval(this.timer);
+          if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+          this.timer = null;
+          this.heartbeatTimer = null;
+          try {
+            await this.unregisterWorker();
+          } catch (cleanupError) {
+            this.onError(cleanupError);
+          }
+        }
         return null;
       } finally {
         this.inFlight = null;

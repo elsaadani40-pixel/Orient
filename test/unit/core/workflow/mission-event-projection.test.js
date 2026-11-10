@@ -103,3 +103,57 @@ test('projection round trip preserves compensation and recovery evidence', () =>
   assert.equal(restored.compensation.state, 'COMPLETED');
   assert.deepEqual(restored.compensation.completed, ['undo-prepare']);
 });
+
+
+test('approval-required event reconstructs a durable waiting state and approval identity', () => {
+  const events = stream().slice(0, 4);
+  events.push(
+    {
+      id: 'approval-required',
+      aggregateId: 'wf-36',
+      sequence: 5,
+      type: 'workflow.approval.required',
+      timestamp: '2026-10-08T10:00:04.000Z',
+      data: { stepId: 'prepare', executionId: 'exec-approval-1', approvalId: 'approval-1' }
+    },
+    {
+      id: 'approval-waiting',
+      aggregateId: 'wf-36',
+      sequence: 6,
+      type: 'workflow.state.changed',
+      timestamp: '2026-10-08T10:00:05.000Z',
+      data: { to: 'WAITING' }
+    }
+  );
+  const restored = new MissionEventProjection().rebuild(events);
+  assert.equal(restored.state, 'WAITING');
+  assert.equal(restored.steps.prepare.state, 'PENDING');
+  assert.equal(restored.metadata.approvalBlocked, true);
+  assert.equal(restored.metadata.approvalExecutionId, 'exec-approval-1');
+  assert.equal(restored.metadata.approvalId, 'approval-1');
+});
+
+
+test('snapshot replacement event reconstructs owner-authorized approval resolution', () => {
+  const events = stream();
+  const snapshot = new MissionEventProjection().rebuild(events).toJSON();
+  snapshot.state = 'COMPLETED';
+  snapshot.metadata = {
+    ...snapshot.metadata,
+    approvalBlocked: false,
+    approvalDecisionStatus: 'approved',
+    approvalResolvedAt: '2026-10-08T10:00:06.000Z'
+  };
+  events.push({
+    id: 'approval-resolution-snapshot',
+    aggregateId: 'wf-36',
+    sequence: 7,
+    type: 'workflow.snapshot.replaced',
+    timestamp: '2026-10-08T10:00:06.000Z',
+    data: { reason: 'approval_resolution', snapshot }
+  });
+  const restored = new MissionEventProjection().rebuild(events);
+  assert.equal(restored.state, 'COMPLETED');
+  assert.equal(restored.metadata.approvalBlocked, false);
+  assert.equal(restored.metadata.approvalDecisionStatus, 'approved');
+});
