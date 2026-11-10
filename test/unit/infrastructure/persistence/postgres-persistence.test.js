@@ -98,6 +98,7 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
   const db = fakeDb([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 },
+    { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '7' }], rowCount: 1 }
   ]);
@@ -120,7 +121,12 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
 });
 
 test('Postgres workflow writes reject stale fencing tokens', async () => {
-  const db = fakeDb([{ rows: [{}], rowCount: 1 }, { rows: [], rowCount: 0 }]);
+  const db = fakeDb([
+    { rows: [{}], rowCount: 1 },
+    { rows: [{ workflow_id: 'wf-1' }], rowCount: 1 },
+    { rows: [{}], rowCount: 1 },
+    { rows: [], rowCount: 0 }
+  ]);
   const repo = new PostgresWorkflowRepository(db);
   const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
   const workerPrincipal = createWorkerPersistencePrincipal({
@@ -427,6 +433,8 @@ test('Postgres workflow outbox acknowledgement locks and advances checkpoint rev
 test('Postgres mission event append requires the active lease-bound worker principal', async () => {
   const db = fakeDb([
     { rows: [{}], rowCount: 1 },
+    { rows: [{ workflow_id: 'workflow-a' }], rowCount: 1 },
+    { rows: [{}], rowCount: 1 },
     { rows: [{}], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [], rowCount: 0 },
@@ -454,10 +462,13 @@ test('Postgres mission event append requires the active lease-bound worker princ
   assert.equal(result.sequence, 1);
   assert.match(db.calls[0].text, /FROM worker_nodes/);
   assert.match(db.calls[0].text, /session_id/);
-  assert.match(db.calls[1].text, /FROM workflow_leases/);
-  assert.match(db.calls[1].text, /fencing_token/);
-  assert.match(db.calls[1].text, /expires_at > NOW/);
-  assert.match(db.calls[2].text, /pg_advisory_xact_lock/);
+  assert.match(db.calls[1].text, /FROM workflows/);
+  assert.match(db.calls[1].text, /FOR UPDATE/);
+  assert.match(db.calls[2].text, /FROM worker_nodes/);
+  assert.match(db.calls[3].text, /FROM workflow_leases/);
+  assert.match(db.calls[3].text, /fencing_token/);
+  assert.match(db.calls[3].text, /expires_at > clock_timestamp/);
+  assert.match(db.calls[4].text, /pg_advisory_xact_lock/);
 });
 
 test('Postgres mission event append rejects a worker principal for another workflow', async () => {
