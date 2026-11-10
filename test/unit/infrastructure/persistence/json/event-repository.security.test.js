@@ -414,7 +414,7 @@ test('a safe non-writable parent directory is accepted', t => {
 test('whitespace-only event files are treated as an empty event log', t => {
   const f = fixture(t);
   const repository = f.create();
-  fs.writeFileSync(repository.filePath, '  \\n\\t  ');
+  fs.writeFileSync(repository.filePath, '  \n\t  ');
   assert.deepEqual(repository.read(), []);
 });
 
