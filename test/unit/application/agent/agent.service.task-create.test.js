@@ -107,15 +107,16 @@ function createRuntime({
     async getExecutionStatus(id) {
       statusLookups += 1;
       if (failFirstStatusLookup && statusLookups === 1) throw new Error('simulated transient status read failure');
+      const currentStatus = typeof status === 'function' ? status() : status;
       return {
         executionId: statusExecutionId || id,
-        status,
+        status: currentStatus,
         currentStep: 2,
         startedAt: '2026-10-10T10:00:00.000Z',
         updatedAt: '2026-10-10T10:00:02.000Z',
-        completedAt: status === 'completed' ? '2026-10-10T10:00:02.000Z' : null,
+        completedAt: currentStatus === 'completed' ? '2026-10-10T10:00:02.000Z' : null,
         cancellationRequested: false,
-        agentLifecycle: status === 'awaiting_approval' ? 'paused' : 'completed',
+        agentLifecycle: currentStatus === 'awaiting_approval' ? 'paused' : currentStatus === 'running' ? 'executing' : 'completed',
         tenantId: 'must-not-leak'
       };
     }
@@ -128,6 +129,78 @@ function createRuntime({
     get statusLookups() { return statusLookups; }
   };
 }
+
+test('concurrent retry cannot complete idempotency from a still-running execution', async () => {
+  let releaseExecution;
+  let markAdmitted;
+  const executionGate = new Promise(resolve => { releaseExecution = resolve; });
+  const admitted = new Promise(resolve => { markAdmitted = resolve; });
+  let executionFinished = false;
+  const fixture = createRuntime({
+    status: () => executionFinished ? 'completed' : 'running',
+    execute: async (_goal, options, persistedExecutions) => {
+      storePersistedExecution(persistedExecutions, options.executionId);
+      markAdmitted();
+      await executionGate;
+      executionFinished = true;
+      return { execution: { executionId: options.executionId } };
+    }
+  });
+  const request = {
+    goal: 'serialize concurrent idempotent task creation',
+    idempotencyKey: 'request-key-concurrent-recovery-01'
+  };
+  const firstRequest = fixture.service.createTask(request);
+  await admitted;
+
+  await assert.rejects(
+    fixture.service.createTask(request),
+    error => error.code === 'TASK_EXECUTION_IN_PROGRESS' && error.statusCode === 409
+  );
+  assert.equal([...fixture.records.values()][0].status, 'running');
+  assert.equal(fixture.executions, 1);
+
+  releaseExecution();
+  const first = await firstRequest;
+  assert.equal(first.task.status, 'completed');
+  const replay = await fixture.service.createTask(request);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.task.status, 'completed');
+  assert.deepEqual(replay.task, first.task);
+  assert.equal(fixture.executions, 1);
+});
+
+test('persisted approval challenge is reconciled as awaiting approval, not as a running task', async () => {
+  const fixture = createRuntime({
+    status: 'running',
+    execute: async (_goal, options, persistedExecutions) => {
+      persistedExecutions.set(options.executionId, {
+        executionId: options.executionId,
+        tenantId: 'tenant-test',
+        metadata: {
+          tenantId: 'tenant-test',
+          pendingStepInputs: { 1: { tool: 'project.execute_change' } }
+        },
+        events: [{ type: 'approval.challenge.requested' }]
+      });
+      throw Object.assign(new Error('Owner approval is required'), {
+        code: 'APPROVAL_REQUIRED',
+        executionContext: { executionId: options.executionId }
+      });
+    }
+  });
+  const request = {
+    goal: 'pause a high-risk change for owner approval',
+    idempotencyKey: 'request-key-approval-marker-01'
+  };
+  const first = await fixture.service.createTask(request);
+  const replay = await fixture.service.createTask(request);
+  assert.equal(first.task.status, 'awaiting_approval');
+  assert.equal(replay.task.status, 'awaiting_approval');
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.task, first.task);
+  assert.equal(fixture.executions, 1);
+});
 
 test('unified task creation is durably idempotent and returns a sanitized task summary', async () => {
   const fixture = createRuntime();
