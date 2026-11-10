@@ -51,13 +51,15 @@ test('fenced workflow writes require a lease-bound worker transaction and match 
   assert.match(h.calls[0].sql, /clock_timestamp\(\)/);
   assert.match(h.calls[1].sql, /FROM workflows/);
   assert.match(h.calls[1].sql, /FOR UPDATE/);
-  assert.match(h.calls[2].sql, /worker_session_id=\$5/);
-  assert.match(h.calls[2].sql, /lease_id=\$3/);
-  assert.match(h.calls[2].sql, /fencing_token=\$6/);
+  assert.match(h.calls[2].sql, /FROM worker_nodes/);
   assert.match(h.calls[2].sql, /clock_timestamp\(\)/);
-  assert.match(h.calls[2].sql, /FOR UPDATE/);
-  assert.deepEqual(h.calls[2].values, ['workflow-a', 'tenant-a', 'lease-a', 'worker-a', 'session-a', 71]);
-  assert.match(h.calls[3].sql, /UPDATE workflows/);
+  assert.match(h.calls[3].sql, /worker_session_id=\$5/);
+  assert.match(h.calls[3].sql, /lease_id=\$3/);
+  assert.match(h.calls[3].sql, /fencing_token=\$6/);
+  assert.match(h.calls[3].sql, /clock_timestamp\(\)/);
+  assert.match(h.calls[3].sql, /FOR UPDATE/);
+  assert.deepEqual(h.calls[3].values, ['workflow-a', 'tenant-a', 'lease-a', 'worker-a', 'session-a', 71]);
+  assert.match(h.calls[4].sql, /UPDATE workflows/);
 });
 
 test('fenced workflow writes reject expired or replaced worker sessions', async () => {
@@ -76,7 +78,7 @@ test('fenced workflow writes reject stale lease rows even for a live worker sess
     h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal }),
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
-  assert.equal(h.calls.length, 3);
+  assert.equal(h.calls.length, 4);
 });
 
 test('fenced workflow writes reject missing or mismatched principals before database access', async () => {
