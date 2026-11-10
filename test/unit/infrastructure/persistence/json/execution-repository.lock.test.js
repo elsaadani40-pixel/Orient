@@ -38,21 +38,26 @@ test('execution repository does not reclaim an old lock owned by a live process'
   }
 });
 
-test('execution repository recovers a lock whose local owner process is dead', () => {
-  const f = fixture(100);
+test('execution repository leaves a stale lock untouched and fails closed', () => {
+  const f = fixture(20);
   try {
     fs.mkdirSync(f.repository.lockPath);
-    fs.writeFileSync(path.join(f.repository.lockPath, 'owner.json'), JSON.stringify({
+    const owner = {
       token: 'dead-owner',
       pid: 2147483647,
       hostname: os.hostname(),
       acquiredAt: new Date(0).toISOString()
-    }));
+    };
+    fs.writeFileSync(path.join(f.repository.lockPath, 'owner.json'), JSON.stringify(owner));
     const old = new Date(Date.now() - 60_000);
     fs.utimesSync(f.repository.lockPath, old, old);
 
-    assert.equal(f.repository.withLock(() => 'acquired'), 'acquired');
-    assert.equal(fs.existsSync(f.repository.lockPath), false);
+    assert.throws(
+      () => f.repository.withLock(() => 'must not run'),
+      error => error.code === 'EXECUTION_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.repository.lockPath, 'owner.json'), 'utf8')), owner);
+    assert.equal(fs.existsSync(f.repository.lockPath), true);
   } finally {
     fs.rmSync(f.dir, { recursive: true, force: true });
   }
