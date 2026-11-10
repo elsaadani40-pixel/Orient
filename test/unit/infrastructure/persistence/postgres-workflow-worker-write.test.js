@@ -84,7 +84,7 @@ test('fenced workflow writes revalidate worker expiry after waiting for the work
     error => error.code === 'WORKER_SESSION_LOST'
   );
   assert.equal(h.calls.length, 3);
-  assert.match(h.calls[2].sql, /clock_timestamp\\(\\)/);
+  assert.match(h.calls[2].sql, /clock_timestamp\(\)/);
 });
 
 test('fenced workflow writes reject stale lease rows even for a live worker session', async () => {
