@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
@@ -519,4 +520,61 @@ test('appendMany rejects array-like objects instead of treating them as empty ba
   const repository = f.create();
   assert.throws(() => repository.appendMany({ length: 0 }), TypeError);
   assert.equal(repository.count(), 0);
+});
+
+
+test('storage fails closed if permission tightening does not make the directory private', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-chmod-noop-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const storage = path.join(root, 'storage');
+  fs.mkdirSync(storage, { mode: 0o755 });
+  fs.chmodSync(storage, 0o755);
+
+  const originalChmodSync = fs.chmodSync;
+  fs.chmodSync = function (target, mode, ...args) {
+    if (target === storage && mode === 0o700) return;
+    return originalChmodSync.call(this, target, mode, ...args);
+  };
+
+  try {
+    assert.throws(
+      () => new EventRepository(path.join(storage, 'events.json')),
+      error => error.code === 'EVENT_STORAGE_DIRECTORY_PERMISSIONS_INVALID'
+    );
+  } finally {
+    fs.chmodSync = originalChmodSync;
+  }
+});
+
+test('lock acquisition never follows a pre-existing owner-marker symlink', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const outside = path.join(f.root, 'outside-owner-target');
+  fs.writeFileSync(outside, 'outside-data-must-remain-unchanged');
+
+  const token = 'fixed-owner-token';
+  const ownerPath = path.join(repository.lockPath, 'owner.' + token + '.json');
+  const originalRandomUUID = crypto.randomUUID;
+  const originalMkdirSync = fs.mkdirSync;
+
+  crypto.randomUUID = () => token;
+  fs.mkdirSync = function (target, ...args) {
+    const result = originalMkdirSync.call(this, target, ...args);
+    if (target === repository.lockPath) fs.symlinkSync(outside, ownerPath);
+    return result;
+  };
+
+  try {
+    assert.throws(
+      () => repository.withLock(() => assert.fail('must not acquire a symlinked owner marker')),
+      error => error.code === 'EEXIST'
+    );
+  } finally {
+    crypto.randomUUID = originalRandomUUID;
+    fs.mkdirSync = originalMkdirSync;
+  }
+
+  assert.equal(fs.lstatSync(ownerPath).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'outside-data-must-remain-unchanged');
+  assert.equal(fs.existsSync(repository.lockPath), true);
 });
