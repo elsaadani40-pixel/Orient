@@ -49,19 +49,25 @@ test('event repository does not reclaim an old lock owned by a live process', ()
   }
 });
 
-test('event repository recovers a lock whose local owner process is dead', () => {
+test('event repository never reclaims a lock whose owner process appears dead', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-dead-lock-'));
   const file = path.join(dir, 'events.json');
-  const repo = new EventRepository(file, { lockTimeoutMs: 100 });
+  const repo = new EventRepository(file, { lockTimeoutMs: 20 });
   try {
     fs.mkdirSync(repo.lockPath);
-    fs.writeFileSync(path.join(repo.lockPath, 'owner.json'), JSON.stringify({
+    const ownerPath = path.join(repo.lockPath, 'owner.json');
+    const marker = JSON.stringify({
       token: 'dead-owner', pid: 2147483647, hostname: os.hostname(), acquiredAt: new Date(0).toISOString()
-    }));
+    });
+    fs.writeFileSync(ownerPath, marker);
     const old = new Date(Date.now() - 60000);
     fs.utimesSync(repo.lockPath, old, old);
-    assert.equal(repo.withLock(() => 'acquired'), 'acquired');
-    assert.equal(fs.existsSync(repo.lockPath), false);
+    assert.throws(
+      () => repo.withLock(() => 'must not run'),
+      error => error.code === 'EVENT_STORAGE_LOCK_TIMEOUT'
+    );
+    assert.equal(fs.readFileSync(ownerPath, 'utf8'), marker);
+    assert.equal(fs.existsSync(repo.lockPath), true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
