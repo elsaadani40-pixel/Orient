@@ -657,7 +657,7 @@ test('event repository lock deadline waits until the configured timeout instead 
   }
 });
 
-test('event repository never probes PID zero when evaluating a lock owner', t => {
+test('directory lock acquisition treats legacy owner PID metadata as opaque and fails closed', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-pid-zero-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const repository = new EventRepository(path.join(directory, 'events.json'), { lockTimeoutMs: 5 });
