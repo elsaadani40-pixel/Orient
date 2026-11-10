@@ -8,11 +8,16 @@ const { createWorkerPersistencePrincipal } = require('../../../../src/core/secur
 function fixture({ workerRows = 1, workflowRows = 1, leaseRows = 1, updateRows = 1 } = {}) {
   const calls = [];
   let transactions = 0;
+  let workerChecks = 0;
   let requireLease = false;
   const client = {
     async query(sql, values = []) {
       calls.push({ sql, values });
-      if (sql.includes('FROM worker_nodes')) return { rowCount: workerRows, rows: workerRows ? [{}] : [] };
+      if (sql.includes('FROM worker_nodes')) {
+        const configuredRows = Array.isArray(workerRows) ? workerRows[Math.min(workerChecks, workerRows.length - 1)] : workerRows;
+        workerChecks += 1;
+        return { rowCount: configuredRows, rows: configuredRows ? [{}] : [] };
+      }
       if (sql.includes('FROM workflows')) return { rowCount: workflowRows, rows: workflowRows ? [{}] : [] };
       if (sql.includes('FROM workflow_leases')) return { rowCount: leaseRows, rows: leaseRows ? [{}] : [] };
       if (sql.includes('UPDATE workflows')) return { rowCount: updateRows, rows: [] };
@@ -70,6 +75,16 @@ test('fenced workflow writes reject expired or replaced worker sessions', async 
   );
   assert.equal(h.calls.length, 1);
   assert.equal(h.transactions, 1);
+});
+
+test('fenced workflow writes revalidate worker expiry after waiting for the workflow lock', async () => {
+  const h = fixture({ workerRows: [1, 0] });
+  await assert.rejects(
+    h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  assert.equal(h.calls.length, 3);
+  assert.match(h.calls[2].sql, /clock_timestamp\\(\\)/);
 });
 
 test('fenced workflow writes reject stale lease rows even for a live worker session', async () => {
