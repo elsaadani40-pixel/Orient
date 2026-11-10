@@ -27,22 +27,6 @@ const PolicyEngine = require('../../src/core/agent/policy/policy-engine');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
 
-// Temporary diagnostic: preserve the caller stack when the dispatch-claim
-// fence rejects an unleased workflow write. The repository transaction's
-// async boundary otherwise hides the originating scheduler path.
-const originalWorkflowSave = persistence.workflows.save.bind(persistence.workflows);
-persistence.workflows.save = async (...args) => {
-  const callerStack = new Error('Workflow save caller').stack;
-  try {
-    return await originalWorkflowSave(...args);
-  } catch (error) {
-    if (error?.code === 'WORKFLOW_DISPATCH_CLAIM_HELD') {
-      console.error('[dispatch-claim-save-caller]', callerStack);
-    }
-    throw error;
-  }
-};
-
 test('PostgreSQL initializes versioned schema idempotently on a real server', async () => {
   await persistence.initialize();
   await persistence.initialize();
