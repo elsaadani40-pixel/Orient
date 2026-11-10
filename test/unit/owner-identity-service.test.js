@@ -394,3 +394,72 @@ test('post-rename logout durability error keeps the committed revocation applied
   const restarted = new OwnerIdentityService({ stateFile });
   assert.equal(restarted.authenticate(login.token), null);
 });
+
+test('owner identity state directory rejects a symlink at the configured boundary', t => {
+  const { directory } = fixture(t);
+  const alias = path.join(directory, 'owner-directory-alias');
+  fs.symlinkSync(directory, alias, 'dir');
+
+  assert.throws(
+    () => new OwnerIdentityService({
+      stateFile: path.join(alias, 'owner.json'),
+      bootstrapPassword: 'temporary-owner-password-9F!x'
+    }),
+    error => error.code === 'OWNER_IDENTITY_STORAGE_DIRECTORY_INVALID'
+  );
+});
+
+test('owner identity state file permissions are tightened when an existing state is loaded', t => {
+  const { stateFile } = fixture(t);
+  new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  fs.chmodSync(stateFile, 0o644);
+
+  new OwnerIdentityService({ stateFile });
+
+  assert.equal(fs.statSync(stateFile).mode & 0o777, 0o600);
+});
+
+test('owner identity state rejects a hard-linked state file', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX hard-link count enforcement is not available');
+    return;
+  }
+  const { directory, stateFile } = fixture(t);
+  new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  fs.linkSync(stateFile, path.join(directory, 'owner-state-hardlink.json'));
+
+  assert.throws(
+    () => new OwnerIdentityService({ stateFile }),
+    error => error.code === 'OWNER_IDENTITY_STATE_INVALID'
+  );
+});
+
+test('owner identity state rejects a parent directory writable by other users without a sticky bit', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX parent permission checks are not available');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-parent-boundary-'));
+  const parent = path.join(root, 'untrusted-parent');
+  const storage = path.join(parent, 'storage');
+  fs.mkdirSync(parent, { mode: 0o700 });
+  fs.chmodSync(parent, 0o777);
+  try {
+    assert.throws(
+      () => new OwnerIdentityService({
+        stateFile: path.join(storage, 'owner.json'),
+        bootstrapPassword: 'temporary-owner-password-9F!x'
+      }),
+      error => error.code === 'OWNER_IDENTITY_STORAGE_PARENT_UNTRUSTED'
+    );
+  } finally {
+    fs.chmodSync(parent, 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
