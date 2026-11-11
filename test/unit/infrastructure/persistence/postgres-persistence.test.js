@@ -179,7 +179,6 @@ test('Postgres workflow writes reject stale fencing tokens', async () => {
     { rows: [{ workflow_id: 'wf-1' }], rowCount: 1 },
     { rows: [{}], rowCount: 1 },
     { rows: [{ capabilities: [] }], rowCount: 1 },
-    { rows: [{}], rowCount: 1 },
     { rows: [], rowCount: 0 }
   ]);
   const repo = new PostgresWorkflowRepository(db);
@@ -199,11 +198,11 @@ test('Postgres workflow writes reject stale fencing tokens', async () => {
     }, 'tenant-a', { workerPrincipal }),
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
-  assert.match(db.calls[1].text, /FROM workflows/);
-  assert.match(db.calls[1].text, /FOR UPDATE/);
-  assert.match(db.calls[3].text, /worker_session_id/);
-  assert.match(db.calls[3].text, /fencing_token/);
-  assert.match(db.calls[3].text, /clock_timestamp/);
+  assert.match(db.calls[2].text, /FROM workflows/);
+  assert.match(db.calls[2].text, /FOR UPDATE/);
+  assert.match(db.calls[5].text, /worker_session_id/);
+  assert.match(db.calls[5].text, /fencing_token/);
+  assert.match(db.calls[5].text, /clock_timestamp/);
 });
 
 
