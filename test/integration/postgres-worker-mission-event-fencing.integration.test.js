@@ -237,6 +237,35 @@ test('PostgreSQL rejects a replaced dispatch claim without creating a lease', as
   });
 });
 
+test('PostgreSQL rolls back claim consumption when durable lease insertion fails', async () => {
+  await withRegisteredQueuedWorkflow('handoff-rollback', async ({ tenantId, workflowId, worker }) => {
+    const [claimed] = await persistence.workflows.claimQueued({
+      tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000,
+      workerCapabilities: [], workerPrincipal: worker
+    });
+    const duplicateLeaseId = 'lease-duplicate-' + randomUUID();
+    const conflictWorkflowId = 'workflow-lease-conflict-' + randomUUID();
+    try {
+      await pool.query(
+        'INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload) VALUES ($1,$2,$3,$4,$5,clock_timestamp(),clock_timestamp()+INTERVAL \'30 seconds\',$6)',
+        [conflictWorkflowId, tenantId, duplicateLeaseId, worker.workerId, worker.sessionId, { workflowId: conflictWorkflowId, tenantId }]
+      );
+      await assert.rejects(() => persistence.workflowLeases.tryAcquireClaimed({
+        workflowId, leaseId: duplicateLeaseId, workerId: worker.workerId,
+        acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+      }, claimed.dispatchClaim, tenantId, { workerPrincipal: worker }), error => error.code === '23505');
+      const state = await pool.query(
+        'SELECT (SELECT COUNT(*)::int FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2) AS claims, (SELECT COUNT(*)::int FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2) AS leases',
+        [tenantId, workflowId]
+      );
+      assert.equal(state.rows[0].claims, 1, 'claim must remain after the failed lease insert transaction rolls back');
+      assert.equal(state.rows[0].leases, 0, 'failed lease insert must not leave a partial lease');
+    } finally {
+      await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, conflictWorkflowId]);
+    }
+  });
+});
+
 test.after(async () => {
   await pool.end();
 });
