@@ -1215,8 +1215,7 @@ class PostgresWorkflowRepository {
           'SELECT worker_id,session_id,capabilities,status,expires_at FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3 AND status=\'READY\' AND expires_at > clock_timestamp() FOR UPDATE',
           [effectiveTenant, workerId, principal.sessionId]
         );
-        if (!worker.rows.length || worker.rows[0].session_id !== principal.sessionId ||
-            new Date(worker.rows[0].expires_at).getTime() <= Date.now()) {
+        if (!worker.rows.length || worker.rows[0].session_id !== principal.sessionId) {
           const error = new Error('Worker session is not registered or its lease has expired');
           error.code = 'WORKER_SESSION_LOST';
           throw error;

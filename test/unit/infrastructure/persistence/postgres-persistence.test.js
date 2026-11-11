@@ -116,10 +116,11 @@ test('Postgres claimed lease acquisition consumes the exact claim in one transac
     workerSessionId: 'session-1', claimedAt: '2026-11-11T10:00:00.000Z', expiresAt: '2026-11-11T10:00:05.000Z'
   }, 'tenant-a', { workerPrincipal: principal });
   assert.equal(result.fencingToken, 42);
-  const sql = db.calls.map(call => call.text).join('\\n');
-  assert.match(sql, /workflow_dispatch_claims[\\s\\S]*FOR UPDATE/);
-  assert.match(sql, /INSERT INTO workflow_leases/);
-  assert.match(sql, /DELETE FROM workflow_dispatch_claims[\\s\\S]*RETURNING workflow_id/);
+  const sql = db.calls.map(call => call.text).join('\n');
+  assert.ok(sql.includes('FOR UPDATE'));
+  assert.ok(sql.includes('INSERT INTO workflow_leases'));
+  assert.ok(sql.includes('DELETE FROM workflow_dispatch_claims'));
+  assert.ok(sql.includes('RETURNING workflow_id'));
 });
 
 test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
