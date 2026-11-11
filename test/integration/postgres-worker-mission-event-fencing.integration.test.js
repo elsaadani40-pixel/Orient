@@ -8,6 +8,7 @@ const {
 const {
   createWorkerPersistencePrincipal
 } = require('../../src/core/security/worker-persistence-principal');
+const AsyncWorkflowLeaseStore = require('../../src/core/workflow/async-workflow-lease-store');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
@@ -262,6 +263,70 @@ test('PostgreSQL rolls back claim consumption when durable lease insertion fails
       await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, conflictWorkflowId]);
     }
   });
+});
+
+
+test('PostgreSQL lease state survives scheduler-process reconstruction and fences the stale worker after expiry takeover', async () => {
+  await withRegisteredQueuedWorkflow('process-restart-recovery', async ({ tenantId, workflowId, workers }) => {
+    const [workerA, workerB] = workers;
+    const leaseA = await persistence.workflowLeases.tryAcquire({
+      workflowId, leaseId: 'lease-a-' + randomUUID(), workerId: workerA.workerId,
+      acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+    }, tenantId, { workerPrincipal: workerA });
+    const stalePrincipal = createWorkerPersistencePrincipal({
+      tenantId, workerId: workerA.workerId, sessionId: workerA.sessionId,
+      capabilities: workerA.capabilities, workflowId, leaseId: leaseA.leaseId,
+      fencingToken: leaseA.fencingToken
+    });
+
+    // A new store instance has no process-local memory: it must recover the
+    // authoritative lease exclusively from PostgreSQL.
+    const restartedStore = new AsyncWorkflowLeaseStore({
+      repository: persistence.workflowLeases, tenantId, leaseDurationMs: 30000
+    });
+    const restored = await restartedStore.get(workflowId);
+    assert.equal(restored.leaseId, leaseA.leaseId);
+    assert.equal(restored.fencingToken, leaseA.fencingToken);
+
+    const competingStore = new AsyncWorkflowLeaseStore({
+      repository: persistence.workflowLeases, tenantId, leaseDurationMs: 30000
+    });
+    await assert.rejects(
+      () => competingStore.acquire(workflowId, workerB.workerId, { tenantId }, workerB),
+      error => error.code === 'WORKFLOW_LEASE_HELD'
+    );
+
+    // Expire through database time, then let a fresh process perform recovery.
+    await pool.query(
+      "UPDATE workflow_leases SET expires_at=clock_timestamp()-INTERVAL '1 second' WHERE tenant_id=$1 AND workflow_id=$2 AND lease_id=$3",
+      [tenantId, workflowId, leaseA.leaseId]
+    );
+    const recovered = await restartedStore.recoverExpired();
+    assert.equal(recovered.length, 1);
+    assert.equal(recovered[0].leaseId, leaseA.leaseId);
+
+    const leaseB = await competingStore.acquire(
+      workflowId, workerB.workerId, { tenantId }, workerB
+    );
+    assert.ok(leaseB.fencingToken > leaseA.fencingToken);
+
+    await assert.rejects(
+      () => persistence.workflows.save({
+        workflowId, tenantId, state: 'RUNNING', updatedAt: new Date().toISOString(),
+        metadata: { fencingToken: leaseA.fencingToken }
+      }, tenantId, { workerPrincipal: stalePrincipal }),
+      error => error.code === 'WORKFLOW_FENCING_REJECTED'
+    );
+
+    const currentPrincipal = createWorkerPersistencePrincipal({
+      tenantId, workerId: workerB.workerId, sessionId: workerB.sessionId,
+      capabilities: workerB.capabilities, workflowId, leaseId: leaseB.leaseId,
+      fencingToken: leaseB.fencingToken
+    });
+    await persistence.workflowLeases.delete(
+      workflowId, leaseB.leaseId, tenantId, { workerPrincipal: currentPrincipal }
+    );
+  }, 2);
 });
 
 test.after(async () => {
