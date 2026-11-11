@@ -38,6 +38,27 @@ async function withPersistencePrincipal(db, persistencePrincipal, tenantId, labe
   return db.transactionWithPrincipal(principal, work);
 }
 
+async function lockReadyWorkerSession(client, principal) {
+  const worker = await client.query(
+    'SELECT session_id,status,capabilities FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
+    [principal.tenantId, principal.workerId]
+  );
+  if (!worker.rows.length || worker.rows[0].session_id !== principal.sessionId) {
+    throw Object.assign(new Error('Worker session is no longer registered'), { code: 'WORKER_SESSION_LOST' });
+  }
+  if (worker.rows[0].status !== 'READY') {
+    throw Object.assign(new Error('Worker is not ready to perform work'), { code: 'WORKER_NOT_READY' });
+  }
+  const expiry = await client.query(
+    'SELECT expires_at > clock_timestamp() AS active FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3',
+    [principal.tenantId, principal.workerId, principal.sessionId]
+  );
+  if (!expiry.rows[0]?.active) {
+    throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+  }
+  return worker.rows[0];
+}
+
 class PostgresExecutionRepository {
   constructor(db) { this.db = db; }
 
@@ -378,16 +399,7 @@ class PostgresEventRepository {
             code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH'
           });
         }
-        const worker = await client.query(
-          `SELECT 1 FROM worker_nodes
-           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
-             AND status='READY' AND expires_at > clock_timestamp()
-           FOR UPDATE`,
-          [principal.tenantId, principal.workerId, principal.sessionId]
-        );
-        if (worker.rowCount !== 1) {
-          throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
-        }
+        await lockReadyWorkerSession(client, principal);
         const workflow = await client.query(
           'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
           [principal.workflowId, principal.tenantId]
@@ -395,18 +407,7 @@ class PostgresEventRepository {
         if (workflow.rowCount !== 1) {
           throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
         }
-        const currentWorker = await client.query(
-          `SELECT 1 FROM worker_nodes
-           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
-             AND status='READY' AND expires_at > clock_timestamp()
-           FOR UPDATE`,
-          [principal.tenantId, principal.workerId, principal.sessionId]
-        );
-        if (currentWorker.rowCount !== 1) {
-          throw Object.assign(new Error('Worker session expired while waiting for the workflow lock'), {
-            code: 'WORKER_SESSION_LOST'
-          });
-        }
+        await lockReadyWorkerSession(client, principal);
         const lease = await client.query(
           `SELECT 1 FROM workflow_leases
            WHERE tenant_id=$1 AND workflow_id=$2 AND lease_id=$3
@@ -1211,22 +1212,9 @@ class PostgresWorkflowRepository {
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
       if (this.workerRegistry) {
-        const worker = await client.query(
-          'SELECT worker_id,session_id,capabilities,status,expires_at FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3 AND status=\'READY\' AND expires_at > clock_timestamp() FOR UPDATE',
-          [effectiveTenant, workerId, principal.sessionId]
-        );
-        if (!worker.rows.length || worker.rows[0].session_id !== principal.sessionId) {
-          const error = new Error('Worker session is not registered or its lease has expired');
-          error.code = 'WORKER_SESSION_LOST';
-          throw error;
-        }
-        if (worker.rows[0].status !== 'READY') {
-          const error = new Error('Worker is not ready to claim work');
-          error.code = 'WORKER_NOT_READY';
-          throw error;
-        }
-        const registeredCapabilities = Array.isArray(worker.rows[0].capabilities)
-          ? [...new Set(worker.rows[0].capabilities.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()))]
+        const worker = await lockReadyWorkerSession(client, principal);
+        const registeredCapabilities = Array.isArray(worker.capabilities)
+          ? [...new Set(worker.capabilities.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()))]
           : [];
         const missing = capabilities.filter(capability => !registeredCapabilities.includes(capability));
         if (missing.length) {
@@ -1518,16 +1506,7 @@ class PostgresWorkflowLeaseRepository {
   }
 
   async assertRegisteredWorkerSession(client, principal) {
-    const result = await client.query(
-      `SELECT 1 FROM worker_nodes
-       WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
-         AND status='READY' AND expires_at > clock_timestamp()
-       FOR UPDATE`,
-      [principal.tenantId, principal.workerId, principal.sessionId]
-    );
-    if (result.rowCount !== 1) {
-      throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
-    }
+    await lockReadyWorkerSession(client, principal);
     return true;
   }
 
