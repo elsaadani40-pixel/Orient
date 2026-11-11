@@ -27,6 +27,7 @@ function fakeDb({ insertRows = null, updateRows = null } = {}) {
           capabilities: JSON.parse(values[6]), metadata: values[7], session_id: values[8]
         }], rowCount: insertRows ? insertRows.length : 1 };
       }
+      if (sql.startsWith('SELECT 1 FROM worker_nodes')) return { rows: [{}], rowCount: 1 };
       if (sql.startsWith('UPDATE worker_nodes')) return { rows: updateRows || [], rowCount: updateRows ? updateRows.length : 0 };
       if (sql.startsWith('DELETE FROM worker_nodes')) return { rows: [], rowCount: 1 };
       if (sql.startsWith('SELECT * FROM worker_nodes')) return { rows: [] };
@@ -98,11 +99,13 @@ test('worker registry heartbeat and unregister require the exact active worker s
     () => repo.heartbeat('worker-a', { tenantId: 'tenant-a', workerPrincipal: principal() }),
     error => error.code === 'WORKER_SESSION_LOST'
   );
-  assert.ok(db.calls[0].sql.includes('session_id=$6 AND expires_at > clock_timestamp()'));
+  assert.ok(db.calls[0].sql.includes('session_id=$3 FOR UPDATE'));
+  assert.ok(db.calls[1].sql.includes('expires_at > clock_timestamp()'));
+  assert.ok(db.calls[2].sql.includes('session_id=$6 AND expires_at > clock_timestamp()'));
 
   const removed = await repo.unregister('worker-a', 'tenant-a', { workerPrincipal: principal() });
   assert.equal(removed, true);
-  assert.ok(db.calls[1].sql.includes('session_id=$3'));
+  assert.ok(db.calls[3].sql.includes('session_id=$3'));
   assert.equal(db.transactions, 2);
 });
 
