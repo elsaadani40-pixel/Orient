@@ -16,7 +16,8 @@ function payload(workflowId) {
     })
   });
   instance.transition('QUEUED');
-  return instance.toJSON();
+  const snapshot = instance.toJSON();
+  return { ...snapshot, dispatchClaim: { tenantId: 'tenant-a', workflowId, workerId: 'worker-a', workerSessionId: 'session-a', claimedAt: new Date(Date.now() - 100).toISOString(), expiresAt: new Date(Date.now() + 10000).toISOString() } };
 }
 
 function scheduler({ snapshots, claimed, reconcile, releaseDispatchClaim = async () => true }) {

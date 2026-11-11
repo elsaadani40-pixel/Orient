@@ -10,7 +10,8 @@ function definition(id='dispatch-policy'){
 function payload(workflowId,requiredCapabilities=[]){
   const instance=new WorkflowInstance({definition:definition(workflowId),workflowId,tenantId:'tenant-a'});
   instance.metadata={requiredCapabilities};
-  return instance.toJSON();
+  const snapshot = instance.toJSON();
+  return { ...snapshot, dispatchClaim: { tenantId: 'tenant-a', workflowId, workerId: 'worker-a', workerSessionId: 'session-a', claimedAt: new Date(Date.now() - 100).toISOString(), expiresAt: new Date(Date.now() + 10000).toISOString() } };
 }
 
 test('async recovery applies bounded backpressure and passes worker capabilities to durable claims',async()=>{
