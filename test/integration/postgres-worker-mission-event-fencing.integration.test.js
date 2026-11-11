@@ -627,7 +627,8 @@ test('PostgreSQL workflow dispatch recovers across scheduler reconstruction afte
     await pool.query(
       'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)',
       [workflowId, tenantId, 'QUEUED', {
-        workflowId, tenantId, state: 'QUEUED', metadata: {}, input: {}, definition: { steps: [] }
+        workflowId, tenantId, state: 'QUEUED', metadata: {}, input: {},
+        definition: { id: 'restart-definition', version: 1, name: 'Restart recovery', steps: [{ id: 'step-1', tool: 'noop', input: {}, dependsOn: [] }] }
       }]
     );
 
