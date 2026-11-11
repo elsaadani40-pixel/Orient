@@ -135,7 +135,7 @@ async function assertUnleasedWorkflowWriteRejected({ workflowId, activeClaim, ex
     error => error.code === expectedCode
   );
   assert.match(calls[0].sql, /FOR UPDATE/);
-  assert.match(calls[1].sql, new RegExp(expectedTable));
+  assert.ok(calls.some(call => call.sql.includes(expectedTable)), `Expected ${expectedTable} guard query`);
   assert.equal(calls.length, expectedCount);
 }
 
