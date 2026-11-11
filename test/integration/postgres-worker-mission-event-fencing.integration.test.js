@@ -69,6 +69,86 @@ async function acquireClaimedWorkflowLease({ tenantId, workflowId, worker, claim
   }, claim, tenantId, { workerPrincipal: worker });
 }
 
+async function withExpiredWorkerSessionRowLock({ tenantId, worker, waitQuery, waitMessage, start, verify }) {
+  const blocker = await pool.connect();
+  let inTransaction = false;
+  let pending = null;
+  try {
+    await pool.query(
+      "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '500 milliseconds' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
+      [tenantId, worker.workerId, worker.sessionId]
+    );
+    await blocker.query('BEGIN');
+    inTransaction = true;
+    await blocker.query(
+      'SELECT worker_id FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
+      [tenantId, worker.workerId]
+    );
+    pending = start();
+
+    let waiting = false;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const activity = await pool.query(
+        `SELECT 1 FROM pg_stat_activity
+         WHERE datname=current_database() AND wait_event_type='Lock'
+           AND query LIKE $1 LIMIT 1`,
+        [waitQuery]
+      );
+      if (activity.rowCount === 1) { waiting = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.equal(waiting, true, waitMessage);
+    await blocker.query('SELECT pg_sleep(1.3)');
+    await blocker.query('COMMIT');
+    inTransaction = false;
+    return await verify(pending);
+  } finally {
+    if (inTransaction) await blocker.query('ROLLBACK').catch(() => {});
+    blocker.release();
+    if (pending) await pending.catch(() => {});
+  }
+}
+
+async function insertRestartWorkflow(tenantId, workflowId, definitionId) {
+  await pool.query(
+    'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)',
+    [workflowId, tenantId, 'QUEUED', {
+      workflowId, tenantId, state: 'QUEUED', metadata: {}, input: {},
+      definition: {
+        id: definitionId, version: 1, name: 'Restart recovery',
+        steps: [{ id: 'step-1', tool: 'noop', input: {}, dependsOn: [] }]
+      }
+    }]
+  );
+}
+
+function createRestartRuntime({ tenantId, workerId, workerTtlMs = 1200, serviceErrors, acquireLease = true }) {
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId, workflowRepository: persistence.workflows,
+    leaseRepository: persistence.workflowLeases, leaseDurationMs: 1200,
+    maxConcurrent: 1, maxQueueDepth: 10, dispatchWindow: 1
+  });
+  const service = new AsyncWorkflowWorkerService({
+    scheduler, workerId, workerRegistry: persistence.workers, workerTtlMs,
+    workerHeartbeatIntervalMs: 5000, pollIntervalMs: 100,
+    recoveryIntervalMs: 1000, workerCapabilities: [],
+    onError: error => serviceErrors.push(error),
+    workerFactory: (id, capabilities, principal) => ({
+      workerId: id, workerPrincipal: principal,
+      tick: () => acquireLease ? scheduler.leaseAsync(id, capabilities, principal) : null
+    })
+  });
+  return { scheduler, service };
+}
+
+async function cleanupRestartWorkflow({ tenantId, workflowId, workerIds, service }) {
+  if (service) await service.stopAndDrain().catch(() => {});
+  await pool.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id=ANY($2::text[])', [tenantId, workerIds]);
+  await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+}
+
 async function assertWriteRejectedAfterFenceExpiresWhileWorkflowLockHeld({
   scenario,
   expectedCode,
@@ -447,235 +527,81 @@ test('PostgreSQL does not dispatch a workflow for quota recovery while its durab
 
 test('PostgreSQL rejects a worker heartbeat when its session expires while waiting for the registry row lock', async () => {
   await withRegisteredQueuedWorkflow('worker-heartbeat-expiry', async ({ tenantId, worker }) => {
-    const blocker = await pool.connect();
-    let blockerInTransaction = false;
-    let heartbeatPromise = null;
-    try {
-      await pool.query(
-        "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '500 milliseconds' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
-        [tenantId, worker.workerId, worker.sessionId]
-      );
-      await blocker.query('BEGIN');
-      blockerInTransaction = true;
-      await blocker.query(
-        'SELECT worker_id FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
-        [tenantId, worker.workerId]
-      );
-
-      heartbeatPromise = persistence.workers.heartbeat(worker.workerId, {
-        tenantId,
-        heartbeatAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 30000).toISOString(),
-        workerPrincipal: worker
-      });
-
-      let waiting = false;
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        const activity = await pool.query(
-          `SELECT 1 FROM pg_stat_activity
-           WHERE datname=current_database() AND wait_event_type='Lock'
-             AND query LIKE 'SELECT 1 FROM worker_nodes%' LIMIT 1`
-        );
-        if (activity.rowCount === 1) { waiting = true; break; }
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-      assert.equal(waiting, true, 'heartbeat must wait on the held worker registry row lock');
-      await blocker.query('SELECT pg_sleep(1.3)');
-      await blocker.query('COMMIT');
-      blockerInTransaction = false;
-
-      await assert.rejects(
-        heartbeatPromise,
-        error => error.code === 'WORKER_SESSION_LOST'
-      );
-    } finally {
-      if (blockerInTransaction) await blocker.query('ROLLBACK').catch(() => {});
-      blocker.release();
-      if (heartbeatPromise) await heartbeatPromise.catch(() => {});
-    }
+    await withExpiredWorkerSessionRowLock({
+      tenantId, worker, waitQuery: 'SELECT 1 FROM worker_nodes%',
+      waitMessage: 'heartbeat must wait on the held worker registry row lock',
+      start: () => persistence.workers.heartbeat(worker.workerId, {
+        tenantId, heartbeatAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30000).toISOString(), workerPrincipal: worker
+      }),
+      verify: pending => assert.rejects(pending, error => error.code === 'WORKER_SESSION_LOST')
+    });
   });
 });
-
 
 test('PostgreSQL allows a new worker session to replace an expired session after waiting for its registry row lock', async () => {
   await withRegisteredQueuedWorkflow('worker-register-takeover', async ({ tenantId, worker }) => {
-    const blocker = await pool.connect();
-    let blockerInTransaction = false;
-    let registrationPromise = null;
     const replacement = createWorkerPersistencePrincipal({
-      tenantId,
-      workerId: worker.workerId,
-      sessionId: 'replacement-' + randomUUID(),
-      capabilities: worker.capabilities
+      tenantId, workerId: worker.workerId,
+      sessionId: 'replacement-' + randomUUID(), capabilities: worker.capabilities
     });
-    try {
-      await pool.query(
-        "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '500 milliseconds' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
-        [tenantId, worker.workerId, worker.sessionId]
-      );
-      await blocker.query('BEGIN');
-      blockerInTransaction = true;
-      await blocker.query(
-        'SELECT worker_id FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
-        [tenantId, worker.workerId]
-      );
-
-      registrationPromise = persistence.workers.register({
-        workerId: worker.workerId,
-        tenantId,
-        status: 'READY',
-        capabilities: worker.capabilities,
-        heartbeatAt: new Date().toISOString(),
+    await withExpiredWorkerSessionRowLock({
+      tenantId, worker, waitQuery: 'INSERT INTO worker_nodes%',
+      waitMessage: 'new registration must wait on the existing worker registry row',
+      start: () => persistence.workers.register({
+        workerId: worker.workerId, tenantId, status: 'READY',
+        capabilities: worker.capabilities, heartbeatAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 30000).toISOString()
-      }, tenantId, { workerPrincipal: replacement });
-
-      let waiting = false;
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        const activity = await pool.query(
-          `SELECT 1 FROM pg_stat_activity
-           WHERE datname=current_database() AND wait_event_type='Lock'
-             AND query LIKE 'INSERT INTO worker_nodes%' LIMIT 1`
-        );
-        if (activity.rowCount === 1) { waiting = true; break; }
-        await new Promise(resolve => setTimeout(resolve, 50));
+      }, tenantId, { workerPrincipal: replacement }),
+      verify: async pending => {
+        const registered = await pending;
+        assert.equal(registered.sessionId, replacement.sessionId);
       }
-      assert.equal(waiting, true, 'new registration must wait on the existing worker registry row');
-      await blocker.query('SELECT pg_sleep(1.3)');
-      await blocker.query('COMMIT');
-      blockerInTransaction = false;
-
-      const registered = await registrationPromise;
-      assert.equal(registered.sessionId, replacement.sessionId);
-    } finally {
-      if (blockerInTransaction) await blocker.query('ROLLBACK').catch(() => {});
-      blocker.release();
-      if (registrationPromise) await registrationPromise.catch(() => {});
-      await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2', [tenantId, worker.workerId]);
-    }
+    });
   });
 });
-
 
 test('PostgreSQL rejects durable dispatch claims when the worker session expires during the registry lock wait', async () => {
   await withRegisteredQueuedWorkflow('claim-session-expiry-lockwait', async ({ tenantId, workflowId, worker }) => {
-    const blocker = await pool.connect();
-    let blockerInTransaction = false;
-    let claimPromise = null;
-    try {
-      await pool.query(
-        "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '500 milliseconds' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
-        [tenantId, worker.workerId, worker.sessionId]
-      );
-      await blocker.query('BEGIN');
-      blockerInTransaction = true;
-      await blocker.query(
-        'SELECT worker_id FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
-        [tenantId, worker.workerId]
-      );
-
-      claimPromise = persistence.workflows.claimQueued({
-        tenantId,
-        workerId: worker.workerId,
-        limit: 1,
-        claimTtlMs: 10000,
-        workerCapabilities: [],
-        workerPrincipal: worker
-      });
-
-      let waiting = false;
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        const activity = await pool.query(
-          `SELECT 1 FROM pg_stat_activity
-           WHERE datname=current_database() AND wait_event_type='Lock'
-             AND query LIKE 'SELECT session_id FROM worker_nodes%' LIMIT 1`
+    await withExpiredWorkerSessionRowLock({
+      tenantId, worker, waitQuery: 'SELECT session_id FROM worker_nodes%',
+      waitMessage: 'claiming must wait on the exact worker-session row lock',
+      start: () => persistence.workflows.claimQueued({
+        tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000,
+        workerCapabilities: [], workerPrincipal: worker
+      }),
+      verify: async pending => {
+        await assert.rejects(pending, error => error.code === 'WORKER_SESSION_LOST');
+        const claims = await pool.query(
+          'SELECT COUNT(*)::int AS count FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2',
+          [tenantId, workflowId]
         );
-        if (activity.rowCount === 1) { waiting = true; break; }
-        await new Promise(resolve => setTimeout(resolve, 50));
+        assert.equal(claims.rows[0].count, 0, 'an expired worker session must not acquire a durable dispatch claim');
       }
-      assert.equal(waiting, true, 'claiming must wait on the exact worker-session row lock');
-      await blocker.query('SELECT pg_sleep(1.3)');
-      await blocker.query('COMMIT');
-      blockerInTransaction = false;
-
-      await assert.rejects(
-        claimPromise,
-        error => error.code === 'WORKER_SESSION_LOST'
-      );
-      const claims = await pool.query(
-        'SELECT COUNT(*)::int AS count FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2',
-        [tenantId, workflowId]
-      );
-      assert.equal(claims.rows[0].count, 0, 'an expired worker session must not acquire a durable dispatch claim');
-    } finally {
-      if (blockerInTransaction) await blocker.query('ROLLBACK').catch(() => {});
-      blocker.release();
-      if (claimPromise) await claimPromise.catch(() => {});
-    }
+    });
   });
 });
-
 
 test('PostgreSQL workflow dispatch recovers across scheduler reconstruction after worker crash', async () => {
   await persistence.initialize();
   const tenantId = 'tenant-restart-' + randomUUID();
   const workflowId = 'workflow-restart-' + randomUUID();
-  const firstWorkerId = 'worker-before-crash-' + randomUUID();
-  const secondWorkerId = 'worker-after-restart-' + randomUUID();
+  const workerIds = ['worker-before-crash-' + randomUUID(), 'worker-after-restart-' + randomUUID()];
   let secondService = null;
   const serviceErrors = [];
   try {
-    await pool.query(
-      'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)',
-      [workflowId, tenantId, 'QUEUED', {
-        workflowId, tenantId, state: 'QUEUED', metadata: {}, input: {},
-        definition: { id: 'restart-definition', version: 1, name: 'Restart recovery', steps: [{ id: 'step-1', tool: 'noop', input: {}, dependsOn: [] }] }
-      }]
-    );
-
-    const createScheduler = () => new AsyncWorkflowScheduler({
-      tenantId,
-      workflowRepository: persistence.workflows,
-      leaseRepository: persistence.workflowLeases,
-      leaseDurationMs: 1200,
-      maxConcurrent: 1,
-      maxQueueDepth: 10,
-      dispatchWindow: 1
-    });
-    const createService = (scheduler, workerId) => new AsyncWorkflowWorkerService({
-      scheduler,
-      workerId,
-      workerRegistry: persistence.workers,
-      workerTtlMs: 1200,
-      workerHeartbeatIntervalMs: 5000,
-      pollIntervalMs: 100,
-      recoveryIntervalMs: 1000,
-      workerCapabilities: [],
-      onError: error => serviceErrors.push(error),
-      workerFactory: (id, capabilities, principal) => ({
-        workerId: id,
-        workerPrincipal: principal,
-        tick: () => scheduler.leaseAsync(id, capabilities, principal)
-      })
-    });
-
-    // First process claims and leases the workflow, then disappears without
-    // stop/drain so its durable worker session and lease are left to expire.
-    const firstScheduler = createScheduler();
-    const firstService = createService(firstScheduler, firstWorkerId);
-    const firstLease = await firstService.runOnce();
+    await insertRestartWorkflow(tenantId, workflowId, 'restart-definition');
+    const first = createRestartRuntime({ tenantId, workerId: workerIds[0], serviceErrors });
+    const firstLease = await first.service.runOnce();
     assert.ok(firstLease?.leaseId, 'first process must obtain a durable lease; errors: ' + serviceErrors.map(error => `${error.code || error.name}: ${error.message}`).join(' | '));
     const firstSnapshot = await persistence.workflows.findById(workflowId, tenantId);
     assert.equal(firstSnapshot.state, 'RUNNING');
     assert.equal(Number(firstSnapshot.metadata.fencingToken), Number(firstLease.fencingToken));
 
     await new Promise(resolve => setTimeout(resolve, 1500));
-
-    // A fresh scheduler/service pair has no in-memory queue or active map from
-    // the first process. Recovery must reclaim the durable workflow and fence
-    // the expired worker with a strictly newer token.
-    const secondScheduler = createScheduler();
-    secondService = createService(secondScheduler, secondWorkerId);
-    const secondLease = await secondService.runOnce();
+    const second = createRestartRuntime({ tenantId, workerId: workerIds[1], serviceErrors });
+    secondService = second.service;
+    const secondLease = await second.service.runOnce();
     assert.ok(secondLease?.leaseId, 'restarted process must recover and lease the workflow; errors: ' + serviceErrors.map(error => `${error.code || error.name}: ${error.message}`).join(' | '));
     assert.notEqual(secondLease.workerId, firstLease.workerId);
     assert.ok(Number(secondLease.fencingToken) > Number(firstLease.fencingToken));
@@ -689,65 +615,25 @@ test('PostgreSQL workflow dispatch recovers across scheduler reconstruction afte
     );
     assert.equal(liveLeases.rows[0].count, 1, 'restart must leave exactly one live lease');
   } finally {
-    if (secondService) await secondService.stopAndDrain().catch(() => {});
-    await pool.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-    await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id IN ($2,$3)', [tenantId, firstWorkerId, secondWorkerId]);
-    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+    await cleanupRestartWorkflow({ tenantId, workflowId, workerIds, service: secondService });
   }
 });
-
 
 test('PostgreSQL reclaims an expired dispatch claim after scheduler crash before lease handoff', async () => {
   await persistence.initialize();
   const tenantId = 'tenant-claim-restart-' + randomUUID();
   const workflowId = 'workflow-claim-restart-' + randomUUID();
-  const firstWorkerId = 'worker-claim-before-crash-' + randomUUID();
-  const secondWorkerId = 'worker-claim-after-restart-' + randomUUID();
+  const workerIds = ['worker-claim-before-crash-' + randomUUID(), 'worker-claim-after-restart-' + randomUUID()];
   let secondService = null;
   const serviceErrors = [];
   try {
-    await pool.query(
-      'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)',
-      [workflowId, tenantId, 'QUEUED', {
-        workflowId, tenantId, state: 'QUEUED', metadata: {}, input: {},
-        definition: { id: 'claim-restart-definition', version: 1, name: 'Claim restart', steps: [{ id: 'step-1', tool: 'noop', input: {}, dependsOn: [] }] }
-      }]
-    );
-
-    const createScheduler = () => new AsyncWorkflowScheduler({
-      tenantId,
-      workflowRepository: persistence.workflows,
-      leaseRepository: persistence.workflowLeases,
-      leaseDurationMs: 1200,
-      maxConcurrent: 1,
-      maxQueueDepth: 10,
-      dispatchWindow: 1
+    await insertRestartWorkflow(tenantId, workflowId, 'claim-restart-definition');
+    const first = createRestartRuntime({
+      tenantId, workerId: workerIds[0], workerTtlMs: 1200, serviceErrors, acquireLease: false
     });
-    const createService = (scheduler, workerId, workerTtlMs, acquireLease) => new AsyncWorkflowWorkerService({
-      scheduler,
-      workerId,
-      workerRegistry: persistence.workers,
-      workerTtlMs,
-      workerHeartbeatIntervalMs: 5000,
-      pollIntervalMs: 100,
-      recoveryIntervalMs: 1000,
-      workerCapabilities: [],
-      onError: error => serviceErrors.push(error),
-      workerFactory: (id, capabilities, principal) => ({
-        workerId: id,
-        workerPrincipal: principal,
-        tick: () => acquireLease ? scheduler.leaseAsync(id, capabilities, principal) : null
-      })
-    });
-
-    // Process one persists a durable dispatch claim and queues it locally, but
-    // crashes before converting that claim into a lease.
-    const firstScheduler = createScheduler();
-    const firstService = createService(firstScheduler, firstWorkerId, 1200, false);
-    await firstService.runOnce();
-    assert.equal(firstScheduler.queue.length, 1, 'first process must have a locally queued claimed workflow');
-    assert.ok(firstScheduler.queue[0].dispatchClaim, 'the exact durable dispatch claim must exist');
+    await first.service.runOnce();
+    assert.equal(first.scheduler.queue.length, 1, 'first process must have a locally queued claimed workflow');
+    assert.ok(first.scheduler.queue[0].dispatchClaim, 'the exact durable dispatch claim must exist');
     const beforeCrash = await pool.query(
       'SELECT COUNT(*)::int AS count FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND expires_at > clock_timestamp()',
       [tenantId, workflowId]
@@ -759,12 +645,12 @@ test('PostgreSQL reclaims an expired dispatch claim after scheduler crash before
     );
     assert.equal(noLease.rows[0].count, 0, 'crash point must precede lease handoff');
 
-    // Leave the first service/session untouched. The new process must wait for
-    // the durable claim TTL, reclaim it, and complete the atomic lease handoff.
     await new Promise(resolve => setTimeout(resolve, 5300));
-    const secondScheduler = createScheduler();
-    secondService = createService(secondScheduler, secondWorkerId, 30000, true);
-    const recoveredLease = await secondService.runOnce();
+    const second = createRestartRuntime({
+      tenantId, workerId: workerIds[1], workerTtlMs: 30000, serviceErrors
+    });
+    secondService = second.service;
+    const recoveredLease = await second.service.runOnce();
     assert.ok(recoveredLease?.leaseId, 'restarted process must reclaim and lease the expired dispatch claim; errors: ' + serviceErrors.map(error => `${error.code || error.name}: ${error.message}`).join(' | '));
 
     const remainingClaims = await pool.query(
@@ -781,11 +667,7 @@ test('PostgreSQL reclaims an expired dispatch claim after scheduler crash before
     assert.equal(latest.state, 'RUNNING');
     assert.equal(Number(latest.metadata.fencingToken), Number(recoveredLease.fencingToken));
   } finally {
-    if (secondService) await secondService.stopAndDrain().catch(() => {});
-    await pool.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-    await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id IN ($2,$3)', [tenantId, firstWorkerId, secondWorkerId]);
-    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+    await cleanupRestartWorkflow({ tenantId, workflowId, workerIds, service: secondService });
   }
 });
 
