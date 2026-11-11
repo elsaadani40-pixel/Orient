@@ -17,44 +17,43 @@ class AsyncWorkflowLeaseStore {
 
   now() { return this.clock(); }
 
-  async acquire(workflowId, workerId = crypto.randomUUID(), metadata = {}, workerPrincipal = null) {
-    if (!workflowId) throw new AppError('workflowId is required', 400, 'LEASE_WORKFLOW_REQUIRED');
+  createLease(workflowId, workerId, metadata) {
     const now = this.now();
-    let lease = {
-      workflowId,
-      leaseId: crypto.randomUUID(),
-      workerId,
-      acquiredAt: now,
-      expiresAt: now + this.leaseDurationMs,
+    return {
+      workflowId, leaseId: crypto.randomUUID(), workerId,
+      acquiredAt: now, expiresAt: now + this.leaseDurationMs,
       metadata: { ...metadata, ...(this.tenantId ? { tenantId: this.tenantId } : {}) }
     };
+  }
 
+  rememberLease(lease) {
+    if (lease.fencingToken !== undefined) lease.metadata = { ...lease.metadata, fencingToken: lease.fencingToken };
+    this.memory.set(lease.workflowId, lease);
+    return { ...lease };
+  }
+
+  async acquire(workflowId, workerId = crypto.randomUUID(), metadata = {}, workerPrincipal = null) {
+    if (!workflowId) throw new AppError('workflowId is required', 400, 'LEASE_WORKFLOW_REQUIRED');
+    let lease = this.createLease(workflowId, workerId, metadata);
     if (this.repository?.tryAcquire) {
       const acquired = await this.repository.tryAcquire(lease, this.tenantId, { workerPrincipal });
       if (!acquired) throw new AppError('Workflow lease is already held', 409, 'WORKFLOW_LEASE_HELD');
       lease = { ...lease, ...acquired };
     } else {
       const current = await this.get(workflowId);
-      if (current && current.expiresAt > now) throw new AppError('Workflow lease is already held', 409, 'WORKFLOW_LEASE_HELD');
+      if (current && current.expiresAt > lease.acquiredAt) throw new AppError('Workflow lease is already held', 409, 'WORKFLOW_LEASE_HELD');
       await this.persist(lease, workerPrincipal);
     }
-
-    if (lease.fencingToken !== undefined) lease.metadata = { ...lease.metadata, fencingToken: lease.fencingToken };
-    this.memory.set(workflowId, lease);
-    return { ...lease };
+    return this.rememberLease(lease);
   }
 
   async acquireClaimed(workflowId, workerId, metadata = {}, dispatchClaim, workerPrincipal = null) {
     if (!workflowId || !dispatchClaim) throw new AppError('Exact dispatch claim is required', 400, 'WORKFLOW_DISPATCH_CLAIM_REQUIRED');
     if (typeof this.repository?.tryAcquireClaimed !== 'function') throw new AppError('Atomic PostgreSQL claim-to-lease handoff is required', 503, 'WORKFLOW_ATOMIC_CLAIM_HANDOFF_REQUIRED');
-    const now = this.now();
-    const lease = { workflowId, leaseId: crypto.randomUUID(), workerId, acquiredAt: now, expiresAt: now + this.leaseDurationMs, metadata: { ...metadata, ...(this.tenantId ? { tenantId: this.tenantId } : {}) } };
+    const lease = this.createLease(workflowId, workerId, metadata);
     const acquired = await this.repository.tryAcquireClaimed(lease, dispatchClaim, this.tenantId, { workerPrincipal });
     if (!acquired) throw new AppError('Workflow lease is already held or dispatch claim is no longer valid', 409, 'WORKFLOW_LEASE_HELD');
-    const result = { ...lease, ...acquired };
-    if (result.fencingToken !== undefined) result.metadata = { ...result.metadata, fencingToken: result.fencingToken };
-    this.memory.set(workflowId, result);
-    return { ...result };
+    return this.rememberLease({ ...lease, ...acquired });
   }
 
   async renew(workflowId, leaseId, workerPrincipal = null) {

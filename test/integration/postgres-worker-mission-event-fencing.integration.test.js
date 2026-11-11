@@ -50,6 +50,22 @@ async function withRegisteredQueuedWorkflow(scenario, run, workerCount = 1) {
   }
 }
 
+async function claimQueuedWorkflow({ tenantId, worker, claimTtlMs = 10000 }) {
+  const [claimed] = await persistence.workflows.claimQueued({
+    tenantId, workerId: worker.workerId, limit: 1, claimTtlMs,
+    workerCapabilities: [], workerPrincipal: worker
+  });
+  assert.ok(claimed?.dispatchClaim, 'claim response must include exact durable identity');
+  return claimed;
+}
+
+async function acquireClaimedWorkflowLease({ tenantId, workflowId, worker, claim, leaseId = 'lease-' + randomUUID() }) {
+  return persistence.workflowLeases.tryAcquireClaimed({
+    workflowId, leaseId, workerId: worker.workerId,
+    acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+  }, claim, tenantId, { workerPrincipal: worker });
+}
+
 async function assertWriteRejectedAfterFenceExpiresWhileWorkflowLockHeld({
   scenario,
   expectedCode,
@@ -195,16 +211,10 @@ test('PostgreSQL rejects a workflow write when the worker session expires while 
 
 test('PostgreSQL atomically converts an exact dispatch claim into one durable worker lease', async () => {
   await withRegisteredQueuedWorkflow('atomic-handoff', async ({ tenantId, workflowId, worker }) => {
-    const [claimed] = await persistence.workflows.claimQueued({
-      tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000,
-      workerCapabilities: [], workerPrincipal: worker
-    });
+    const claimed = await claimQueuedWorkflow({ tenantId, worker });
     assert.ok(claimed?.dispatchClaim, 'claim response must include exact durable identity');
     assert.equal(claimed.dispatchClaim.workerSessionId, worker.sessionId);
-    const lease = await persistence.workflowLeases.tryAcquireClaimed({
-      workflowId, leaseId: 'lease-' + randomUUID(), workerId: worker.workerId,
-      acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
-    }, claimed.dispatchClaim, tenantId, { workerPrincipal: worker });
+    const lease = await acquireClaimedWorkflowLease({ tenantId, workflowId, worker, claim: claimed.dispatchClaim });
     assert.ok(Number.isSafeInteger(lease.fencingToken) && lease.fencingToken > 0);
     const state = await pool.query(
       'SELECT (SELECT COUNT(*)::int FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2) AS claims, (SELECT COUNT(*)::int FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND lease_id=$3) AS leases',
@@ -217,18 +227,12 @@ test('PostgreSQL atomically converts an exact dispatch claim into one durable wo
 
 test('PostgreSQL rejects a replaced dispatch claim without creating a lease', async () => {
   await withRegisteredQueuedWorkflow('replaced-claim', async ({ tenantId, workflowId, worker }) => {
-    const [claimed] = await persistence.workflows.claimQueued({
-      tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000,
-      workerCapabilities: [], workerPrincipal: worker
-    });
+    const claimed = await claimQueuedWorkflow({ tenantId, worker });
     await pool.query(
       "UPDATE workflow_dispatch_claims SET claimed_at=claimed_at-INTERVAL '1 millisecond' WHERE tenant_id=$1 AND workflow_id=$2",
       [tenantId, workflowId]
     );
-    await assert.rejects(() => persistence.workflowLeases.tryAcquireClaimed({
-      workflowId, leaseId: 'lease-' + randomUUID(), workerId: worker.workerId,
-      acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
-    }, claimed.dispatchClaim, tenantId, { workerPrincipal: worker }), error => error.code === 'WORKFLOW_DISPATCH_CLAIM_INVALID');
+    await assert.rejects(() => acquireClaimedWorkflowLease({ tenantId, workflowId, worker, claim: claimed.dispatchClaim }), error => error.code === 'WORKFLOW_DISPATCH_CLAIM_INVALID');
     const leaseCount = await pool.query(
       'SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2',
       [tenantId, workflowId]
@@ -239,10 +243,7 @@ test('PostgreSQL rejects a replaced dispatch claim without creating a lease', as
 
 test('PostgreSQL rolls back claim consumption when durable lease insertion fails', async () => {
   await withRegisteredQueuedWorkflow('handoff-rollback', async ({ tenantId, workflowId, worker }) => {
-    const [claimed] = await persistence.workflows.claimQueued({
-      tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000,
-      workerCapabilities: [], workerPrincipal: worker
-    });
+    const claimed = await claimQueuedWorkflow({ tenantId, worker });
     const duplicateLeaseId = 'lease-duplicate-' + randomUUID();
     const conflictWorkflowId = 'workflow-lease-conflict-' + randomUUID();
     try {
@@ -250,10 +251,7 @@ test('PostgreSQL rolls back claim consumption when durable lease insertion fails
         'INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload) VALUES ($1,$2,$3,$4,$5,clock_timestamp(),clock_timestamp()+INTERVAL \'30 seconds\',$6)',
         [conflictWorkflowId, tenantId, duplicateLeaseId, worker.workerId, worker.sessionId, { workflowId: conflictWorkflowId, tenantId }]
       );
-      await assert.rejects(() => persistence.workflowLeases.tryAcquireClaimed({
-        workflowId, leaseId: duplicateLeaseId, workerId: worker.workerId,
-        acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
-      }, claimed.dispatchClaim, tenantId, { workerPrincipal: worker }), error => error.code === '23505');
+      await assert.rejects(() => acquireClaimedWorkflowLease({ tenantId, workflowId, worker, claim: claimed.dispatchClaim, leaseId: duplicateLeaseId }), error => error.code === '23505');
       const state = await pool.query(
         'SELECT (SELECT COUNT(*)::int FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2) AS claims, (SELECT COUNT(*)::int FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2) AS leases',
         [tenantId, workflowId]
