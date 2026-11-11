@@ -40,23 +40,24 @@ async function withPersistencePrincipal(db, persistencePrincipal, tenantId, labe
 
 async function lockReadyWorkerSession(client, principal) {
   const worker = await client.query(
-    'SELECT session_id,status,capabilities FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
-    [principal.tenantId, principal.workerId]
-  );
-  if (!worker.rows.length || worker.rows[0].session_id !== principal.sessionId) {
-    throw Object.assign(new Error('Worker session is no longer registered'), { code: 'WORKER_SESSION_LOST' });
-  }
-  if (worker.rows[0].status !== 'READY') {
-    throw Object.assign(new Error('Worker is not ready to perform work'), { code: 'WORKER_NOT_READY' });
-  }
-  const expiry = await client.query(
-    'SELECT expires_at > clock_timestamp() AS active FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3',
+    `SELECT capabilities FROM worker_nodes
+     WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+       AND status='READY' AND expires_at > clock_timestamp()
+     FOR UPDATE`,
     [principal.tenantId, principal.workerId, principal.sessionId]
   );
-  if (!expiry.rows[0]?.active) {
+  if (worker.rowCount !== 1) {
     throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
   }
   return worker.rows[0];
+}
+
+async function lockWorkflowRow(client, workflowId, tenantId) {
+  const result = await client.query(
+    'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+    [workflowId, tenantId]
+  );
+  return result.rowCount === 1;
 }
 
 class PostgresExecutionRepository {
@@ -400,11 +401,7 @@ class PostgresEventRepository {
           });
         }
         await lockReadyWorkerSession(client, principal);
-        const workflow = await client.query(
-          'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
-          [principal.workflowId, principal.tenantId]
-        );
-        if (workflow.rowCount !== 1) {
+        if (!await lockWorkflowRow(client, principal.workflowId, principal.tenantId)) {
           throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
         }
         await lockReadyWorkerSession(client, principal);
@@ -1014,38 +1011,12 @@ class PostgresWorkflowRepository {
         });
       }
       return this.db.transactionWithWorkerPrincipal(principal, async client => {
-        const worker = await client.query(
-          `SELECT 1 FROM worker_nodes
-           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
-             AND status='READY' AND expires_at > clock_timestamp()
-           FOR UPDATE`,
-          [effectiveTenant, principal.workerId, principal.sessionId]
-        );
-        if (worker.rowCount !== 1) {
-          throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
-        }
-
-        // Lock order is worker session -> workflow -> lease. Lease acquisition and
-        // recovery use the same order, so a takeover cannot race this write.
-        const workflow = await client.query(
-          'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
-          [item.workflowId, effectiveTenant]
-        );
-        if (workflow.rowCount !== 1) {
+        // Lock order is worker session -> workflow -> lease.
+        await lockReadyWorkerSession(client, principal);
+        if (!await lockWorkflowRow(client, item.workflowId, effectiveTenant)) {
           throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
         }
-        const currentWorker = await client.query(
-          `SELECT 1 FROM worker_nodes
-           WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
-             AND status='READY' AND expires_at > clock_timestamp()
-           FOR UPDATE`,
-          [effectiveTenant, principal.workerId, principal.sessionId]
-        );
-        if (currentWorker.rowCount !== 1) {
-          throw Object.assign(new Error('Worker session expired while waiting for the workflow lock'), {
-            code: 'WORKER_SESSION_LOST'
-          });
-        }
+        await lockReadyWorkerSession(client, principal);
 
         const lease = await client.query(
           `SELECT 1 FROM workflow_leases
@@ -1510,6 +1481,17 @@ class PostgresWorkflowLeaseRepository {
     return true;
   }
 
+  async lockWorkflowForLeaseOwner(client, workflowId, tenantId, principal, { required = true } = {}) {
+    await this.assertRegisteredWorkerSession(client, principal);
+    const exists = await lockWorkflowRow(client, workflowId, tenantId);
+    if (!exists) {
+      if (required) throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+      return false;
+    }
+    await this.assertRegisteredWorkerSession(client, principal);
+    return true;
+  }
+
   async lockWorkflowForLease(client, lease, tenantId) {
     const workflow = await client.query(
       'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
@@ -1597,15 +1579,7 @@ class PostgresWorkflowLeaseRepository {
       throw Object.assign(new Error('Lease principal does not match the lease payload'), { code: 'WORKFLOW_FENCING_REJECTED' });
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
-      await this.assertRegisteredWorkerSession(client, principal);
-      const workflow = await client.query(
-        'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
-        [lease.workflowId, effectiveTenant]
-      );
-      if (workflow.rowCount !== 1) {
-        throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
-      }
-      await this.assertRegisteredWorkerSession(client, principal);
+      await this.lockWorkflowForLeaseOwner(client, lease.workflowId, effectiveTenant, principal);
       const result = await client.query(
         `UPDATE workflow_leases SET expires_at=$1,payload=$2
          WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
@@ -1625,13 +1599,7 @@ class PostgresWorkflowLeaseRepository {
       throw Object.assign(new Error('Lease principal does not match renewal request'), { code: 'WORKFLOW_FENCING_REJECTED' });
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
-      await this.assertRegisteredWorkerSession(client, principal);
-      const workflow = await client.query(
-        'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
-        [workflowId, principal.tenantId]
-      );
-      if (workflow.rowCount !== 1) return false;
-      await this.assertRegisteredWorkerSession(client, principal);
+      if (!await this.lockWorkflowForLeaseOwner(client, workflowId, principal.tenantId, principal, { required: false })) return false;
       const result = await client.query(
         `UPDATE workflow_leases SET expires_at=$1::timestamptz,
            payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
@@ -1648,13 +1616,7 @@ class PostgresWorkflowLeaseRepository {
     if (principal.workflowId !== workflowId || principal.leaseId !== leaseId ||
         Number(principal.fencingToken) !== Number(fencingToken)) return false;
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
-      await this.assertRegisteredWorkerSession(client, principal);
-      const workflow = await client.query(
-        'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
-        [workflowId, principal.tenantId]
-      );
-      if (workflow.rowCount !== 1) return false;
-      await this.assertRegisteredWorkerSession(client, principal);
+      if (!await this.lockWorkflowForLeaseOwner(client, workflowId, principal.tenantId, principal, { required: false })) return false;
       const result = await client.query(
         `SELECT 1 FROM workflow_leases
          WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
@@ -1687,13 +1649,7 @@ class PostgresWorkflowLeaseRepository {
       throw Object.assign(new Error('Lease principal does not match release request'), { code: 'WORKFLOW_FENCING_REJECTED' });
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
-      await this.assertRegisteredWorkerSession(client, principal);
-      const workflow = await client.query(
-        'SELECT workflow_id FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
-        [workflowId, principal.tenantId]
-      );
-      if (workflow.rowCount !== 1) return false;
-      await this.assertRegisteredWorkerSession(client, principal);
+      if (!await this.lockWorkflowForLeaseOwner(client, workflowId, principal.tenantId, principal, { required: false })) return false;
       const result = await client.query(
         `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
          AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
