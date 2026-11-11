@@ -1212,8 +1212,8 @@ class PostgresWorkflowRepository {
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
       if (this.workerRegistry) {
         const worker = await client.query(
-          'SELECT worker_id,session_id,capabilities,status,expires_at FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
-          [effectiveTenant, workerId]
+          'SELECT worker_id,session_id,capabilities,status,expires_at FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3 AND status=\'READY\' AND expires_at > clock_timestamp() FOR UPDATE',
+          [effectiveTenant, workerId, principal.sessionId]
         );
         if (!worker.rows.length || worker.rows[0].session_id !== principal.sessionId ||
             new Date(worker.rows[0].expires_at).getTime() <= Date.now()) {
@@ -1254,14 +1254,14 @@ class PostgresWorkflowRepository {
          )
          INSERT INTO workflow_dispatch_claims(tenant_id,workflow_id,worker_id,worker_session_id,claimed_at,expires_at)
          SELECT $1,workflow_id,$3,$7,clock_timestamp(),clock_timestamp()+($6::bigint * INTERVAL '1 millisecond') FROM candidates
-         ON CONFLICT (tenant_id,workflow_id) DO NOTHING RETURNING workflow_id,worker_id,worker_session_id,claimed_at,expires_at`,
+         ON CONFLICT (tenant_id,workflow_id) DO NOTHING RETURNING workflow_id,worker_id,worker_session_id,claimed_at::text AS claimed_at,expires_at::text AS expires_at`,
         [effectiveTenant,safeLimit,workerId,JSON.stringify(capabilities),safeAgingQuantumMs,safeClaimTtlMs,principal.sessionId]
       );
       if(!result.rows.length) return [];
       const ids=result.rows.map(row=>row.workflow_id);
       const workflows=await client.query('SELECT payload FROM workflows WHERE tenant_id=$1 AND workflow_id=ANY($2::text[])',[effectiveTenant,ids]);
       const byId=new Map(workflows.rows.map(row=>[row.payload.workflowId,row.payload]));
-      const claimsById=new Map(result.rows.map(row=>[row.workflow_id,{tenantId:effectiveTenant,workflowId:row.workflow_id,workerId:row.worker_id,workerSessionId:row.worker_session_id,claimedAt:new Date(row.claimed_at).toISOString(),expiresAt:new Date(row.expires_at).toISOString()}]));
+      const claimsById=new Map(result.rows.map(row=>[row.workflow_id,{tenantId:effectiveTenant,workflowId:row.workflow_id,workerId:row.worker_id,workerSessionId:row.worker_session_id,claimedAt:row.claimed_at,expiresAt:row.expires_at}]));
       return ids.map(id=>byId.has(id)?{...byId.get(id),dispatchClaim:claimsById.get(id)}:null).filter(Boolean);
     });
   }

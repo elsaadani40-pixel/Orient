@@ -99,6 +99,8 @@ test('Postgres claimed lease acquisition consumes the exact claim in one transac
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-atomic', state: 'QUEUED' } }], rowCount: 1 },
     { rows: [{ claimed_at: '2026-11-11T10:00:00.000Z', expires_at: '2026-11-11T10:00:05.000Z' }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [], rowCount: 0 }, { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '42' }], rowCount: 1 },
     { rows: [{ workflow_id: 'wf-atomic' }], rowCount: 1 }

@@ -267,6 +267,9 @@ const previousMetadata = instance.metadata;
 const restoreQueuedItem = () => {
   instance.state = previousState;
   instance.metadata = previousMetadata;
+  // A claimed item has already consumed its durable claim in the atomic handoff.
+  // Do not retry it with stale provenance; durable recovery must claim it again.
+  if (item.dispatchClaim) return;
   if (!this.queue.some(queued => queued.instance.workflowId === instance.workflowId)) {
     this.queue.push(item);
     this.sortQueue();
