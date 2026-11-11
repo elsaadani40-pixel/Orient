@@ -472,7 +472,7 @@ test('PostgreSQL rejects a worker heartbeat when its session expires while waiti
         const activity = await pool.query(
           `SELECT 1 FROM pg_stat_activity
            WHERE datname=current_database() AND wait_event_type='Lock'
-             AND query LIKE 'UPDATE worker_nodes%' LIMIT 1`
+             AND query LIKE 'SELECT 1 FROM worker_nodes%' LIMIT 1`
         );
         if (activity.rowCount === 1) { waiting = true; break; }
         await new Promise(resolve => setTimeout(resolve, 50));
