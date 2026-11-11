@@ -98,7 +98,7 @@ test('worker registry heartbeat and unregister require the exact active worker s
     () => repo.heartbeat('worker-a', { tenantId: 'tenant-a', workerPrincipal: principal() }),
     error => error.code === 'WORKER_SESSION_LOST'
   );
-  assert.match(db.calls[0].sql, /session_id=$6 AND expires_at > clock_timestamp()/);
+  assert.ok(db.calls[0].sql.includes('session_id=$6 AND expires_at > clock_timestamp()'));
 
   const removed = await repo.unregister('worker-a', 'tenant-a', { workerPrincipal: principal() });
   assert.equal(removed, true);
@@ -123,6 +123,6 @@ test('worker registry can reap expired workers only inside the tenant boundary',
   const repo = new PostgresWorkerRegistryRepository(db);
   const count = await repo.reapExpired({ tenantId: 'tenant-a', now: '2026-10-07T06:01:00.000Z' });
   assert.equal(count, 1);
-  assert.match(db.calls[0].sql, /WHERE tenant_id=$1 AND expires_at <= $2/);
+  assert.ok(db.calls[0].sql.includes('WHERE tenant_id=$1 AND expires_at <= $2'));
   assert.deepEqual(db.calls[0].values, ['tenant-a', '2026-10-07T06:01:00.000Z']);
 });
