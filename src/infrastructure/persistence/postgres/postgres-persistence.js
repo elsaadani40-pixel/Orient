@@ -374,7 +374,7 @@ class PostgresEventRepository {
           });
         }
         const activeClaim = await client.query(
-          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>NOW() LIMIT 1',
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>clock_timestamp() LIMIT 1',
           [normalized.aggregateId, effectiveTenant]
         );
         if (activeClaim.rowCount) {
@@ -383,7 +383,7 @@ class PostgresEventRepository {
           });
         }
         const activeLease = await client.query(
-          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>NOW() LIMIT 1',
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at>clock_timestamp() LIMIT 1',
           [normalized.aggregateId, effectiveTenant]
         );
         if (activeLease.rowCount) {
@@ -1069,7 +1069,7 @@ class PostgresWorkflowRepository {
           });
         }
         const activeDispatchClaim = await client.query(
-          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp() LIMIT 1',
           [item.workflowId, effectiveTenant]
         );
         if (activeDispatchClaim.rowCount > 0) {
@@ -1078,7 +1078,7 @@ class PostgresWorkflowRepository {
           });
         }
         const activeLease = await client.query(
-          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp() LIMIT 1',
           [item.workflowId, effectiveTenant]
         );
         if (activeLease.rowCount > 0) {
@@ -1131,7 +1131,7 @@ class PostgresWorkflowRepository {
         }
       }
       const activeDispatchClaim = await client.query(
-        'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+        'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp() LIMIT 1',
         [item.workflowId, effectiveTenant]
       );
       if (activeDispatchClaim.rowCount > 0) {
@@ -1140,7 +1140,7 @@ class PostgresWorkflowRepository {
         });
       }
       const activeLease = await client.query(
-        'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+        'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp() LIMIT 1',
         [item.workflowId, effectiveTenant]
       );
       if (activeLease.rowCount > 0) {
@@ -1215,6 +1215,7 @@ class PostgresWorkflowRepository {
          ON CONFLICT (tenant_id,workflow_id) DO NOTHING RETURNING workflow_id,worker_id,worker_session_id,claimed_at::text AS claimed_at,expires_at::text AS expires_at`,
         [effectiveTenant,safeLimit,workerId,JSON.stringify(capabilities),safeAgingQuantumMs,safeClaimTtlMs,principal.sessionId]
       );
+      if (this.workerRegistry && result.rows.length) await lockReadyWorkerSession(client, principal);
       if(!result.rows.length) return [];
       const ids=result.rows.map(row=>row.workflow_id);
       const workflows=await client.query('SELECT payload FROM workflows WHERE tenant_id=$1 AND workflow_id=ANY($2::text[])',[effectiveTenant,ids]);
@@ -1263,7 +1264,7 @@ class PostgresWorkflowRepository {
           });
         }
         const activeClaim = await client.query(
-          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          'SELECT 1 FROM workflow_dispatch_claims WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp() LIMIT 1',
           [item.workflowId, effectiveTenant]
         );
         if (activeClaim.rowCount > 0) {
@@ -1272,7 +1273,7 @@ class PostgresWorkflowRepository {
           });
         }
         const activeLease = await client.query(
-          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > NOW() LIMIT 1',
+          'SELECT 1 FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at > clock_timestamp() LIMIT 1',
           [item.workflowId, effectiveTenant]
         );
         if (activeLease.rowCount > 0) {
