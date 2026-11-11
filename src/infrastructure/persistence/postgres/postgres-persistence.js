@@ -1549,6 +1549,14 @@ class PostgresWorkflowLeaseRepository {
       }
       const workflowState = workflow.rows[0].state;
       const workflowPayload = workflow.rows[0].payload || {};
+      const activeClaim = await client.query(
+        `SELECT 1 FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2
+         AND expires_at > clock_timestamp() FOR UPDATE`,
+        [effectiveTenant, lease.workflowId]
+      );
+      if (activeClaim.rowCount) {
+        throw Object.assign(new Error('Workflow is held by a durable dispatch claim'), { code: 'WORKFLOW_DISPATCH_CLAIM_HELD' });
+      }
       if (workflowPayload.cancelRequested || workflowState === 'CANCELLED') {
         throw Object.assign(new Error('Workflow cancellation was requested'), { code: 'WORKFLOW_CANCELLATION_REQUESTED' });
       }

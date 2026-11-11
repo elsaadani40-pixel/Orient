@@ -127,6 +127,7 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
   const db = fakeDb([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '7' }], rowCount: 1 }
