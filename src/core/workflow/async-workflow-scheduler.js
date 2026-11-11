@@ -199,10 +199,8 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       delete instance.metadata.fencingToken;
     }
     if (['CREATED', 'QUEUED', 'WAITING', 'RECOVERING'].includes(instance.state)) {
-      let quotaRecoveryStarted = false;
       try {
         if (this.quotaRepository) {
-          quotaRecoveryStarted = true;
           if (this.quotaRepository.recoverWorkflow) await this.quotaRepository.recoverWorkflow({ tenantId, workflowId: instance.workflowId });
           try { await this.quotaRepository.reserveWorkflow({ tenantId, workflowId: instance.workflowId, policy: this.quotaPolicy });  }
           catch (error) { if (error?.code !== 'TENANT_QUOTA_RESERVATION_EXISTS') throw error; }
@@ -212,7 +210,10 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
         super.enqueuePersisted(instance, { priority: Number(instance.metadata?.priority || 0), deadlineAt: instance.deadlineAt, dispatchClaim: payload.dispatchClaim || null });
         recovered++;
       } catch (error) {
-        if (quotaRecoveryStarted && this.quotaRepository?.releaseWorkflow) { try { await this.quotaRepository.releaseWorkflow({ tenantId, workflowId: instance.workflowId }); } catch (cleanupError) { error.quotaCleanupError = cleanupError; } }
+        // The workflow is already durable. Keep its tenant quota reservation so
+        // a later recovery attempt cannot bypass queued-work admission limits.
+        // Only release this worker's exact dispatch claim; do not delete the
+        // workflow's durable quota accounting when local enqueueing fails.
         try { await releaseUnverifiedClaim(payload); } catch (cleanupError) { error.dispatchClaimCleanupError = cleanupError; }
         throw error;
       }
