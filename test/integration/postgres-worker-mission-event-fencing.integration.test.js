@@ -9,6 +9,7 @@ const {
   createWorkerPersistencePrincipal
 } = require('../../src/core/security/worker-persistence-principal');
 const AsyncWorkflowLeaseStore = require('../../src/core/workflow/async-workflow-lease-store');
+const PostgresTenantQuotaRepository = require('../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
@@ -327,6 +328,105 @@ test('PostgreSQL lease state survives scheduler-process reconstruction and fence
       workflowId, leaseB.leaseId, tenantId, { workerPrincipal: currentPrincipal }
     );
   }, 2);
+});
+
+
+test('PostgreSQL quota recovery and competing promotion converge after a concurrent capacity race', async () => {
+  await persistence.initialize();
+  const tenantId = 'tenant-quota-race-' + randomUUID();
+  const expiredWorkflowId = 'workflow-expired-' + randomUUID();
+  const competingWorkflowId = 'workflow-competing-' + randomUUID();
+  const quotaRepository = new PostgresTenantQuotaRepository(pool);
+  const expiresAt = new Date(Date.now() + 60000).toISOString();
+
+  try {
+    await pool.query(
+      'INSERT INTO tenant_quota_limits(tenant_id,max_concurrent,max_queued,max_input_chars,max_tool_input_chars,max_retries,updated_at) VALUES($1,1,10,10000,10000,3,clock_timestamp())',
+      [tenantId]
+    );
+    for (const [workflowId, state] of [[expiredWorkflowId, 'RUNNING'], [competingWorkflowId, 'QUEUED']]) {
+      await pool.query(
+        'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES($1,$2,$3,clock_timestamp(),$4)',
+        [workflowId, tenantId, state, { workflowId, tenantId, state, metadata: {} }]
+      );
+    }
+    await pool.query(
+      "INSERT INTO tenant_quota_reservations(tenant_id,workflow_id,state,reserved_at,expires_at,fencing_token) VALUES($1,$2,'RUNNING',clock_timestamp()-INTERVAL '2 minutes',clock_timestamp()-INTERVAL '1 minute',41),($1,$3,'QUEUED',clock_timestamp(),NULL,NULL)",
+      [tenantId, expiredWorkflowId, competingWorkflowId]
+    );
+
+    const [recovery, firstPromotion] = await Promise.allSettled([
+      quotaRepository.recoverWorkflow({ tenantId, workflowId: expiredWorkflowId }),
+      quotaRepository.promoteWorkflow({ tenantId, workflowId: competingWorkflowId, expiresAt, fencingToken: 9001 })
+    ]);
+    assert.equal(recovery.status, 'fulfilled');
+    assert.equal(recovery.value.state, 'QUEUED');
+
+    let promoted = firstPromotion;
+    if (promoted.status === 'rejected') {
+      assert.equal(promoted.reason.code, 'TENANT_CONCURRENT_QUOTA_EXCEEDED');
+      // A promotion that wins the race before recovery may conservatively fail
+      // once. It must succeed on retry after the expired reservation is repaired.
+      promoted = { status: 'fulfilled', value: await quotaRepository.promoteWorkflow({
+        tenantId, workflowId: competingWorkflowId, expiresAt, fencingToken: 9002
+      }) };
+    }
+    assert.equal(promoted.status, 'fulfilled');
+    assert.equal(promoted.value.state, 'RUNNING');
+
+    const state = await pool.query(
+      'SELECT workflow_id,state,fencing_token FROM tenant_quota_reservations WHERE tenant_id=$1 AND workflow_id=ANY($2::text[]) ORDER BY workflow_id',
+      [tenantId, [expiredWorkflowId, competingWorkflowId]]
+    );
+    const byWorkflow = new Map(state.rows.map(row => [row.workflow_id, row]));
+    assert.equal(byWorkflow.get(expiredWorkflowId).state, 'QUEUED');
+    assert.equal(byWorkflow.get(competingWorkflowId).state, 'RUNNING');
+    const active = await pool.query(
+      "SELECT COUNT(*)::int AS count FROM tenant_quota_reservations WHERE tenant_id=$1 AND state='RUNNING'",
+      [tenantId]
+    );
+    assert.equal(active.rows[0].count, 1);
+  } finally {
+    await pool.query('DELETE FROM tenant_quota_reservations WHERE tenant_id=$1', [tenantId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=ANY($2::text[])', [tenantId, [expiredWorkflowId, competingWorkflowId]]);
+    await pool.query('DELETE FROM tenant_quota_limits WHERE tenant_id=$1', [tenantId]);
+  }
+});
+
+test('PostgreSQL does not dispatch a workflow for quota recovery while its durable lease is still live', async () => {
+  await withRegisteredQueuedWorkflow('live-lease-quota-recovery', async ({ tenantId, workflowId, worker }) => {
+    try {
+      await pool.query(
+        'INSERT INTO tenant_quota_limits(tenant_id,max_concurrent,max_queued,max_input_chars,max_tool_input_chars,max_retries,updated_at) VALUES($1,1,10,10000,10000,3,clock_timestamp())',
+        [tenantId]
+      );
+      await pool.query(
+        "INSERT INTO tenant_quota_reservations(tenant_id,workflow_id,state,reserved_at,expires_at,fencing_token) VALUES($1,$2,'RUNNING',clock_timestamp()-INTERVAL '2 minutes',clock_timestamp()-INTERVAL '1 minute',51)",
+        [tenantId, workflowId]
+      );
+      const lease = await persistence.workflowLeases.tryAcquire({
+        workflowId, leaseId: 'lease-live-quota-' + randomUUID(), workerId: worker.workerId,
+        acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+      }, tenantId, { workerPrincipal: worker });
+      assert.ok(lease);
+
+      const claimed = await persistence.workflows.claimQueued({
+        tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000,
+        workerCapabilities: [], workerPrincipal: worker
+      });
+      assert.equal(claimed.length, 0, 'an unexpired durable lease must prevent dispatch to the quota recovery path');
+
+      const reservation = await pool.query(
+        'SELECT state FROM tenant_quota_reservations WHERE tenant_id=$1 AND workflow_id=$2',
+        [tenantId, workflowId]
+      );
+      assert.equal(reservation.rows[0].state, 'RUNNING',
+        'the expired quota reservation remains untouched while the live lease blocks scheduler recovery');
+    } finally {
+      await pool.query('DELETE FROM tenant_quota_reservations WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+      await pool.query('DELETE FROM tenant_quota_limits WHERE tenant_id=$1', [tenantId]);
+    }
+  });
 });
 
 test.after(async () => {

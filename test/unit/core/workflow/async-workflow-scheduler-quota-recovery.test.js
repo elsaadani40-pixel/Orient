@@ -86,3 +86,42 @@ test('recovery enqueue failure preserves durable quota reservation and releases 
   assert.equal(claimReleases[0].workerId, recoveredPayload.dispatchClaim.workerId);
   assert.deepEqual(claimReleases[0].claim, recoveredPayload.dispatchClaim);
 });
+
+test('recovery fails closed when PostgreSQL quota recovery fails and releases only the exact dispatch claim', async () => {
+  const payload = createQueuedPayload('quota-recovery-db-failure');
+  const databaseError = Object.assign(new Error('simulated PostgreSQL connection loss'), { code: '08006' });
+  const calls = [];
+  const workflowRepository = {
+    async claimQueued() { return [payload]; },
+    async releaseDispatchClaim(workflowId, workerId, tenantId, options) {
+      calls.push({ workflowId, workerId, tenantId, claim: options.claim });
+      return true;
+    }
+  };
+  let reserveCalls = 0;
+  const quotaRepository = {
+    async recoverWorkflow() { throw databaseError; },
+    async reserveWorkflow() { reserveCalls += 1; }
+  };
+  const scheduler = new AsyncWorkflowScheduler({
+    tenantId: 'tenant-quota-recovery',
+    workflowRepository,
+    quotaRepository,
+    quotaPolicy: {},
+    maxConcurrent: 1,
+    maxQueueDepth: 2,
+    dispatchWindow: 1
+  });
+
+  await assert.rejects(
+    () => scheduler.recoverPersisted('worker-a', []),
+    error => error === databaseError
+  );
+  assert.equal(reserveCalls, 0, 'a failed recovery must not reserve or enqueue work');
+  assert.equal(scheduler.queue.length, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].workflowId, payload.workflowId);
+  assert.equal(calls[0].workerId, 'worker-a');
+  assert.deepEqual(calls[0].claim, payload.dispatchClaim);
+});
+
