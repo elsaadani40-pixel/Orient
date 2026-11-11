@@ -2,6 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const AsyncWorkflowScheduler=require('../../../../src/core/workflow/async-workflow-scheduler');
 const {WorkflowDefinition,WorkflowInstance}=require('../../../../src/core/workflow');
+const withDispatchClaim = require('../../../helpers/dispatch-claim-fixture');
 
 function definition(id='dispatch-policy'){
   return new WorkflowDefinition({id,version:1,name:'Dispatch Policy',steps:[{id:'step',tool:'noop',input:{}}]});
@@ -10,8 +11,7 @@ function definition(id='dispatch-policy'){
 function payload(workflowId,requiredCapabilities=[]){
   const instance=new WorkflowInstance({definition:definition(workflowId),workflowId,tenantId:'tenant-a'});
   instance.metadata={requiredCapabilities};
-  const snapshot = instance.toJSON();
-  return { ...snapshot, dispatchClaim: { tenantId: 'tenant-a', workflowId, workerId: 'worker-a', workerSessionId: 'session-a', claimedAt: new Date(Date.now() - 100).toISOString(), expiresAt: new Date(Date.now() + 10000).toISOString() } };
+  return withDispatchClaim(instance.toJSON());
 }
 
 test('async recovery applies bounded backpressure and passes worker capabilities to durable claims',async()=>{

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const AsyncWorkflowScheduler = require('../../../../src/core/workflow/async-workflow-scheduler');
 const WorkflowDefinition = require('../../../../src/core/workflow/workflow-definition');
 const WorkflowInstance = require('../../../../src/core/workflow/workflow-instance');
+const withDispatchClaim = require('../../../helpers/dispatch-claim-fixture');
 
 function payload(workflowId) {
   const instance = new WorkflowInstance({
@@ -16,8 +17,7 @@ function payload(workflowId) {
     })
   });
   instance.transition('QUEUED');
-  const snapshot = instance.toJSON();
-  return { ...snapshot, dispatchClaim: { tenantId: 'tenant-a', workflowId, workerId: 'worker-a', workerSessionId: 'session-a', claimedAt: new Date(Date.now() - 100).toISOString(), expiresAt: new Date(Date.now() + 10000).toISOString() } };
+  return withDispatchClaim(instance.toJSON());
 }
 
 function scheduler({ snapshots, claimed, reconcile, releaseDispatchClaim = async () => true }) {
