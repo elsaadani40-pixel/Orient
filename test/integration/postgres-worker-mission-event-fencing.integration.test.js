@@ -361,6 +361,20 @@ test('PostgreSQL quota recovery and competing promotion converge after a concurr
     assert.equal(recovery.status, 'fulfilled');
     assert.equal(recovery.value.state, 'QUEUED');
 
+    // Match AsyncWorkflowScheduler.recoverPersisted(): after converting an
+    // expired RUNNING reservation back to QUEUED, reserve it again before
+    // considering recovery complete. A competing promotion may have cleaned
+    // up the expired queue row in the meantime.
+    const recoveredReservation = await quotaRepository.reserveWorkflow({
+      tenantId,
+      workflowId: expiredWorkflowId,
+      policy: {
+        maxConcurrent: 1, maxQueued: 10, maxInputChars: 10000,
+        maxToolInputChars: 10000, maxRetries: 3
+      }
+    });
+    assert.equal(recoveredReservation.state, 'QUEUED');
+
     let promoted = firstPromotion;
     if (promoted.status === 'rejected') {
       assert.equal(promoted.reason.code, 'TENANT_CONCURRENT_QUOTA_EXCEEDED');
