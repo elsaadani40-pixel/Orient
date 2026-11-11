@@ -68,7 +68,7 @@ class PostgresWorkerRegistryRepository {
            capabilities=EXCLUDED.capabilities,
            metadata=EXCLUDED.metadata,
            session_id=EXCLUDED.session_id
-         WHERE worker_nodes.expires_at <= NOW() OR worker_nodes.session_id=EXCLUDED.session_id
+         WHERE worker_nodes.expires_at <= clock_timestamp() OR worker_nodes.session_id=EXCLUDED.session_id
          RETURNING *`,
         [item.tenantId,item.workerId,item.startedAt,item.heartbeatAt,item.expiresAt,item.status,JSON.stringify(item.capabilities),item.metadata,item.sessionId]
       );
@@ -87,7 +87,7 @@ class PostgresWorkerRegistryRepository {
       const result = await client.query(
         `UPDATE worker_nodes
          SET heartbeat_at=$1,expires_at=$2,status=$3
-         WHERE tenant_id=$4 AND worker_id=$5 AND session_id=$6 AND expires_at > NOW()
+         WHERE tenant_id=$4 AND worker_id=$5 AND session_id=$6 AND expires_at > clock_timestamp()
          RETURNING *`,
         [heartbeatAt,effectiveExpiry,status,tenant,workerId,principal.sessionId]
       );
