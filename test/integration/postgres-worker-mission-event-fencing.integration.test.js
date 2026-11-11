@@ -442,6 +442,58 @@ test('PostgreSQL does not dispatch a workflow for quota recovery while its durab
   });
 });
 
+
+test('PostgreSQL rejects a worker heartbeat when its session expires while waiting for the registry row lock', async () => {
+  await withRegisteredQueuedWorkflow('worker-heartbeat-expiry', async ({ tenantId, worker }) => {
+    const blocker = await pool.connect();
+    let blockerInTransaction = false;
+    let heartbeatPromise = null;
+    try {
+      await pool.query(
+        "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '500 milliseconds' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
+        [tenantId, worker.workerId, worker.sessionId]
+      );
+      await blocker.query('BEGIN');
+      blockerInTransaction = true;
+      await blocker.query(
+        'SELECT worker_id FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
+        [tenantId, worker.workerId]
+      );
+
+      heartbeatPromise = persistence.workers.heartbeat(worker.workerId, {
+        tenantId,
+        heartbeatAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30000).toISOString(),
+        workerPrincipal: worker
+      });
+
+      let waiting = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const activity = await pool.query(
+          `SELECT 1 FROM pg_stat_activity
+           WHERE datname=current_database() AND wait_event_type='Lock'
+             AND query LIKE 'UPDATE worker_nodes%' LIMIT 1`
+        );
+        if (activity.rowCount === 1) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      assert.equal(waiting, true, 'heartbeat must wait on the held worker registry row lock');
+      await blocker.query('SELECT pg_sleep(1.3)');
+      await blocker.query('COMMIT');
+      blockerInTransaction = false;
+
+      await assert.rejects(
+        heartbeatPromise,
+        error => error.code === 'WORKER_SESSION_LOST'
+      );
+    } finally {
+      if (blockerInTransaction) await blocker.query('ROLLBACK').catch(() => {});
+      blocker.release();
+      if (heartbeatPromise) await heartbeatPromise.catch(() => {});
+    }
+  });
+});
+
 test.after(async () => {
   await pool.end();
 });
