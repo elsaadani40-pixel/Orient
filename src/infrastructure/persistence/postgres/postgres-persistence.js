@@ -39,12 +39,26 @@ async function withPersistencePrincipal(db, persistencePrincipal, tenantId, labe
 }
 
 async function lockReadyWorkerSession(client, principal) {
+  const identity = [principal.tenantId, principal.workerId, principal.sessionId];
+  // Lock by immutable identity first. Do not put the expiry predicate in this
+  // locking SELECT: PostgreSQL may evaluate a volatile WHERE expression before
+  // waiting for a row lock when the row itself is unchanged.
+  const locked = await client.query(
+    `SELECT session_id FROM worker_nodes
+     WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
+     FOR UPDATE`,
+    identity
+  );
+  if (locked.rowCount !== 1) {
+    throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
+  }
+  // The transaction now owns the worker row lock, so this decision-time
+  // validity check cannot be evaluated before a competing lock wait.
   const worker = await client.query(
     `SELECT capabilities FROM worker_nodes
      WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3
-       AND status='READY' AND expires_at > clock_timestamp()
-     FOR UPDATE`,
-    [principal.tenantId, principal.workerId, principal.sessionId]
+       AND status='READY' AND expires_at > clock_timestamp()`,
+    identity
   );
   if (worker.rowCount !== 1) {
     throw Object.assign(new Error('Worker session is no longer active'), { code: 'WORKER_SESSION_LOST' });
