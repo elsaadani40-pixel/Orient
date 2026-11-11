@@ -3,7 +3,7 @@ name: ORIENT — Browser Acceptance
 on:
   pull_request:
   push:
-    branches: ["main"]
+    branches: ["main", "hardening/**"]
 
 permissions:
   contents: read
