@@ -9,7 +9,6 @@ const {
   createWorkerPersistencePrincipal
 } = require('../../src/core/security/worker-persistence-principal');
 const AsyncWorkflowLeaseStore = require('../../src/core/workflow/async-workflow-lease-store');
-const PostgresTenantQuotaRepository = require('../../src/infrastructure/persistence/postgres/postgres-tenant-quota-repository');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
@@ -336,7 +335,7 @@ test('PostgreSQL quota recovery and competing promotion converge after a concurr
   const tenantId = 'tenant-quota-race-' + randomUUID();
   const expiredWorkflowId = 'workflow-expired-' + randomUUID();
   const competingWorkflowId = 'workflow-competing-' + randomUUID();
-  const quotaRepository = new PostgresTenantQuotaRepository(pool);
+  const quotaRepository = persistence.tenantQuotas;
   const expiresAt = new Date(Date.now() + 60000).toISOString();
 
   try {
