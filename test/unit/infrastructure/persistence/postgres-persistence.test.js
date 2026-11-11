@@ -106,12 +106,10 @@ function workerLeaseFixture(responses, { tenantId = 'tenant-a', workerId, sessio
 test('Postgres claimed lease acquisition consumes the exact claim in one transaction', async () => {
   const { db, repo, workerPrincipal: principal } = workerLeaseFixture([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
-    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-atomic', state: 'QUEUED' } }], rowCount: 1 },
     { rows: [{ claimed_at: '2026-11-11T10:00:00.000Z', expires_at: '2026-11-11T10:00:05.000Z' }], rowCount: 1 },
     { rows: [], rowCount: 0 }, { rows: [], rowCount: 0 },
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
-    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '42' }], rowCount: 1 },
     { rows: [{ workflow_id: 'wf-atomic' }], rowCount: 1 }
@@ -149,11 +147,9 @@ test('Postgres expired lease cleanup uses database decision time, not the applic
 test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
   const { db, repo, workerPrincipal } = workerLeaseFixture([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
-    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
-    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '7' }], rowCount: 1 }
   ], { workerId: 'worker-1' });
@@ -175,7 +171,10 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
 test('Postgres workflow writes reject stale fencing tokens', async () => {
   const db = fakeDb([
     { rows: [{}], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{ workflow_id: 'wf-1' }], rowCount: 1 },
+    { rows: [{}], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{}], rowCount: 1 },
     { rows: [], rowCount: 0 }
   ]);
@@ -488,8 +487,10 @@ test('Postgres workflow outbox acknowledgement locks and advances checkpoint rev
 test('Postgres mission event append requires the active lease-bound worker principal', async () => {
   const db = fakeDb([
     { rows: [{}], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{ workflow_id: 'workflow-a' }], rowCount: 1 },
     { rows: [{}], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{}], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [], rowCount: 0 },
@@ -517,13 +518,19 @@ test('Postgres mission event append requires the active lease-bound worker princ
   assert.equal(result.sequence, 1);
   assert.match(db.calls[0].text, /FROM worker_nodes/);
   assert.match(db.calls[0].text, /session_id/);
-  assert.match(db.calls[1].text, /FROM workflows/);
-  assert.match(db.calls[1].text, /FOR UPDATE/);
-  assert.match(db.calls[2].text, /FROM worker_nodes/);
-  assert.match(db.calls[3].text, /FROM workflow_leases/);
-  assert.match(db.calls[3].text, /fencing_token/);
-  assert.match(db.calls[3].text, /expires_at > clock_timestamp/);
-  assert.match(db.calls[4].text, /pg_advisory_xact_lock/);
+  assert.match(db.calls[0].text, /FOR UPDATE/);
+  assert.match(db.calls[1].text, /status='READY'/);
+  assert.match(db.calls[1].text, /clock_timestamp/);
+  assert.match(db.calls[2].text, /FROM workflows/);
+  assert.match(db.calls[2].text, /FOR UPDATE/);
+  assert.match(db.calls[3].text, /FROM worker_nodes/);
+  assert.match(db.calls[3].text, /FOR UPDATE/);
+  assert.match(db.calls[4].text, /status='READY'/);
+  assert.match(db.calls[4].text, /clock_timestamp/);
+  assert.match(db.calls[5].text, /FROM workflow_leases/);
+  assert.match(db.calls[5].text, /fencing_token/);
+  assert.match(db.calls[5].text, /expires_at > clock_timestamp/);
+  assert.match(db.calls[6].text, /pg_advisory_xact_lock/);
 });
 
 test('Postgres mission event append rejects a worker principal for another workflow', async () => {
