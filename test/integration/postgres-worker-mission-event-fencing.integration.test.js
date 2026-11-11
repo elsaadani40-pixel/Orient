@@ -494,6 +494,65 @@ test('PostgreSQL rejects a worker heartbeat when its session expires while waiti
   });
 });
 
+
+test('PostgreSQL allows a new worker session to replace an expired session after waiting for its registry row lock', async () => {
+  await withRegisteredQueuedWorkflow('worker-register-takeover', async ({ tenantId, worker }) => {
+    const blocker = await pool.connect();
+    let blockerInTransaction = false;
+    let registrationPromise = null;
+    const replacement = createWorkerPersistencePrincipal({
+      tenantId,
+      workerId: worker.workerId,
+      sessionId: 'replacement-' + randomUUID(),
+      capabilities: worker.capabilities
+    });
+    try {
+      await pool.query(
+        "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '500 milliseconds' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
+        [tenantId, worker.workerId, worker.sessionId]
+      );
+      await blocker.query('BEGIN');
+      blockerInTransaction = true;
+      await blocker.query(
+        'SELECT worker_id FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 FOR UPDATE',
+        [tenantId, worker.workerId]
+      );
+
+      registrationPromise = persistence.workers.register({
+        workerId: worker.workerId,
+        tenantId,
+        status: 'READY',
+        capabilities: worker.capabilities,
+        heartbeatAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30000).toISOString()
+      }, tenantId, { workerPrincipal: replacement });
+
+      let waiting = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const activity = await pool.query(
+          `SELECT 1 FROM pg_stat_activity
+           WHERE datname=current_database() AND wait_event_type='Lock'
+             AND query LIKE 'INSERT INTO worker_nodes%' LIMIT 1`
+        );
+        if (activity.rowCount === 1) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      assert.equal(waiting, true, 'new registration must wait on the existing worker registry row');
+      await blocker.query('SELECT pg_sleep(1.3)');
+      await blocker.query('COMMIT');
+      blockerInTransaction = false;
+
+      const registered = await registrationPromise;
+      assert.equal(registered.sessionId, replacement.sessionId);
+    } finally {
+      if (blockerInTransaction) await blocker.query('ROLLBACK').catch(() => {});
+      blocker.release();
+      if (registrationPromise) await registrationPromise.catch(() => {});
+      await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2', [tenantId, worker.workerId]);
+    }
+  });
+});
+
 test.after(async () => {
   await pool.end();
 });
