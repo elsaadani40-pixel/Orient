@@ -697,6 +697,98 @@ test('PostgreSQL workflow dispatch recovers across scheduler reconstruction afte
   }
 });
 
+
+test('PostgreSQL reclaims an expired dispatch claim after scheduler crash before lease handoff', async () => {
+  await persistence.initialize();
+  const tenantId = 'tenant-claim-restart-' + randomUUID();
+  const workflowId = 'workflow-claim-restart-' + randomUUID();
+  const firstWorkerId = 'worker-claim-before-crash-' + randomUUID();
+  const secondWorkerId = 'worker-claim-after-restart-' + randomUUID();
+  let secondService = null;
+  const serviceErrors = [];
+  try {
+    await pool.query(
+      'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)',
+      [workflowId, tenantId, 'QUEUED', {
+        workflowId, tenantId, state: 'QUEUED', metadata: {}, input: {},
+        definition: { id: 'claim-restart-definition', version: 1, name: 'Claim restart', steps: [{ id: 'step-1', tool: 'noop', input: {}, dependsOn: [] }] }
+      }]
+    );
+
+    const createScheduler = () => new AsyncWorkflowScheduler({
+      tenantId,
+      workflowRepository: persistence.workflows,
+      leaseRepository: persistence.workflowLeases,
+      leaseDurationMs: 1200,
+      maxConcurrent: 1,
+      maxQueueDepth: 10,
+      dispatchWindow: 1
+    });
+    const createService = (scheduler, workerId, workerTtlMs, acquireLease) => new AsyncWorkflowWorkerService({
+      scheduler,
+      workerId,
+      workerRegistry: persistence.workers,
+      workerTtlMs,
+      workerHeartbeatIntervalMs: 5000,
+      pollIntervalMs: 100,
+      recoveryIntervalMs: 1000,
+      workerCapabilities: [],
+      onError: error => serviceErrors.push(error),
+      workerFactory: (id, capabilities, principal) => ({
+        workerId: id,
+        workerPrincipal: principal,
+        tick: () => acquireLease ? scheduler.leaseAsync(id, capabilities, principal) : null
+      })
+    });
+
+    // Process one persists a durable dispatch claim and queues it locally, but
+    // crashes before converting that claim into a lease.
+    const firstScheduler = createScheduler();
+    const firstService = createService(firstScheduler, firstWorkerId, 1200, false);
+    await firstService.runOnce();
+    assert.equal(firstScheduler.queue.length, 1, 'first process must have a locally queued claimed workflow');
+    assert.ok(firstScheduler.queue[0].dispatchClaim, 'the exact durable dispatch claim must exist');
+    const beforeCrash = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND expires_at > clock_timestamp()',
+      [tenantId, workflowId]
+    );
+    assert.equal(beforeCrash.rows[0].count, 1, 'claim must be durable before simulated crash');
+    const noLease = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND expires_at > clock_timestamp()',
+      [tenantId, workflowId]
+    );
+    assert.equal(noLease.rows[0].count, 0, 'crash point must precede lease handoff');
+
+    // Leave the first service/session untouched. The new process must wait for
+    // the durable claim TTL, reclaim it, and complete the atomic lease handoff.
+    await new Promise(resolve => setTimeout(resolve, 5300));
+    const secondScheduler = createScheduler();
+    secondService = createService(secondScheduler, secondWorkerId, 30000, true);
+    const recoveredLease = await secondService.runOnce();
+    assert.ok(recoveredLease?.leaseId, 'restarted process must reclaim and lease the expired dispatch claim; errors: ' + serviceErrors.map(error => `${error.code || error.name}: ${error.message}`).join(' | '));
+
+    const remainingClaims = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2',
+      [tenantId, workflowId]
+    );
+    assert.equal(remainingClaims.rows[0].count, 0, 'claim must be consumed by atomic lease handoff');
+    const liveLeases = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND expires_at > clock_timestamp()',
+      [tenantId, workflowId]
+    );
+    assert.equal(liveLeases.rows[0].count, 1, 'recovery must produce exactly one live lease');
+    const latest = await persistence.workflows.findById(workflowId, tenantId);
+    assert.equal(latest.state, 'RUNNING');
+    assert.equal(Number(latest.metadata.fencingToken), Number(recoveredLease.fencingToken));
+  } finally {
+    if (secondService) await secondService.stopAndDrain().catch(() => {});
+    await pool.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id IN ($2,$3)', [tenantId, firstWorkerId, secondWorkerId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  }
+});
+
 test.after(async () => {
   await pool.end();
 });
