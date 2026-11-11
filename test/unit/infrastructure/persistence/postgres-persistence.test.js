@@ -106,10 +106,12 @@ function workerLeaseFixture(responses, { tenantId = 'tenant-a', workerId, sessio
 test('Postgres claimed lease acquisition consumes the exact claim in one transaction', async () => {
   const { db, repo, workerPrincipal: principal } = workerLeaseFixture([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-atomic', state: 'QUEUED' } }], rowCount: 1 },
     { rows: [{ claimed_at: '2026-11-11T10:00:00.000Z', expires_at: '2026-11-11T10:00:05.000Z' }], rowCount: 1 },
     { rows: [], rowCount: 0 }, { rows: [], rowCount: 0 },
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '42' }], rowCount: 1 },
     { rows: [{ workflow_id: 'wf-atomic' }], rowCount: 1 }
@@ -147,9 +149,11 @@ test('Postgres expired lease cleanup uses database decision time, not the applic
 test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
   const { db, repo, workerPrincipal } = workerLeaseFixture([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '7' }], rowCount: 1 }
   ], { workerId: 'worker-1' });
