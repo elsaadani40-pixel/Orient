@@ -19,7 +19,7 @@ test('initialized PostgreSQL databases do not replay base-schema DDL on every in
     },
     release() {}
   };
-  const pool = { async connect() { return client; } };
+  const pool = { async query() { return { rows: [] }; }, async connect() { return client; } };
 
   await new PostgresDatabase({ pool }).initialize();
 
