@@ -130,6 +130,20 @@ test('Postgres claimed lease acquisition consumes the exact claim in one transac
   assert.ok(sql.includes('RETURNING workflow_id'));
 });
 
+test('Postgres expired lease cleanup uses database decision time, not the application clock', async () => {
+  const db = fakeDb([{ rows: [], rowCount: 0 }]);
+  const repo = new PostgresWorkflowLeaseRepository(db);
+
+  // A far-future application timestamp must not authorize early deletion.
+  await repo.deleteExpired('wf-clock-skew', 'lease-clock-skew',
+    Date.parse('2099-01-01T00:00:00.000Z'), 'tenant-a');
+
+  assert.equal(db.calls.length, 1);
+  assert.match(db.calls[0].text, /expires_at <= clock_timestamp\(\)/);
+  assert.doesNotMatch(db.calls[0].text, /expires_at <= \$\d+/);
+  assert.deepEqual(db.calls[0].values, ['wf-clock-skew', 'lease-clock-skew', 'tenant-a']);
+});
+
 test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
   const { db, repo, workerPrincipal } = workerLeaseFixture([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },

@@ -1660,14 +1660,16 @@ class PostgresWorkflowLeaseRepository {
     });
   }
 
-  async deleteExpired(workflowId, leaseId, now = Date.now(), tenantId = null) {
+  async deleteExpired(workflowId, leaseId, _now = Date.now(), tenantId = null) {
+    // Lease expiry is an authorization decision: use the database clock so
+    // application clock skew cannot reclaim a lease before it truly expires.
     const result = await this.db.query(
       tenantId
-        ? 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3 AND expires_at <= $4'
-        : 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND expires_at <= $3',
+        ? 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3 AND expires_at <= clock_timestamp()'
+        : 'DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND expires_at <= clock_timestamp()',
       tenantId
-        ? [workflowId, leaseId, tenantId, new Date(now).toISOString()]
-        : [workflowId, leaseId, new Date(now).toISOString()]
+        ? [workflowId, leaseId, tenantId]
+        : [workflowId, leaseId]
     );
     return result.rowCount === 1;
   }
