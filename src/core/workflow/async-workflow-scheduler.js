@@ -199,11 +199,12 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       delete instance.metadata.fencingToken;
     }
     if (['CREATED', 'QUEUED', 'WAITING', 'RECOVERING'].includes(instance.state)) {
-      let quotaReservationCreated = false;
+      let quotaRecoveryStarted = false;
       try {
         if (this.quotaRepository) {
+          quotaRecoveryStarted = true;
           if (this.quotaRepository.recoverWorkflow) await this.quotaRepository.recoverWorkflow({ tenantId, workflowId: instance.workflowId });
-          try { await this.quotaRepository.reserveWorkflow({ tenantId, workflowId: instance.workflowId, policy: this.quotaPolicy }); quotaReservationCreated = true; }
+          try { await this.quotaRepository.reserveWorkflow({ tenantId, workflowId: instance.workflowId, policy: this.quotaPolicy });  }
           catch (error) { if (error?.code !== 'TENANT_QUOTA_RESERVATION_EXISTS') throw error; }
         }
         if (usesDispatchClaims && !payload.dispatchClaim) throw Object.assign(new Error('Durable claim response omitted its identity'), { code: 'WORKFLOW_RECOVERY_CLAIM_PROVENANCE_REQUIRED', workflowId: instance.workflowId });
@@ -211,7 +212,7 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
         super.enqueuePersisted(instance, { priority: Number(instance.metadata?.priority || 0), deadlineAt: instance.deadlineAt, dispatchClaim: payload.dispatchClaim || null });
         recovered++;
       } catch (error) {
-        if (quotaReservationCreated && this.quotaRepository?.releaseWorkflow) { try { await this.quotaRepository.releaseWorkflow({ tenantId, workflowId: instance.workflowId }); } catch (cleanupError) { error.quotaCleanupError = cleanupError; } }
+        if (quotaRecoveryStarted && this.quotaRepository?.releaseWorkflow) { try { await this.quotaRepository.releaseWorkflow({ tenantId, workflowId: instance.workflowId }); } catch (cleanupError) { error.quotaCleanupError = cleanupError; } }
         try { await releaseUnverifiedClaim(payload); } catch (cleanupError) { error.dispatchClaimCleanupError = cleanupError; }
         throw error;
       }

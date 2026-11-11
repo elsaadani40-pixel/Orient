@@ -145,6 +145,7 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
     metadata: { tenantId: 'tenant-a' }
   }, 'tenant-a', { workerPrincipal });
   assert.equal(lease.fencingToken, 7);
+  assert.ok(db.calls.some(call => call.text.includes('workflow_dispatch_claims') && call.text.includes('clock_timestamp()')), 'generic lease acquisition must fence active claims');
   const insertCall = db.calls.find(call => call.text.includes('INSERT INTO workflow_leases'));
   assert.ok(insertCall);
   assert.match(insertCall.text, /RETURNING fencing_token/);
