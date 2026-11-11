@@ -102,7 +102,7 @@ test('worker registry heartbeat and unregister require the exact active worker s
 
   const removed = await repo.unregister('worker-a', 'tenant-a', { workerPrincipal: principal() });
   assert.equal(removed, true);
-  assert.match(db.calls[1].sql, /session_id=$3/);
+  assert.ok(db.calls[1].sql.includes('session_id=$3'));
   assert.equal(db.transactions, 2);
 });
 
