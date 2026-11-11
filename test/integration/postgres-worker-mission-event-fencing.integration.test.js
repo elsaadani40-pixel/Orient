@@ -622,6 +622,7 @@ test('PostgreSQL workflow dispatch recovers across scheduler reconstruction afte
   const firstWorkerId = 'worker-before-crash-' + randomUUID();
   const secondWorkerId = 'worker-after-restart-' + randomUUID();
   let secondService = null;
+  const serviceErrors = [];
   try {
     await pool.query(
       'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)',
@@ -648,6 +649,7 @@ test('PostgreSQL workflow dispatch recovers across scheduler reconstruction afte
       pollIntervalMs: 100,
       recoveryIntervalMs: 1000,
       workerCapabilities: [],
+      onError: error => serviceErrors.push(error),
       workerFactory: (id, capabilities, principal) => ({
         workerId: id,
         workerPrincipal: principal,
@@ -660,7 +662,7 @@ test('PostgreSQL workflow dispatch recovers across scheduler reconstruction afte
     const firstScheduler = createScheduler();
     const firstService = createService(firstScheduler, firstWorkerId);
     const firstLease = await firstService.runOnce();
-    assert.ok(firstLease?.leaseId, 'first process must obtain a durable lease');
+    assert.ok(firstLease?.leaseId, 'first process must obtain a durable lease; errors: ' + serviceErrors.map(error => `${error.code || error.name}: ${error.message}`).join(' | '));
     const firstSnapshot = await persistence.workflows.findById(workflowId, tenantId);
     assert.equal(firstSnapshot.state, 'RUNNING');
     assert.equal(Number(firstSnapshot.metadata.fencingToken), Number(firstLease.fencingToken));
@@ -673,7 +675,7 @@ test('PostgreSQL workflow dispatch recovers across scheduler reconstruction afte
     const secondScheduler = createScheduler();
     secondService = createService(secondScheduler, secondWorkerId);
     const secondLease = await secondService.runOnce();
-    assert.ok(secondLease?.leaseId, 'restarted process must recover and lease the workflow');
+    assert.ok(secondLease?.leaseId, 'restarted process must recover and lease the workflow; errors: ' + serviceErrors.map(error => `${error.code || error.name}: ${error.message}`).join(' | '));
     assert.notEqual(secondLease.workerId, firstLease.workerId);
     assert.ok(Number(secondLease.fencingToken) > Number(firstLease.fencingToken));
 
