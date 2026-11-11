@@ -125,8 +125,11 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       })
     : await (snapshots || this.workflowRepository.findAll({ tenantId }));
 
-  const releaseUnverifiedClaim = async workflowId => {
+  const releaseUnverifiedClaim = async payload => {
     if (!usesDispatchClaims) return;
+    const workflowId = typeof payload === 'string' ? payload : payload?.workflowId;
+    const claim = typeof payload === 'object' ? payload?.dispatchClaim : null;
+    if (!claim) throw Object.assign(new Error('Exact dispatch-claim provenance is required for cleanup'), { code: 'WORKFLOW_RECOVERY_CLAIM_PROVENANCE_REQUIRED', workflowId });
     if (typeof this.workflowRepository.releaseDispatchClaim !== 'function') {
       throw Object.assign(
         new Error('Cannot safely release a dispatch claim for a workflow that failed recovery verification'),
@@ -134,9 +137,10 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       );
     }
     try {
-      await this.workflowRepository.releaseDispatchClaim(
-        workflowId, workerId, tenantId, { workerPrincipal }
+      const released = await this.workflowRepository.releaseDispatchClaim(
+        workflowId, workerId, tenantId, { workerPrincipal, claim }
       );
+      if (released !== true) throw Object.assign(new Error('Exact dispatch claim was not released'), { code: 'WORKFLOW_RECOVERY_CLAIM_RELEASE_NOT_OWNER', workflowId });
     } catch (cause) {
       const error = Object.assign(
         new Error('Failed to release a dispatch claim for a workflow that was not recovery-verified'),
@@ -153,24 +157,24 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
     if (!payload) continue;
     if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(payload.state) ||
         Boolean(payload.metadata && payload.metadata.approvalBlocked)) {
-      await releaseUnverifiedClaim(payload.workflowId);
+      await releaseUnverifiedClaim(payload);
       continue;
     }
 
     if (dispatchEligibleWorkflowIds && !dispatchEligibleWorkflowIds.has(payload.workflowId)) {
-      await releaseUnverifiedClaim(payload.workflowId);
+      await releaseUnverifiedClaim(payload);
       continue;
     }
 
     if (this.queue.some(item => item.instance.workflowId === payload.workflowId) ||
         this.active.has(payload.workflowId)) {
-      await releaseUnverifiedClaim(payload.workflowId);
+      await releaseUnverifiedClaim(payload);
       continue;
     }
 
     const lease = await this.leaseStore.get(payload.workflowId);
     if (lease && lease.expiresAt > this.clock()) {
-      await releaseUnverifiedClaim(payload.workflowId);
+      await releaseUnverifiedClaim(payload);
       continue;
     }
 
@@ -181,11 +185,11 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       // Do not mutate a claimed snapshot through the unleased repository path.
       // Keep the durable state unchanged until a lease-bound worker can persist
       // an authorized terminal transition.
-      await releaseUnverifiedClaim(payload.workflowId);
+      await releaseUnverifiedClaim(payload);
       continue;
     }
     if (!supportsCapabilities(instance, workerCapabilities)) {
-      await releaseUnverifiedClaim(payload.workflowId);
+      await releaseUnverifiedClaim(payload);
       continue;
     }
 
@@ -195,31 +199,22 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       delete instance.metadata.fencingToken;
     }
     if (['CREATED', 'QUEUED', 'WAITING', 'RECOVERING'].includes(instance.state)) {
-      if (this.quotaRepository) {
-        if (this.quotaRepository.recoverWorkflow) {
-          await this.quotaRepository.recoverWorkflow({ tenantId: this.tenantId, workflowId: instance.workflowId });
+      let quotaReservationCreated = false;
+      try {
+        if (this.quotaRepository) {
+          if (this.quotaRepository.recoverWorkflow) await this.quotaRepository.recoverWorkflow({ tenantId, workflowId: instance.workflowId });
+          try { await this.quotaRepository.reserveWorkflow({ tenantId, workflowId: instance.workflowId, policy: this.quotaPolicy }); quotaReservationCreated = true; }
+          catch (error) { if (error?.code !== 'TENANT_QUOTA_RESERVATION_EXISTS') throw error; }
         }
-        try {
-          await this.quotaRepository.reserveWorkflow({
-            tenantId: this.tenantId, workflowId: instance.workflowId, policy: this.quotaPolicy
-          });
-        } catch (error) {
-          if (error?.code !== 'TENANT_QUOTA_RESERVATION_EXISTS') {
-            await releaseUnverifiedClaim(payload.workflowId);
-            continue;
-          }
-        }
+        if (usesDispatchClaims && !payload.dispatchClaim) throw Object.assign(new Error('Durable claim response omitted its identity'), { code: 'WORKFLOW_RECOVERY_CLAIM_PROVENANCE_REQUIRED', workflowId: instance.workflowId });
+        if (instance.state !== 'QUEUED') instance.transition('QUEUED');
+        super.enqueuePersisted(instance, { priority: Number(instance.metadata?.priority || 0), deadlineAt: instance.deadlineAt, dispatchClaim: payload.dispatchClaim || null });
+        recovered++;
+      } catch (error) {
+        if (quotaReservationCreated && this.quotaRepository?.releaseWorkflow) { try { await this.quotaRepository.releaseWorkflow({ tenantId, workflowId: instance.workflowId }); } catch (cleanupError) { error.quotaCleanupError = cleanupError; } }
+        try { await releaseUnverifiedClaim(payload); } catch (cleanupError) { error.dispatchClaimCleanupError = cleanupError; }
+        throw error;
       }
-      // The claim is the durable authority until leaseAsync completes the
-      // claim-to-lease handoff. Use the persisted enqueue path: base enqueue()
-      // invokes the polymorphic persist() method and would issue an unleased
-      // repository write while this claim is still held.
-      if (instance.state !== 'QUEUED') instance.transition('QUEUED');
-      super.enqueuePersisted(instance, {
-        priority: Number(instance.metadata?.priority || 0),
-        deadlineAt: instance.deadlineAt
-      });
-      recovered++;
     }
   }
   return recovered;
@@ -251,7 +246,7 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
    throw error;
   }
  }
- async leaseAsync(workerId='worker',workerCapabilities=[],workerPrincipal=null){await this.leaseStore.recoverExpired();if(this.active.size>=this.maxConcurrent)return null;this.sortQueue();const now=this.clock();const queuePassSize=this.queue.length;let inspected=0;while(this.queue.length&&inspected<queuePassSize){inspected++;const item=this.queue.shift(),instance=item.instance;if(!supportsCapabilities(instance,workerCapabilities)){this.queue.push(item);this.sortQueue();continue;}if(this.cancelled.has(instance.workflowId)||instance.cancelRequested){if(instance.state!=='CANCELLED')instance.transition('CANCELLED');await this.persistAsync(instance);continue;}if(item.availableAt>now){this.queue.unshift(item);return null;}if(item.deadlineAt&&new Date(item.deadlineAt).getTime()<=now){if(instance.state!=='FAILED')instance.transition('FAILED');instance.metadata.deadlineExceeded=true;instance.metadata.failureCode='WORKFLOW_DEADLINE_EXCEEDED';await this.persistAsync(instance);continue;}let lease;try{lease=await this.leaseStore.acquire(instance.workflowId,workerId,{tenantId:instance.tenantId,workflowId:instance.workflowId},workerPrincipal);}catch(error){if(error?.code==='WORKFLOW_LEASE_HELD'){this.queue.push(item);this.sortQueue();continue;}throw error;}if (!workerPrincipal || !Number.isSafeInteger(Number(lease.fencingToken)) || Number(lease.fencingToken) <= 0) {
+ async leaseAsync(workerId='worker',workerCapabilities=[],workerPrincipal=null){await this.leaseStore.recoverExpired();if(this.active.size>=this.maxConcurrent)return null;this.sortQueue();const now=this.clock();const queuePassSize=this.queue.length;let inspected=0;while(this.queue.length&&inspected<queuePassSize){inspected++;const item=this.queue.shift(),instance=item.instance;if(!supportsCapabilities(instance,workerCapabilities)){this.queue.push(item);this.sortQueue();continue;}if(this.cancelled.has(instance.workflowId)||instance.cancelRequested){if(instance.state!=='CANCELLED')instance.transition('CANCELLED');await this.persistAsync(instance);continue;}if(item.availableAt>now){this.queue.unshift(item);return null;}if(item.deadlineAt&&new Date(item.deadlineAt).getTime()<=now){if(instance.state!=='FAILED')instance.transition('FAILED');instance.metadata.deadlineExceeded=true;instance.metadata.failureCode='WORKFLOW_DEADLINE_EXCEEDED';await this.persistAsync(instance);continue;}let lease;try{lease=item.dispatchClaim ? await this.leaseStore.acquireClaimed(instance.workflowId,workerId,{tenantId:instance.tenantId,workflowId:instance.workflowId},item.dispatchClaim,workerPrincipal) : await this.leaseStore.acquire(instance.workflowId,workerId,{tenantId:instance.tenantId,workflowId:instance.workflowId},workerPrincipal);}catch(error){if(error?.code==='WORKFLOW_LEASE_HELD'){this.queue.push(item);this.sortQueue();continue;}throw error;}if (!workerPrincipal || !Number.isSafeInteger(Number(lease.fencingToken)) || Number(lease.fencingToken) <= 0) {
  const error = Object.assign(new Error('Async worker dispatch requires a durable lease fencing token and trusted worker session'), { code: 'WORKER_DURABLE_FENCING_UNSUPPORTED', workflowId: instance.workflowId });
  try { await this.leaseStore.release(instance.workflowId, lease.leaseId, workerPrincipal); } catch (cause) { error.leaseCleanupError = cause; }
  try { if (this.workflowRepository?.releaseDispatchClaim) await this.workflowRepository.releaseDispatchClaim(instance.workflowId, workerId, this.tenantId || 'local', { workerPrincipal }); } catch (cause) { error.dispatchClaimCleanupError = cause; }
@@ -328,9 +323,9 @@ const record = {
   previousState
 };
 this.active.set(record.workflowId, record);
-let dispatchClaimReleased = false;
+let dispatchClaimReleased = Boolean(item.dispatchClaim);
 try {
-  if (this.workflowRepository?.releaseDispatchClaim) {
+  if (!item.dispatchClaim && this.workflowRepository?.releaseDispatchClaim) {
     await this.workflowRepository.releaseDispatchClaim(
       instance.workflowId, workerId, this.tenantId || 'local', { workerPrincipal }
     );
@@ -366,12 +361,9 @@ try {
   }
   if (!dispatchClaimReleased && this.workflowRepository?.releaseDispatchClaim) {
     try {
-      await this.workflowRepository.releaseDispatchClaim(
-        instance.workflowId, workerId, this.tenantId || 'local', { workerPrincipal }
-      );
-    } catch (cleanupError) {
-      error.dispatchClaimCleanupError = cleanupError;
-    }
+      const released = await this.workflowRepository.releaseDispatchClaim(instance.workflowId, workerId, this.tenantId || 'local', { workerPrincipal, claim: item.dispatchClaim });
+      if (released !== true) throw Object.assign(new Error('Exact dispatch claim cleanup failed'), { code: 'WORKFLOW_RECOVERY_CLAIM_RELEASE_NOT_OWNER' });
+    } catch (cleanupError) { error.dispatchClaimCleanupError = cleanupError; }
   }
   restoreQueuedItem();
   throw error;

@@ -94,6 +94,32 @@ test('Postgres persistence rejects cross-tenant writes before SQL execution', as
 });
 
 
+test('Postgres claimed lease acquisition consumes the exact claim in one transaction', async () => {
+  const db = fakeDb([
+    { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-atomic', state: 'QUEUED' } }], rowCount: 1 },
+    { rows: [{ claimed_at: '2026-11-11T10:00:00.000Z', expires_at: '2026-11-11T10:00:05.000Z' }], rowCount: 1 },
+    { rows: [], rowCount: 0 }, { rows: [], rowCount: 0 },
+    { rows: [{ fencing_token: '42' }], rowCount: 1 },
+    { rows: [{ workflow_id: 'wf-atomic' }], rowCount: 1 }
+  ]);
+  const repo = new PostgresWorkflowLeaseRepository(db);
+  const principal = createWorkerPersistencePrincipal({ tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-1', capabilities: [] });
+  const result = await repo.tryAcquireClaimed({
+    workflowId: 'wf-atomic', leaseId: 'lease-atomic', workerId: 'worker-a',
+    acquiredAt: Date.parse('2026-11-11T10:00:01.000Z'), expiresAt: Date.parse('2026-11-11T10:00:31.000Z'),
+    metadata: { tenantId: 'tenant-a' }
+  }, {
+    tenantId: 'tenant-a', workflowId: 'wf-atomic', workerId: 'worker-a',
+    workerSessionId: 'session-1', claimedAt: '2026-11-11T10:00:00.000Z', expiresAt: '2026-11-11T10:00:05.000Z'
+  }, 'tenant-a', { workerPrincipal: principal });
+  assert.equal(result.fencingToken, 42);
+  const sql = db.calls.map(call => call.text).join('\\n');
+  assert.match(sql, /workflow_dispatch_claims[\\s\\S]*FOR UPDATE/);
+  assert.match(sql, /INSERT INTO workflow_leases/);
+  assert.match(sql, /DELETE FROM workflow_dispatch_claims[\\s\\S]*RETURNING workflow_id/);
+});
+
 test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
   const db = fakeDb([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },

@@ -1205,7 +1205,7 @@ class PostgresWorkflowRepository {
       throw Object.assign(new Error('Requested worker capabilities exceed principal authority'), { code: 'WORKER_CAPABILITY_MISMATCH' });
     }
     const safeAgingQuantumMs=Math.max(1000,Number(agingQuantumMs)||30000);
-    const expiresAt=new Date(Date.now()+Math.max(1000,Number(claimTtlMs)||5000)).toISOString();
+    const safeClaimTtlMs = Math.max(1000, Number(claimTtlMs) || 5000);
     if (typeof this.db.transactionWithWorkerPrincipal !== 'function') {
       throw Object.assign(new Error('Worker-scoped PostgreSQL transactions are required'), { code: 'WORKER_PRINCIPAL_TRANSACTION_REQUIRED' });
     }
@@ -1237,45 +1237,45 @@ class PostgresWorkflowRepository {
           throw error;
         }
       }
-      await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND expires_at <= NOW()',[effectiveTenant]);
+      await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND expires_at <= clock_timestamp()',[effectiveTenant]);
       const result=await client.query(
         `WITH candidates AS (
            SELECT w.workflow_id FROM workflows w
            WHERE w.tenant_id=$1 AND w.state IN ('QUEUED','WAITING','RECOVERING','RUNNING')
              AND COALESCE(w.payload->'metadata'->>'approvalBlocked','false') <> 'true'
              AND COALESCE(w.payload->'metadata'->'requiredCapabilities','[]'::jsonb) <@ $4::jsonb
-             AND NOT EXISTS (SELECT 1 FROM workflow_dispatch_claims c WHERE c.tenant_id=w.tenant_id AND c.workflow_id=w.workflow_id AND c.expires_at > NOW())
-             AND NOT EXISTS (SELECT 1 FROM workflow_leases l WHERE l.tenant_id=w.tenant_id AND l.workflow_id=w.workflow_id AND l.expires_at > NOW())
+             AND NOT EXISTS (SELECT 1 FROM workflow_dispatch_claims c WHERE c.tenant_id=w.tenant_id AND c.workflow_id=w.workflow_id AND c.expires_at > clock_timestamp())
+             AND NOT EXISTS (SELECT 1 FROM workflow_leases l WHERE l.tenant_id=w.tenant_id AND l.workflow_id=w.workflow_id AND l.expires_at > clock_timestamp())
            ORDER BY (
              COALESCE((w.payload->>'priority')::int,0)
-             + FLOOR(GREATEST(0,EXTRACT(EPOCH FROM (NOW()-w.updated_at))*1000) / $5)
+             + FLOOR(GREATEST(0,EXTRACT(EPOCH FROM (clock_timestamp()-w.updated_at))*1000) / $5)
            ) DESC, w.updated_at ASC
            FOR UPDATE SKIP LOCKED LIMIT $2
          )
          INSERT INTO workflow_dispatch_claims(tenant_id,workflow_id,worker_id,worker_session_id,claimed_at,expires_at)
-         SELECT $1,workflow_id,$3,$7,NOW(),$6 FROM candidates
-         ON CONFLICT (tenant_id,workflow_id) DO NOTHING RETURNING workflow_id`,
-        [effectiveTenant,safeLimit,workerId,JSON.stringify(capabilities),safeAgingQuantumMs,expiresAt,principal.sessionId]
+         SELECT $1,workflow_id,$3,$7,clock_timestamp(),clock_timestamp()+($6::bigint * INTERVAL '1 millisecond') FROM candidates
+         ON CONFLICT (tenant_id,workflow_id) DO NOTHING RETURNING workflow_id,worker_id,worker_session_id,claimed_at,expires_at`,
+        [effectiveTenant,safeLimit,workerId,JSON.stringify(capabilities),safeAgingQuantumMs,safeClaimTtlMs,principal.sessionId]
       );
       if(!result.rows.length) return [];
       const ids=result.rows.map(row=>row.workflow_id);
       const workflows=await client.query('SELECT payload FROM workflows WHERE tenant_id=$1 AND workflow_id=ANY($2::text[])',[effectiveTenant,ids]);
       const byId=new Map(workflows.rows.map(row=>[row.payload.workflowId,row.payload]));
-      return ids.map(id=>byId.get(id)).filter(Boolean);
+      const claimsById=new Map(result.rows.map(row=>[row.workflow_id,{tenantId:effectiveTenant,workflowId:row.workflow_id,workerId:row.worker_id,workerSessionId:row.worker_session_id,claimedAt:new Date(row.claimed_at).toISOString(),expiresAt:new Date(row.expires_at).toISOString()}]));
+      return ids.map(id=>byId.has(id)?{...byId.get(id),dispatchClaim:claimsById.get(id)}:null).filter(Boolean);
     });
   }
 
-  async releaseDispatchClaim(workflowId,workerId,tenantId='local',{workerPrincipal=null}={}) {
+  async releaseDispatchClaim(workflowId,workerId,tenantId='local',{workerPrincipal=null,claim=null}={}) {
     const principal = assertWorkerPersistencePrincipal(workerPrincipal);
     const effectiveTenant = tenantOrLocal(tenantId);
     if (principal.tenantId !== effectiveTenant || principal.workerId !== workerId) {
       throw Object.assign(new Error('Worker principal does not match dispatch release identity'), { code: 'WORKER_PERSISTENCE_PRINCIPAL_MISMATCH' });
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
-      const result=await client.query(
-        'DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3 AND worker_session_id=$4',
-        [effectiveTenant,workflowId,workerId,principal.sessionId]
-      );
+      const result=claim
+        ? await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3 AND worker_session_id=$4 AND claimed_at=$5::timestamptz AND expires_at=$6::timestamptz',[effectiveTenant,workflowId,workerId,principal.sessionId,claim.claimedAt,claim.expiresAt])
+        : await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3 AND worker_session_id=$4',[effectiveTenant,workflowId,workerId,principal.sessionId]);
       return result.rowCount===1;
     });
   }
@@ -1570,6 +1570,33 @@ class PostgresWorkflowLeaseRepository {
       );
       if (result.rowCount !== 1) return null;
       return { ...lease, workerSessionId: principal.sessionId, fencingToken: Number(result.rows[0].fencing_token) };
+    });
+  }
+
+  async tryAcquireClaimed(lease, claim, tenantId = null, { workerPrincipal = null } = {}) {
+    const effectiveTenant=tenantOrLocal(lease.metadata?.tenantId); assertTenant(effectiveTenant,tenantId,'Lease');
+    const principal=this.assertWorkerPrincipal(workerPrincipal,effectiveTenant,lease.workerId);
+    if(!claim||claim.tenantId!==effectiveTenant||claim.workflowId!==lease.workflowId||claim.workerId!==principal.workerId||claim.workerSessionId!==principal.sessionId||!claim.claimedAt||!claim.expiresAt)throw Object.assign(new Error('Dispatch claim identity does not match worker lease principal'),{code:'WORKFLOW_DISPATCH_CLAIM_MISMATCH'});
+    const acquiredAt=new Date(lease.acquiredAt).toISOString(),expiresAt=new Date(lease.expiresAt).toISOString();
+    return this.db.transactionWithWorkerPrincipal(principal,async client=>{
+      await this.assertRegisteredWorkerSession(client,principal);
+      const workflow=await client.query('SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',[lease.workflowId,effectiveTenant]);
+      if(!workflow.rows.length)throw Object.assign(new Error('Workflow is not durably registered'),{code:'WORKFLOW_NOT_FOUND'});
+      const state=workflow.rows[0].state,payload=workflow.rows[0].payload||{};
+      if(payload.cancelRequested||state==='CANCELLED')throw Object.assign(new Error('Workflow cancellation was requested'),{code:'WORKFLOW_CANCELLATION_REQUESTED'});
+      if(['COMPLETED','FAILED'].includes(state))throw Object.assign(new Error('Workflow is terminal'),{code:'WORKFLOW_TERMINAL'});
+      const exact=await client.query('SELECT claimed_at,expires_at FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3 AND worker_session_id=$4 AND claimed_at=$5::timestamptz AND expires_at=$6::timestamptz AND expires_at>clock_timestamp() FOR UPDATE',[effectiveTenant,lease.workflowId,principal.workerId,principal.sessionId,claim.claimedAt,claim.expiresAt]);
+      if(exact.rowCount!==1)throw Object.assign(new Error('Exact dispatch claim is missing, replaced, or expired'),{code:'WORKFLOW_DISPATCH_CLAIM_INVALID'});
+      await client.query('SELECT workflow_id FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 FOR UPDATE',[effectiveTenant,lease.workflowId]);
+      await this.assertRegisteredWorkerSession(client,principal);
+      const live=await client.query('SELECT 1 FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND expires_at>clock_timestamp()',[effectiveTenant,lease.workflowId]);
+      if(live.rowCount)throw Object.assign(new Error('Workflow lease is already held'),{code:'WORKFLOW_LEASE_HELD'});
+      await client.query('DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at<=clock_timestamp()',[lease.workflowId,effectiveTenant]);
+      const inserted=await client.query('INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(workflow_id) DO NOTHING RETURNING fencing_token',[lease.workflowId,effectiveTenant,lease.leaseId,principal.workerId,principal.sessionId,acquiredAt,expiresAt,lease]);
+      if(inserted.rowCount!==1)throw Object.assign(new Error('Workflow lease acquisition lost a concurrent race'),{code:'WORKFLOW_LEASE_HELD'});
+      const consumed=await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3 AND worker_session_id=$4 AND claimed_at=$5::timestamptz AND expires_at=$6::timestamptz AND expires_at>clock_timestamp() RETURNING workflow_id',[effectiveTenant,lease.workflowId,principal.workerId,principal.sessionId,claim.claimedAt,claim.expiresAt]);
+      if(consumed.rowCount!==1)throw Object.assign(new Error('Exact dispatch claim could not be consumed atomically'),{code:'WORKFLOW_DISPATCH_CLAIM_CONSUME_FAILED'});
+      return {...lease,workerSessionId:principal.sessionId,fencingToken:Number(inserted.rows[0].fencing_token)};
     });
   }
 
