@@ -21,6 +21,29 @@ function workerPrincipal(tenantId, workerId) {
   });
 }
 
+async function withRegisteredQueuedWorkflow(scenario, run) {
+  await persistence.initialize();
+  const tenantId = 'tenant-' + scenario + '-' + randomUUID();
+  const workflowId = 'workflow-' + scenario + '-' + randomUUID();
+  const worker = workerPrincipal(tenantId, 'worker-' + scenario + '-' + randomUUID());
+  try {
+    await pool.query(
+      'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)',
+      [workflowId, tenantId, 'QUEUED', { workflowId, tenantId, state: 'QUEUED', metadata: {} }]
+    );
+    await persistence.workers.register({
+      workerId: worker.workerId, tenantId, status: 'READY', capabilities: [],
+      heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString()
+    }, tenantId, { workerPrincipal: worker });
+    return await run({ tenantId, workflowId, worker });
+  } finally {
+    await pool.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2', [tenantId, worker.workerId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  }
+}
+
 async function assertWriteRejectedAfterFenceExpiresWhileWorkflowLockHeld({
   scenario,
   expectedCode,
@@ -267,49 +290,49 @@ test('PostgreSQL rejects a workflow write when the worker session expires while 
 });
 
 test('PostgreSQL atomically converts an exact dispatch claim into one durable worker lease', async () => {
-  await persistence.initialize();
-  const tenantId = 'tenant-atomic-handoff-' + randomUUID();
-  const workflowId = 'workflow-atomic-handoff-' + randomUUID();
-  const worker = workerPrincipal(tenantId, 'worker-atomic-' + randomUUID());
-  try {
-    await pool.query('INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)', [workflowId, tenantId, 'QUEUED', { workflowId, tenantId, state: 'QUEUED', metadata: {} }]);
-    await persistence.workers.register({ workerId: worker.workerId, tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId, { workerPrincipal: worker });
-    const [claimed] = await persistence.workflows.claimQueued({ tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000, workerCapabilities: [], workerPrincipal: worker });
+  await withRegisteredQueuedWorkflow('atomic-handoff', async ({ tenantId, workflowId, worker }) => {
+    const [claimed] = await persistence.workflows.claimQueued({
+      tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000,
+      workerCapabilities: [], workerPrincipal: worker
+    });
     assert.ok(claimed?.dispatchClaim, 'claim response must include exact durable identity');
     assert.equal(claimed.dispatchClaim.workerSessionId, worker.sessionId);
-    const lease = await persistence.workflowLeases.tryAcquireClaimed({ workflowId, leaseId: 'lease-' + randomUUID(), workerId: worker.workerId, acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId } }, claimed.dispatchClaim, tenantId, { workerPrincipal: worker });
+    const lease = await persistence.workflowLeases.tryAcquireClaimed({
+      workflowId, leaseId: 'lease-' + randomUUID(), workerId: worker.workerId,
+      acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+    }, claimed.dispatchClaim, tenantId, { workerPrincipal: worker });
     assert.ok(Number.isSafeInteger(lease.fencingToken) && lease.fencingToken > 0);
-    const state = await pool.query('SELECT (SELECT COUNT(*)::int FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2) AS claims, (SELECT COUNT(*)::int FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND lease_id=$3) AS leases', [tenantId, workflowId, lease.leaseId]);
+    const state = await pool.query(
+      'SELECT (SELECT COUNT(*)::int FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2) AS claims, (SELECT COUNT(*)::int FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND lease_id=$3) AS leases',
+      [tenantId, workflowId, lease.leaseId]
+    );
     assert.equal(state.rows[0].claims, 0);
     assert.equal(state.rows[0].leases, 1);
-  } finally {
-    await pool.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-    await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2', [tenantId, worker.workerId]);
-    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-  }
+  });
 });
 
 test('PostgreSQL rejects a replaced dispatch claim without creating a lease', async () => {
-  await persistence.initialize();
-  const tenantId = 'tenant-replaced-claim-' + randomUUID();
-  const workflowId = 'workflow-replaced-claim-' + randomUUID();
-  const worker = workerPrincipal(tenantId, 'worker-replaced-' + randomUUID());
-  try {
-    await pool.query('INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)', [workflowId, tenantId, 'QUEUED', { workflowId, tenantId, state: 'QUEUED', metadata: {} }]);
-    await persistence.workers.register({ workerId: worker.workerId, tenantId, status: 'READY', capabilities: [], heartbeatAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString() }, tenantId, { workerPrincipal: worker });
-    const [claimed] = await persistence.workflows.claimQueued({ tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000, workerCapabilities: [], workerPrincipal: worker });
-    await pool.query("UPDATE workflow_dispatch_claims SET claimed_at=claimed_at-INTERVAL '1 millisecond' WHERE tenant_id=$1 AND workflow_id=$2", [tenantId, workflowId]);
-    await assert.rejects(() => persistence.workflowLeases.tryAcquireClaimed({ workflowId, leaseId: 'lease-' + randomUUID(), workerId: worker.workerId, acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId } }, claimed.dispatchClaim, tenantId, { workerPrincipal: worker }), error => error.code === 'WORKFLOW_DISPATCH_CLAIM_INVALID');
-    const leaseCount = await pool.query('SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  await withRegisteredQueuedWorkflow('replaced-claim', async ({ tenantId, workflowId, worker }) => {
+    const [claimed] = await persistence.workflows.claimQueued({
+      tenantId, workerId: worker.workerId, limit: 1, claimTtlMs: 10000,
+      workerCapabilities: [], workerPrincipal: worker
+    });
+    await pool.query(
+      "UPDATE workflow_dispatch_claims SET claimed_at=claimed_at-INTERVAL '1 millisecond' WHERE tenant_id=$1 AND workflow_id=$2",
+      [tenantId, workflowId]
+    );
+    await assert.rejects(() => persistence.workflowLeases.tryAcquireClaimed({
+      workflowId, leaseId: 'lease-' + randomUUID(), workerId: worker.workerId,
+      acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+    }, claimed.dispatchClaim, tenantId, { workerPrincipal: worker }), error => error.code === 'WORKFLOW_DISPATCH_CLAIM_INVALID');
+    const leaseCount = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2',
+      [tenantId, workflowId]
+    );
     assert.equal(leaseCount.rows[0].count, 0);
-  } finally {
-    await pool.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-    await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2', [tenantId, worker.workerId]);
-    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
-  }
+  });
 });
+
 test.after(async () => {
   await pool.end();
 });

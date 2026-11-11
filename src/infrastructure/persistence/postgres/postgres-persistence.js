@@ -1531,6 +1531,39 @@ class PostgresWorkflowLeaseRepository {
     return true;
   }
 
+  async lockWorkflowForLease(client, lease, tenantId) {
+    const workflow = await client.query(
+      'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+      [lease.workflowId, tenantId]
+    );
+    if (!workflow.rows.length) {
+      throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
+    }
+    const state = workflow.rows[0].state;
+    const payload = workflow.rows[0].payload || {};
+    if (payload.cancelRequested || state === 'CANCELLED') {
+      throw Object.assign(new Error('Workflow cancellation was requested'), { code: 'WORKFLOW_CANCELLATION_REQUESTED' });
+    }
+    if (['COMPLETED', 'FAILED'].includes(state)) {
+      throw Object.assign(new Error('Workflow is terminal'), { code: 'WORKFLOW_TERMINAL' });
+    }
+    return payload;
+  }
+
+  async insertLeaseRow(client, lease, tenantId, principal, acquiredAt, expiresAt) {
+    await this.assertRegisteredWorkerSession(client, principal);
+    await client.query(
+      'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= clock_timestamp()',
+      [lease.workflowId, tenantId]
+    );
+    return client.query(
+      `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT(workflow_id) DO NOTHING RETURNING fencing_token`,
+      [lease.workflowId,tenantId,lease.leaseId,principal.workerId,principal.sessionId,acquiredAt,expiresAt,lease]
+    );
+  }
+
   async tryAcquire(lease, tenantId = null, { workerPrincipal = null } = {}) {
     const effectiveTenant = tenantOrLocal(lease.metadata?.tenantId);
     assertTenant(effectiveTenant, tenantId, 'Lease');
@@ -1540,15 +1573,7 @@ class PostgresWorkflowLeaseRepository {
 
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
       await this.assertRegisteredWorkerSession(client, principal);
-      const workflow = await client.query(
-        'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
-        [lease.workflowId, effectiveTenant]
-      );
-      if (!workflow.rows.length) {
-        throw Object.assign(new Error('Workflow is not durably registered'), { code: 'WORKFLOW_NOT_FOUND' });
-      }
-      const workflowState = workflow.rows[0].state;
-      const workflowPayload = workflow.rows[0].payload || {};
+      await this.lockWorkflowForLease(client, lease, effectiveTenant);
       const activeClaim = await client.query(
         `SELECT 1 FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2
          AND expires_at > clock_timestamp() FOR UPDATE`,
@@ -1557,24 +1582,7 @@ class PostgresWorkflowLeaseRepository {
       if (activeClaim.rowCount) {
         throw Object.assign(new Error('Workflow is held by a durable dispatch claim'), { code: 'WORKFLOW_DISPATCH_CLAIM_HELD' });
       }
-      if (workflowPayload.cancelRequested || workflowState === 'CANCELLED') {
-        throw Object.assign(new Error('Workflow cancellation was requested'), { code: 'WORKFLOW_CANCELLATION_REQUESTED' });
-      }
-      if (['COMPLETED','FAILED'].includes(workflowState)) {
-        throw Object.assign(new Error('Workflow is terminal'), { code: 'WORKFLOW_TERMINAL' });
-      }
-      await this.assertRegisteredWorkerSession(client, principal);
-      await client.query(
-        'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= clock_timestamp()',
-        [lease.workflowId, effectiveTenant]
-      );
-      const result = await client.query(
-        `INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT(workflow_id) DO NOTHING
-         RETURNING fencing_token`,
-        [lease.workflowId,effectiveTenant,lease.leaseId,lease.workerId,principal.sessionId,acquiredAt,expiresAt,lease]
-      );
+      const result = await this.insertLeaseRow(client, lease, effectiveTenant, principal, acquiredAt, expiresAt);
       if (result.rowCount !== 1) return null;
       return { ...lease, workerSessionId: principal.sessionId, fencingToken: Number(result.rows[0].fencing_token) };
     });
@@ -1587,19 +1595,13 @@ class PostgresWorkflowLeaseRepository {
     const acquiredAt=new Date(lease.acquiredAt).toISOString(),expiresAt=new Date(lease.expiresAt).toISOString();
     return this.db.transactionWithWorkerPrincipal(principal,async client=>{
       await this.assertRegisteredWorkerSession(client,principal);
-      const workflow=await client.query('SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',[lease.workflowId,effectiveTenant]);
-      if(!workflow.rows.length)throw Object.assign(new Error('Workflow is not durably registered'),{code:'WORKFLOW_NOT_FOUND'});
-      const state=workflow.rows[0].state,payload=workflow.rows[0].payload||{};
-      if(payload.cancelRequested||state==='CANCELLED')throw Object.assign(new Error('Workflow cancellation was requested'),{code:'WORKFLOW_CANCELLATION_REQUESTED'});
-      if(['COMPLETED','FAILED'].includes(state))throw Object.assign(new Error('Workflow is terminal'),{code:'WORKFLOW_TERMINAL'});
+      await this.lockWorkflowForLease(client, lease, effectiveTenant);
       const exact=await client.query('SELECT claimed_at,expires_at FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3 AND worker_session_id=$4 AND claimed_at=$5::timestamptz AND expires_at=$6::timestamptz AND expires_at>clock_timestamp() FOR UPDATE',[effectiveTenant,lease.workflowId,principal.workerId,principal.sessionId,claim.claimedAt,claim.expiresAt]);
       if(exact.rowCount!==1)throw Object.assign(new Error('Exact dispatch claim is missing, replaced, or expired'),{code:'WORKFLOW_DISPATCH_CLAIM_INVALID'});
       await client.query('SELECT workflow_id FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 FOR UPDATE',[effectiveTenant,lease.workflowId]);
-      await this.assertRegisteredWorkerSession(client,principal);
       const live=await client.query('SELECT 1 FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND expires_at>clock_timestamp()',[effectiveTenant,lease.workflowId]);
       if(live.rowCount)throw Object.assign(new Error('Workflow lease is already held'),{code:'WORKFLOW_LEASE_HELD'});
-      await client.query('DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at<=clock_timestamp()',[lease.workflowId,effectiveTenant]);
-      const inserted=await client.query('INSERT INTO workflow_leases(workflow_id,tenant_id,lease_id,worker_id,worker_session_id,acquired_at,expires_at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(workflow_id) DO NOTHING RETURNING fencing_token',[lease.workflowId,effectiveTenant,lease.leaseId,principal.workerId,principal.sessionId,acquiredAt,expiresAt,lease]);
+      const inserted=await this.insertLeaseRow(client,lease,effectiveTenant,principal,acquiredAt,expiresAt);
       if(inserted.rowCount!==1)throw Object.assign(new Error('Workflow lease acquisition lost a concurrent race'),{code:'WORKFLOW_LEASE_HELD'});
       const consumed=await client.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2 AND worker_id=$3 AND worker_session_id=$4 AND claimed_at=$5::timestamptz AND expires_at=$6::timestamptz AND expires_at>clock_timestamp() RETURNING workflow_id',[effectiveTenant,lease.workflowId,principal.workerId,principal.sessionId,claim.claimedAt,claim.expiresAt]);
       if(consumed.rowCount!==1)throw Object.assign(new Error('Exact dispatch claim could not be consumed atomically'),{code:'WORKFLOW_DISPATCH_CLAIM_CONSUME_FAILED'});
