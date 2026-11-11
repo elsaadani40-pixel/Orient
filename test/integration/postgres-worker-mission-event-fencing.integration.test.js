@@ -9,6 +9,8 @@ const {
   createWorkerPersistencePrincipal
 } = require('../../src/core/security/worker-persistence-principal');
 const AsyncWorkflowLeaseStore = require('../../src/core/workflow/async-workflow-lease-store');
+const AsyncWorkflowScheduler = require('../../src/core/workflow/async-workflow-scheduler');
+const AsyncWorkflowWorkerService = require('../../src/core/workflow/async-workflow-worker-service');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const persistence = new PostgresPersistence({ pool });
@@ -610,6 +612,86 @@ test('PostgreSQL rejects durable dispatch claims when the worker session expires
       if (claimPromise) await claimPromise.catch(() => {});
     }
   });
+});
+
+
+test('PostgreSQL workflow dispatch recovers across scheduler reconstruction after worker crash', async () => {
+  await persistence.initialize();
+  const tenantId = 'tenant-restart-' + randomUUID();
+  const workflowId = 'workflow-restart-' + randomUUID();
+  const firstWorkerId = 'worker-before-crash-' + randomUUID();
+  const secondWorkerId = 'worker-after-restart-' + randomUUID();
+  let secondService = null;
+  try {
+    await pool.query(
+      'INSERT INTO workflows(workflow_id,tenant_id,state,updated_at,payload) VALUES ($1,$2,$3,clock_timestamp(),$4)',
+      [workflowId, tenantId, 'QUEUED', {
+        workflowId, tenantId, state: 'QUEUED', metadata: {}, input: {}, definition: { steps: [] }
+      }]
+    );
+
+    const createScheduler = () => new AsyncWorkflowScheduler({
+      tenantId,
+      workflowRepository: persistence.workflows,
+      leaseRepository: persistence.workflowLeases,
+      leaseDurationMs: 1200,
+      maxConcurrent: 1,
+      maxQueueDepth: 10,
+      dispatchWindow: 1
+    });
+    const createService = (scheduler, workerId) => new AsyncWorkflowWorkerService({
+      scheduler,
+      workerId,
+      workerRegistry: persistence.workers,
+      workerTtlMs: 1200,
+      workerHeartbeatIntervalMs: 5000,
+      pollIntervalMs: 100,
+      recoveryIntervalMs: 1000,
+      workerCapabilities: [],
+      workerFactory: (id, capabilities, principal) => ({
+        workerId: id,
+        workerPrincipal: principal,
+        tick: () => scheduler.leaseAsync(id, capabilities, principal)
+      })
+    });
+
+    // First process claims and leases the workflow, then disappears without
+    // stop/drain so its durable worker session and lease are left to expire.
+    const firstScheduler = createScheduler();
+    const firstService = createService(firstScheduler, firstWorkerId);
+    const firstLease = await firstService.runOnce();
+    assert.ok(firstLease?.leaseId, 'first process must obtain a durable lease');
+    const firstSnapshot = await persistence.workflows.findById(workflowId, tenantId);
+    assert.equal(firstSnapshot.state, 'RUNNING');
+    assert.equal(Number(firstSnapshot.metadata.fencingToken), Number(firstLease.fencingToken));
+
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // A fresh scheduler/service pair has no in-memory queue or active map from
+    // the first process. Recovery must reclaim the durable workflow and fence
+    // the expired worker with a strictly newer token.
+    const secondScheduler = createScheduler();
+    secondService = createService(secondScheduler, secondWorkerId);
+    const secondLease = await secondService.runOnce();
+    assert.ok(secondLease?.leaseId, 'restarted process must recover and lease the workflow');
+    assert.notEqual(secondLease.workerId, firstLease.workerId);
+    assert.ok(Number(secondLease.fencingToken) > Number(firstLease.fencingToken));
+
+    const latest = await persistence.workflows.findById(workflowId, tenantId);
+    assert.equal(latest.state, 'RUNNING');
+    assert.equal(Number(latest.metadata.fencingToken), Number(secondLease.fencingToken));
+    const liveLeases = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2 AND expires_at > clock_timestamp()',
+      [tenantId, workflowId]
+    );
+    assert.equal(liveLeases.rows[0].count, 1, 'restart must leave exactly one live lease');
+  } finally {
+    if (secondService) await secondService.stopAndDrain().catch(() => {});
+    await pool.query('DELETE FROM workflow_dispatch_claims WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM workflow_leases WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+    await pool.query('DELETE FROM worker_nodes WHERE tenant_id=$1 AND worker_id IN ($2,$3)', [tenantId, firstWorkerId, secondWorkerId]);
+    await pool.query('DELETE FROM workflows WHERE tenant_id=$1 AND workflow_id=$2', [tenantId, workflowId]);
+  }
 });
 
 test.after(async () => {
