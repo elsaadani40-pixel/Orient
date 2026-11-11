@@ -94,8 +94,17 @@ test('Postgres persistence rejects cross-tenant writes before SQL execution', as
 });
 
 
+function workerLeaseFixture(responses, { tenantId = 'tenant-a', workerId, sessionId = 'session-1' }) {
+  const db = fakeDb(responses);
+  return {
+    db,
+    repo: new PostgresWorkflowLeaseRepository(db),
+    workerPrincipal: createWorkerPersistencePrincipal({ tenantId, workerId, sessionId, capabilities: [] })
+  };
+}
+
 test('Postgres claimed lease acquisition consumes the exact claim in one transaction', async () => {
-  const db = fakeDb([
+  const { db, repo, workerPrincipal: principal } = workerLeaseFixture([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-atomic', state: 'QUEUED' } }], rowCount: 1 },
     { rows: [{ claimed_at: '2026-11-11T10:00:00.000Z', expires_at: '2026-11-11T10:00:05.000Z' }], rowCount: 1 },
@@ -104,9 +113,7 @@ test('Postgres claimed lease acquisition consumes the exact claim in one transac
     { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '42' }], rowCount: 1 },
     { rows: [{ workflow_id: 'wf-atomic' }], rowCount: 1 }
-  ]);
-  const repo = new PostgresWorkflowLeaseRepository(db);
-  const principal = createWorkerPersistencePrincipal({ tenantId: 'tenant-a', workerId: 'worker-a', sessionId: 'session-1', capabilities: [] });
+  ], { workerId: 'worker-a' });
   const result = await repo.tryAcquireClaimed({
     workflowId: 'wf-atomic', leaseId: 'lease-atomic', workerId: 'worker-a',
     acquiredAt: Date.parse('2026-11-11T10:00:01.000Z'), expiresAt: Date.parse('2026-11-11T10:00:31.000Z'),
@@ -124,18 +131,14 @@ test('Postgres claimed lease acquisition consumes the exact claim in one transac
 });
 
 test('Postgres workflow lease acquisition returns a durable fencing token', async () => {
-  const db = fakeDb([
+  const { db, repo, workerPrincipal } = workerLeaseFixture([
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '7' }], rowCount: 1 }
-  ]);
-  const repo = new PostgresWorkflowLeaseRepository(db);
-  const workerPrincipal = createWorkerPersistencePrincipal({
-    tenantId: 'tenant-a', workerId: 'worker-1', sessionId: 'session-1', capabilities: []
-  });
+  ], { workerId: 'worker-1' });
   const lease = await repo.tryAcquire({
     workflowId: 'wf-1',
     leaseId: 'lease-1',
