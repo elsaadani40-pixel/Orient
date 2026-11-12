@@ -102,6 +102,8 @@ test('worker registry heartbeat and unregister require the exact active worker s
   assert.ok(db.calls[0].sql.includes('session_id=$3 FOR UPDATE'));
   assert.ok(db.calls[1].sql.includes('expires_at > clock_timestamp()'));
   assert.ok(db.calls[2].sql.includes('session_id=$6 AND expires_at > clock_timestamp()'));
+  assert.match(db.calls[2].sql, /heartbeat_at=GREATEST\(heartbeat_at,\$1\)/);
+  assert.match(db.calls[2].sql, /expires_at=GREATEST\(expires_at,\$2\)/);
 
   const removed = await repo.unregister('worker-a', 'tenant-a', { workerPrincipal: principal() });
   assert.equal(removed, true);

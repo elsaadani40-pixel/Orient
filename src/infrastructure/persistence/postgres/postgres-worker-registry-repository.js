@@ -103,7 +103,7 @@ class PostgresWorkerRegistryRepository {
       }
       const result = await client.query(
         `UPDATE worker_nodes
-         SET heartbeat_at=$1,expires_at=$2,status=$3
+         SET heartbeat_at=GREATEST(heartbeat_at,$1),expires_at=GREATEST(expires_at,$2),status=$3
          WHERE tenant_id=$4 AND worker_id=$5 AND session_id=$6 AND expires_at > clock_timestamp()
          RETURNING *`,
         [heartbeatAt,effectiveExpiry,status,tenant,workerId,principal.sessionId]
