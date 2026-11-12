@@ -113,6 +113,9 @@ test('Postgres claimed lease acquisition consumes the exact claim in one transac
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [], rowCount: 0 },
+    { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
     { rows: [{ fencing_token: '42' }], rowCount: 1 },
     { rows: [{ workflow_id: 'wf-atomic' }], rowCount: 1 }
   ], { workerId: 'worker-a' });
@@ -151,6 +154,9 @@ test('Postgres workflow lease acquisition returns a durable fencing token', asyn
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [{ state: 'QUEUED', payload: { workflowId: 'wf-1', tenantId: 'tenant-a', state: 'QUEUED' } }], rowCount: 1 },
+    { rows: [], rowCount: 0 },
+    { rows: [{ session_id: 'session-1' }], rowCount: 1 },
+    { rows: [{ capabilities: [] }], rowCount: 1 },
     { rows: [], rowCount: 0 },
     { rows: [{ session_id: 'session-1' }], rowCount: 1 },
     { rows: [{ capabilities: [] }], rowCount: 1 },
