@@ -1701,7 +1701,7 @@ class PostgresWorkflowLeaseRepository {
       const result = await client.query(
         `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
          AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
-        [workflowId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken]
+        [workflowId,leaseId,principal.tenantId,principal.workerId,principal.sessionId,principal.fencingToken]
       );
       return result.rowCount === 1;
     });
