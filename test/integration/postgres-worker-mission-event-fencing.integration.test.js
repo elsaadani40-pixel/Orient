@@ -202,6 +202,161 @@ async function assertWriteRejectedAfterFenceExpiresWhileWorkflowLockHeld({
   });
 }
 
+async function assertLeaseOperationRejectedAfterSessionExpiresDuringLeaseLockWait({ scenario, start }) {
+  await withRegisteredQueuedWorkflow(scenario, async ({ tenantId, workflowId, worker }) => {
+    const lease = await persistence.workflowLeases.tryAcquire({
+      workflowId, leaseId: 'lease-' + scenario + '-' + randomUUID(), workerId: worker.workerId,
+      acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+    }, tenantId, { workerPrincipal: worker });
+    const leasePrincipal = createWorkerPersistencePrincipal({
+      tenantId, workerId: worker.workerId, sessionId: worker.sessionId,
+      capabilities: worker.capabilities, workflowId, leaseId: lease.leaseId,
+      fencingToken: lease.fencingToken
+    });
+    const blocker = await pool.connect();
+    let inTransaction = false;
+    let pending = null;
+    try {
+      await pool.query(
+        "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '1 second' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
+        [tenantId, worker.workerId, worker.sessionId]
+      );
+      await blocker.query('BEGIN');
+      inTransaction = true;
+      await blocker.query(
+        'SELECT workflow_id FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [workflowId, tenantId]
+      );
+      pending = start({ tenantId, workflowId, lease, leasePrincipal });
+
+      let waiting = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const activity = await pool.query(
+          `SELECT 1 FROM pg_stat_activity
+           WHERE datname=current_database() AND wait_event_type='Lock'
+             AND query LIKE 'SELECT workflow_id FROM workflow_leases%' LIMIT 1`
+        );
+        if (activity.rowCount === 1) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      assert.equal(waiting, true, 'worker operation must wait on the held lease row lock');
+      await blocker.query('SELECT pg_sleep(1.5)');
+      await blocker.query('COMMIT');
+      inTransaction = false;
+      await assert.rejects(pending, error => error.code === 'WORKER_SESSION_LOST');
+
+      const persisted = await pool.query(
+        'SELECT lease_id,expires_at FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2',
+        [workflowId, tenantId]
+      );
+      assert.equal(persisted.rows[0]?.lease_id, lease.leaseId, 'the stale session must not replace or delete the lease');
+      assert.equal(new Date(persisted.rows[0].expires_at).getTime(), lease.expiresAt,
+        'the stale session must not mutate the lease expiry');
+    } finally {
+      if (inTransaction) await blocker.query('ROLLBACK').catch(() => {});
+      blocker.release();
+      if (pending) await pending.catch(() => {});
+    }
+  });
+}
+
+test('PostgreSQL rejects lease save when the worker session expires while waiting for the lease row lock', async () => {
+  await assertLeaseOperationRejectedAfterSessionExpiresDuringLeaseLockWait({
+    scenario: 'lease-save-session-lockwait',
+    start: ({ tenantId, lease, leasePrincipal }) => persistence.workflowLeases.save(
+      { ...lease, expiresAt: Date.now() + 60000 }, tenantId, { workerPrincipal: leasePrincipal }
+    )
+  });
+});
+
+test('PostgreSQL rejects lease renewal when the worker session expires while waiting for the lease row lock', async () => {
+  await assertLeaseOperationRejectedAfterSessionExpiresDuringLeaseLockWait({
+    scenario: 'lease-renew-session-lockwait',
+    start: ({ tenantId, workflowId, lease, leasePrincipal }) => persistence.workflowLeases.renewIfOwned(
+      workflowId, lease.leaseId, Date.now() + 60000, Date.now(), tenantId, { workerPrincipal: leasePrincipal }
+    )
+  });
+});
+
+test('PostgreSQL rejects lease ownership assertion when the worker session expires while waiting for the lease row lock', async () => {
+  await assertLeaseOperationRejectedAfterSessionExpiresDuringLeaseLockWait({
+    scenario: 'lease-assert-session-lockwait',
+    start: ({ tenantId, workflowId, lease, leasePrincipal }) => persistence.workflowLeases.assertCurrent(
+      workflowId, lease.leaseId, lease.fencingToken, Date.now(), tenantId, { workerPrincipal: leasePrincipal }
+    )
+  });
+});
+
+test('PostgreSQL rejects lease release when the worker session expires while waiting for the lease row lock', async () => {
+  await assertLeaseOperationRejectedAfterSessionExpiresDuringLeaseLockWait({
+    scenario: 'lease-delete-session-lockwait',
+    start: ({ tenantId, workflowId, lease, leasePrincipal }) => persistence.workflowLeases.delete(
+      workflowId, lease.leaseId, tenantId, { workerPrincipal: leasePrincipal }
+    )
+  });
+});
+
+test('PostgreSQL rejects expired-lease reclamation when the worker session expires while waiting for the lease row lock', async () => {
+  await withRegisteredQueuedWorkflow('lease-reclaim-session-lockwait', async ({ tenantId, workflowId, workers }) => {
+    const [originalWorker, replacementWorker] = workers;
+    const oldLease = await persistence.workflowLeases.tryAcquire({
+      workflowId, leaseId: 'lease-original-' + randomUUID(), workerId: originalWorker.workerId,
+      acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+    }, tenantId, { workerPrincipal: originalWorker });
+    await pool.query(
+      "UPDATE workflow_leases SET expires_at=clock_timestamp()-INTERVAL '1 second' WHERE workflow_id=$1 AND tenant_id=$2",
+      [workflowId, tenantId]
+    );
+    await pool.query(
+      "UPDATE worker_nodes SET expires_at=clock_timestamp()+INTERVAL '1 second' WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3",
+      [tenantId, replacementWorker.workerId, replacementWorker.sessionId]
+    );
+
+    const blocker = await pool.connect();
+    let inTransaction = false;
+    let pending = null;
+    try {
+      await blocker.query('BEGIN');
+      inTransaction = true;
+      await blocker.query(
+        'SELECT workflow_id FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+        [workflowId, tenantId]
+      );
+      pending = persistence.workflowLeases.tryAcquire({
+        workflowId, leaseId: 'lease-replacement-' + randomUUID(), workerId: replacementWorker.workerId,
+        acquiredAt: Date.now(), expiresAt: Date.now() + 30000, metadata: { tenantId }
+      }, tenantId, { workerPrincipal: replacementWorker });
+
+      let waiting = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const activity = await pool.query(
+          `SELECT 1 FROM pg_stat_activity
+           WHERE datname=current_database() AND wait_event_type='Lock'
+             AND query LIKE 'SELECT workflow_id FROM workflow_leases%' LIMIT 1`
+        );
+        if (activity.rowCount === 1) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      assert.equal(waiting, true, 'replacement admission must wait on the expired lease row lock');
+      await blocker.query('SELECT pg_sleep(1.5)');
+      await blocker.query('COMMIT');
+      inTransaction = false;
+      await assert.rejects(pending, error => error.code === 'WORKER_SESSION_LOST');
+
+      const persisted = await pool.query(
+        'SELECT lease_id FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2',
+        [workflowId, tenantId]
+      );
+      assert.equal(persisted.rows[0]?.lease_id, oldLease.leaseId,
+        'expired-lease reclamation must not proceed under an expired worker session');
+    } finally {
+      if (inTransaction) await blocker.query('ROLLBACK').catch(() => {});
+      blocker.release();
+      if (pending) await pending.catch(() => {});
+    }
+  }, 2);
+});
+
 test('PostgreSQL rejects a stale mission-event append racing with expired lease reacquisition', async () => {
   await withRegisteredQueuedWorkflow('mission-fence', async ({ tenantId, workflowId, workers }) => {
     const [workerA, workerB] = workers;

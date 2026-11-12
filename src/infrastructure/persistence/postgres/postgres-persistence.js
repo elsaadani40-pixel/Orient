@@ -1507,6 +1507,35 @@ class PostgresWorkflowLeaseRepository {
     return true;
   }
 
+  async lockOwnedLeaseRowForWorker(client, workflowId, tenantId, principal, { requireLive = true } = {}) {
+    const identity = [
+      workflowId, tenantId, principal.leaseId, principal.workerId,
+      principal.sessionId, principal.fencingToken
+    ];
+    const locked = await client.query(
+      `SELECT workflow_id FROM workflow_leases
+       WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
+         AND worker_session_id=$5 AND fencing_token=$6
+       FOR UPDATE`,
+      identity
+    );
+    if (locked.rowCount !== 1) return false;
+
+    // Revalidate after acquiring the lease row: this lock can wait long enough
+    // for the worker session to expire.
+    await this.assertRegisteredWorkerSession(client, principal);
+    if (!requireLive) return true;
+
+    const live = await client.query(
+      `SELECT 1 FROM workflow_leases
+       WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
+         AND worker_session_id=$5 AND fencing_token=$6
+         AND expires_at > clock_timestamp()`,
+      identity
+    );
+    return live.rowCount === 1;
+  }
+
   async lockWorkflowForLease(client, lease, tenantId) {
     const workflow = await client.query(
       'SELECT state,payload FROM workflows WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
@@ -1527,6 +1556,11 @@ class PostgresWorkflowLeaseRepository {
   }
 
   async insertLeaseRow(client, lease, tenantId, principal, acquiredAt, expiresAt) {
+    await this.assertRegisteredWorkerSession(client, principal);
+    await client.query(
+      'SELECT workflow_id FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 FOR UPDATE',
+      [lease.workflowId, tenantId]
+    );
     await this.assertRegisteredWorkerSession(client, principal);
     await client.query(
       'DELETE FROM workflow_leases WHERE workflow_id=$1 AND tenant_id=$2 AND expires_at <= clock_timestamp()',
@@ -1595,6 +1629,10 @@ class PostgresWorkflowLeaseRepository {
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
       await this.lockWorkflowForLeaseOwner(client, lease.workflowId, effectiveTenant, principal);
+      const owned = await this.lockOwnedLeaseRowForWorker(client, lease.workflowId, effectiveTenant, principal);
+      if (!owned) {
+        throw Object.assign(new Error('Workflow lease is no longer owned by this worker session'), { code: 'WORKFLOW_LEASE_NOT_OWNER' });
+      }
       const result = await client.query(
         `UPDATE workflow_leases SET expires_at=$1,payload=$2
          WHERE workflow_id=$3 AND tenant_id=$4 AND lease_id=$5 AND worker_id=$6
@@ -1615,6 +1653,7 @@ class PostgresWorkflowLeaseRepository {
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
       if (!await this.lockWorkflowForLeaseOwner(client, workflowId, principal.tenantId, principal, { required: false })) return false;
+      if (!await this.lockOwnedLeaseRowForWorker(client, workflowId, principal.tenantId, principal)) return false;
       const result = await client.query(
         `UPDATE workflow_leases SET expires_at=$1::timestamptz,
            payload=jsonb_set(payload,'{expiresAt}',to_jsonb($1::timestamptz::text))
@@ -1632,14 +1671,7 @@ class PostgresWorkflowLeaseRepository {
         Number(principal.fencingToken) !== Number(fencingToken)) return false;
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
       if (!await this.lockWorkflowForLeaseOwner(client, workflowId, principal.tenantId, principal, { required: false })) return false;
-      const result = await client.query(
-        `SELECT 1 FROM workflow_leases
-         WHERE workflow_id=$1 AND tenant_id=$2 AND lease_id=$3 AND worker_id=$4
-           AND worker_session_id=$5 AND fencing_token=$6 AND expires_at > clock_timestamp()
-         FOR UPDATE`,
-        [workflowId,principal.tenantId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken]
-      );
-      return result.rowCount === 1;
+      return this.lockOwnedLeaseRowForWorker(client, workflowId, principal.tenantId, principal);
     });
   }
 
@@ -1665,10 +1697,11 @@ class PostgresWorkflowLeaseRepository {
     }
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
       if (!await this.lockWorkflowForLeaseOwner(client, workflowId, principal.tenantId, principal, { required: false })) return false;
+      if (!await this.lockOwnedLeaseRowForWorker(client, workflowId, principal.tenantId, principal, { requireLive: false })) return false;
       const result = await client.query(
         `DELETE FROM workflow_leases WHERE workflow_id=$1 AND lease_id=$2 AND tenant_id=$3
          AND worker_id=$4 AND worker_session_id=$5 AND fencing_token=$6`,
-        [workflowId,leaseId,principal.tenantId,principal.workerId,principal.sessionId,principal.fencingToken]
+        [workflowId,leaseId,principal.workerId,principal.sessionId,principal.fencingToken]
       );
       return result.rowCount === 1;
     });
