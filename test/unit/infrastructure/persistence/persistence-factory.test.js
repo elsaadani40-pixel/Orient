@@ -9,7 +9,7 @@ const path = require('node:path');
 
 const baseConfig = {
   persistenceMode: 'json',
-  agentDataDirectory: '/tmp/orient-persistence-factory-test',
+  agentDataDirectory: path.join(os.tmpdir(), 'orient-persistence-factory-test'),
   databaseUrl: '',
   databasePoolMax: 2,
   databaseIdleTimeoutMs: 1000,

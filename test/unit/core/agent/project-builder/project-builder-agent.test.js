@@ -40,6 +40,10 @@ const FileWorkspace =
 const CommandRunner =
   require('../../../../../src/core/agent/project-builder/workspace/command-runner');
 
+// Unit tests exercise verification result handling independently of OS sandbox availability.
+const TestCommandIsolator =
+  require('./test-command-isolator');
+
 test(
   'builder requires a project root',
   () => {
@@ -541,7 +545,7 @@ test('verification engine records thrown check errors as failures', async () => 
   );
 });
 
-test('command verification passes for an allowed successful command', async t => {
+test('command verification passes for an allowed successful command', async () => {
   const CommandRunner =
     require('../../../../../src/core/agent/project-builder/workspace/command-runner');
 
@@ -563,7 +567,8 @@ test('command verification passes for an allowed successful command', async t =>
 
   const runner =
     new CommandRunner({
-      policy
+      policy,
+      isolator: new TestCommandIsolator()
     });
 
   const verification =
@@ -580,11 +585,6 @@ test('command verification passes for an allowed successful command', async t =>
 
   const result =
     await check.run();
-
-  if (!result.passed && /Failed RTM_NEWADDR|Operation not permitted/.test(result.stderr || '')) {
-    t.skip('host runner denies the network namespace required by the OS sandbox; command execution correctly failed closed');
-    return;
-  }
 
   assert.equal(
     result.passed,
@@ -618,7 +618,8 @@ test('command verification fails for a command with non-zero exit code', async (
 
   const runner =
     new CommandRunner({
-      policy
+      policy,
+      isolator: new TestCommandIsolator()
     });
 
   const verification =
@@ -668,7 +669,8 @@ test('project verifier treats a failed command verification as a failed check', 
 
   const runner =
     new CommandRunner({
-      policy
+      policy,
+      isolator: new TestCommandIsolator()
     });
 
   const commandVerification =
