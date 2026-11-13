@@ -91,7 +91,7 @@ fi
   echo "- Open issues: $(jq -r '.issues | length' "$out_dir/issues.json")"
   echo
   echo "### Quality gate"
-  jq -r '.projectStatus | "Status: " + (.status // "unknown"), (.projectStatus.conditions[]? | "- " + .metricKey + ": " + (.actualValue // "n/a") + " (threshold " + (.errorThreshold // "n/a") + ")")' "$out_dir/quality-gate.json"
+  jq -r '"Status: " + (.projectStatus.status // "unknown"), (.projectStatus.conditions[]? | "- " + .metricKey + ": " + (.actualValue // "n/a") + " (threshold " + (.errorThreshold // "n/a") + ")")' "$out_dir/quality-gate.json"
   echo
   echo "### Open issues"
   jq -r '.issues[]? | "- [" + (.severity // "UNKNOWN") + "] " + (.rule // "unknown-rule") + " — " + (.component // "unknown-component") + (if .line then ":" + (.line|tostring) else "" end) + " — " + (.message // "")' "$out_dir/issues.json"
