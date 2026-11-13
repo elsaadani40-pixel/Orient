@@ -34,11 +34,11 @@ jobs:
       - name: Export quality gate, measures, issues and hotspots
         shell: bash
         env:
-          SONAR_PROJECT_KEY: els aadani40-pixel_Orient
+          SONAR_PROJECT_KEY: elsaadani40-pixel_Orient
           SONAR_PULL_REQUEST: ${{ github.event_name == 'workflow_dispatch' && inputs.pull_request || '394' }}
         run: |
           set -euo pipefail
-          SONAR_PROJECT_KEY="${SONAR_PROJECT_KEY// /}" bash scripts/ci/export-sonarcloud-pr-diagnostics.sh
+          bash scripts/ci/export-sonarcloud-pr-diagnostics.sh
 
       - name: Upload raw SonarCloud evidence
         uses: actions/upload-artifact@v7
