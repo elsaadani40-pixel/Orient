@@ -98,7 +98,7 @@ fi
 {
   echo "## SonarCloud PR #$pull_request diagnostics"
   echo
-  echo "- Project: `$project_key`"
+  printf -- '- Project: %s\n' "$project_key"
   echo "- Issue records exported: $(jq -r '.total' "$out_dir/issues.json")"
   echo "- Open issues: $(jq -r '.issues | length' "$out_dir/issues.json")"
   echo
