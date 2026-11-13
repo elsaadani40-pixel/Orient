@@ -25,8 +25,16 @@ write_json() {
   local endpoint="$2"
   shift 2
   local tmp="$out_dir/$name.tmp"
-  api_get "$endpoint" "$@" > "$tmp"
-  jq -e 'type == "object" and (has("errors") | not)' "$tmp" >/dev/null
+  if ! api_get "$endpoint" "$@" > "$tmp"; then
+    echo "SonarCloud API request failed for endpoint '$endpoint'. Check project key, project visibility, and whether an authorized read-only SONAR_TOKEN is required." >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! jq -e 'type == "object" and (has("errors") | not)' "$tmp" >/dev/null; then
+    echo "SonarCloud API returned an error payload for endpoint '$endpoint': $(jq -c '.errors // .' "$tmp" | head -c 1000)" >&2
+    rm -f "$tmp"
+    return 1
+  fi
   mv "$tmp" "$out_dir/$name.json"
 }
 
