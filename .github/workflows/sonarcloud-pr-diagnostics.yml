@@ -1,0 +1,47 @@
+name: ORIENT — SonarCloud PR Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "ORIENT pull request number to inspect"
+        required: true
+        default: "394"
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    name: Export SonarCloud issue-level evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout default branch diagnostics
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Install JSON tooling
+        run: |
+          set -euo pipefail
+          command -v curl
+          command -v jq
+
+      - name: Export quality gate, measures, issues and hotspots
+        shell: bash
+        env:
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PULL_REQUEST: ${{ inputs.pull_request }}
+        run: |
+          set -euo pipefail
+          bash scripts/ci/export-sonarcloud-pr-diagnostics.sh
+
+      - name: Upload raw SonarCloud evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: orient-sonarcloud-pr-${{ inputs.pull_request }}-diagnostics
+          path: artifacts/sonarcloud/
+          if-no-files-found: error
+          retention-days: 14
