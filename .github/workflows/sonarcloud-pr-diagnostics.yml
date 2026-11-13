@@ -34,7 +34,7 @@ jobs:
       - name: Export quality gate, measures, issues and hotspots
         shell: bash
         env:
-          SONAR_PROJECT_KEY: elsaadani40-pixel_Orient
+          SONAR_PROJECT_KEY: ${{ github.repository_owner }}_Orient
           SONAR_PULL_REQUEST: ${{ github.event_name == 'workflow_dispatch' && inputs.pull_request || '394' }}
         run: |
           set -euo pipefail
