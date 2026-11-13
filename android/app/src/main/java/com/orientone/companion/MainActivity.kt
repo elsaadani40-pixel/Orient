@@ -1,5 +1,6 @@
 package com.orientone.companion
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -18,12 +20,15 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,323 +41,313 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
+private enum class OrientSection(val title: String, val symbol: String) {
+    HOME("الرئيسية", "⌂"),
+    TASKS("المهام", "▤"),
+    ACTIVITY("النشاط", "◷"),
+    PHONE("الهاتف", "▣"),
+    SETTINGS("الإعدادات", "⚙")
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { OrientCompanionApp() }
+        setContent { OrientApp() }
     }
 }
 
 @Composable
-private fun OrientCompanionApp() {
-    val background = Color(0xFF080D16)
-    val panel = Color(0xFF131D2B)
-    val muted = Color(0xFFB5C2D5)
-    val scope = rememberCoroutineScope()
-
+private fun OrientApp() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val preferences = remember(context) {
+        context.getSharedPreferences("orient_ui_preferences", Context.MODE_PRIVATE)
+    }
+    var isDarkTheme by remember { mutableStateOf(preferences.getBoolean("dark_theme", true)) }
+    var selectedSection by remember { mutableStateOf(OrientSection.HOME) }
     var portText by remember { mutableStateOf("8080") }
     var ownerEmail by remember { mutableStateOf("elsaadani40@gmail.com") }
     var password by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var confirmNewPassword by remember { mutableStateOf("") }
+    var passwordChangeRequired by remember { mutableStateOf(false) }
     var taskInput by remember { mutableStateOf("") }
-    var resultText by remember { mutableStateOf("") }
-    var statusText by remember { mutableStateOf("أدخل كلمة مرور المالك للاتصال بخدمة ORIENT المحلية.") }
+    var taskData by remember { mutableStateOf("") }
+    var activityData by remember { mutableStateOf("") }
+    var statusText by remember { mutableStateOf("ORIENT جاهز للاتصال بخدمة Runtime المحلية.") }
     var isBusy by remember { mutableStateOf(false) }
     var isAuthenticated by remember { mutableStateOf(false) }
-    var passwordChangeRequired by remember { mutableStateOf(false) }
     var client by remember { mutableStateOf<OwnerSessionClient?>(null) }
+    val scope = rememberCoroutineScope()
 
-    fun handleFailure(error: Exception) {
+    val background = if (isDarkTheme) Color(0xFF0B1118) else Color(0xFFF4F7F9)
+    val panel = if (isDarkTheme) Color(0xFF141F2A) else Color.White
+    val muted = if (isDarkTheme) Color(0xFFA8B6C5) else Color(0xFF647386)
+    val accent = if (isDarkTheme) Color(0xFF79D4C5) else Color(0xFF147D73)
+    val scheme = if (isDarkTheme) {
+        darkColorScheme(
+            primary = accent, onPrimary = Color(0xFF06231F), background = background,
+            surface = panel, surfaceVariant = Color(0xFF1B2A38),
+            onBackground = Color(0xFFF0F4F8), onSurface = Color(0xFFF0F4F8),
+            onSurfaceVariant = muted
+        )
+    } else {
+        lightColorScheme(
+            primary = accent, onPrimary = Color.White, background = background,
+            surface = panel, surfaceVariant = Color(0xFFE9EFF3),
+            onBackground = Color(0xFF14202B), onSurface = Color(0xFF14202B),
+            onSurfaceVariant = muted
+        )
+    }
+
+    fun showFailure(error: Exception) {
         statusText = error.message ?: "تعذر الاتصال بخدمة ORIENT."
         if (error is OwnerApiException && error.statusCode == 401) {
             client?.clearSession()
             client = null
             isAuthenticated = false
+            passwordChangeRequired = false
+            password = ""
+            newPassword = ""
+            confirmNewPassword = ""
         }
     }
 
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Color(0xFF8AB4FF),
-            background = background,
-            surface = panel,
-            onBackground = Color(0xFFEAF1FB),
-            onSurface = Color(0xFFEAF1FB)
-        )
-    ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = background) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 22.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                item {
-                    Text("ORIENT", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("المرافق التنفيذي", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("اتصال محلي مصادق عليه · Android", color = Color(0xFF9BAAC0), fontSize = 13.sp)
-                }
+    val canUseRuntime = isAuthenticated && !passwordChangeRequired
 
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("حالة Runtime", fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    if (isAuthenticated) "متصل ومصادق عليه" else "غير متصل",
-                                    color = if (isAuthenticated) Color(0xFF80D8A2) else Color(0xFFFFC857),
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Text(statusText, color = muted, fontSize = 13.sp)
-                        }
-                    }
-                }
-
-                if (!isAuthenticated) {
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("تسجيل دخول المالك", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                                Text(
-                                    "يجب تشغيل ORIENT على هذا الهاتف عبر Termux. لا يُرسل التطبيق كلمة المرور إلا إلى 127.0.0.1، ولا يحفظها أو يحفظ الجلسة على القرص.",
-                                    color = muted,
-                                    fontSize = 13.sp
-                                )
-                                OutlinedTextField(
-                                    value = portText,
-                                    onValueChange = { value -> if (value.length <= 5 && value.all(Char::isDigit)) portText = value },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("منفذ الخدمة المحلية") },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    enabled = !isBusy
-                                )
-                                OutlinedTextField(
-                                    value = ownerEmail,
-                                    onValueChange = { ownerEmail = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("البريد الإلكتروني للمالك") },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                                    enabled = !isBusy
-                                )
-                                OutlinedTextField(
-                                    value = password,
-                                    onValueChange = { password = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("كلمة مرور المالك") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                    enabled = !isBusy
-                                )
-                                Button(
-                                    onClick = {
-                                        val port = portText.toIntOrNull()
-                                        if (port == null || port !in 1..65535) {
-                                            statusText = "أدخل منفذًا صحيحًا من 1 إلى 65535."
-                                        } else {
-                                            val candidate = try {
-                                                OwnerSessionClient(port)
-                                            } catch (error: Exception) {
-                                                handleFailure(error)
-                                                null
-                                            }
-                                            if (candidate != null) {
-                                                isBusy = true
-                                                scope.launch {
-                                                    try {
-                                                        statusText = candidate.login(ownerEmail, password)
-                                                        client = candidate
-                                                        isAuthenticated = true
-                                                        passwordChangeRequired = candidate.mustChangePassword
-                                                        password = ""
-                                                        if (passwordChangeRequired) {
-                                                            resultText = ""
-                                                        } else {
-                                                            resultText = candidate.fetchTasks()
-                                                        }
-                                                    } catch (error: Exception) {
-                                                        candidate.clearSession()
-                                                        handleFailure(error)
-                                                    } finally {
-                                                        isBusy = false
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !isBusy
-                                ) {
-                                    if (isBusy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.height(18.dp))
-                                    else Text("اتصال آمن")
-                                }
-                            }
-                        }
-                    }
-                } else if (passwordChangeRequired) {
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("تغيير كلمة المرور مطلوب", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                                Text(
-                                    "تم التحقق من حساب المالك. لأمان الحساب، غيّر كلمة المرور الأولية الآن قبل استخدام مهام Runtime أو أدوات الجهاز.",
-                                    color = muted,
-                                    fontSize = 13.sp
-                                )
-                                OutlinedTextField(
-                                    value = newPassword,
-                                    onValueChange = { newPassword = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("كلمة المرور الجديدة (14 حرفًا على الأقل)") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                    enabled = !isBusy
-                                )
-                                OutlinedTextField(
-                                    value = confirmNewPassword,
-                                    onValueChange = { confirmNewPassword = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("تأكيد كلمة المرور الجديدة") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                    enabled = !isBusy
-                                )
-                                Button(
-                                    onClick = {
-                                        val activeClient = client ?: return@Button
-                                        if (newPassword.length < 14) {
-                                            statusText = "استخدم كلمة مرور لا تقل عن 14 حرفًا."
-                                        } else if (newPassword != confirmNewPassword) {
-                                            statusText = "كلمتا المرور غير متطابقتين."
-                                        } else {
-                                            isBusy = true
-                                            scope.launch {
-                                                try {
-                                                    statusText = activeClient.changePassword(newPassword, confirmNewPassword)
-                                                    passwordChangeRequired = activeClient.mustChangePassword
-                                                    newPassword = ""
-                                                    confirmNewPassword = ""
-                                                    resultText = activeClient.fetchTasks()
-                                                    statusText = "تم تغيير كلمة المرور. اتصال Runtime جاهز."
-                                                } catch (error: Exception) {
-                                                    handleFailure(error)
-                                                } finally {
-                                                    isBusy = false
-                                                }
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !isBusy && newPassword.isNotBlank() && confirmNewPassword.isNotBlank()
-                                ) {
-                                    if (isBusy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.height(18.dp))
-                                    else Text("حفظ كلمة المرور والمتابعة")
-                                }
-                                TextButton(
-                                    onClick = {
-                                        val activeClient = client
-                                        isBusy = true
-                                        scope.launch {
-                                            try { activeClient?.logout() } catch (_: Exception) { }
-                                            finally {
-                                                activeClient?.clearSession()
-                                                client = null
-                                                isAuthenticated = false
-                                                passwordChangeRequired = false
-                                                newPassword = ""
-                                                confirmNewPassword = ""
-                                                statusText = "تم تسجيل الخروج."
-                                                isBusy = false
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.align(Alignment.End),
-                                    enabled = !isBusy
-                                ) { Text("تسجيل الخروج") }
-                            }
-                        }
-                    }
+    fun connect() {
+        val port = portText.toIntOrNull()
+        if (port == null || port !in 1..65535) {
+            statusText = "أدخل منفذًا صحيحًا من 1 إلى 65535."
+            return
+        }
+        val candidate = try {
+            OwnerSessionClient(port)
+        } catch (error: Exception) {
+            showFailure(error)
+            return
+        }
+        isBusy = true
+        scope.launch {
+            try {
+                statusText = candidate.login(ownerEmail, password)
+                client = candidate
+                isAuthenticated = true
+                passwordChangeRequired = candidate.mustChangePassword
+                password = ""
+                newPassword = ""
+                confirmNewPassword = ""
+                statusText = if (passwordChangeRequired) {
+                    "تم التحقق من الهوية. غيّر كلمة المرور الأولية قبل استخدام Runtime."
                 } else {
-                    item { PhoneToolsCard() }
+                    "اتصال آمن ونشط مع Runtime المحلي."
+                }
+                selectedSection = if (passwordChangeRequired) OrientSection.SETTINGS else OrientSection.HOME
+            } catch (error: Exception) {
+                candidate.clearSession()
+                showFailure(error)
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
+    fun refreshTasks() {
+        if (!canUseRuntime) return
+        val activeClient = client ?: return
+        isBusy = true
+        scope.launch {
+            try {
+                taskData = activeClient.fetchTasks()
+                statusText = "تم تحديث بيانات المهام من Runtime."
+            } catch (error: Exception) {
+                showFailure(error)
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
+    fun refreshActivity() {
+        if (!canUseRuntime) return
+        val activeClient = client ?: return
+        isBusy = true
+        scope.launch {
+            try {
+                activityData = activeClient.fetchExecutions()
+                statusText = "تم تحديث سجل التنفيذات من Runtime."
+            } catch (error: Exception) {
+                showFailure(error)
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
+    fun changeOwnerPassword() {
+        val activeClient = client ?: return
+        if (newPassword.length !in 14..1024) {
+            statusText = "كلمة المرور الجديدة يجب ألا تقل عن 14 حرفًا."
+            return
+        }
+        if (newPassword != confirmNewPassword) {
+            statusText = "كلمتا المرور غير متطابقتين."
+            return
+        }
+        isBusy = true
+        scope.launch {
+            try {
+                statusText = activeClient.changePassword(newPassword, confirmNewPassword)
+                passwordChangeRequired = activeClient.mustChangePassword
+                newPassword = ""
+                confirmNewPassword = ""
+                if (!passwordChangeRequired) {
+                    taskData = activeClient.fetchTasks()
+                    selectedSection = OrientSection.HOME
+                    statusText = "تم تغيير كلمة المرور. اتصال Runtime جاهز."
+                }
+            } catch (error: Exception) {
+                showFailure(error)
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
+    MaterialTheme(colorScheme = scheme) {
+        Surface(modifier = Modifier.fillMaxSize(), color = background) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 18.dp, end = 18.dp, top = 20.dp, bottom = 24.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
                     item {
-                        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("تنفيذ مهمة", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                                Text(
-                                    "يُرسل الطلب إلى Runtime الحالي، الذي يطبّق سياساته وصلاحيات الأدوات. هذا لا يفعّل تلقائيًا قدرات غير مسجلة في الخادم.",
-                                    color = muted,
-                                    fontSize = 13.sp
+                        AppHeader(
+                            isDarkTheme = isDarkTheme,
+                            onThemeToggle = {
+                                isDarkTheme = !isDarkTheme
+                                preferences.edit().putBoolean("dark_theme", isDarkTheme).apply()
+                            }
+                        )
+                    }
+                    item {
+                        RuntimeStatusCard(
+                            connected = canUseRuntime,
+                            status = statusText,
+                            panel = panel,
+                            muted = muted
+                        )
+                    }
+                    when (selectedSection) {
+                        OrientSection.HOME -> {
+                            item {
+                                HomeScreen(
+                                    connected = isAuthenticated,
+                                    panel = panel,
+                                    muted = muted,
+                                    onConnect = { selectedSection = OrientSection.SETTINGS },
+                                    onTasks = { selectedSection = OrientSection.TASKS },
+                                    onActivity = { selectedSection = OrientSection.ACTIVITY },
+                                    onPhone = { selectedSection = OrientSection.PHONE }
                                 )
-                                OutlinedTextField(
-                                    value = taskInput,
-                                    onValueChange = { taskInput = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("اكتب المهمة") },
-                                    minLines = 3,
-                                    maxLines = 6,
-                                    enabled = !isBusy
-                                )
-                                Button(
-                                    onClick = {
-                                        val activeClient = client ?: return@Button
+                            }
+                        }
+                        OrientSection.TASKS -> {
+                            item {
+                                TasksScreen(
+                                    connected = isAuthenticated,
+                                    busy = isBusy,
+                                    taskInput = taskInput,
+                                    taskData = taskData,
+                                    panel = panel,
+                                    muted = muted,
+                                    onInputChange = { taskInput = it },
+                                    onRefresh = { refreshTasks() },
+                                    onConnect = { selectedSection = OrientSection.SETTINGS },
+                                    onExecute = {
+                                        val activeClient = client ?: return@TasksScreen
                                         isBusy = true
                                         scope.launch {
                                             try {
-                                                statusText = "تم إرسال المهمة؛ بانتظار نتيجة Runtime…"
-                                                resultText = activeClient.executeTask(taskInput)
-                                                statusText = "وصلت استجابة من Runtime."
+                                                taskData = activeClient.executeTask(taskInput)
+                                                taskInput = ""
+                                                statusText = "وصل رد التنفيذ من Runtime."
                                             } catch (error: Exception) {
-                                                handleFailure(error)
+                                                showFailure(error)
                                             } finally {
                                                 isBusy = false
                                             }
                                         }
+                                    }
+                                )
+                            }
+                        }
+                        OrientSection.ACTIVITY -> {
+                            item {
+                                DataScreen(
+                                    title = "سجل النشاط",
+                                    subtitle = "سجل التنفيذات الذي يعيده Runtime فقط.",
+                                    connected = isAuthenticated,
+                                    busy = isBusy,
+                                    data = activityData,
+                                    panel = panel,
+                                    muted = muted,
+                                    onRefresh = { refreshActivity() },
+                                    onConnect = { selectedSection = OrientSection.SETTINGS }
+                                )
+                            }
+                        }
+                        OrientSection.PHONE -> {
+                            item {
+                                if (canUseRuntime) PhoneToolsCard()
+                                else LockedFeatureCard(
+                                    title = "أدوات الهاتف",
+                                    description = "اتصل بخدمة ORIENT المحلية أولًا للوصول إلى مساحة العمل. أذونات الهاتف تظل اختيارية وتُطلب عند الحاجة فقط.",
+                                    panel = panel,
+                                    muted = muted,
+                                    onConnect = { selectedSection = OrientSection.SETTINGS }
+                                )
+                            }
+                        }
+                        OrientSection.SETTINGS -> {
+                            item {
+                                SettingsScreen(
+                                    connected = isAuthenticated,
+                                    passwordChangeRequired = passwordChangeRequired,
+                                    busy = isBusy,
+                                    portText = portText,
+                                    ownerEmail = ownerEmail,
+                                    password = password,
+                                    newPassword = newPassword,
+                                    confirmNewPassword = confirmNewPassword,
+                                    isDarkTheme = isDarkTheme,
+                                    panel = panel,
+                                    muted = muted,
+                                    onPortChange = { portText = it },
+                                    onOwnerEmailChange = { ownerEmail = it },
+                                    onPasswordChange = { password = it },
+                                    onNewPasswordChange = { newPassword = it },
+                                    onConfirmNewPasswordChange = { confirmNewPassword = it },
+                                    onConnect = { connect() },
+                                    onChangePassword = { changeOwnerPassword() },
+                                    onThemeToggle = {
+                                        isDarkTheme = !isDarkTheme
+                                        preferences.edit().putBoolean("dark_theme", isDarkTheme).apply()
                                     },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !isBusy && taskInput.isNotBlank()
-                                ) { Text("تنفيذ المهمة") }
-
-                                OutlinedButton(
-                                    onClick = {
-                                        val activeClient = client ?: return@OutlinedButton
-                                        isBusy = true
-                                        scope.launch {
-                                            try {
-                                                resultText = activeClient.fetchTasks()
-                                                statusText = "تم تحديث قائمة المهام من واجهة API الموحدة."
-                                            } catch (error: Exception) {
-                                                handleFailure(error)
-                                            } finally {
-                                                isBusy = false
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    enabled = !isBusy
-                                ) { Text("تحديث قائمة المهام") }
-
-                                TextButton(
-                                    onClick = {
+                                    onLogout = {
                                         val activeClient = client
                                         isBusy = true
                                         scope.launch {
                                             try {
                                                 activeClient?.logout()
-                                                statusText = "تم تسجيل الخروج."
+                                                statusText = "تم تسجيل الخروج بأمان."
                                             } catch (error: Exception) {
                                                 statusText = error.message ?: "تعذر إنهاء الجلسة عن بُعد."
                                             } finally {
@@ -360,41 +355,356 @@ private fun OrientCompanionApp() {
                                                 client = null
                                                 isAuthenticated = false
                                                 passwordChangeRequired = false
-                                                resultText = ""
-                                                taskInput = ""
+                                                password = ""
+                                                newPassword = ""
+                                                confirmNewPassword = ""
+                                                taskData = ""
+                                                activityData = ""
                                                 isBusy = false
                                             }
                                         }
-                                    },
-                                    modifier = Modifier.align(Alignment.End),
-                                    enabled = !isBusy
-                                ) { Text("تسجيل الخروج") }
+                                    }
+                                )
                             }
                         }
                     }
+                    item {
+                        Text(
+                            "ORIENT · صلاحيات واضحة، تنفيذ محكوم، ونتائج من المصدر الفعلي.",
+                            color = muted, style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center
+                        )
+                    }
+                }
+                if (!passwordChangeRequired) NavigationBar(containerColor = panel) {
+                    OrientSection.entries.forEach { section ->
+                        NavigationBarItem(
+                            selected = selectedSection == section,
+                            onClick = {
+                                selectedSection = section
+                                if (section == OrientSection.TASKS && canUseRuntime && taskData.isBlank()) refreshTasks()
+                                if (section == OrientSection.ACTIVITY && canUseRuntime && activityData.isBlank()) refreshActivity()
+                            },
+                            icon = { Text(section.symbol, fontSize = 19.sp) },
+                            label = { Text(section.title, fontSize = 10.sp) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
-                    if (resultText.isNotBlank()) {
-                        item {
-                            Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text("استجابة الخادم", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                                    Text(resultText, color = muted, fontSize = 12.sp)
-                                }
-                            }
+@Composable
+private fun AppHeader(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("ORIENT", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("مساحة عملك الذكية", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text("Personal AI workspace", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        TextButton(onClick = onThemeToggle) {
+            Text(if (isDarkTheme) "فاتح ☼" else "داكن ◐")
+        }
+    }
+}
+
+@Composable
+private fun RuntimeStatusCard(connected: Boolean, status: String, panel: Color, muted: Color) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = panel),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("حالة ORIENT Runtime", fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (connected) "متصل" else "بانتظار الاتصال",
+                    color = if (connected) Color(0xFF39B980) else Color(0xFFE7AE4C),
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Text(status, color = muted, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (connected) "اتصال محلي آمن · الجلسة في الذاكرة" else "محلي أولًا · لا يوجد اتصال بخادم حتى الآن",
+                color = muted, style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    connected: Boolean,
+    panel: Color,
+    muted: Color,
+    onConnect: () -> Unit,
+    onTasks: () -> Unit,
+    onActivity: () -> Unit,
+    onPhone: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("مرحبًا بك في ORIENT", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "مركز واحد لمهامك، خططك، وسجل التنفيذ — مع بقاء القرار والصلاحيات تحت سيطرتك.",
+                color = muted, style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("ابدأ من هنا", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    if (connected) "خدمة Runtime متصلة. اختر مساحة العمل التي تريد متابعتها."
+                    else "لتفعيل بياناتك الحقيقية، شغّل ORIENT Runtime محليًا ثم اربط التطبيق من الإعدادات.",
+                    color = muted, style = MaterialTheme.typography.bodyMedium
+                )
+                Button(onClick = if (connected) onTasks else onConnect, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (connected) "افتح المهام" else "إعداد الاتصال")
+                }
+            }
+        }
+        Text("مساحات ORIENT", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        WorkspaceTile("المهام والتنفيذ", "إرسال المهام ومراجعة استجابات Runtime", "↗", panel, muted, onTasks)
+        WorkspaceTile("سجل النشاط", "متابعة التنفيذات التي يعيدها الخادم", "◷", panel, muted, onActivity)
+        WorkspaceTile("أدوات الهاتف", "أدوات محلية بإذن المستخدم وتأكيده", "▣", panel, muted, onPhone)
+        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("مبدأ ORIENT", fontWeight = FontWeight.Bold)
+                Text(
+                    "لن نعرض بيانات تجريبية أو قدرات غير متاحة. كل نتيجة تظهر هنا مصدرها خدمة ORIENT الفعلية، وكل إجراء حساس يظل خاضعًا لسياسات الخادم وموافقات المالك.",
+                    color = muted, style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceTile(
+    title: String, description: String, symbol: String,
+    panel: Color, muted: Color, onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = panel),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(symbol, color = MaterialTheme.colorScheme.primary, fontSize = 25.sp)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(description, color = muted, style = MaterialTheme.typography.bodySmall)
+            }
+            Text("‹", color = MaterialTheme.colorScheme.primary, fontSize = 22.sp)
+        }
+    }
+}
+
+@Composable
+private fun TasksScreen(
+    connected: Boolean, busy: Boolean, taskInput: String, taskData: String,
+    panel: Color, muted: Color, onInputChange: (String) -> Unit,
+    onRefresh: () -> Unit, onConnect: () -> Unit, onExecute: () -> Unit
+) {
+    if (!connected) {
+        LockedFeatureCard(
+            title = "المهام والتنفيذ",
+            description = "سجّل الاتصال بخدمة Runtime المحلية لعرض مهامك وإرسال طلبات التنفيذ.",
+            panel = panel, muted = muted, onConnect = onConnect
+        )
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("المهام والتنفيذ", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("اكتب هدفك بوضوح. يراجع Runtime الصلاحيات والسياسات قبل تنفيذ الأدوات.", color = muted)
+        OutlinedTextField(
+            value = taskInput, onValueChange = onInputChange,
+            modifier = Modifier.fillMaxWidth(), label = { Text("ما الذي تريد من ORIENT إنجازه؟") },
+            minLines = 3, maxLines = 5, enabled = !busy
+        )
+        Button(onClick = onExecute, modifier = Modifier.fillMaxWidth(), enabled = !busy && taskInput.isNotBlank()) {
+            Text("إرسال إلى Runtime")
+        }
+        OutlinedButton(onClick = onRefresh, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
+            Text("تحديث بيانات المهام")
+        }
+        if (busy) CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+        DataPanel("استجابة Runtime / بيانات المهام", taskData, panel, muted)
+    }
+}
+
+@Composable
+private fun DataScreen(
+    title: String, subtitle: String, connected: Boolean, busy: Boolean, data: String,
+    panel: Color, muted: Color, onRefresh: () -> Unit, onConnect: () -> Unit
+) {
+    if (!connected) {
+        LockedFeatureCard(title, subtitle, panel, muted, onConnect)
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(subtitle, color = muted)
+        OutlinedButton(onClick = onRefresh, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
+            Text("تحديث السجل")
+        }
+        if (busy) CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+        DataPanel("بيانات من Runtime", data, panel, muted)
+    }
+}
+
+@Composable
+private fun DataPanel(title: String, data: String, panel: Color, muted: Color) {
+    Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, fontWeight = FontWeight.Bold)
+            Text(
+                data.ifBlank { "لا توجد بيانات محمّلة بعد. استخدم زر التحديث لجلب البيانات الفعلية." },
+                color = muted, style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun LockedFeatureCard(
+    title: String, description: String, panel: Color, muted: Color, onConnect: () -> Unit
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(description, color = muted)
+            Button(onClick = onConnect, modifier = Modifier.fillMaxWidth()) { Text("الانتقال إلى إعداد الاتصال") }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    connected: Boolean,
+    passwordChangeRequired: Boolean,
+    busy: Boolean,
+    portText: String,
+    ownerEmail: String,
+    password: String,
+    newPassword: String,
+    confirmNewPassword: String,
+    isDarkTheme: Boolean,
+    panel: Color,
+    muted: Color,
+    onPortChange: (String) -> Unit,
+    onOwnerEmailChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onNewPasswordChange: (String) -> Unit,
+    onConfirmNewPasswordChange: (String) -> Unit,
+    onConnect: () -> Unit,
+    onChangePassword: () -> Unit,
+    onThemeToggle: () -> Unit,
+    onLogout: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("الإعدادات", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("المظهر", fontWeight = FontWeight.Bold)
+                Text(if (isDarkTheme) "الوضع الداكن مفعّل" else "الوضع الفاتح مفعّل", color = muted)
+                OutlinedButton(onClick = onThemeToggle, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (isDarkTheme) "التبديل إلى الوضع الفاتح" else "التبديل إلى الوضع الداكن")
+                }
+            }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("اتصال Runtime المحلي", fontWeight = FontWeight.Bold)
+                Text(
+                    "يقبل التطبيق الاتصال بهذا الهاتف فقط عبر 127.0.0.1. كلمة المرور ورموز الجلسة لا تُحفظ على القرص.",
+                    color = muted, style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { value -> if (value.length <= 5 && value.all(Char::isDigit)) onPortChange(value) },
+                    modifier = Modifier.fillMaxWidth(), label = { Text("منفذ الخدمة") },
+                    singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    enabled = !busy && !connected
+                )
+                when {
+                    !connected -> {
+                        OutlinedTextField(
+                            value = ownerEmail, onValueChange = onOwnerEmailChange,
+                            modifier = Modifier.fillMaxWidth(), label = { Text("البريد الإلكتروني للمالك") },
+                            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                            enabled = !busy
+                        )
+                        OutlinedTextField(
+                            value = password, onValueChange = onPasswordChange,
+                            modifier = Modifier.fillMaxWidth(), label = { Text("كلمة مرور المالك") },
+                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), enabled = !busy
+                        )
+                        Button(
+                            onClick = onConnect, modifier = Modifier.fillMaxWidth(),
+                            enabled = !busy && ownerEmail.isNotBlank() && password.isNotBlank()
+                        ) {
+                            if (busy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                            else Text("اتصال آمن")
+                        }
+                    }
+                    passwordChangeRequired -> {
+                        Text(
+                            "تغيير كلمة المرور مطلوب قبل فتح المهام أو أدوات الهاتف أو أي واجهة Runtime.",
+                            color = muted, style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = newPassword, onValueChange = onNewPasswordChange,
+                            modifier = Modifier.fillMaxWidth(), label = { Text("كلمة المرور الجديدة (14 حرفًا على الأقل)") },
+                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), enabled = !busy
+                        )
+                        OutlinedTextField(
+                            value = confirmNewPassword, onValueChange = onConfirmNewPasswordChange,
+                            modifier = Modifier.fillMaxWidth(), label = { Text("تأكيد كلمة المرور الجديدة") },
+                            singleLine = true, visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), enabled = !busy
+                        )
+                        Button(
+                            onClick = onChangePassword, modifier = Modifier.fillMaxWidth(),
+                            enabled = !busy && newPassword.isNotBlank() && confirmNewPassword.isNotBlank()
+                        ) {
+                            if (busy) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                            else Text("حفظ كلمة المرور والمتابعة")
+                        }
+                        TextButton(onClick = onLogout, modifier = Modifier.align(Alignment.End), enabled = !busy) {
+                            Text("تسجيل الخروج")
+                        }
+                    }
+                    else -> {
+                        Text("الجلسة الحالية مصادق عليها.", color = Color(0xFF39B980))
+                        OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth(), enabled = !busy) {
+                            Text("تسجيل الخروج")
                         }
                     }
                 }
-
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("حدود القدرات الحالية", fontWeight = FontWeight.Bold)
-                            Text("• تنفيذ المهام وسجل التنفيذات: عبر Runtime بعد المصادقة.", color = muted, fontSize = 13.sp)
-                            Text("• البحث الخارجي وقراءة/كتابة الملفات: لا تُعرض كقدرات جاهزة ما لم تكن أدواتها مسجلة ومصرحًا بها في الخادم.", color = muted, fontSize = 13.sp)
-                            Text("• جهات الاتصال: بحث محلي بإذن واضح، وفتح شاشة الاتصال للتأكيد اليدوي. التعرف التلقائي على المكالمات الواردة وتسجيل المكالمات غير مفعّلين.", color = muted, fontSize = 13.sp)
-                        }
-                    }
-                }
+            }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = panel), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("الخصوصية والأمان", fontWeight = FontWeight.Bold)
+                Text("• الاتصال محصور في 127.0.0.1.", color = muted, style = MaterialTheme.typography.bodySmall)
+                Text("• لا تُخزّن كلمة المرور أو رموز الجلسة على القرص.", color = muted, style = MaterialTheme.typography.bodySmall)
+                Text("• الصلاحيات الحساسة والموافقات يفرضها Runtime، وليس التطبيق.", color = muted, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
