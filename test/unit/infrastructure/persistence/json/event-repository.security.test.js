@@ -365,17 +365,19 @@ test('lock owner descriptor is closed before the protected operation begins', t 
   }
 });
 
-test('atomic writes fsync and close their temporary file descriptor', t => {
+test('atomic writes fsync and close both temporary file and containing directory descriptors', t => {
   const f = fixture(t);
   const repository = f.create();
   const originalOpenSync = fs.openSync;
   const originalFsyncSync = fs.fsyncSync;
   let temporaryDescriptor;
+  let directoryDescriptor;
   let fsyncCalls = 0;
 
   fs.openSync = function (target, ...args) {
     const descriptor = originalOpenSync.call(this, target, ...args);
     if (String(target).startsWith(repository.filePath + '.tmp.')) temporaryDescriptor = descriptor;
+    if (target === repository.directory) directoryDescriptor = descriptor;
     return descriptor;
   };
   fs.fsyncSync = function (descriptor) {
@@ -384,11 +386,9 @@ test('atomic writes fsync and close their temporary file descriptor', t => {
   };
   try {
     repository.write([{ id: 'durable-event', type: 'test.created' }]);
-    assert.equal(fsyncCalls, 1);
-    assert.throws(
-      () => fs.fstatSync(temporaryDescriptor),
-      error => error.code === 'EBADF'
-    );
+    assert.equal(fsyncCalls, 2, 'the temp file and its containing directory must both be synced');
+    assert.throws(() => fs.fstatSync(temporaryDescriptor), error => error.code === 'EBADF');
+    assert.throws(() => fs.fstatSync(directoryDescriptor), error => error.code === 'EBADF');
   } finally {
     fs.openSync = originalOpenSync;
     fs.fsyncSync = originalFsyncSync;
