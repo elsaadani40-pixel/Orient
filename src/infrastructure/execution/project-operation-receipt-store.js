@@ -86,6 +86,33 @@ class ProjectOperationReceiptStore {
     return this.receiptPath(operationId, tenantId) + '.intent.json';
   }
 
+  assertPrivateFileDescriptor(fd, code, label) {
+    const stats = fs.fstatSync(fd);
+    const posix = process.platform !== 'win32' && typeof process.getuid === 'function';
+    if (!stats.isFile() || (posix && stats.nlink !== 1)) {
+      fail(label + ' must be a single-link regular file', code);
+    }
+    if (posix) {
+      if (stats.uid !== process.getuid()) {
+        fail(label + ' must be owned by the application user', code);
+      }
+      if ((stats.mode & 0o077) !== 0) {
+        try {
+          fs.fchmodSync(fd, 0o600);
+        } catch (error) {
+          const invalid = new Error(label + ' permissions could not be secured');
+          invalid.code = code;
+          invalid.cause = error;
+          throw invalid;
+        }
+        if ((fs.fstatSync(fd).mode & 0o077) !== 0) {
+          fail(label + ' must be private (mode 0600)', code);
+        }
+      }
+    }
+    return stats;
+  }
+
   readIntent({ operationId, tenantId }) {
     const filePath = this.intentPath(operationId, tenantId);
     let intent;
@@ -98,10 +125,11 @@ class ProjectOperationReceiptStore {
         fail('Safe intent-file reads are unsupported on this platform', 'PROJECT_OPERATION_INTENT_UNSAFE_FILESYSTEM');
       }
       fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-      const openedStats = fs.fstatSync(fd);
-      if (!openedStats.isFile()) {
-        fail('Project operation intent is not a regular file', 'PROJECT_OPERATION_INTENT_CORRUPT');
-      }
+      const openedStats = this.assertPrivateFileDescriptor(
+        fd,
+        'PROJECT_OPERATION_INTENT_CORRUPT',
+        'Project operation intent'
+      );
       if (openedStats.size > MAX_INTENT_BYTES) {
         fail('Project operation intent exceeds its maximum permitted size', 'PROJECT_OPERATION_INTENT_CORRUPT');
       }
@@ -202,10 +230,11 @@ class ProjectOperationReceiptStore {
       // Open once without following symlinks, then validate and read that exact
       // file descriptor. A pathname replacement cannot redirect this read.
       descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-      const openedStats = fs.fstatSync(descriptor);
-      if (!openedStats.isFile()) {
-        fail('Project operation receipt is not a regular file', 'PROJECT_OPERATION_RECEIPT_CORRUPT');
-      }
+      const openedStats = this.assertPrivateFileDescriptor(
+        descriptor,
+        'PROJECT_OPERATION_RECEIPT_CORRUPT',
+        'Project operation receipt'
+      );
       if (openedStats.size > MAX_RECEIPT_BYTES) {
         fail('Project operation receipt exceeds its maximum permitted size', 'PROJECT_OPERATION_RECEIPT_CORRUPT');
       }
