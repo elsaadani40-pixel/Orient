@@ -125,3 +125,80 @@ test('recovery fails closed when PostgreSQL quota recovery fails and releases on
   assert.deepEqual(calls[0].claim, payload.dispatchClaim);
 });
 
+test('post-claim lease lookup and snapshot hydration failures release only the exact claim', async () => {
+  const scenarios = [
+    {
+      name: 'lease lookup rejection with successful claim cleanup',
+      payload: createQueuedPayload('lease-lookup-rejection'),
+      leaseError: Object.assign(new Error('simulated lease repository outage'), { code: '08006' }),
+      releaseResult: true,
+      expectedError: error => error.code === '08006' && error.message === 'simulated lease repository outage',
+      expectedCleanupError: null
+    },
+    {
+      name: 'malformed snapshot with a false exact-claim cleanup result',
+      payload: createQueuedPayload('malformed-recovery-snapshot'),
+      releaseResult: false,
+      expectedError: error => error.code === 'WORKFLOW_DEFINITION_SNAPSHOT_REQUIRED',
+      expectedCleanupError: 'WORKFLOW_RECOVERY_CLAIM_RELEASE_FAILED'
+    },
+    {
+      name: 'lease lookup rejection while exact-claim cleanup itself throws',
+      payload: createQueuedPayload('lease-lookup-cleanup-failure'),
+      leaseError: Object.assign(new Error('simulated lease repository outage'), { code: '08006' }),
+      releaseError: Object.assign(new Error('simulated claim release outage'), { code: '08006' }),
+      expectedError: error => error.code === '08006' && error.message === 'simulated lease repository outage',
+      expectedCleanupError: 'WORKFLOW_RECOVERY_CLAIM_RELEASE_FAILED'
+    }
+  ];
+
+  for (const scenario of scenarios) {
+    if (scenario.name.startsWith('malformed snapshot')) {
+      delete scenario.payload.definition;
+    }
+    const releaseCalls = [];
+    const workflowRepository = {
+      async claimQueued() { return [scenario.payload]; },
+      async releaseDispatchClaim(workflowId, workerId, tenantId, options) {
+        releaseCalls.push({ workflowId, workerId, tenantId, claim: options.claim });
+        if (scenario.releaseError) throw scenario.releaseError;
+        return scenario.releaseResult;
+      }
+    };
+    const leaseRepository = {
+      async findByWorkflowId() {
+        if (scenario.leaseError) throw scenario.leaseError;
+        return null;
+      }
+    };
+    const scheduler = new AsyncWorkflowScheduler({
+      tenantId: 'tenant-quota-recovery',
+      workflowRepository,
+      leaseRepository,
+      quotaPolicy: {},
+      maxConcurrent: 1,
+      maxQueueDepth: 2,
+      dispatchWindow: 1
+    });
+
+    await assert.rejects(
+      () => scheduler.recoverPersisted('worker-a', []),
+      error => {
+        assert.equal(scenario.expectedError(error), true, scenario.name);
+        if (scenario.expectedCleanupError) {
+          assert.equal(error.dispatchClaimCleanupError?.code, scenario.expectedCleanupError, scenario.name);
+        } else {
+          assert.equal(error.dispatchClaimCleanupError, undefined, scenario.name);
+        }
+        return true;
+      }
+    );
+
+    assert.equal(scheduler.queue.length, 0, scenario.name);
+    assert.equal(releaseCalls.length, 1, scenario.name);
+    assert.equal(releaseCalls[0].workflowId, scenario.payload.workflowId, scenario.name);
+    assert.equal(releaseCalls[0].workerId, 'worker-a', scenario.name);
+    assert.equal(releaseCalls[0].tenantId, 'tenant-quota-recovery', scenario.name);
+    assert.deepEqual(releaseCalls[0].claim, scenario.payload.dispatchClaim, scenario.name);
+  }
+});
