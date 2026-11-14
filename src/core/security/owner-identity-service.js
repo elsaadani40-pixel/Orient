@@ -301,13 +301,12 @@ class OwnerIdentityService {
     const readExisting = () => {
       let fd;
       try {
-        // Open first, then validate the opened descriptor. On POSIX, O_NOFOLLOW
-        // makes the open itself reject symlinks, avoiding a separate lstat/open
-        // check-then-use race. Node does not expose O_NOFOLLOW on Windows;
-        // there, protection against path replacement depends on the deployment
-        // ACL restricting this directory to the service account. chmod(0700)
-        // is not an ACL boundary on Windows; fstat still validates the handle.
         const noFollow = fs.constants.O_NOFOLLOW;
+        if (process.platform !== 'win32' && typeof noFollow !== 'number') {
+          throw Object.assign(new Error('Safe owner lockout key reads are unsupported on this platform'), {
+            code: 'OWNER_LOCKOUT_KEY_UNSAFE_FILESYSTEM'
+          });
+        }
         try {
           fd = fs.openSync(
             this.loginFailureKeyFile,
@@ -326,12 +325,37 @@ class OwnerIdentityService {
         if (!stat.isFile() || stat.nlink !== 1 || stat.size !== 64) {
           throw Object.assign(new Error('Owner lockout key file is invalid'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
         }
-        const encoded = fs.readFileSync(fd, 'utf8');
+        if (process.platform !== 'win32' && typeof process.getuid === 'function') {
+          if (stat.uid !== process.getuid()) {
+            throw Object.assign(new Error('Owner lockout key must be owned by the application user'), {
+              code: 'OWNER_LOCKOUT_KEY_INVALID'
+            });
+          }
+          if ((stat.mode & 0o7777) !== 0o600) {
+            try { fs.fchmodSync(fd, 0o600); } catch (error) {
+              throw Object.assign(new Error('Owner lockout key permissions could not be secured'), {
+                code: 'OWNER_LOCKOUT_KEY_INVALID',
+                cause: error
+              });
+            }
+            if ((fs.fstatSync(fd).mode & 0o7777) !== 0o600) {
+              throw Object.assign(new Error('Owner lockout key must be private (mode 0600)'), {
+                code: 'OWNER_LOCKOUT_KEY_INVALID'
+              });
+            }
+          }
+        }
+        let encoded;
+        try {
+          encoded = readBoundedFile(fd, 64);
+        } catch (error) {
+          throw Object.assign(new Error('Owner lockout key file is invalid'), {
+            code: 'OWNER_LOCKOUT_KEY_INVALID',
+            cause: error
+          });
+        }
         if (!/^[a-f0-9]{64}$/.test(encoded)) {
           throw Object.assign(new Error('Owner lockout key file is invalid'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
-        }
-        try { fs.fchmodSync(fd, 0o600); } catch (error) {
-          if (process.platform !== 'win32') throw error;
         }
         return Buffer.from(encoded, 'hex');
       } finally {
@@ -357,8 +381,10 @@ class OwnerIdentityService {
     const secret = crypto.randomBytes(32);
     let fd;
     let created = false;
+    let committed = false;
     try {
       fd = fs.openSync(this.loginFailureKeyFile, 'wx', 0o600);
+      created = true;
       fs.writeFileSync(fd, secret.toString('hex'), 'utf8');
       try { fs.fchmodSync(fd, 0o600); } catch (error) {
         if (process.platform !== 'win32') throw error;
@@ -366,7 +392,7 @@ class OwnerIdentityService {
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = undefined;
-      created = true;
+      committed = true;
 
       if (process.platform !== 'win32') {
         const dirFd = fs.openSync(dir, 'r');
@@ -376,10 +402,10 @@ class OwnerIdentityService {
     } catch (error) {
       if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
       if (error.code === 'EEXIST') return readExisting();
-      if (!created) { try { fs.rmSync(this.loginFailureKeyFile, { force: true }); } catch {} }
+      if (created && !committed) { try { fs.unlinkSync(this.loginFailureKeyFile); } catch {} }
       throw Object.assign(new Error('Could not persist owner lockout key safely'), {
         code: 'OWNER_LOCKOUT_KEY_PERSIST_FAILED',
-        committed: created,
+        committed,
         cause: error
       });
     }
