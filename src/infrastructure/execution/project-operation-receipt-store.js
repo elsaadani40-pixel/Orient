@@ -96,7 +96,7 @@ class ProjectOperationReceiptStore {
       if (stats.uid !== process.getuid()) {
         fail(label + ' must be owned by the application user', code);
       }
-      if ((stats.mode & 0o077) !== 0) {
+      if ((stats.mode & 0o7777) !== 0o600) {
         try {
           fs.fchmodSync(fd, 0o600);
         } catch (error) {
@@ -105,7 +105,7 @@ class ProjectOperationReceiptStore {
           invalid.cause = error;
           throw invalid;
         }
-        if ((fs.fstatSync(fd).mode & 0o077) !== 0) {
+        if ((fs.fstatSync(fd).mode & 0o7777) !== 0o600) {
           fail(label + ' must be private (mode 0600)', code);
         }
       }
