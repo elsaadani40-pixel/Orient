@@ -785,3 +785,66 @@ test('duplicate-only appendMany replay does not rewrite the event file', t => {
   assert.deepEqual(repository.appendMany([event], { tenantId: 'tenant-a' }), []);
   assert.equal(writes, 0);
 });
+
+test('EventRepository canonicalizes a trusted platform symlink ancestor', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-alias-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const canonicalParent = path.join(root, 'canonical-parent');
+  const storage = path.join(canonicalParent, 'storage');
+  const alias = path.join(root, 'platform-alias');
+  fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+  fs.symlinkSync(canonicalParent, alias, 'dir');
+
+  const repository = new EventRepository(path.join(alias, 'storage', 'events.json'));
+  assert.equal(repository.directory, path.join(fs.realpathSync(canonicalParent), 'storage'));
+  assert.equal(fs.statSync(repository.filePath).isFile(), true);
+  assert.equal(fs.statSync(repository.directory).mode & 0o077, 0);
+});
+
+test('EventRepository rejects a symlink alias whose canonical grandparent is untrusted', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-untrusted-alias-'));
+  const untrustedParent = path.join(root, 'untrusted-parent');
+  const canonicalParent = path.join(untrustedParent, 'canonical-parent');
+  const storage = path.join(canonicalParent, 'storage');
+  const alias = path.join(root, 'platform-alias');
+  fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+  fs.chmodSync(untrustedParent, 0o777);
+  fs.symlinkSync(canonicalParent, alias, 'dir');
+  t.after(() => {
+    fs.chmodSync(untrustedParent, 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  assert.throws(
+    () => new EventRepository(path.join(alias, 'storage', 'events.json')),
+    error => error.code === 'EVENT_STORAGE_PARENT_UNTRUSTED'
+  );
+  assert.equal(fs.existsSync(path.join(storage, 'events.json')), false);
+});
+
+test('event reads reject hard-linked event files and tighten private file permissions', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX hard-link and file-mode checks are required');
+    return;
+  }
+  const f = fixture(t);
+  const repository = f.create();
+  fs.chmodSync(repository.filePath, 0o644);
+  assert.deepEqual(repository.read(), []);
+  assert.equal(fs.statSync(repository.filePath).mode & 0o077, 0);
+
+  const linked = path.join(f.root, 'events-hardlink.json');
+  fs.linkSync(repository.filePath, linked);
+  assert.throws(
+    () => repository.read(),
+    error => error.code === 'EVENT_STORAGE_CORRUPT'
+  );
+});
