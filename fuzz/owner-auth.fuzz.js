@@ -1,7 +1,10 @@
 'use strict';
 
-const { createHash } = require('node:crypto');
-const OwnerAuthService = require('../src/core/security/owner-auth-service');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const OwnerIdentityService = require('../src/core/security/owner-identity-service');
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const VALID_TOKEN = 'orient-fuzz-owner-session-token-00000000000000000000';
@@ -9,20 +12,25 @@ const VALID_CSRF = 'orient-fuzz-csrf-sentinel';
 const SESSION_ID = '11111111-1111-4111-8111-111111111111';
 let now = 1_000_000;
 
-const auth = new OwnerAuthService({
-  password: 'orient-fuzz-owner-password-2026',
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-identity-fuzz-'));
+const auth = new OwnerIdentityService({
+  stateFile: path.join(directory, 'owner.json'),
+  bootstrapPassword: 'orient-fuzz-owner-bootstrap-password-2026!',
   sessionTtlMs: SESSION_TTL_MS,
   now: () => now
 });
-const tokenDigest = createHash('sha256').update(VALID_TOKEN).digest('hex');
+const tokenDigest = crypto.createHash('sha256').update(VALID_TOKEN).digest('hex');
+
+process.on('exit', () => {
+  try { fs.rmSync(directory, { recursive: true, force: true }); } catch {}
+});
 
 function seedActiveSession() {
   auth.sessions.clear();
   auth.sessions.set(tokenDigest, {
-    id: SESSION_ID,
     csrfToken: VALID_CSRF,
-    createdAt: now,
-    expiresAt: now + SESSION_TTL_MS
+    expiresAt: now + SESSION_TTL_MS,
+    sessionId: SESSION_ID
   });
 }
 
@@ -68,10 +76,9 @@ module.exports.fuzz = function fuzz(data) {
   now += SESSION_TTL_MS;
   auth.sessions.clear();
   auth.sessions.set(tokenDigest, {
-    id: SESSION_ID,
     csrfToken: VALID_CSRF,
-    createdAt: now - SESSION_TTL_MS,
-    expiresAt: now
+    expiresAt: now,
+    sessionId: SESSION_ID
   });
   if (auth.authenticate(VALID_TOKEN) !== null || auth.isActiveSession(SESSION_ID)) {
     throw new Error('An owner session must be expired at its exact expiry boundary');
