@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const ensurePrivateStorageDirectory = require('../filesystem/private-storage-directory');
 
 function fail(message, code) {
   const error = new Error(message);
@@ -69,66 +70,18 @@ class ProjectOperationReceiptStore {
   }
 
   ensureDirectory() {
-    const root = path.parse(this.directory).root;
-    const components = this.directory.slice(root.length).split(path.sep).filter(Boolean);
-    if (components.length === 0) {
-      fail('Filesystem root cannot be used as an operation receipt directory', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID');
-    }
-    const hasPosixIdentity = process.platform !== 'win32' &&
-      typeof process.getuid === 'function';
-    const serviceUid = hasPosixIdentity ? BigInt(process.getuid()) : null;
-    const trustedOwners = hasPosixIdentity ? new Set([0n, serviceUid]) : null;
-
-    const validateDirectory = (directory, isReceiptDirectory) => {
-      const stats = fs.lstatSync(directory, { bigint: true });
-      if (!stats.isDirectory() || stats.isSymbolicLink() ||
-          fs.realpathSync(directory) !== directory) {
-        fail('Operation receipt path contains a non-directory, symbolic link, or non-canonical component', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID');
+    this.directory = ensurePrivateStorageDirectory(this.directory, {
+      repairPermissions: false,
+      errorCodes: {
+        directoryInvalid: 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID',
+        directoryOwnerInvalid: 'PROJECT_OPERATION_RECEIPT_DIRECTORY_OWNER_INVALID',
+        directoryPermissionsInvalid: 'PROJECT_OPERATION_RECEIPT_DIRECTORY_PERMISSIONS_INVALID',
+        parentInvalid: 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED',
+        parentUntrusted: 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED'
       }
-
-      if (!hasPosixIdentity) return;
-      if (isReceiptDirectory) {
-        if (stats.uid !== serviceUid) {
-          fail('Operation receipt directory must be owned by the application user', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_OWNER_INVALID');
-        }
-        if ((stats.mode & 0o077n) !== 0n) {
-          fail('Operation receipt directory must not be accessible by group or other users (chmod 700)', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_PERMISSIONS_INVALID');
-        }
-        return;
-      }
-
-      // Every ancestor must be owned by root or the service UID. A directory
-      // owner can change its permissions even when it is currently read-only.
-      if (!trustedOwners.has(stats.uid)) {
-        fail('Operation receipt path ancestor is not owned by a trusted principal', 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED');
-      }
-
-      const ancestorMode = stats.mode & 0o7777n;
-      if ((ancestorMode & 0o022n) !== 0n && (ancestorMode & 0o1000n) === 0n) {
-        fail('Operation receipt path ancestor is writable by group or other users without sticky-bit protection', 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED');
-      }
-    };
-
-    // Validate each existing parent before creating its child. Recursive mkdir
-    // could otherwise follow a substituted ancestor before the trust checks run.
-    let current = root;
-    validateDirectory(current, false);
-    for (let index = 0; index < components.length; index += 1) {
-      const next = path.join(current, components[index]);
-      try {
-        fs.lstatSync(next);
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-        try {
-          fs.mkdirSync(next, { mode: 0o700 });
-        } catch (createError) {
-          if (createError.code !== 'EEXIST') throw createError;
-        }
-      }
-      validateDirectory(next, index === components.length - 1);
-      current = next;
-    }
+    });
   }
+
   intentPath(operationId, tenantId) {
     return this.receiptPath(operationId, tenantId) + '.intent.json';
   }
