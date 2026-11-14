@@ -601,7 +601,7 @@ test('owner lockout key EEXIST collision is preserved and never cleaned up by th
   let reservationAttempted = false;
 
   fs.openSync = function (target, flags, ...args) {
-    if (target === keyFile && typeof flags === 'number') {
+    if (target === keyFile && typeof flags === 'number' && !reservationAttempted) {
       throw Object.assign(new Error('simulated missing key during initial read'), { code: 'ENOENT' });
     }
     if (target === keyFile && flags === 'wx' && !reservationAttempted) {
