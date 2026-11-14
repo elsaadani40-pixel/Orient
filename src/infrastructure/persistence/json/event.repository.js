@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { isDeepStrictEqual } = require('node:util');
-const ensurePrivateStorageDirectory = require('../filesystem/private-storage-directory');
+const ensurePrivateStorageDirectory = require('../../filesystem/private-storage-directory');
 
 const MAX_EVENT_FILE_BYTES = 64 * 1024 * 1024;
 
