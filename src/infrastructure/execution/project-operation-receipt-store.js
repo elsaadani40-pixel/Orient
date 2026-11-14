@@ -71,6 +71,9 @@ class ProjectOperationReceiptStore {
   ensureDirectory() {
     const root = path.parse(this.directory).root;
     const components = this.directory.slice(root.length).split(path.sep).filter(Boolean);
+    if (components.length === 0) {
+      fail('Filesystem root cannot be used as an operation receipt directory', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID');
+    }
     const hasPosixIdentity = process.platform !== 'win32' &&
       typeof process.getuid === 'function';
     const serviceUid = hasPosixIdentity ? BigInt(process.getuid()) : null;
