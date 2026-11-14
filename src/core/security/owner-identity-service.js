@@ -157,9 +157,9 @@ class OwnerIdentityService {
         if (stats.uid !== process.getuid()) {
           throw invalid('Owner identity state must be owned by the application user');
         }
-        if ((stats.mode & 0o077) !== 0) {
+        if ((stats.mode & 0o7777) !== 0o600) {
           fs.fchmodSync(descriptor, 0o600);
-          if ((fs.fstatSync(descriptor).mode & 0o077) !== 0) {
+          if ((fs.fstatSync(descriptor).mode & 0o7777) !== 0o600) {
             throw invalid('Owner identity state must be private (mode 0600)');
           }
         }
