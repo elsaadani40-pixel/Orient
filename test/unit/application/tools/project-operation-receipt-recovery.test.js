@@ -591,6 +591,41 @@ test('receipt storage rejects a writable non-sticky grandparent even when its ch
   }
 });
 
+test('receipt storage rejects symbolic-link path ancestors before creating descendants', async t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required for this test');
+    return;
+  }
+
+  const parent = fsSync.mkdtempSync(path.join(os.tmpdir(), 'orient-receipt-path-symlink-'));
+  const realDirectory = path.join(parent, 'real');
+  const linkedDirectory = path.join(parent, 'linked');
+  try {
+    fsSync.mkdirSync(realDirectory, { mode: 0o700 });
+    fsSync.symlinkSync(realDirectory, linkedDirectory, 'dir');
+    const store = new ProjectOperationReceiptStore({
+      directory: path.join(linkedDirectory, 'receipts')
+    });
+
+    assert.throws(
+      () => store.ensureDirectory(),
+      error => error?.code === 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID'
+    );
+    assert.equal(fsSync.existsSync(path.join(realDirectory, 'receipts')), false);
+  } finally {
+    fsSync.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('filesystem root cannot be configured as receipt storage', () => {
+  const root = path.parse(path.resolve(path.sep)).root;
+  const store = new ProjectOperationReceiptStore({ directory: root });
+  assert.throws(
+    () => store.ensureDirectory(),
+    error => error?.code === 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID'
+  );
+});
+
 test('concurrent receipt writers cannot enter a lock directory already owned by another process', async t => {
   if (process.platform === 'win32') {
     t.skip('POSIX child-process lock synchronization is required for this adversarial test');
