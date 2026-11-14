@@ -245,7 +245,6 @@ class OwnerIdentityService {
       // even if the directory durability barrier fails. Callers must not roll
       // back session state as though the write never happened.
       this.state = value;
-      try { fs.chmodSync(this.stateFile, 0o600); } catch {}
 
       // Node does not expose a portable directory-fsync operation on Windows.
       // Keep file fsync + atomic replacement there; on POSIX, require the
