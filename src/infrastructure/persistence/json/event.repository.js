@@ -89,14 +89,14 @@ class EventRepository {
         if (stats.uid !== process.getuid()) {
           fail('Event storage file must be owned by the application user', 'EVENT_STORAGE_CORRUPT');
         }
-        if ((stats.mode & 0o077) !== 0) {
+        if ((stats.mode & 0o7777) !== 0o600) {
           try { fs.fchmodSync(descriptor, 0o600); } catch (error) {
             const invalid = new Error('Event storage file permissions could not be secured');
             invalid.code = 'EVENT_STORAGE_PERMISSIONS_INVALID';
             invalid.cause = error;
             throw invalid;
           }
-          if ((fs.fstatSync(descriptor).mode & 0o077) !== 0) {
+          if ((fs.fstatSync(descriptor).mode & 0o7777) !== 0o600) {
             fail('Event storage file must be private (mode 0600)', 'EVENT_STORAGE_PERMISSIONS_INVALID');
           }
         }
