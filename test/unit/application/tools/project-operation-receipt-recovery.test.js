@@ -860,3 +860,66 @@ test('receipt write preserves a pre-existing temporary-file collision it did not
     await assert.rejects(fs.stat(receiptPath + '.lock'), error => error.code === 'ENOENT');
   });
 });
+
+test('intent reads tighten permissive files and reject hard-linked intent evidence', async t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX file ownership and hard-link checks are required');
+    return;
+  }
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'orient-intent-file-policy-'));
+  const directory = path.join(root, 'receipts');
+  fsSync.mkdirSync(directory, { mode: 0o700 });
+  t.after(() => fsSync.rmSync(root, { recursive: true, force: true }));
+  const store = new ProjectOperationReceiptStore({ directory });
+  const identity = {
+    operationId: 'intent-file-policy',
+    tenantId: 'tenant-a',
+    workspaceId: 'a'.repeat(64),
+    changeSetHash: 'b'.repeat(64)
+  };
+  store.beginIntent(identity);
+  const intentPath = store.intentPath(identity.operationId, identity.tenantId);
+  fsSync.chmodSync(intentPath, 0o644);
+  assert.equal(store.readIntent(identity).status, 'pending');
+  assert.equal(fsSync.statSync(intentPath).mode & 0o077, 0);
+
+  const hardLink = path.join(root, 'intent-hardlink.json');
+  fsSync.linkSync(intentPath, hardLink);
+  assert.throws(
+    () => store.readIntent(identity),
+    error => error.code === 'PROJECT_OPERATION_INTENT_CORRUPT'
+  );
+});
+
+test('receipt reads tighten permissive files and reject hard-linked receipt evidence', async t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX file ownership and hard-link checks are required');
+    return;
+  }
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'orient-receipt-file-policy-'));
+  const directory = path.join(root, 'receipts');
+  fsSync.mkdirSync(directory, { mode: 0o700 });
+  t.after(() => fsSync.rmSync(root, { recursive: true, force: true }));
+  const store = new ProjectOperationReceiptStore({ directory });
+  const identity = {
+    operationId: 'receipt-file-policy',
+    tenantId: 'tenant-a',
+    workspaceId: 'a'.repeat(64),
+    changeSetHash: 'b'.repeat(64)
+  };
+  store.write({
+    ...identity,
+    result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+  });
+  const receiptPath = store.receiptPath(identity.operationId, identity.tenantId);
+  fsSync.chmodSync(receiptPath, 0o644);
+  assert.equal(store.read(identity).result.status, 'verified');
+  assert.equal(fsSync.statSync(receiptPath).mode & 0o077, 0);
+
+  const hardLink = path.join(root, 'receipt-hardlink.json');
+  fsSync.linkSync(receiptPath, hardLink);
+  assert.throws(
+    () => store.read(identity),
+    error => error.code === 'PROJECT_OPERATION_RECEIPT_CORRUPT'
+  );
+});
