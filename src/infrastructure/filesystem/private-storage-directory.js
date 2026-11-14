@@ -125,13 +125,13 @@ function ensurePrivateStorageDirectory(directory, {
       if (stats.uid !== serviceUid) {
         fail('Private storage directory must be owned by the application user', codes.directoryOwnerInvalid);
       }
-      if ((stats.mode & 0o077n) !== 0n) {
+      if ((stats.mode & 0o7777n) !== BigInt(mode)) {
         if (!repairPermissions) {
           fail('Private storage directory must not be accessible by group or other users', codes.directoryPermissionsInvalid);
         }
         fs.chmodSync(candidate, mode);
         const privateStats = fs.lstatSync(candidate, { bigint: true });
-        if (privateStats.uid !== serviceUid || (privateStats.mode & 0o077n) !== 0n) {
+        if (privateStats.uid !== serviceUid || (privateStats.mode & 0o7777n) !== BigInt(mode)) {
           fail('Private storage directory permissions could not be secured', codes.directoryPermissionsInvalid);
         }
       }
