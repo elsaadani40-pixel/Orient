@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const AsyncWorkflowScheduler = require('../../../../src/core/workflow/async-workflow-scheduler');
 const WorkflowDefinition = require('../../../../src/core/workflow/workflow-definition');
 const WorkflowInstance = require('../../../../src/core/workflow/workflow-instance');
+const withDispatchClaim = require('../../../helpers/dispatch-claim-fixture');
 
 function payload(workflowId) {
   const instance = new WorkflowInstance({
@@ -16,7 +17,7 @@ function payload(workflowId) {
     })
   });
   instance.transition('QUEUED');
-  return instance.toJSON();
+  return withDispatchClaim(instance.toJSON());
 }
 
 function scheduler({ snapshots, claimed, reconcile, releaseDispatchClaim = async () => true }) {
@@ -155,7 +156,7 @@ test('legacy workflows without an event history retain the documented recovery p
 });
 
 
-test('scheduler refuses to dispatch a worker without a durable fencing token and releases its claim', async () => {
+test('scheduler does not release a replacement claim after a claimed lease fails its fencing gate', async () => {
   const WorkflowInstance = require('../../../../src/core/workflow/workflow-instance');
   const instance = new WorkflowInstance({
     workflowId: 'workflow-without-fencing',
@@ -170,7 +171,7 @@ test('scheduler refuses to dispatch a worker without a durable fencing token and
   const value = Object.create(AsyncWorkflowScheduler.prototype);
   value.leaseStore = {
     async recoverExpired() {},
-    async acquire(workflowId, workerId) {
+    async acquireClaimed(workflowId, workerId) {
       return { workflowId, workerId, leaseId: 'lease-without-token', acquiredAt: Date.now(), expiresAt: Date.now() + 5000 };
     },
     async release(workflowId, leaseId) {
@@ -180,7 +181,10 @@ test('scheduler refuses to dispatch a worker without a durable fencing token and
   };
   value.active = new Map();
   value.maxConcurrent = 1;
-  value.queue = [{ instance, availableAt: 0, deadlineAt: null, priority: 0, sequence: 1 }];
+  value.queue = [{
+    instance, availableAt: 0, deadlineAt: null, priority: 0, sequence: 1,
+    dispatchClaim: { tenantId: 'tenant-a', workflowId: instance.workflowId, workerId: 'worker-a', workerSessionId: 'session-a', claimedAt: '2026-11-11T10:00:00.000Z', expiresAt: '2026-11-11T10:00:10.000Z' }
+  }];
   value.sortQueue = () => {};
   value.clock = () => Date.now();
   value.cancelled = new Set();
@@ -188,10 +192,7 @@ test('scheduler refuses to dispatch a worker without a durable fencing token and
   value.leaseDurationMs = 5000;
   value.quotaRepository = null;
   value.workflowRepository = {
-    async releaseDispatchClaim(workflowId, workerId, tenantId) {
-      released.push(['claim', workflowId, workerId, tenantId]);
-      return true;
-    }
+    async releaseDispatchClaim() { throw new Error('a consumed claim must never be released again'); }
   };
 
   await assert.rejects(
@@ -201,11 +202,8 @@ test('scheduler refuses to dispatch a worker without a durable fencing token and
     }),
     error => error.code === 'WORKER_DURABLE_FENCING_UNSUPPORTED'
   );
-  assert.deepEqual(released, [
-    ['lease', 'workflow-without-fencing', 'lease-without-token'],
-    ['claim', 'workflow-without-fencing', 'worker-a', 'tenant-a']
-  ]);
-  assert.equal(value.queue.length, 1);
+  assert.deepEqual(released, [['lease', 'workflow-without-fencing', 'lease-without-token']]);
+  assert.equal(value.queue.length, 0, 'the consumed claim must not be retried with stale provenance');
   assert.equal(value.active.size, 0);
   assert.equal(instance.state, 'QUEUED');
 });
