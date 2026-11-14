@@ -150,6 +150,14 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
     }
   };
 
+  const releaseClaimAfterFailure = async (payload, error) => {
+    try {
+      await releaseUnverifiedClaim(payload);
+    } catch (cleanupError) {
+      error.dispatchClaimCleanupError = cleanupError;
+    }
+  };
+
   const WorkflowInstance = require('./workflow-instance');
   let recovered = 0;
 
@@ -172,13 +180,25 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       continue;
     }
 
-    const lease = await this.leaseStore.get(payload.workflowId);
+    let lease;
+    try {
+      lease = await this.leaseStore.get(payload.workflowId);
+    } catch (error) {
+      await releaseClaimAfterFailure(payload, error);
+      throw error;
+    }
     if (lease && lease.expiresAt > this.clock()) {
       await releaseUnverifiedClaim(payload);
       continue;
     }
 
-    const instance = WorkflowInstance.fromJSON(payload);
+    let instance;
+    try {
+      instance = WorkflowInstance.fromJSON(payload);
+    } catch (error) {
+      await releaseClaimAfterFailure(payload, error);
+      throw error;
+    }
     try {
       enforceInputQuota(instance, this.quotaPolicy);
     } catch (error) {
@@ -188,7 +208,14 @@ class AsyncWorkflowScheduler extends WorkflowScheduler{
       await releaseUnverifiedClaim(payload);
       continue;
     }
-    if (!supportsCapabilities(instance, workerCapabilities)) {
+    let capabilitySupported;
+    try {
+      capabilitySupported = supportsCapabilities(instance, workerCapabilities);
+    } catch (error) {
+      await releaseClaimAfterFailure(payload, error);
+      throw error;
+    }
+    if (!capabilitySupported) {
       await releaseUnverifiedClaim(payload);
       continue;
     }
