@@ -591,7 +591,7 @@ test('receipt storage rejects a writable non-sticky grandparent even when its ch
   }
 });
 
-test('receipt storage rejects symbolic-link path ancestors before creating descendants', async t => {
+test('receipt storage canonicalizes a trusted symlink ancestor before creating descendants', async t => {
   if (process.platform === 'win32') {
     t.skip('POSIX symbolic-link directory setup is required for this test');
     return;
@@ -607,12 +607,40 @@ test('receipt storage rejects symbolic-link path ancestors before creating desce
       directory: path.join(linkedDirectory, 'receipts')
     });
 
+    store.ensureDirectory();
+    assert.equal(store.directory, path.join(fsSync.realpathSync(realDirectory), 'receipts'));
+    assert.equal(fsSync.statSync(store.directory).isDirectory(), true);
+    assert.equal(fsSync.statSync(store.directory).mode & 0o077, 0);
+  } finally {
+    fsSync.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('receipt storage rejects a symlink alias whose canonical target has an untrusted ancestor', async t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required for this test');
+    return;
+  }
+
+  const parent = fsSync.mkdtempSync(path.join(os.tmpdir(), 'orient-receipt-untrusted-alias-'));
+  const untrustedParent = path.join(parent, 'untrusted');
+  const realDirectory = path.join(untrustedParent, 'real');
+  const linkedDirectory = path.join(parent, 'linked');
+  try {
+    fsSync.mkdirSync(realDirectory, { recursive: true, mode: 0o700 });
+    fsSync.chmodSync(untrustedParent, 0o777);
+    fsSync.symlinkSync(realDirectory, linkedDirectory, 'dir');
+    const store = new ProjectOperationReceiptStore({
+      directory: path.join(linkedDirectory, 'receipts')
+    });
+
     assert.throws(
       () => store.ensureDirectory(),
-      error => error?.code === 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID'
+      error => error?.code === 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED'
     );
     assert.equal(fsSync.existsSync(path.join(realDirectory, 'receipts')), false);
   } finally {
+    fsSync.chmodSync(untrustedParent, 0o700);
     fsSync.rmSync(parent, { recursive: true, force: true });
   }
 });
