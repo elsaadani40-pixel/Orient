@@ -21,6 +21,10 @@ const auth = new OwnerIdentityService({
 });
 const tokenDigest = crypto.createHash('sha256').update(VALID_TOKEN).digest('hex');
 
+// Persistence has dedicated deterministic tests. Keep this campaign focused on
+// token/CSRF/session semantics instead of fsyncing the state file per input.
+auth.save = () => {};
+
 process.on('exit', () => {
   try { fs.rmSync(directory, { recursive: true, force: true }); } catch {}
 });
