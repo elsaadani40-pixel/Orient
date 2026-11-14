@@ -3,6 +3,8 @@ name: ORIENT — Temporary SonarCloud diagnostics for PR #394
 on:
   push:
     branches: ["hardening/sonarcloud-diagnostics-pr394"]
+  pull_request:
+    branches: ["main"]
 
 permissions:
   contents: read
