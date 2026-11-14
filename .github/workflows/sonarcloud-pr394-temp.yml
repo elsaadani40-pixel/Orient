@@ -1,0 +1,43 @@
+name: ORIENT — Temporary SonarCloud diagnostics for PR #394
+
+on:
+  push:
+    branches: ["hardening/sonarcloud-diagnostics-pr394"]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    name: Export issue-level SonarCloud evidence for PR #394
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout default branch diagnostics
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Verify diagnostic tools
+        run: |
+          set -euo pipefail
+          command -v curl
+          command -v jq
+
+      - name: Export PR #394 diagnostics
+        shell: bash
+        env:
+          SONAR_PROJECT_KEY: els aadani
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PULL_REQUEST: "394"
+        run: |
+          set -euo pipefail
+          SONAR_PROJECT_KEY="elsaadani40-pixel_Orient" bash scripts/ci/export-sonarcloud-pr-diagnostics.sh
+
+      - name: Upload raw SonarCloud evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: orient-sonarcloud-pr-394-diagnostics
+          path: artifacts/sonarcloud/
+          if-no-files-found: error
+          retention-days: 7
