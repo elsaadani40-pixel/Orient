@@ -289,7 +289,6 @@ class OwnerIdentityService {
 
   loadLoginFailureSecret() {
     const dir = path.dirname(this.stateFile);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(dir, 0o700); } catch (error) {
       if (process.platform !== 'win32') {
         throw Object.assign(new Error('Could not protect owner identity directory'), {
