@@ -502,3 +502,51 @@ test('owner identity save never removes a temporary file it did not create', t =
   assert.equal(fs.readFileSync(collisionPath, 'utf8'), '');
   assert.equal(fs.readFileSync(stateFile, 'utf8'), originalState);
 });
+
+test('owner identity canonicalizes a trusted platform symlink ancestor', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-alias-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const canonicalParent = path.join(root, 'canonical-parent');
+  const storage = path.join(canonicalParent, 'storage');
+  const alias = path.join(root, 'platform-alias');
+  fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+  fs.symlinkSync(canonicalParent, alias, 'dir');
+
+  const identity = new OwnerIdentityService({
+    stateFile: path.join(alias, 'storage', 'owner.json'),
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  assert.equal(identity.stateFile, path.join(fs.realpathSync(storage), 'owner.json'));
+  assert.equal(fs.statSync(storage).mode & 0o077, 0);
+});
+
+test('owner identity rejects a trusted-looking symlink alias when its canonical grandparent is untrusted', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-untrusted-alias-'));
+  t.after(() => {
+    fs.chmodSync(path.join(root, 'untrusted-parent'), 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const untrustedParent = path.join(root, 'untrusted-parent');
+  const canonicalParent = path.join(untrustedParent, 'canonical-parent');
+  const storage = path.join(canonicalParent, 'storage');
+  const alias = path.join(root, 'platform-alias');
+  fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+  fs.chmodSync(untrustedParent, 0o777);
+  fs.symlinkSync(canonicalParent, alias, 'dir');
+
+  assert.throws(
+    () => new OwnerIdentityService({
+      stateFile: path.join(alias, 'storage', 'owner.json'),
+      bootstrapPassword: 'temporary-owner-password-9F!x'
+    }),
+    error => error.code === 'OWNER_IDENTITY_STORAGE_PARENT_UNTRUSTED'
+  );
+});
