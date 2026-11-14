@@ -790,3 +790,45 @@ test('a process crash after lock-directory creation but before owner-marker dura
   });
 });
 
+test('receipt write preserves a pre-existing temporary-file collision it did not create', async () => {
+  await withFixture(async ({ store }) => {
+    const context = { operationId: 'receipt-temp-collision', tenantId: 'tenant-a' };
+    const receiptPath = store.receiptPath(context.operationId, context.tenantId);
+    const originalOpenSync = fsSync.openSync;
+    const originalCloseSync = fsSync.closeSync;
+    let collisionPath = null;
+    const collisionContents = 'owned by another writer\\n';
+
+    fsSync.openSync = function (filePath, ...args) {
+      if (typeof filePath === 'string' &&
+          filePath.startsWith(receiptPath + '.tmp.') &&
+          args[0] === 'wx') {
+        collisionPath = filePath;
+        const descriptor = originalOpenSync.call(this, filePath, 'wx', 0o600);
+        originalCloseSync.call(this, descriptor);
+        fsSync.writeFileSync(filePath, collisionContents, 'utf8');
+        throw Object.assign(new Error('temporary receipt path already exists'), { code: 'EEXIST' });
+      }
+      return originalOpenSync.call(this, filePath, ...args);
+    };
+
+    try {
+      assert.throws(
+        () => store.write({
+          ...context,
+          workspaceId: 'a'.repeat(64),
+          changeSetHash: 'b'.repeat(64),
+          result: { status: 'verified', verification: { status: 'passed', failed: 0 } }
+        }),
+        error => error.code === 'EEXIST'
+      );
+    } finally {
+      fsSync.openSync = originalOpenSync;
+    }
+
+    assert.ok(collisionPath);
+    assert.equal(await fs.readFile(collisionPath, 'utf8'), collisionContents);
+    await assert.rejects(fs.stat(receiptPath), error => error.code === 'ENOENT');
+    await assert.rejects(fs.stat(receiptPath + '.lock'), error => error.code === 'ENOENT');
+  });
+});
