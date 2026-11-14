@@ -365,17 +365,19 @@ test('lock owner descriptor is closed before the protected operation begins', t 
   }
 });
 
-test('atomic writes fsync and close their temporary file descriptor', t => {
+test('atomic writes fsync and close both temporary file and containing directory descriptors', t => {
   const f = fixture(t);
   const repository = f.create();
   const originalOpenSync = fs.openSync;
   const originalFsyncSync = fs.fsyncSync;
   let temporaryDescriptor;
+  let directoryDescriptor;
   let fsyncCalls = 0;
 
   fs.openSync = function (target, ...args) {
     const descriptor = originalOpenSync.call(this, target, ...args);
     if (String(target).startsWith(repository.filePath + '.tmp.')) temporaryDescriptor = descriptor;
+    if (target === repository.directory) directoryDescriptor = descriptor;
     return descriptor;
   };
   fs.fsyncSync = function (descriptor) {
@@ -384,11 +386,9 @@ test('atomic writes fsync and close their temporary file descriptor', t => {
   };
   try {
     repository.write([{ id: 'durable-event', type: 'test.created' }]);
-    assert.equal(fsyncCalls, 1);
-    assert.throws(
-      () => fs.fstatSync(temporaryDescriptor),
-      error => error.code === 'EBADF'
-    );
+    assert.equal(fsyncCalls, 2, 'the temp file and its containing directory must both be synced');
+    assert.throws(() => fs.fstatSync(temporaryDescriptor), error => error.code === 'EBADF');
+    assert.throws(() => fs.fstatSync(directoryDescriptor), error => error.code === 'EBADF');
   } finally {
     fs.openSync = originalOpenSync;
     fs.fsyncSync = originalFsyncSync;
@@ -640,4 +640,211 @@ test('constructor accepts EEXIST when another creator wins the initial event-fil
 
   assert.equal(simulatedRace, true);
   assert.deepEqual(repository.read(), []);
+});
+
+
+test('lock acquisition propagates unexpected mkdir errors instead of converting them to lock timeouts', t => {
+  const f = fixture(t, { lockTimeoutMs: 10 });
+  const repository = f.create();
+  const originalMkdirSync = fs.mkdirSync;
+  const expected = Object.assign(new Error('read-only event storage'), { code: 'EROFS' });
+
+  fs.mkdirSync = function (directory, ...args) {
+    if (directory === repository.lockPath) throw expected;
+    return originalMkdirSync.call(this, directory, ...args);
+  };
+  try {
+    assert.throws(
+      () => repository.withLock(() => assert.fail('must not acquire a lock')),
+      error => error === expected
+    );
+  } finally {
+    fs.mkdirSync = originalMkdirSync;
+  }
+
+  assert.equal(fs.existsSync(repository.lockPath), false);
+});
+
+test('failed exclusive temporary-file creation never removes a pre-existing collision path', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const originalContents = fs.readFileSync(repository.filePath, 'utf8');
+  const originalOpenSync = fs.openSync;
+  const originalCloseSync = fs.closeSync;
+  let collisionPath = null;
+
+  fs.openSync = function (filePath, ...args) {
+    if (typeof filePath === 'string' &&
+        filePath.startsWith(repository.filePath + '.tmp.') &&
+        args[0] === 'wx') {
+      collisionPath = filePath;
+      const descriptor = originalOpenSync.call(this, filePath, 'wx', 0o600);
+      originalCloseSync.call(this, descriptor);
+      throw Object.assign(new Error('temporary path already exists'), { code: 'EEXIST' });
+    }
+    return originalOpenSync.call(this, filePath, ...args);
+  };
+  try {
+    assert.throws(
+      () => repository.write([{ id: 'event-collision', type: 'test.created' }]),
+      error => error.code === 'EEXIST'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert.ok(collisionPath);
+  assert.equal(fs.existsSync(collisionPath), true, 'the colliding file belongs to another writer');
+  assert.equal(fs.readFileSync(collisionPath, 'utf8'), '');
+  assert.equal(fs.readFileSync(repository.filePath, 'utf8'), originalContents);
+});
+
+test('write failure closes the open descriptor and removes only its own temporary file', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const originalContents = fs.readFileSync(repository.filePath, 'utf8');
+  const originalOpenSync = fs.openSync;
+  const originalWriteFileSync = fs.writeFileSync;
+  const expected = Object.assign(new Error('simulated temporary write failure'), { code: 'EIO' });
+  let temporaryPath = null;
+  let temporaryDescriptor = null;
+
+  fs.openSync = function (filePath, ...args) {
+    const descriptor = originalOpenSync.call(this, filePath, ...args);
+    if (typeof filePath === 'string' && filePath.startsWith(repository.filePath + '.tmp.')) {
+      temporaryPath = filePath;
+      temporaryDescriptor = descriptor;
+    }
+    return descriptor;
+  };
+  fs.writeFileSync = function (target, ...args) {
+    if (target === temporaryDescriptor) throw expected;
+    return originalWriteFileSync.call(this, target, ...args);
+  };
+  try {
+    assert.throws(
+      () => repository.write([{ id: 'event-write-failure', type: 'test.created' }]),
+      error => error === expected
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.writeFileSync = originalWriteFileSync;
+  }
+
+  assert.ok(temporaryPath);
+  assert.ok(Number.isInteger(temporaryDescriptor));
+  assert.throws(() => fs.fstatSync(temporaryDescriptor), error => error.code === 'EBADF');
+  assert.equal(fs.existsSync(temporaryPath), false);
+  assert.equal(fs.readFileSync(repository.filePath, 'utf8'), originalContents);
+});
+
+test('local event reads tolerate legacy records without a data object', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  fs.writeFileSync(f.filePath, JSON.stringify([
+    { id: 'legacy-event-without-data', type: 'legacy.created' }
+  ]));
+
+  assert.deepEqual(
+    repository.findAll({ tenantId: 'local' }).map(event => event.id),
+    ['legacy-event-without-data']
+  );
+});
+
+test('appendMissionEvent rejects a null event with the stable aggregateId contract', t => {
+  const f = fixture(t);
+  const repository = f.create();
+
+  assert.throws(
+    () => repository.appendMissionEvent(null),
+    error => error instanceof TypeError && error.message === 'aggregateId is required'
+  );
+});
+
+test('an empty appendMany batch is a no-op even while another writer holds the lock', t => {
+  const f = fixture(t, { lockTimeoutMs: 10 });
+  const repository = f.create();
+  fs.mkdirSync(repository.lockPath, { mode: 0o700 });
+
+  assert.deepEqual(repository.appendMany([]), []);
+  assert.equal(fs.lstatSync(repository.lockPath).isDirectory(), true);
+});
+
+test('duplicate-only appendMany replay does not rewrite the event file', t => {
+  const f = fixture(t);
+  const repository = f.create();
+  const event = { id: 'duplicate-only-event', type: 'test.created' };
+  repository.append(event, { tenantId: 'tenant-a' });
+
+  let writes = 0;
+  repository.write = () => {
+    writes += 1;
+    throw new Error('duplicate replay must not rewrite storage');
+  };
+
+  assert.deepEqual(repository.appendMany([event], { tenantId: 'tenant-a' }), []);
+  assert.equal(writes, 0);
+});
+
+test('EventRepository canonicalizes a trusted platform symlink ancestor', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-alias-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const canonicalParent = path.join(root, 'canonical-parent');
+  const storage = path.join(canonicalParent, 'storage');
+  const alias = path.join(root, 'platform-alias');
+  fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+  fs.symlinkSync(canonicalParent, alias, 'dir');
+
+  const repository = new EventRepository(path.join(alias, 'storage', 'events.json'));
+  assert.equal(repository.directory, path.join(fs.realpathSync(canonicalParent), 'storage'));
+  assert.equal(fs.statSync(repository.filePath).isFile(), true);
+  assert.equal(fs.statSync(repository.directory).mode & 0o077, 0);
+});
+
+test('EventRepository rejects a symlink alias whose canonical grandparent is untrusted', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-event-untrusted-alias-'));
+  const untrustedParent = path.join(root, 'untrusted-parent');
+  const canonicalParent = path.join(untrustedParent, 'canonical-parent');
+  const storage = path.join(canonicalParent, 'storage');
+  const alias = path.join(root, 'platform-alias');
+  fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+  fs.chmodSync(untrustedParent, 0o777);
+  fs.symlinkSync(canonicalParent, alias, 'dir');
+  t.after(() => {
+    fs.chmodSync(untrustedParent, 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  assert.throws(
+    () => new EventRepository(path.join(alias, 'storage', 'events.json')),
+    error => error.code === 'EVENT_STORAGE_PARENT_UNTRUSTED'
+  );
+  assert.equal(fs.existsSync(path.join(storage, 'events.json')), false);
+});
+
+test('event reads reject hard-linked event files and tighten private file permissions', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX hard-link and file-mode checks are required');
+    return;
+  }
+  const f = fixture(t);
+  const repository = f.create();
+  fs.chmodSync(repository.filePath, 0o644);
+  assert.deepEqual(repository.read(), []);
+  assert.equal(fs.statSync(repository.filePath).mode & 0o077, 0);
+
+  const linked = path.join(f.root, 'events-hardlink.json');
+  fs.linkSync(repository.filePath, linked);
+  assert.throws(
+    () => repository.read(),
+    error => error.code === 'EVENT_STORAGE_CORRUPT'
+  );
 });

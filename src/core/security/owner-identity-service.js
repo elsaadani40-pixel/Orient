@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const ensurePrivateStorageDirectory = require('../../infrastructure/filesystem/private-storage-directory');
 
 const TOKEN = /^[A-Za-z0-9_-]{40,100}$/;
 const HASH = /^(?:[a-f0-9]{128}:[a-f0-9]{32}|legacy:[a-f0-9]{128}:[a-f0-9]{32})$/;
@@ -99,52 +100,17 @@ class OwnerIdentityService {
   }
 
   prepareStateDirectory() {
-    const configuredDirectory = path.dirname(this.stateFile);
-    fs.mkdirSync(configuredDirectory, { recursive: true, mode: 0o700 });
-    const configuredStats = fs.lstatSync(configuredDirectory, { bigint: true });
-    if (!configuredStats.isDirectory() || configuredStats.isSymbolicLink()) {
-      throw Object.assign(new Error('Owner identity directory must not be a symbolic link'), {
-        code: 'OWNER_IDENTITY_STORAGE_DIRECTORY_INVALID'
-      });
-    }
-
-    // Resolve trusted platform path aliases once, then use only the canonical path.
-    const directory = fs.realpathSync(configuredDirectory);
-    const directoryStats = fs.lstatSync(directory, { bigint: true });
-    const parentDirectory = path.dirname(directory);
-    const parentStats = fs.lstatSync(parentDirectory, { bigint: true });
-    if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink() ||
-        !parentStats.isDirectory() || parentStats.isSymbolicLink() ||
-        fs.realpathSync(directory) !== directory ||
-        fs.realpathSync(parentDirectory) !== parentDirectory) {
-      throw Object.assign(new Error('Owner identity directory must be a real canonical directory'), {
-        code: 'OWNER_IDENTITY_STORAGE_DIRECTORY_INVALID'
-      });
-    }
-
-    if (process.platform !== 'win32' && typeof process.getuid === 'function') {
-      if (directoryStats.uid !== BigInt(process.getuid())) {
-        throw Object.assign(new Error('Owner identity directory must be owned by the application user'), {
-          code: 'OWNER_IDENTITY_STORAGE_DIRECTORY_OWNER_INVALID'
-        });
+    const directory = ensurePrivateStorageDirectory(path.dirname(this.stateFile), {
+      repairPermissions: true,
+      errorCodes: {
+        directoryInvalid: 'OWNER_IDENTITY_STORAGE_DIRECTORY_INVALID',
+        directoryOwnerInvalid: 'OWNER_IDENTITY_STORAGE_DIRECTORY_OWNER_INVALID',
+        directoryPermissionsInvalid: 'OWNER_IDENTITY_STORAGE_DIRECTORY_PERMISSIONS_INVALID',
+        parentInvalid: 'OWNER_IDENTITY_STORAGE_PARENT_UNTRUSTED',
+        parentUntrusted: 'OWNER_IDENTITY_STORAGE_PARENT_UNTRUSTED'
       }
-      const parentMode = parentStats.mode & 0o7777n;
-      if ((parentMode & 0o022n) !== 0n && (parentMode & 0o1000n) === 0n) {
-        throw Object.assign(new Error('Owner identity parent directory is writable by other users without sticky-bit protection'), {
-          code: 'OWNER_IDENTITY_STORAGE_PARENT_UNTRUSTED'
-        });
-      }
-      if ((directoryStats.mode & 0o077n) !== 0n) fs.chmodSync(directory, 0o700);
-      const privateStats = fs.lstatSync(directory, { bigint: true });
-      if ((privateStats.mode & 0o077n) !== 0n) {
-        throw Object.assign(new Error('Owner identity directory must be private (mode 0700)'), {
-          code: 'OWNER_IDENTITY_STORAGE_DIRECTORY_PERMISSIONS_INVALID'
-        });
-      }
-    }
-
+    });
     this.stateFile = path.join(directory, path.basename(this.stateFile));
-    this.loginFailureKeyFile = this.stateFile + '.lockout-key';
   }
 
   read() {
@@ -191,9 +157,9 @@ class OwnerIdentityService {
         if (stats.uid !== process.getuid()) {
           throw invalid('Owner identity state must be owned by the application user');
         }
-        if ((stats.mode & 0o077) !== 0) {
+        if ((stats.mode & 0o7777) !== 0o600) {
           fs.fchmodSync(descriptor, 0o600);
-          if ((fs.fstatSync(descriptor).mode & 0o077) !== 0) {
+          if ((fs.fstatSync(descriptor).mode & 0o7777) !== 0o600) {
             throw invalid('Owner identity state must be private (mode 0600)');
           }
         }
@@ -253,7 +219,6 @@ class OwnerIdentityService {
 
   save(next = this.state) {
     const dir = path.dirname(this.stateFile);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const value = {
       ...next,
       sessions: [...this.sessions].map(([digest, session]) => ({ digest, ...session })),
@@ -261,9 +226,11 @@ class OwnerIdentityService {
     };
     const tmp = this.stateFile + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
     let fd = null;
+    let created = false;
     let renamed = false;
     try {
       fd = fs.openSync(tmp, 'wx', 0o600);
+      created = true;
       fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
       try { fs.fchmodSync(fd, 0o600); } catch (error) {
         if (process.platform !== 'win32') throw error;
@@ -278,7 +245,6 @@ class OwnerIdentityService {
       // even if the directory durability barrier fails. Callers must not roll
       // back session state as though the write never happened.
       this.state = value;
-      try { fs.chmodSync(this.stateFile, 0o600); } catch {}
 
       // Node does not expose a portable directory-fsync operation on Windows.
       // Keep file fsync + atomic replacement there; on POSIX, require the
@@ -289,7 +255,7 @@ class OwnerIdentityService {
       }
     } catch (error) {
       if (fd !== null) { try { fs.closeSync(fd); } catch {} }
-      if (!renamed) { try { fs.rmSync(tmp, { force: true }); } catch {} }
+      if (created && !renamed) { try { fs.rmSync(tmp, { force: true }); } catch {} }
       throw Object.assign(new Error('Could not persist owner identity safely'), {
         code: 'OWNER_IDENTITY_PERSIST_FAILED',
         committed: renamed,
@@ -322,7 +288,6 @@ class OwnerIdentityService {
 
   loadLoginFailureSecret() {
     const dir = path.dirname(this.stateFile);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(dir, 0o700); } catch (error) {
       if (process.platform !== 'win32') {
         throw Object.assign(new Error('Could not protect owner identity directory'), {
@@ -335,13 +300,12 @@ class OwnerIdentityService {
     const readExisting = () => {
       let fd;
       try {
-        // Open first, then validate the opened descriptor. On POSIX, O_NOFOLLOW
-        // makes the open itself reject symlinks, avoiding a separate lstat/open
-        // check-then-use race. Node does not expose O_NOFOLLOW on Windows;
-        // there, protection against path replacement depends on the deployment
-        // ACL restricting this directory to the service account. chmod(0700)
-        // is not an ACL boundary on Windows; fstat still validates the handle.
         const noFollow = fs.constants.O_NOFOLLOW;
+        if (process.platform !== 'win32' && typeof noFollow !== 'number') {
+          throw Object.assign(new Error('Safe owner lockout key reads are unsupported on this platform'), {
+            code: 'OWNER_LOCKOUT_KEY_UNSAFE_FILESYSTEM'
+          });
+        }
         try {
           fd = fs.openSync(
             this.loginFailureKeyFile,
@@ -360,12 +324,37 @@ class OwnerIdentityService {
         if (!stat.isFile() || stat.nlink !== 1 || stat.size !== 64) {
           throw Object.assign(new Error('Owner lockout key file is invalid'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
         }
-        const encoded = fs.readFileSync(fd, 'utf8');
+        if (process.platform !== 'win32' && typeof process.getuid === 'function') {
+          if (stat.uid !== process.getuid()) {
+            throw Object.assign(new Error('Owner lockout key must be owned by the application user'), {
+              code: 'OWNER_LOCKOUT_KEY_INVALID'
+            });
+          }
+          if ((stat.mode & 0o7777) !== 0o600) {
+            try { fs.fchmodSync(fd, 0o600); } catch (error) {
+              throw Object.assign(new Error('Owner lockout key permissions could not be secured'), {
+                code: 'OWNER_LOCKOUT_KEY_INVALID',
+                cause: error
+              });
+            }
+            if ((fs.fstatSync(fd).mode & 0o7777) !== 0o600) {
+              throw Object.assign(new Error('Owner lockout key must be private (mode 0600)'), {
+                code: 'OWNER_LOCKOUT_KEY_INVALID'
+              });
+            }
+          }
+        }
+        let encoded;
+        try {
+          encoded = readBoundedFile(fd, 64);
+        } catch (error) {
+          throw Object.assign(new Error('Owner lockout key file is invalid'), {
+            code: 'OWNER_LOCKOUT_KEY_INVALID',
+            cause: error
+          });
+        }
         if (!/^[a-f0-9]{64}$/.test(encoded)) {
           throw Object.assign(new Error('Owner lockout key file is invalid'), { code: 'OWNER_LOCKOUT_KEY_INVALID' });
-        }
-        try { fs.fchmodSync(fd, 0o600); } catch (error) {
-          if (process.platform !== 'win32') throw error;
         }
         return Buffer.from(encoded, 'hex');
       } finally {
@@ -391,8 +380,10 @@ class OwnerIdentityService {
     const secret = crypto.randomBytes(32);
     let fd;
     let created = false;
+    let committed = false;
     try {
       fd = fs.openSync(this.loginFailureKeyFile, 'wx', 0o600);
+      created = true;
       fs.writeFileSync(fd, secret.toString('hex'), 'utf8');
       try { fs.fchmodSync(fd, 0o600); } catch (error) {
         if (process.platform !== 'win32') throw error;
@@ -400,7 +391,7 @@ class OwnerIdentityService {
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = undefined;
-      created = true;
+      committed = true;
 
       if (process.platform !== 'win32') {
         const dirFd = fs.openSync(dir, 'r');
@@ -410,10 +401,10 @@ class OwnerIdentityService {
     } catch (error) {
       if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
       if (error.code === 'EEXIST') return readExisting();
-      if (!created) { try { fs.rmSync(this.loginFailureKeyFile, { force: true }); } catch {} }
+      if (created && !committed) { try { fs.unlinkSync(this.loginFailureKeyFile); } catch {} }
       throw Object.assign(new Error('Could not persist owner lockout key safely'), {
         code: 'OWNER_LOCKOUT_KEY_PERSIST_FAILED',
-        committed: created,
+        committed,
         cause: error
       });
     }

@@ -463,3 +463,190 @@ test('owner identity state rejects a parent directory writable by other users wi
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('owner identity save never removes a temporary file it did not create', t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  const originalState = fs.readFileSync(stateFile, 'utf8');
+  const originalOpenSync = fs.openSync;
+  const originalCloseSync = fs.closeSync;
+  let collisionPath = null;
+
+  fs.openSync = function (filePath, ...args) {
+    if (typeof filePath === 'string' &&
+        filePath.startsWith(stateFile + '.') &&
+        filePath.endsWith('.tmp') &&
+        args[0] === 'wx') {
+      collisionPath = filePath;
+      const descriptor = originalOpenSync.call(this, filePath, 'wx', 0o600);
+      originalCloseSync.call(this, descriptor);
+      throw Object.assign(new Error('owner state temp path already exists'), { code: 'EEXIST' });
+    }
+    return originalOpenSync.call(this, filePath, ...args);
+  };
+  try {
+    assert.throws(
+      () => identity.save(),
+      error => error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.cause?.code === 'EEXIST'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert.ok(collisionPath);
+  assert.equal(fs.existsSync(collisionPath), true, 'the colliding temp path belongs to another writer');
+  assert.equal(fs.readFileSync(collisionPath, 'utf8'), '');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), originalState);
+});
+
+test('owner identity canonicalizes a trusted platform symlink ancestor', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-alias-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const canonicalParent = path.join(root, 'canonical-parent');
+  const storage = path.join(canonicalParent, 'storage');
+  const alias = path.join(root, 'platform-alias');
+  fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+  fs.symlinkSync(canonicalParent, alias, 'dir');
+
+  const identity = new OwnerIdentityService({
+    stateFile: path.join(alias, 'storage', 'owner.json'),
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  assert.equal(identity.stateFile, path.join(fs.realpathSync(storage), 'owner.json'));
+  assert.equal(fs.statSync(storage).mode & 0o077, 0);
+});
+
+test('owner identity rejects a trusted-looking symlink alias when its canonical grandparent is untrusted', t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX symbolic-link directory setup is required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-untrusted-alias-'));
+  t.after(() => {
+    fs.chmodSync(path.join(root, 'untrusted-parent'), 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const untrustedParent = path.join(root, 'untrusted-parent');
+  const canonicalParent = path.join(untrustedParent, 'canonical-parent');
+  const storage = path.join(canonicalParent, 'storage');
+  const alias = path.join(root, 'platform-alias');
+  fs.mkdirSync(storage, { recursive: true, mode: 0o700 });
+  fs.chmodSync(untrustedParent, 0o777);
+  fs.symlinkSync(canonicalParent, alias, 'dir');
+
+  assert.throws(
+    () => new OwnerIdentityService({
+      stateFile: path.join(alias, 'storage', 'owner.json'),
+      bootstrapPassword: 'temporary-owner-password-9F!x'
+    }),
+    error => error.code === 'OWNER_IDENTITY_STORAGE_PARENT_UNTRUSTED'
+  );
+});
+
+test('owner lockout key reservation does not delete a file it failed to create', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-key-eacces-'));
+  fs.chmodSync(root, 0o700);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stateFile = path.join(root, 'owner.json');
+  const keyFile = stateFile + '.lockout-key';
+  const originalOpenSync = fs.openSync;
+  const originalCloseSync = fs.closeSync;
+  let reservationAttempted = false;
+
+  fs.openSync = function (target, flags, ...args) {
+    if (target === keyFile && typeof flags === 'number') {
+      throw Object.assign(new Error('simulated missing key during initial read'), { code: 'ENOENT' });
+    }
+    if (target === keyFile && flags === 'wx' && !reservationAttempted) {
+      reservationAttempted = true;
+      const descriptor = originalOpenSync.call(this, target, 'wx', 0o600);
+      originalCloseSync.call(this, descriptor);
+      fs.writeFileSync(target, 'owned by another writer');
+      throw Object.assign(new Error('exclusive reservation denied'), { code: 'EACCES' });
+    }
+    return originalOpenSync.call(this, target, flags, ...args);
+  };
+  try {
+    assert.throws(
+      () => new OwnerIdentityService({
+        stateFile,
+        bootstrapPassword: 'temporary-owner-password-9F!x'
+      }),
+      error => error.code === 'OWNER_LOCKOUT_KEY_PERSIST_FAILED'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert.equal(reservationAttempted, true);
+  assert.equal(fs.readFileSync(keyFile, 'utf8'), 'owned by another writer');
+});
+
+test('owner lockout key EEXIST collision is preserved and never cleaned up by the losing writer', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-key-eexist-'));
+  fs.chmodSync(root, 0o700);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stateFile = path.join(root, 'owner.json');
+  const keyFile = stateFile + '.lockout-key';
+  const originalOpenSync = fs.openSync;
+  const originalCloseSync = fs.closeSync;
+  let reservationAttempted = false;
+
+  fs.openSync = function (target, flags, ...args) {
+    if (target === keyFile && typeof flags === 'number' && !reservationAttempted) {
+      throw Object.assign(new Error('simulated missing key during initial read'), { code: 'ENOENT' });
+    }
+    if (target === keyFile && flags === 'wx' && !reservationAttempted) {
+      reservationAttempted = true;
+      const descriptor = originalOpenSync.call(this, target, 'wx', 0o600);
+      originalCloseSync.call(this, descriptor);
+      fs.writeFileSync(target, 'collision');
+      throw Object.assign(new Error('another writer reserved the key path'), { code: 'EEXIST' });
+    }
+    return originalOpenSync.call(this, target, flags, ...args);
+  };
+  try {
+    assert.throws(
+      () => new OwnerIdentityService({
+        stateFile,
+        bootstrapPassword: 'temporary-owner-password-9F!x'
+      }),
+      error => error.code === 'OWNER_LOCKOUT_KEY_INVALID'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert.equal(reservationAttempted, true);
+  assert.equal(fs.readFileSync(keyFile, 'utf8'), 'collision');
+});
+
+test('owner lockout key rejects hard-linked files before reading secret material', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX hard-link ownership checks are required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-key-hardlink-'));
+  fs.chmodSync(root, 0o700);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stateFile = path.join(root, 'owner.json');
+  const keyFile = stateFile + '.lockout-key';
+  fs.writeFileSync(keyFile, 'a'.repeat(64), { mode: 0o600 });
+  fs.linkSync(keyFile, path.join(root, 'external-key-link'));
+
+  assert.throws(
+    () => new OwnerIdentityService({
+      stateFile,
+      bootstrapPassword: 'temporary-owner-password-9F!x'
+    }),
+    error => error.code === 'OWNER_LOCKOUT_KEY_INVALID'
+  );
+});
