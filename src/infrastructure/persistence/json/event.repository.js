@@ -66,7 +66,7 @@ class EventRepository {
     try {
       descriptor = fs.openSync(this.filePath, 'wx', 0o600);
       created = true;
-      fs.writeFileSync(descriptor, '[]\\n', 'utf8');
+      fs.writeFileSync(descriptor, '[]\n', 'utf8');
       fs.fsyncSync(descriptor);
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
@@ -122,7 +122,7 @@ class EventRepository {
     try {
       descriptor = fs.openSync(temporaryFile, 'wx', 0o600);
       created = true;
-      fs.writeFileSync(descriptor, JSON.stringify(events, null, 2) + '\\n', 'utf8');
+      fs.writeFileSync(descriptor, JSON.stringify(events, null, 2) + '\n', 'utf8');
       fs.fsyncSync(descriptor);
       fs.closeSync(descriptor);
       descriptor = undefined;
