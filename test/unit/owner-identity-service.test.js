@@ -463,3 +463,42 @@ test('owner identity state rejects a parent directory writable by other users wi
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('owner identity save never removes a temporary file it did not create', t => {
+  const { stateFile } = fixture(t);
+  const identity = new OwnerIdentityService({
+    stateFile,
+    bootstrapPassword: 'temporary-owner-password-9F!x'
+  });
+  const originalState = fs.readFileSync(stateFile, 'utf8');
+  const originalOpenSync = fs.openSync;
+  const originalCloseSync = fs.closeSync;
+  let collisionPath = null;
+
+  fs.openSync = function (filePath, ...args) {
+    if (typeof filePath === 'string' &&
+        filePath.startsWith(stateFile + '.') &&
+        filePath.endsWith('.tmp') &&
+        args[0] === 'wx') {
+      collisionPath = filePath;
+      const descriptor = originalOpenSync.call(this, filePath, 'wx', 0o600);
+      originalCloseSync.call(this, descriptor);
+      throw Object.assign(new Error('owner state temp path already exists'), { code: 'EEXIST' });
+    }
+    return originalOpenSync.call(this, filePath, ...args);
+  };
+  try {
+    assert.throws(
+      () => identity.save(),
+      error => error.code === 'OWNER_IDENTITY_PERSIST_FAILED' && error.cause?.code === 'EEXIST'
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+
+  assert.ok(collisionPath);
+  assert.equal(fs.existsSync(collisionPath), true, 'the colliding temp path belongs to another writer');
+  assert.equal(fs.readFileSync(collisionPath, 'utf8'), '');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), originalState);
+});
