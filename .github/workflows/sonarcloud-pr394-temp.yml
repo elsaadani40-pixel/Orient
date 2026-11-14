@@ -27,12 +27,12 @@ jobs:
       - name: Export PR #394 diagnostics
         shell: bash
         env:
-          SONAR_PROJECT_KEY: els aadani
+          SONAR_PROJECT_KEY: "elsaadani40-pixel_Orient"
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_PULL_REQUEST: "394"
         run: |
           set -euo pipefail
-          SONAR_PROJECT_KEY="elsaadani40-pixel_Orient" bash scripts/ci/export-sonarcloud-pr-diagnostics.sh
+          bash scripts/ci/export-sonarcloud-pr-diagnostics.sh
 
       - name: Upload raw SonarCloud evidence
         uses: actions/upload-artifact@v7
