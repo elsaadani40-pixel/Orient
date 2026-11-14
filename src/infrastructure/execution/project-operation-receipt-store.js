@@ -69,35 +69,21 @@ class ProjectOperationReceiptStore {
   }
 
   ensureDirectory() {
-    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-
-    // Validate every directory component, not just the immediate parent.
-    // Any untrusted owner of an ancestor can chmod it and replace descendants.
     const root = path.parse(this.directory).root;
     const components = this.directory.slice(root.length).split(path.sep).filter(Boolean);
-    const directories = [root];
-    let current = root;
-    for (const component of components) {
-      current = path.join(current, component);
-      directories.push(current);
-    }
-
     const hasPosixIdentity = process.platform !== 'win32' &&
       typeof process.getuid === 'function';
     const serviceUid = hasPosixIdentity ? BigInt(process.getuid()) : null;
     const trustedOwners = hasPosixIdentity ? new Set([0n, serviceUid]) : null;
 
-    for (let index = 0; index < directories.length; index += 1) {
-      const directory = directories[index];
+    const validateDirectory = (directory, isReceiptDirectory) => {
       const stats = fs.lstatSync(directory, { bigint: true });
       if (!stats.isDirectory() || stats.isSymbolicLink() ||
           fs.realpathSync(directory) !== directory) {
         fail('Operation receipt path contains a non-directory, symbolic link, or non-canonical component', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_INVALID');
       }
 
-      const isReceiptDirectory = index === directories.length - 1;
-      if (!hasPosixIdentity) continue;
-
+      if (!hasPosixIdentity) return;
       if (isReceiptDirectory) {
         if (stats.uid !== serviceUid) {
           fail('Operation receipt directory must be owned by the application user', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_OWNER_INVALID');
@@ -105,7 +91,7 @@ class ProjectOperationReceiptStore {
         if ((stats.mode & 0o077n) !== 0n) {
           fail('Operation receipt directory must not be accessible by group or other users (chmod 700)', 'PROJECT_OPERATION_RECEIPT_DIRECTORY_PERMISSIONS_INVALID');
         }
-        continue;
+        return;
       }
 
       // Every ancestor must be owned by root or the service UID. A directory
@@ -118,6 +104,26 @@ class ProjectOperationReceiptStore {
       if ((ancestorMode & 0o022n) !== 0n && (ancestorMode & 0o1000n) === 0n) {
         fail('Operation receipt path ancestor is writable by group or other users without sticky-bit protection', 'PROJECT_OPERATION_RECEIPT_PARENT_UNTRUSTED');
       }
+    };
+
+    // Validate each existing parent before creating its child. Recursive mkdir
+    // could otherwise follow a substituted ancestor before the trust checks run.
+    let current = root;
+    validateDirectory(current, false);
+    for (let index = 0; index < components.length; index += 1) {
+      const next = path.join(current, components[index]);
+      try {
+        fs.lstatSync(next);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        try {
+          fs.mkdirSync(next, { mode: 0o700 });
+        } catch (createError) {
+          if (createError.code !== 'EEXIST') throw createError;
+        }
+      }
+      validateDirectory(next, index === components.length - 1);
+      current = next;
     }
   }
   intentPath(operationId, tenantId) {
