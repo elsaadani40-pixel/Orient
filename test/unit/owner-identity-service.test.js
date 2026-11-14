@@ -628,3 +628,25 @@ test('owner lockout key EEXIST collision is preserved and never cleaned up by th
   assert.equal(reservationAttempted, true);
   assert.equal(fs.readFileSync(keyFile, 'utf8'), 'collision');
 });
+
+test('owner lockout key rejects hard-linked files before reading secret material', t => {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    t.skip('POSIX hard-link ownership checks are required');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orient-owner-key-hardlink-'));
+  fs.chmodSync(root, 0o700);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stateFile = path.join(root, 'owner.json');
+  const keyFile = stateFile + '.lockout-key';
+  fs.writeFileSync(keyFile, 'a'.repeat(64), { mode: 0o600 });
+  fs.linkSync(keyFile, path.join(root, 'external-key-link'));
+
+  assert.throws(
+    () => new OwnerIdentityService({
+      stateFile,
+      bootstrapPassword: 'temporary-owner-password-9F!x'
+    }),
+    error => error.code === 'OWNER_LOCKOUT_KEY_INVALID'
+  );
+});
