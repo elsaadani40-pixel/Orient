@@ -14,6 +14,7 @@ on:
       - "src/core/execution/**"
       - "src/infrastructure/persistence/json/**"
       - "test/unit/core/security/**"
+      - "test/unit/owner-identity-service.test.js"
       - "test/unit/core/runtime/**"
       - "test/unit/infrastructure/**"
   push:
@@ -52,16 +53,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: owner-auth
-            mutate: src/core/security/owner-auth-service.js
-            test: test/unit/core/security/owner-auth-service.test.js
+          - name: owner-identity
+            timeout: 60
+            mutate: src/core/security/owner-identity-service.js
+            test: test/unit/owner-identity-service.test.js
           - name: execution-coordinator
             mutate: src/core/runtime/request-execution-coordinator.js
             test: test/unit/core/runtime/request-execution-coordinator.test.js test/unit/core/runtime/coordinator-security-regressions.test.js
           - name: event-repository
             timeout: 60
             mutate: src/infrastructure/persistence/json/event.repository.js
-            test: test/unit/infrastructure/event-repository.test.js
+            test: test/unit/infrastructure/event-repository.test.js test/unit/infrastructure/event-repository-hardening.test.js test/unit/infrastructure/event-repository-concurrency.test.js test/unit/infrastructure/persistence/json/event-repository.security.test.js test/unit/infrastructure/persistence/json/event-repository-tenant-boundaries.test.js
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -126,14 +128,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/jazzer
-          npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/owner-auth.fuzz.js --sync --mode=regression corpus/owner-auth 2>&1 | tee artifacts/jazzer/owner-auth-regression.log
+          npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/owner-auth.fuzz.js --sync --mode=regression corpus/owner-auth 2>&1 | tee artifacts/jazzer/owner-identity-regression.log
           npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/event-normalize.fuzz.js --sync --mode=regression corpus/event-normalize 2>&1 | tee artifacts/jazzer/event-normalize-regression.log
 
       - name: Run bounded fuzz campaigns
         shell: bash
         run: |
           set -euo pipefail
-          npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/owner-auth.fuzz.js --sync corpus/owner-auth -- -max_total_time=45 -print_final_stats=1 2>&1 | tee artifacts/jazzer/owner-auth-fuzz.log
+          npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/owner-auth.fuzz.js --sync corpus/owner-auth -- -max_total_time=45 -print_final_stats=1 2>&1 | tee artifacts/jazzer/owner-identity-fuzz.log
           npx --yes --package=@jazzer.js/core@4.0.0 jazzer fuzz/event-normalize.fuzz.js --sync corpus/event-normalize -- -max_total_time=45 -print_final_stats=1 2>&1 | tee artifacts/jazzer/event-normalize-fuzz.log
 
       - name: Upload fuzzing evidence and corpus
