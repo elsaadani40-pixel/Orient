@@ -3,7 +3,7 @@ name: ORIENT — Browser Acceptance
 on:
   pull_request:
   push:
-    branches: ["main"]
+    branches: ["main", "hardening/**"]
 
 permissions:
   contents: read
@@ -35,7 +35,9 @@ jobs:
         run: |
           set -euo pipefail
           npm install --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright@1.55.0
-          npx playwright install --with-deps chromium
+          # GitHub's ubuntu-24.04 runner image already provides Chromium's shared OS libraries.
+          # Install only the pinned browser binary; avoid a second apt dependency transaction.
+          npx playwright install chromium
 
       - name: Run isolated owner website with temporary credentials
         shell: bash

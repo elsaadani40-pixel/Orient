@@ -21,10 +21,10 @@ function harness({registeredSession='session-a',claimRows=[{workflow_id:'wf-1'}]
   const identity=makePrincipal();
   const client={async query(sql,values=[]){
     calls.push({sql,values});
-    if(sql.includes('SELECT worker_id,session_id,capabilities')) return {rows:[{
-      worker_id:values[1],session_id:registeredSession,capabilities:['web.search','calendar.read'],
-      status:'READY',expires_at:new Date(Date.now()+60000).toISOString()
-    }]};
+    if(sql.includes('FROM worker_nodes')) {
+      const active = registeredSession === values[2];
+      return {rowCount:active ? 1 : 0,rows:active ? [{capabilities:['web.search','calendar.read']}] : []};
+    }
     if(sql.includes('INSERT INTO workflow_dispatch_claims')) return {rows:claimRows,rowCount:claimRows.length};
     if(sql.includes('SELECT payload FROM workflows')) return {rows:[{payload:{workflowId:'wf-1',tenantId:'tenant-a',state:'QUEUED'}}]};
     if(sql.includes('DELETE FROM workflow_dispatch_claims')) return {rows:[],rowCount:1};

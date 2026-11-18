@@ -68,7 +68,7 @@ class PostgresWorkerRegistryRepository {
            capabilities=EXCLUDED.capabilities,
            metadata=EXCLUDED.metadata,
            session_id=EXCLUDED.session_id
-         WHERE worker_nodes.expires_at <= NOW() OR worker_nodes.session_id=EXCLUDED.session_id
+         WHERE worker_nodes.expires_at <= clock_timestamp() OR worker_nodes.session_id=EXCLUDED.session_id
          RETURNING *`,
         [item.tenantId,item.workerId,item.startedAt,item.heartbeatAt,item.expiresAt,item.status,JSON.stringify(item.capabilities),item.metadata,item.sessionId]
       );
@@ -84,10 +84,27 @@ class PostgresWorkerRegistryRepository {
     const principal = this.assertPrincipal(workerPrincipal, tenant, workerId);
     const effectiveExpiry = expiresAt || new Date(new Date(heartbeatAt).getTime() + 30000).toISOString();
     return this.db.transactionWithWorkerPrincipal(principal, async client => {
+      // Acquire the row lock before checking expiry. A volatile timestamp
+      // predicate inside a single UPDATE can be evaluated before a lock wait;
+      // the separate check below runs only after this transaction owns the row.
+      const locked = await client.query(
+        'SELECT 1 FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3 FOR UPDATE',
+        [tenant,workerId,principal.sessionId]
+      );
+      if (locked.rowCount !== 1) {
+        throw new AppError('Worker session is not active or has been replaced', 409, 'WORKER_SESSION_LOST');
+      }
+      const active = await client.query(
+        'SELECT 1 FROM worker_nodes WHERE tenant_id=$1 AND worker_id=$2 AND session_id=$3 AND expires_at > clock_timestamp()',
+        [tenant,workerId,principal.sessionId]
+      );
+      if (active.rowCount !== 1) {
+        throw new AppError('Worker session is not active or has been replaced', 409, 'WORKER_SESSION_LOST');
+      }
       const result = await client.query(
         `UPDATE worker_nodes
-         SET heartbeat_at=$1,expires_at=$2,status=$3
-         WHERE tenant_id=$4 AND worker_id=$5 AND session_id=$6 AND expires_at > NOW()
+         SET heartbeat_at=GREATEST(heartbeat_at,$1),expires_at=GREATEST(expires_at,$2),status=$3
+         WHERE tenant_id=$4 AND worker_id=$5 AND session_id=$6 AND expires_at > clock_timestamp()
          RETURNING *`,
         [heartbeatAt,effectiveExpiry,status,tenant,workerId,principal.sessionId]
       );

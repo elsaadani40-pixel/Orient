@@ -144,7 +144,7 @@ class WorkflowScheduler {
     return instance;
   }
 
-  enqueuePersisted(instance, { priority = 0, deadlineAt = null, delayMs = 0, reservation = null } = {}) {
+  enqueuePersisted(instance, { priority = 0, deadlineAt = null, delayMs = 0, reservation = null, dispatchClaim = null } = {}) {
     const ownedReservation = reservation || this.reserveEnqueue(instance);
     try {
       if (!instance || instance.state !== 'QUEUED') throw new AppError('A durably persisted QUEUED workflow is required', 409, 'SCHEDULER_INVALID_STATE');
@@ -152,7 +152,7 @@ class WorkflowScheduler {
       instance.setDeadline(deadlineAt);
       const now = this.clock();
       this._consumeEnqueueReservation(instance, ownedReservation);
-      this.queue.push({ instance, priority, sequence: ++this.sequence, enqueuedAt: now, availableAt: now + Math.max(0, delayMs), deadlineAt });
+      this.queue.push({ instance, priority, sequence: ++this.sequence, enqueuedAt: now, availableAt: now + Math.max(0, delayMs), deadlineAt, dispatchClaim: dispatchClaim ? Object.freeze({ ...dispatchClaim }) : null });
       this.sortQueue();
       return instance;
     } catch (error) {

@@ -27,6 +27,7 @@ function fakeDb({ insertRows = null, updateRows = null } = {}) {
           capabilities: JSON.parse(values[6]), metadata: values[7], session_id: values[8]
         }], rowCount: insertRows ? insertRows.length : 1 };
       }
+      if (sql.startsWith('SELECT 1 FROM worker_nodes')) return { rows: [{}], rowCount: 1 };
       if (sql.startsWith('UPDATE worker_nodes')) return { rows: updateRows || [], rowCount: updateRows ? updateRows.length : 0 };
       if (sql.startsWith('DELETE FROM worker_nodes')) return { rows: [], rowCount: 1 };
       if (sql.startsWith('SELECT * FROM worker_nodes')) return { rows: [] };
@@ -66,7 +67,8 @@ test('worker registry persists registration bound to the trusted worker session'
   assert.equal(result.tenantId, 'tenant-a');
   assert.equal(result.sessionId, 'session-a');
   assert.match(db.calls[0].sql, /session_id/);
-  assert.match(db.calls[0].sql, /worker_nodes\.session_id=EXCLUDED\.session_id/);
+  assert.match(db.calls[0].sql, /worker_nodes.session_id=EXCLUDED.session_id/);
+  assert.match(db.calls[0].sql, /worker_nodes.expires_at <= clock_timestamp()/);
   assert.deepEqual(db.calls[0].values.slice(0, 2), ['tenant-a', 'worker-a']);
   assert.equal(db.calls[0].values[8], 'session-a');
   assert.equal(db.transactions, 1);
@@ -97,11 +99,15 @@ test('worker registry heartbeat and unregister require the exact active worker s
     () => repo.heartbeat('worker-a', { tenantId: 'tenant-a', workerPrincipal: principal() }),
     error => error.code === 'WORKER_SESSION_LOST'
   );
-  assert.match(db.calls[0].sql, /session_id=\$6 AND expires_at > NOW\(\)/);
+  assert.ok(db.calls[0].sql.includes('session_id=$3 FOR UPDATE'));
+  assert.ok(db.calls[1].sql.includes('expires_at > clock_timestamp()'));
+  assert.ok(db.calls[2].sql.includes('session_id=$6 AND expires_at > clock_timestamp()'));
+  assert.match(db.calls[2].sql, /heartbeat_at=GREATEST\(heartbeat_at,\$1\)/);
+  assert.match(db.calls[2].sql, /expires_at=GREATEST\(expires_at,\$2\)/);
 
   const removed = await repo.unregister('worker-a', 'tenant-a', { workerPrincipal: principal() });
   assert.equal(removed, true);
-  assert.match(db.calls[1].sql, /session_id=\$3/);
+  assert.ok(db.calls[3].sql.includes('session_id=$3'));
   assert.equal(db.transactions, 2);
 });
 
@@ -122,6 +128,6 @@ test('worker registry can reap expired workers only inside the tenant boundary',
   const repo = new PostgresWorkerRegistryRepository(db);
   const count = await repo.reapExpired({ tenantId: 'tenant-a', now: '2026-10-07T06:01:00.000Z' });
   assert.equal(count, 1);
-  assert.match(db.calls[0].sql, /WHERE tenant_id=\$1 AND expires_at <= \$2/);
+  assert.ok(db.calls[0].sql.includes('WHERE tenant_id=$1 AND expires_at <= $2'));
   assert.deepEqual(db.calls[0].values, ['tenant-a', '2026-10-07T06:01:00.000Z']);
 });

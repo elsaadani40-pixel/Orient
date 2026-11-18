@@ -8,6 +8,7 @@ function harness({sessionId='session-a',insertRows=[{fencing_token:'41'}],update
  const calls=[];let transactions=0;
  const client={async query(sql,values=[]){calls.push({sql,values});
   if(sql.includes('FROM worker_nodes'))return{rows:sessionId==='session-a'?[{session_id:sessionId,status:'READY',expires_at:new Date(Date.now()+60000).toISOString()}]:[],rowCount:sessionId==='session-a'?1:0};
+  if(sql.includes('FROM workflow_dispatch_claims'))return{rows:[],rowCount:0};
   if(sql.includes('FROM workflows'))return{rows:[{state:'QUEUED',payload:{}}],rowCount:1};
   if(sql.includes('INSERT INTO workflow_leases'))return{rows:insertRows,rowCount:insertRows.length};
   if(sql.includes('UPDATE workflow_leases')||sql.includes('DELETE FROM workflow_leases'))return{rows:updateRows,rowCount:updateRows.length};

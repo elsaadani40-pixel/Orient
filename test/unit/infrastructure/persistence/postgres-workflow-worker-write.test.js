@@ -5,14 +5,22 @@ const assert = require('node:assert/strict');
 const { PostgresWorkflowRepository } = require('../../../../src/infrastructure/persistence/postgres/postgres-persistence');
 const { createWorkerPersistencePrincipal } = require('../../../../src/core/security/worker-persistence-principal');
 
-function fixture({ workerRows = 1, updateRows = 1 } = {}) {
+function fixture({ workerRows = 1, workflowRows = 1, leaseRows = 1, updateRows = 1 } = {}) {
   const calls = [];
   let transactions = 0;
+  let workerChecks = 0;
   let requireLease = false;
   const client = {
     async query(sql, values = []) {
       calls.push({ sql, values });
-      if (sql.includes('FROM worker_nodes')) return { rowCount: workerRows, rows: workerRows ? [{}] : [] };
+      if (sql.includes('FROM worker_nodes')) {
+        if (sql.includes('FOR UPDATE')) return { rowCount: 1, rows: [{}] };
+        const configuredRows = Array.isArray(workerRows) ? workerRows[Math.min(workerChecks, workerRows.length - 1)] : workerRows;
+        workerChecks += 1;
+        return { rowCount: configuredRows, rows: configuredRows ? [{ capabilities: [] }] : [] };
+      }
+      if (sql.includes('FROM workflows')) return { rowCount: workflowRows, rows: workflowRows ? [{}] : [] };
+      if (sql.includes('FROM workflow_leases')) return { rowCount: leaseRows, rows: leaseRows ? [{}] : [] };
       if (sql.includes('UPDATE workflows')) return { rowCount: updateRows, rows: [] };
       throw new Error('Unexpected SQL: ' + sql);
     }
@@ -45,11 +53,22 @@ test('fenced workflow writes require a lease-bound worker transaction and match 
   assert.equal(h.transactions, 1);
   assert.equal(h.requireLease, true);
   assert.match(h.calls[0].sql, /session_id=\$3/);
-  assert.match(h.calls[0].sql, /status='READY'/);
-  assert.match(h.calls[1].sql, /worker_session_id=\$8/);
-  assert.match(h.calls[1].sql, /lease_id=\$6/);
-  assert.match(h.calls[1].sql, /fencing_token=\$9/);
-  assert.deepEqual(h.calls[1].values.slice(5), ['lease-a', 'worker-a', 'session-a', 71]);
+  assert.match(h.calls[0].sql, /FOR UPDATE/);
+  assert.match(h.calls[1].sql, /status='READY'/);
+  assert.match(h.calls[1].sql, /clock_timestamp\(\)/);
+  assert.match(h.calls[2].sql, /FROM workflows/);
+  assert.match(h.calls[2].sql, /FOR UPDATE/);
+  assert.match(h.calls[3].sql, /FROM worker_nodes/);
+  assert.match(h.calls[3].sql, /FOR UPDATE/);
+  assert.match(h.calls[4].sql, /status='READY'/);
+  assert.match(h.calls[4].sql, /clock_timestamp\(\)/);
+  assert.match(h.calls[5].sql, /worker_session_id=\$5/);
+  assert.match(h.calls[5].sql, /lease_id=\$3/);
+  assert.match(h.calls[5].sql, /fencing_token=\$6/);
+  assert.match(h.calls[5].sql, /clock_timestamp\(\)/);
+  assert.match(h.calls[5].sql, /FOR UPDATE/);
+  assert.deepEqual(h.calls[5].values, ['workflow-a', 'tenant-a', 'lease-a', 'worker-a', 'session-a', 71]);
+  assert.match(h.calls[6].sql, /UPDATE workflows/);
 });
 
 test('fenced workflow writes reject expired or replaced worker sessions', async () => {
@@ -58,17 +77,27 @@ test('fenced workflow writes reject expired or replaced worker sessions', async 
     h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal }),
     error => error.code === 'WORKER_SESSION_LOST'
   );
-  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls.length, 2);
   assert.equal(h.transactions, 1);
 });
 
+test('fenced workflow writes revalidate worker expiry after waiting for the workflow lock', async () => {
+  const h = fixture({ workerRows: [1, 0] });
+  await assert.rejects(
+    h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal }),
+    error => error.code === 'WORKER_SESSION_LOST'
+  );
+  assert.equal(h.calls.length, 5);
+  assert.match(h.calls[4].sql, /clock_timestamp\(\)/);
+});
+
 test('fenced workflow writes reject stale lease rows even for a live worker session', async () => {
-  const h = fixture({ updateRows: 0 });
+  const h = fixture({ leaseRows: 0 });
   await assert.rejects(
     h.repo.save(h.instance, 'tenant-a', { workerPrincipal: h.principal }),
     error => error.code === 'WORKFLOW_FENCING_REJECTED'
   );
-  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls.length, 6);
 });
 
 test('fenced workflow writes reject missing or mismatched principals before database access', async () => {
@@ -89,15 +118,16 @@ test('fenced workflow writes reject missing or mismatched principals before data
 });
 
 
-test('unleased workflow writes cannot overwrite a workflow with an active durable lease', async () => {
+async function assertUnleasedWorkflowWriteRejected({ workflowId, activeClaim, expectedCode, expectedTable, expectedCount }) {
   const calls = [];
   const db = {
     async transaction(work) {
       return work({
         async query(sql, values = []) {
           calls.push({ sql, values });
-          if (sql.includes('SELECT workflow_id FROM workflows')) return { rowCount: 1, rows: [{ workflow_id: 'workflow-active-lease' }] };
-          if (sql.includes('FROM workflow_leases')) return { rowCount: 1, rows: [{}] };
+          if (sql.includes('SELECT workflow_id FROM workflows')) return { rowCount: 1, rows: [{ workflow_id: workflowId }] };
+          if (sql.includes('FROM workflow_dispatch_claims')) return { rowCount: activeClaim ? 1 : 0, rows: activeClaim ? [{}] : [] };
+          if (sql.includes('FROM workflow_leases')) return { rowCount: activeClaim ? 0 : 1, rows: activeClaim ? [] : [{}] };
           throw new Error('Unexpected SQL: ' + sql);
         }
       });
@@ -105,12 +135,24 @@ test('unleased workflow writes cannot overwrite a workflow with an active durabl
   };
   const repo = new PostgresWorkflowRepository(db);
   await assert.rejects(
-    repo.save({
-      workflowId: 'workflow-active-lease', tenantId: 'tenant-a', state: 'QUEUED',
-      metadata: {}, updatedAt: new Date().toISOString()
-    }, 'tenant-a'),
-    error => error.code === 'WORKFLOW_LEASE_HELD'
+    repo.save({ workflowId, tenantId: 'tenant-a', state: 'QUEUED', metadata: {}, updatedAt: new Date().toISOString() }, 'tenant-a'),
+    error => error.code === expectedCode
   );
   assert.match(calls[0].sql, /FOR UPDATE/);
-  assert.match(calls[1].sql, /workflow_leases/);
+  assert.ok(calls.some(call => call.sql.includes(expectedTable)), `Expected ${expectedTable} guard query`);
+  assert.equal(calls.length, expectedCount);
+}
+
+test('unleased workflow writes cannot overwrite a workflow with an active durable lease', async () => {
+  await assertUnleasedWorkflowWriteRejected({
+    workflowId: 'workflow-active-lease', activeClaim: false,
+    expectedCode: 'WORKFLOW_LEASE_HELD', expectedTable: 'workflow_leases', expectedCount: 3
+  });
+});
+
+test('unleased workflow writes cannot overwrite a workflow with an active durable dispatch claim', async () => {
+  await assertUnleasedWorkflowWriteRejected({
+    workflowId: 'workflow-active-claim', activeClaim: true,
+    expectedCode: 'WORKFLOW_DISPATCH_CLAIM_HELD', expectedTable: 'workflow_dispatch_claims', expectedCount: 2
+  });
 });

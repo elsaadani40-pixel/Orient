@@ -217,10 +217,14 @@ class PostgresDatabase {
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock($1)',[1407827128]);
-      await client.query(BASE_SCHEMA);
+      const migrationTable = await client.query("SELECT to_regclass('public.schema_migrations') AS relation");
+      const schemaMissing = !migrationTable.rows[0]?.relation;
+      if (schemaMissing) await client.query(BASE_SCHEMA);
       const current=await client.query('SELECT COALESCE(MAX(version),0)::int AS version FROM schema_migrations');
       const version=Number(current.rows[0].version);
       if(version===0){
+        // An existing but empty migration ledger still needs the base schema.
+        if (!schemaMissing) await client.query(BASE_SCHEMA);
         for(const migration of MIGRATIONS.filter(m=>m.version>1)){
           await client.query(migration.sql);
         }
