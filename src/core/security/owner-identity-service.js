@@ -261,9 +261,11 @@ class OwnerIdentityService {
     };
     const tmp = this.stateFile + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
     let fd = null;
+    let created = false;
     let renamed = false;
     try {
       fd = fs.openSync(tmp, 'wx', 0o600);
+      created = true;
       fs.writeFileSync(fd, JSON.stringify(value) + '\n', 'utf8');
       try { fs.fchmodSync(fd, 0o600); } catch (error) {
         if (process.platform !== 'win32') throw error;
@@ -289,7 +291,7 @@ class OwnerIdentityService {
       }
     } catch (error) {
       if (fd !== null) { try { fs.closeSync(fd); } catch {} }
-      if (!renamed) { try { fs.rmSync(tmp, { force: true }); } catch {} }
+      if (!renamed && created) { try { fs.rmSync(tmp, { force: true }); } catch {} }
       throw Object.assign(new Error('Could not persist owner identity safely'), {
         code: 'OWNER_IDENTITY_PERSIST_FAILED',
         committed: renamed,
