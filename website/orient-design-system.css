@@ -1,0 +1,97 @@
+/* ORIENT Premium AI Hybrid design system */
+:root{color-scheme:dark;--orient-bg:#0c121a;--orient-surface:#141e29;--orient-raised:#192634;--orient-text:#eaf0f6;--orient-muted:#a5b2c2;--orient-line:#2a3948;--orient-accent:#73cfc1;--orient-shadow:0 14px 38px rgba(0,0,0,.16);--bg:var(--orient-bg);--panel:var(--orient-surface);--line:var(--orient-line);--ink:var(--orient-text);--text:var(--orient-text);--muted:var(--orient-muted);--mint:var(--orient-accent)}
+:root[data-orient-theme="light"]{color-scheme:light;--orient-bg:#f5f7fa;--orient-surface:#fff;--orient-raised:#eef2f6;--orient-text:#17212f;--orient-muted:#596779;--orient-line:#dce3eb;--orient-accent:#187c76;--orient-shadow:0 12px 32px rgba(28,45,65,.07);--bg:var(--orient-bg);--panel:var(--orient-surface);--line:var(--orient-line);--ink:var(--orient-text);--text:var(--orient-text);--muted:var(--orient-muted);--mint:var(--orient-accent)}
+html{color-scheme:dark;scroll-behavior:smooth}html[data-orient-theme="light"]{color-scheme:light}
+body{color:var(--orient-text)!important;background-color:var(--orient-bg)!important;font-family:"IBM Plex Sans Arabic",Inter,system-ui,-apple-system,"Segoe UI",sans-serif!important;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body::before{opacity:.3}button,input,textarea,select{font:inherit}
+:where(button,a,input,textarea,select,[tabindex]):focus-visible{outline:3px solid color-mix(in srgb,var(--orient-accent) 72%,transparent);outline-offset:3px}
+:where(.card,.panel,.hero-card,.notice,.approval-change,.side-note){border-color:var(--orient-line)!important;box-shadow:var(--orient-shadow)}
+:where(input,textarea,select){color:var(--orient-text)!important;background:var(--orient-raised)!important;border-color:var(--orient-line)!important;border-radius:11px!important}
+:where(.btn,.button,.tab,.lang,.menu){border-radius:11px!important}
+:where(.btn.secondary,.tab,.lang,.menu){color:var(--orient-text)!important;background:var(--orient-raised)!important;border-color:var(--orient-line)!important}
+:where(.eyebrow,.brand .mark){color:var(--orient-accent)}
+:where(.muted){color:var(--orient-muted)}
+html[data-orient-theme="light"] body{background-image:none!important}html[data-orient-theme="light"] body::before{opacity:.06}
+html[data-orient-theme="light"] :where(.card,.panel,.hero-card,.notice,.approval-change,.side-note){background:#fff!important}
+html[data-orient-theme="light"] :where(.topbar,.top){background:rgba(255,255,255,.94)!important;backdrop-filter:blur(14px)}
+html[data-orient-theme="light"] :where(.links,.nav button){color:var(--orient-text)!important}
+.orient-theme-toggle{position:fixed;inset-inline-start:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:1100;min-width:46px;min-height:46px;padding:0 14px;color:var(--orient-text);background:var(--orient-surface);border:1px solid var(--orient-line);border-radius:999px;box-shadow:var(--orient-shadow);cursor:pointer;font-size:14px;font-weight:650}
+.orient-theme-toggle:focus-visible{outline:3px solid var(--orient-accent);outline-offset:3px}
+@media(max-width:560px){.orient-theme-toggle{min-width:44px;min-height:44px;padding:0 12px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+/* Cross-surface experience layer: hierarchy, density, responsive behavior. */
+:root{
+  --bg:var(--orient-bg);--panel:var(--orient-surface);--line:var(--orient-line);
+  --text:var(--orient-text);--muted:var(--orient-muted);--mint:var(--orient-accent);
+  --orient-radius-sm:10px;--orient-radius-md:16px;--orient-radius-lg:22px;
+}
+:where(.layout,.wrap,.shell){isolation:isolate}
+:where(.card,.hero-card,.command-hero,.notice,.event,.task,.detail-cell){
+  border-color:var(--orient-line)!important;
+  border-radius:var(--orient-radius-md)!important;
+}
+:where(.btn,.button){min-height:42px;transition:background-color .16s ease,border-color .16s ease,transform .16s ease}
+:where(.btn,.button):active{transform:translateY(1px)}
+:where(.input,textarea.input,select){min-height:44px}
+:where(.muted,.hint,.metric-label,.metric-foot){color:var(--orient-muted)!important}
+
+/* Runtime dashboard */
+.layout:has(> .side)>.side{background:var(--orient-surface)!important;border-color:var(--orient-line)!important}
+.layout:has(> .side)>.side .nav button{color:var(--orient-muted)!important;border-radius:11px!important}
+.layout:has(> .side)>.side .nav button.active,
+.layout:has(> .side)>.side .nav button:hover{background:var(--orient-raised)!important;border-color:var(--orient-line)!important;color:var(--orient-text)!important}
+.layout:has(> .side)>.main{padding:clamp(18px,3vw,34px)!important}
+.command-hero{border-color:var(--orient-line)!important;border-radius:var(--orient-radius-lg)!important}
+.main :where(.card,.event,.output){background:var(--orient-surface)!important;border-color:var(--orient-line)!important}
+.main .output{color:var(--orient-text)!important}
+.main .btn:not(.secondary){background:var(--orient-accent)!important;border-color:var(--orient-accent)!important;color:#06201d!important}
+
+/* Workbench: clear task-first hierarchy and legible execution evidence */
+.wrap>.top{padding-bottom:18px;border-color:var(--orient-line)!important}
+.wrap>.hero{padding:22px 0!important}
+.wrap .hero-card,.wrap .card{background:var(--orient-surface)!important;border-color:var(--orient-line)!important;box-shadow:var(--orient-shadow)!important}
+.wrap .hero-card{border-radius:var(--orient-radius-lg)!important}
+.wrap .orb{background:var(--orient-raised)!important;border-color:var(--orient-line)!important}
+.wrap .task{background:var(--orient-raised)!important}
+.wrap .task.selected{background:color-mix(in srgb,var(--orient-accent) 9%,var(--orient-surface))!important}
+.wrap .message,.wrap .event{background:var(--orient-raised)!important;border-color:var(--orient-line)!important;color:var(--orient-text)}
+.wrap .btn.primary{background:var(--orient-accent)!important;border-color:var(--orient-accent)!important;color:#06201d!important}
+
+/* Owner console: audit and approval data remain the visual priority */
+.wrap:has(#console) .card{background:var(--orient-surface)!important;border-color:var(--orient-line)!important}
+.wrap:has(#console) table{width:100%;border-collapse:collapse}
+.wrap:has(#console) th,.wrap:has(#console) td{padding:11px 12px;border-bottom:1px solid var(--orient-line);text-align:start}
+.wrap:has(#console) th{color:var(--orient-muted);font-size:12px;font-weight:700}
+.wrap:has(#console) .table-wrap{overflow-x:auto}
+
+/* Chat: keep conversation readable and composer prominent */
+.shell{max-width:1180px;margin-inline:auto;padding:clamp(12px,2.5vw,26px)!important}
+.shell>.top{padding-bottom:16px;border-bottom:1px solid var(--orient-line)}
+.shell .notice{background:var(--orient-raised)!important;border-color:var(--orient-line)!important}
+.shell .chat{background:var(--orient-surface)!important;border:1px solid var(--orient-line);border-radius:var(--orient-radius-lg);min-height:clamp(360px,58vh,720px)}
+.shell .welcome{max-width:760px;margin-inline:auto}
+.shell .composer-wrap{position:sticky;bottom:10px;z-index:5;background:color-mix(in srgb,var(--orient-bg) 92%,transparent);backdrop-filter:blur(14px);border:1px solid var(--orient-line);border-radius:var(--orient-radius-lg);padding:10px;box-shadow:var(--orient-shadow)}
+.shell .composer{background:var(--orient-surface)!important;border-color:var(--orient-line)!important}
+.shell .composer textarea,.shell .composer input{background:var(--orient-raised)!important}
+.shell .suggestions button{border-color:var(--orient-line)!important;background:var(--orient-raised)!important;color:var(--orient-text)!important}
+
+/* Light mode: explicitly neutralize legacy page-specific dark surfaces. */
+html[data-orient-theme="light"] :where(.side,.main .card,.main .event,.main .output,.wrap .hero-card,.wrap .card,.wrap .task,.wrap .message,.wrap .event,.shell .chat,.shell .composer-wrap,.shell .composer,.shell .notice){
+  background:var(--orient-surface)!important;color:var(--orient-text)!important;border-color:var(--orient-line)!important;
+}
+html[data-orient-theme="light"] :where(.hero-desc,.hero p,.task-meta,.event small,.detail-cell small){color:var(--orient-muted)!important}
+html[data-orient-theme="light"] :where(.hero-title span){background-image:linear-gradient(90deg,#176e72,#397f9a,#655c9a)!important}
+html[data-orient-theme="light"] .shell .composer-wrap{background:rgba(245,247,250,.94)!important}
+@media(max-width:760px){
+  .layout:has(> .side)>.main{padding:16px 12px!important}
+  .shell .chat{min-height:52vh}
+  .shell .composer-wrap{bottom:6px;padding:7px}
+}
+@media(max-width:560px){
+  .wrap>.top{align-items:flex-start;flex-wrap:wrap}
+  .wrap .hero{gap:12px}
+  .wrap .card{padding:14px}
+  .shell>.top{align-items:flex-start;flex-wrap:wrap;gap:12px}
+  .shell .composer-wrap{border-radius:14px}
+}

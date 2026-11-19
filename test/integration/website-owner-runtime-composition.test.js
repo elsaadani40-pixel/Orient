@@ -164,11 +164,22 @@ test('website owner session creates and reads a task through the real Runtime', 
 
   const ownerPage = await fetch(origin + '/owner', { headers: { Cookie: ownerCookie }, redirect: 'manual' });
   assert.equal(ownerPage.status, 200);
+  assert.match(ownerPage.headers.get('content-security-policy') || '', /style-src 'self' 'unsafe-inline'/);
   const ownerPageHtml = await ownerPage.text();
   assert.match(ownerPageHtml, /Owner|ORIENT|owner/i);
   assert.ok(ownerPageHtml.includes('href="/chat"'), 'owner console must link to the protected chat workspace');
+  for (const [asset, contentType] of [
+    ['/orient-design-system.css', 'text/css'],
+    ['/orient-theme.js', 'javascript']
+  ]) {
+    const response = await fetch(origin + asset, { headers: { Cookie: ownerCookie } });
+    assert.equal(response.status, 200, asset + ' must be served by the unified listener');
+    assert.match(response.headers.get('content-type') || '', new RegExp(contentType));
+    assert.ok((await response.text()).length > 100, asset + ' must not be an empty asset');
+  }
   const workbench = await fetch(origin + '/workbench', { headers: { Cookie: ownerCookie }, redirect: 'manual' });
   assert.equal(workbench.status, 200);
+  assert.match(workbench.headers.get('content-security-policy') || '', /style-src 'self' 'unsafe-inline'/);
   assert.match(await workbench.text(), /workbench|task|ORIENT/i);
   for (const pathname of ['/owner', '/workbench']) {
     const response = await fetch(origin + pathname, {
@@ -207,6 +218,7 @@ test('website owner session creates and reads a task through the real Runtime', 
 
   const ownerChatPage = await fetch(origin + '/chat', { headers: { Cookie: ownerCookie } });
   assert.equal(ownerChatPage.status, 200);
+  assert.match(ownerChatPage.headers.get('content-security-policy') || '', /style-src 'self' 'unsafe-inline'/);
   const chatHtml = await ownerChatPage.text();
   assert.match(chatHtml, /id="composer"/);
   assert.match(chatHtml, /id="attachments"/);

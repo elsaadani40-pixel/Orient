@@ -22,14 +22,18 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [35])
 class OwnerSessionClientTest {
     @Test
-    fun manifestDeclaresOnlyInternetPermissionUntilDeviceAdaptersAreImplemented() {
+    fun manifestDeclaresOnlyTheRequiredNetworkAndOptionalContactPermissions() {
         val manifest = java.io.File("src/main/AndroidManifest.xml").readText()
         val permissions = Regex("""<uses-permission\b[^>]*android:name="([^"]+)"""")
             .findAll(manifest)
             .map { it.groupValues[1] }
             .toSet()
 
-        assertEquals(setOf("android.permission.INTERNET"), permissions)
+        assertEquals(
+            setOf("android.permission.INTERNET", "android.permission.READ_CONTACTS"),
+            permissions
+        )
+        assertFalse("android.permission.CALL_PHONE" in permissions)
     }
 
     @Test
