@@ -15,6 +15,7 @@ ORIENT is being built as one coherent system for researching, planning, executin
 
 - **Repository:** [Source code](https://github.com/elsaadani40-pixel/Orient)
 - **Brand website source:** [`website/index.html`](website/index.html) — responsive English/Arabic landing page with RTL support. This is source in the repository; it is not a claim that a public website deployment is live.
+- **Static landing deployment:** [`docs/deployment/VERCEL-STATIC-LANDING.md`](docs/deployment/VERCEL-STATIC-LANDING.md) — reproducible Vercel build; static marketing page only, not the Runtime API.
 - **Engineering constitution:** [`AGENT.md`](AGENT.md)
 - **Product contract and cross-device roadmap:** [`docs/product/ORIENT-PRODUCT-CONTRACT.md`](docs/product/ORIENT-PRODUCT-CONTRACT.md)
 - **Cross-platform implementation and release gates:** [`docs/architecture/cross-platform-product-contract.md`](docs/architecture/cross-platform-product-contract.md)
