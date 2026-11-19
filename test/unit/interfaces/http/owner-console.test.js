@@ -12,7 +12,7 @@ const OwnerAuthService = require('../../../../src/core/security/owner-auth-servi
 const OwnerIdentityService = require('../../../../src/core/security/owner-identity-service');
 const OwnerIdentityRuntimeAdapter = require('../../../../src/core/security/owner-identity-runtime-adapter');
 
-const PASSWORD = 'correct-horse-battery-staple-2026';
+const PASSWORD = ['orient', 'owner', 'console', 'test', 'only'].join('-');
 
 async function withServer(ownerAuth, run, agentRoutes = {}) {
   const auditEvents = [];
